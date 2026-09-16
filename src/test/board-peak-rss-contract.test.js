@@ -100,7 +100,9 @@ test('the room-creating changes are in place (windowing + empty-field omission)'
     assert.ok(/public async getBoardWorkingSet/.test(db), 'the working-set read must exist — it removes 317+91 dormant cards from the build');
     const provider = readSource('src', 'services', 'KanbanProvider.ts');
     assert.ok(/getBoardWorkingSet/.test(provider), 'getFullStateMessages must use the working-set read');
-    assert.ok(/dispatchedAt: row.dispatchedAt \?\? undefined/.test(provider),
+    // V81 renamed dispatchedAt -> ownerSince. The omission pattern is what this
+    // guards, not the field name: `?? undefined` keeps the key out of the JSON.
+    assert.ok(/ownerSince: row\.ownerSince \?\? undefined/.test(provider),
         'empty-field omission must emit undefined — reverting to ?? null re-adds the empty-slot tax');
 });
 

@@ -44,14 +44,34 @@ export interface GlobalConfig {
         visibleAgents?: Record<string, boolean>;
         customAgents?: any[];
         /**
-         * The agent-control surface's model endpoint + model name. These are
-         * the surface's OWN keys — they replaced the overload that read the
-         * model URL out of `startupCommands['project_manager']`. Written by
-         * `POST /agent/control/config`; the API key never lives here (it is in
-         * the encrypted secrets store under `switchboard.agentControl.apiKey`).
+         * Agent-control model config, NORMALISED.
+         *
+         *   agentControlProviders  — the rows: one record per provider id, each
+         *                            owning its own endpoint/model.
+         *   agentControlProvider   — a pointer at the active row.
+         *
+         * The active endpoint/model are DERIVED by looking the pointer up. They
+         * are deliberately not also stored flat: the same fact in two places is
+         * two facts that can disagree, with no rule for which wins.
+         *
+         * A model name is only meaningful to the provider it was chosen for
+         * ('gemma-4-31b-it' on Google vs 'google/gemma-4-31b-it:free' on
+         * OpenRouter), which is why the model belongs to the row and not to the
+         * surface. Switching the pointer recalls that provider's own values.
+         *
+         * The API key is NOT here — it is per-row in the encrypted secrets store
+         * under `switchboard.agentControl.apiKey.<providerId>`.
+         *
+         * `agentControlEndpoint`/`agentControlModel` are the pre-normalisation
+         * flat keys. They are READ ONCE to migrate an existing config into its
+         * row and are never written again; they are not a fallback, because a
+         * stale flat value winning over a row is the divergence this shape
+         * exists to prevent.
          */
         agentControlEndpoint?: string;
         agentControlModel?: string;
+        agentControlProvider?: string;
+        agentControlProviders?: Record<string, { endpoint?: string; model?: string }>;
     };
 }
 
@@ -84,7 +104,8 @@ export const LOCAL_AGENT_MACHINE: AgentMachine = {
 
 /** Agent-config keys that are stored machine-globally (cross-workspace, cross-IDE). */
 export type AgentGlobalKey = 'startupCommands' | 'visibleAgents' | 'customAgents'
-    | 'agentControlEndpoint' | 'agentControlModel';
+    | 'agentControlEndpoint' | 'agentControlModel' | 'agentControlProvider'
+    | 'agentControlProviders';
 
 /**
  * A single scheduled job. `source` picks the prompt preset; `target` picks the

@@ -49,6 +49,23 @@ async function check(name, fn) {
 
 const WS = '/tmp/dependency-gate-contract-ws';
 
+/**
+ * The dispatch-analysis protocol body. Retired protocols were moved to control
+ * plane rows (bodies in `bundledProtocols.ts`) and are materialized on setup, so
+ * the source of truth is the bundle — reading the on-disk path alone makes this
+ * test red on every checkout that has not run setup. Same pattern as
+ * `skill-preconditions-contract.test.js`.
+ */
+function dispatchAnalysisBody() {
+    const fs = require('fs');
+    const disk = path.join(process.cwd(), '.agents', 'protocols', 'dispatch-analysis', 'SKILL.md');
+    if (fs.existsSync(disk)) return fs.readFileSync(disk, 'utf8');
+    const { BUNDLED_PROTOCOLS } = require(path.join(process.cwd(), 'out', 'services', 'bundledProtocols.js'));
+    const bundled = BUNDLED_PROTOCOLS['dispatch-analysis'];
+    assert.ok(bundled, 'dispatch-analysis must exist on disk or in the bundle');
+    return bundled.body;
+}
+
 function card(planId, kanbanColumn, extra = {}) {
     return {
         planId,
@@ -56,9 +73,9 @@ function card(planId, kanbanColumn, extra = {}) {
         topic: planId,
         kanbanColumn,
         featureId: '',
-        dispatchedAt: null,
-        dispatchedTerminal: '',
-        queuePosition: null,
+        ownerSeat: '',
+        ownerSince: null,
+        columnOrder: null,
         completedAt: null,
         ...extra,
     };
@@ -110,25 +127,29 @@ async function run() {
 
     // ── The gate itself ────────────────────────────────────────────────────
 
-    await check('a card whose predecessor has not asserted completion is refused', async () => {
+    await check('a card whose predecessor has not asserted completion is held, not dispatched', async () => {
         const board = [
-            card('A', 'CODER CODED', { dispatchedAt: '2026-08-25T00:00:00Z', completedAt: null }),
-            card('B', 'STAGING', { queuePosition: 1 }),
+            card('A', 'CODER CODED', { ownerSince: '2026-08-25T00:00:00Z', completedAt: null }),
+            card('B', 'STAGING', { columnOrder: 1 }),
         ];
         const { server, dispatched } = makeServer(board, { edges: { B: ['A'] } });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 409, 'B depends on an uncompleted A — the pop must refuse');
-        assert.deepStrictEqual(dispatched, [], 'nothing may be dispatched while a predecessor is incomplete');
+        // V81: the board never refuses. A blocked pop is a 200 that reports
+        // "not ready" and names the blocker — distinguishable from success by
+        // `dispatched: null`, never by a non-2xx status.
+        assert.strictEqual(out.status, 200, 'the board never refuses a dispatch — no 409');
+        assert.strictEqual(out.payload.dispatched, null, 'nothing dispatched while a predecessor is incomplete');
+        assert.deepStrictEqual(dispatched, []);
         assert.ok(
             out.payload.dependencyBlocked && out.payload.dependencyBlocked.blockedBy === 'A',
-            'the refusal must NAME the blocking predecessor, not just refuse'
+            'the not-ready body must NAME the blocking predecessor'
         );
     });
 
     await check('the same card is handed out once its predecessor asserts completion', async () => {
         const board = [
-            card('A', 'CODER CODED', { dispatchedAt: '2026-08-25T00:00:00Z', completedAt: '2026-08-25T01:00:00Z' }),
-            card('B', 'STAGING', { queuePosition: 1 }),
+            card('A', 'CODER CODED', { ownerSince: '2026-08-25T00:00:00Z', completedAt: '2026-08-25T01:00:00Z' }),
+            card('B', 'STAGING', { columnOrder: 1 }),
         ];
         const { server, dispatched } = makeServer(board, { edges: { B: ['A'] } });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
@@ -145,10 +166,10 @@ async function run() {
         // still be dispatchable — the plan's "parallel streams are concurrent"
         // invariant. A refusal on candidates[0] never reaches X.
         const board = [
-            card('A', 'CODER CODED', { dispatchedAt: '2026-08-25T00:00:00Z', completedAt: null }),
-            card('B', 'STAGING', { queuePosition: 1 }),
-            card('X', 'STAGING', { queuePosition: 2 }),
-            card('Y', 'STAGING', { queuePosition: 3 }),
+            card('A', 'CODER CODED', { ownerSince: '2026-08-25T00:00:00Z', completedAt: null }),
+            card('B', 'STAGING', { columnOrder: 1 }),
+            card('X', 'STAGING', { columnOrder: 2 }),
+            card('Y', 'STAGING', { columnOrder: 3 }),
         ];
         const { server, dispatched } = makeServer(board, { edges: { B: ['A'], Y: ['X'] } });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
@@ -158,17 +179,18 @@ async function run() {
             'the pop must skip blocked B and take independent X — head-of-line blocking is the defect');
     });
 
-    await check('the pop refuses only when EVERY staged card is blocked', async () => {
+    await check('the pop reports not-ready only when EVERY staged card is blocked', async () => {
         const board = [
-            card('A', 'CODER CODED', { dispatchedAt: '2026-08-25T00:00:00Z', completedAt: null }),
-            card('B', 'STAGING', { queuePosition: 1 }),
-            card('C', 'STAGING', { queuePosition: 2 }),
+            card('A', 'CODER CODED', { ownerSince: '2026-08-25T00:00:00Z', completedAt: null }),
+            card('B', 'STAGING', { columnOrder: 1 }),
+            card('C', 'STAGING', { columnOrder: 2 }),
         ];
         const { server, dispatched } = makeServer(board, { edges: { B: ['A'], C: ['A'] } });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 409, 'with no unblocked candidate the pop refuses');
+        assert.strictEqual(out.status, 200, 'with no unblocked candidate the pop is still a 200 — not ready, never refused');
+        assert.strictEqual(out.payload.dispatched, null);
         assert.strictEqual(out.payload.dependencyBlocked.planId, 'B',
-            'the refusal names the highest-precedence blocked card, not an arbitrary one');
+            'the not-ready body names the highest-precedence blocked card, not an arbitrary one');
         assert.deepStrictEqual(dispatched, []);
     });
 
@@ -176,16 +198,16 @@ async function run() {
         // A→B→C staged together. Drive the whole chain by asserting completion,
         // never by re-analysing.
         const board = [
-            card('A', 'STAGING', { queuePosition: 1 }),
-            card('B', 'STAGING', { queuePosition: 2 }),
-            card('C', 'STAGING', { queuePosition: 3 }),
+            card('A', 'STAGING', { columnOrder: 1 }),
+            card('B', 'STAGING', { columnOrder: 2 }),
+            card('C', 'STAGING', { columnOrder: 3 }),
         ];
         const edges = { B: ['A'], C: ['B'] };
         const { server, dispatched } = makeServer(board, { edges });
         const advance = async (planId) => {
             const row = board.find(p => p.planId === planId);
             row.kanbanColumn = 'CODER CODED';
-            row.dispatchedAt = '2026-08-25T00:00:00Z';
+            row.ownerSince = '2026-08-25T00:00:00Z';
             row.completedAt = '2026-08-25T01:00:00Z';
         };
         for (const expected of ['A', 'B', 'C']) {
@@ -200,9 +222,9 @@ async function run() {
     // ── The archival deadlock ─────────────────────────────────────────────
 
     await check('a completed predecessor archived out of the hot store does not block forever', async () => {
-        const board = [card('B', 'STAGING', { queuePosition: 1 })];
+        const board = [card('B', 'STAGING', { columnOrder: 1 })];
         const coldStore = {
-            A: card('A', 'COMPLETED', { dispatchedAt: '2026-08-20T00:00:00Z', completedAt: '2026-08-21T00:00:00Z' }),
+            A: card('A', 'COMPLETED', { ownerSince: '2026-08-20T00:00:00Z', completedAt: '2026-08-21T00:00:00Z' }),
         };
         const { server, dispatched } = makeServer(board, { edges: { B: ['A'] }, coldStore });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
@@ -214,7 +236,7 @@ async function run() {
     await check('an edge to a plan that no longer exists is stale, not a permanent block', async () => {
         // A deleted predecessor can never assert completion, so treating the
         // edge as blocking deadlocks the queue with nothing to clear it.
-        const board = [card('B', 'STAGING', { queuePosition: 1 })];
+        const board = [card('B', 'STAGING', { columnOrder: 1 })];
         const { server, dispatched } = makeServer(board, { edges: { B: ['ghost'] } });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
         assert.strictEqual(out.status, 200, 'a dangling edge must not deadlock the queue');
@@ -225,8 +247,8 @@ async function run() {
 
     await check('with no edges the queue behaves exactly as before', async () => {
         const board = [
-            card('a', 'STAGING', { queuePosition: 2 }),
-            card('b', 'STAGING', { queuePosition: 7 }),
+            card('a', 'STAGING', { columnOrder: 2 }),
+            card('b', 'STAGING', { columnOrder: 7 }),
         ];
         const { server, dispatched } = makeServer(board, { edges: {} });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
@@ -237,31 +259,31 @@ async function run() {
     await check('a host without the dependency API is not broken by the gate', async () => {
         // The gate is feature-detected: an older or stubbed db that has no
         // getPlanDependencies must still pop normally.
-        const board = [card('only', 'STAGING', { queuePosition: 1 })];
+        const board = [card('only', 'STAGING', { columnOrder: 1 })];
         const { server, dispatched } = makeServer(board, { omitDependencyApi: true });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
         assert.strictEqual(out.status, 200);
         assert.deepStrictEqual(dispatched, ['only']);
     });
 
-    await check('the gate runs AFTER the in-flight refusal, not instead of it', async () => {
-        // A team already holding an uncompleted card is refused on in-flight
-        // grounds, and the message must be the in-flight one — the two refusals
-        // stay distinguishable.
+    await check('ownership never gates the pop — the dependency gate is the only filter', async () => {
+        // V81 deleted the in-flight refusal. A card owned by a seat does not
+        // make the pop refuse, and it does not shadow the dependency gate: the
+        // only thing that can hold a card back is an unmet dependency.
         const board = [
-            card('held', 'CODER CODED', { dispatchedTerminal: 'Coder 1', completedAt: null }),
-            card('B', 'STAGING', { queuePosition: 1 }),
+            card('held', 'CODER CODED', { ownerSeat: 'Coder 1', ownerSince: '2026-08-25T00:00:00Z', completedAt: null }),
+            card('B', 'STAGING', { columnOrder: 1 }),
         ];
-        const { server, dispatched } = makeServer(board, { edges: { B: ['held'] } });
+        const { server, dispatched } = makeServer(board, { edges: {} });
         const out = await server.dispatchNextFromQueue({
             workspaceRoot: WS,
             from: 'Coder 1',
             resolveTeamMembers: undefined,
         });
-        assert.strictEqual(out.status, 409);
-        assert.ok(out.payload.inFlight, 'the in-flight refusal must win — it is checked first');
-        assert.ok(!out.payload.dependencyBlocked, 'the dependency gate must not shadow the in-flight refusal');
-        assert.deepStrictEqual(dispatched, []);
+        assert.strictEqual(out.status, 200, 'an owned card never refuses the pop');
+        assert.ok(!out.payload.inFlight, 'no in-flight refusal exists');
+        assert.ok(!out.payload.dependencyBlocked, 'no dependency edge → no blocker');
+        assert.deepStrictEqual(dispatched, ['B'], 'the next staged card is handed out');
     });
 
     // ── Source contracts the behaviour above cannot reach ─────────────────
@@ -334,8 +356,7 @@ async function run() {
             'the dependency write path must accept the analysis-time fingerprint — a column nobody writes detects nothing');
         assert.ok(/getMapFingerprint/.test(block),
             'the read path must return the stored fingerprint so a later run can compare it');
-        const skill = fs.readFileSync(
-            path.join(process.cwd(), '.agents', 'protocols', 'dispatch-analysis', 'SKILL.md'), 'utf8');
+        const skill = dispatchAnalysisBody();
         assert.ok(/mapFingerprint/.test(skill),
             'the analysis protocol must send the fingerprint it computes');
         assert.ok(/stale/i.test(skill),
@@ -343,9 +364,7 @@ async function run() {
     });
 
     await check('the analysis protocol keeps its unprovable-plan guardrails', () => {
-        const fs = require('fs');
-        const skill = fs.readFileSync(
-            path.join(process.cwd(), '.agents', 'protocols', 'dispatch-analysis', 'SKILL.md'), 'utf8');
+        const skill = dispatchAnalysisBody();
         for (const rule of [
             'never synthesize it',
             'Unprovable stays in Planned',
@@ -468,13 +487,16 @@ async function run() {
             + 'mission that is not running');
 
         // and launchMission itself must refuse on every non-dispatching path.
+        // V81 deleted the launch-time in-flight/completed guards: pressing Launch
+        // again re-dispatches the head, which unconditionally resets owner and
+        // completion state. Duplicate work is not a failure mode. What survives is
+        // that a launch which dispatches NOTHING still refuses rather than
+        // reporting success.
         const li = provider.indexOf('public async launchMission(');
         assert.notStrictEqual(li, -1, 'launchMission must exist');
         const body = provider.slice(li, provider.indexOf('\n    public ', li + 50));
         for (const [label, pattern] of [
             ['no members', /has no members/],
-            ['already in flight', /already in flight/],
-            ['already completed', /already completed/],
             // Run provisioning IS built now (item 7). The refusal it replaced —
             // "provisioning is not built" — is retired; the durable contract is
             // that a tree that cannot be cut still refuses rather than running in
@@ -487,6 +509,8 @@ async function run() {
                 `launchMission must refuse in words when ${label} — a launch that dispatches nothing `
                 + 'must not report success');
         }
+        assert.ok(!/already in flight/.test(body) && !/already completed/.test(body),
+            'V81 deleted the launch-time in-flight/completed guards — the board never refuses a dispatch');
     });
 
     await check('a mission codename is stable and collision-checked', () => {
@@ -614,15 +638,17 @@ async function run() {
             + 'the members move to a coding column and their membership row is never cleared');
     });
 
-    await check('launch is idempotent and derived, never a stored flag', () => {
+    await check('launch fans out through the pop and never writes a stored run flag', () => {
         const fs = require('fs');
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
         const i = src.indexOf('public async launchMission(');
         assert.notStrictEqual(i, -1, 'launchMission must exist');
         const body = src.slice(i, src.indexOf('\n    public ', i + 50));
-        assert.ok(/runState === 'in-flight'/.test(body),
-            'launch must refuse an in-flight mission — item 8d, pressing Launch twice must not '
-            + 'double-dispatch. The guard reads the DERIVED state, so button and badge cannot disagree.');
+        // V81: the launch-time in-flight guard is deleted. Pressing Launch twice
+        // re-dispatches the head; the dispatch write resets owner/completion
+        // state unconditionally. There is no refusal to pin here.
+        assert.ok(!/runState === 'in-flight'/.test(body),
+            'launch must NOT refuse an in-flight mission — the board never refuses a dispatch (V81)');
         assert.ok(/dispatchNextFromQueue/.test(body),
             'launch must fan out through the queue pop — one dispatch path, so the pop-time '
             + 'dependency gate applies to a mission launch too');
@@ -632,14 +658,16 @@ async function run() {
             'launch must not write a run state — it is derived');
     });
 
-    await check('stop releases the holder rather than writing a status', () => {
+    await check('stop clears the holder rather than writing a status', () => {
         const fs = require('fs');
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
         const i = src.indexOf("case 'mcStopMission'");
         const body = src.slice(i, i + 2200);
-        assert.ok(/releaseDispatchHolder\(plan\.planFile/.test(body),
-            'releaseDispatchHolder is keyed by plan FILE + workspace id. Passing a plan id no-ops '
+        assert.ok(/clearOwnerStamp\(plan\.planFile/.test(body),
+            'clearOwnerStamp is keyed by plan FILE + workspace id. Passing a plan id no-ops '
             + 'silently, which is a Stop button that reports success and stops nothing.');
+        assert.ok(!/releaseDispatchHolder/.test(body),
+            'releaseDispatchHolder was deleted with the release valve — stop uses the queue\'s own clearOwnerStamp');
     });
 
     await check('the operator can ask which mission it oversees', () => {

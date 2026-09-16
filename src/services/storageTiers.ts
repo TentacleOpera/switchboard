@@ -70,7 +70,6 @@ export const SHARED_PLAN_COLUMNS = [
     'source_type',
     'brain_source_path',
     'mirror_path',
-    'routed_to',
     'clickup_task_id',
     'linear_issue_id',
     'notion_page_id',
@@ -78,13 +77,14 @@ export const SHARED_PLAN_COLUMNS = [
     'feature_id',
     'workspace_name',
     'project_id',
-    'queue_position',
     'column_entered_at',
     'completed_at',
     'priority_starred',
     'column_order',
     'map_fingerprint',
     'priority',
+    'owner_seat',
+    'owner_since',
 ] as const;
 
 export type SharedPlanColumn = typeof SHARED_PLAN_COLUMNS[number];
@@ -93,13 +93,16 @@ export type SharedPlanColumn = typeof SHARED_PLAN_COLUMNS[number];
  * Columns of the runtime tier representing machine-local facts about a process.
  *
  * **Tier membership is not the same as physical residence, and the difference is
- * load-bearing.** V74 physically removed only the last four from `plans`; the first
- * four remain resident on the shared `plans` row and are dual-written to
- * `plan_runtime_state` (see `KanbanDatabase._readRows`'s overlay). They are still
- * LOCAL — decision 1 of the tier-split plan's User Review settled that: they are
- * facts about a process on one machine. Listing them here is what stops a future
- * shared-store write path from treating them as board state; it is not a claim
- * about which table they sit in today.
+ * load-bearing.** V74 removed `dispatched_terminal`, `dispatched_at`,
+ * `last_liveness_at` and `blocked_at` from `plans`; V81 then removed them from
+ * `plan_runtime_state` too and folded `routed_to`/`queue_position` away —
+ * `owner_seat`/`owner_since` on `plans` are the advisory display stamp now.
+ * `dispatched_agent`/`dispatched_ide`/`dispatched_team_group` live only on
+ * `plan_runtime_state`. They are still LOCAL — decision 1 of the tier-split
+ * plan's User Review settled that: they are facts about a process on one
+ * machine. Listing them here is what stops a future shared-store write path
+ * from treating them as board state; it is not a claim about which table they
+ * sit in today.
  *
  * `worktree_id` / `worktree_status` are here for the same reason: they point at a
  * `worktrees` row, and `worktrees` is in `LOCAL_TABLES` because it describes
@@ -114,10 +117,7 @@ export type SharedPlanColumn = typeof SHARED_PLAN_COLUMNS[number];
 export const LOCAL_PLAN_COLUMNS = [
     'dispatched_agent',
     'dispatched_ide',
-    'dispatched_terminal',
-    'dispatched_at',
-    'last_liveness_at',
-    'blocked_at',
+    'dispatched_team_group',
     'worktree_id',
     'worktree_status',
 ] as const;

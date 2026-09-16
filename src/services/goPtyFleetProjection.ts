@@ -941,9 +941,8 @@ export class GoPtyFleetProjection {
             // `lastDataAt <= 0 || now - lastDataAt < turnEndSilenceMs` — a frozen
             // positive stamp defeats the `<= 0` fail-safe and reads as "silent for
             // hours", the most confident possible wrong answer, so stall nudges fire
-            // into actively working seats. `recordLiveness` also records 0 forever,
-            // collapsing the activity-light basis to bare `dispatched_at` and blanking
-            // a working card at `timeoutMs`.
+            // into actively working seats and the dead-seat sweep clears the card's
+            // `owner_since` — blanking a working card's activity light.
             //
             // Decode binary first; fall back to the JSON arms for control frames.
             if (isBinary && Buffer.isBuffer(raw) && raw.length >= 4) {

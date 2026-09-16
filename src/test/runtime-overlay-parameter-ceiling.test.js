@@ -14,9 +14,12 @@
  * 1. A board read of 40,000 plans succeeds — the bound-parameter ceiling is
  *    unreachable at any read size (the headline: this is the test that fails on
  *    the pre-change code).
- * 2. The merge is unchanged: `dispatched_terminal = ''` does NOT clear a value
- *    (the empty-string asymmetry is deliberately preserved), a non-empty string
- *    does overlay, and `dispatched_at IS NULL` DOES overlay.
+ * 2. The merge is unchanged in shape: a runtime row's empty-string field does
+ *    NOT invent a value (the row's own default stands), a non-empty string
+ *    overlays, and a runtime row for this device is what overlays at all.
+ *    V81 dropped `dispatched_terminal`/`dispatched_at`/`last_liveness_at`/
+ *    `blocked_at`; the surviving machine-local fields are `dispatched_agent`,
+ *    `dispatched_ide` and `dispatched_team_group`.
  * 3. Runtime rows belonging to another `device_id` never appear in the merge.
  * 4. A database with no `plan_runtime_state` table still reads (pre-V74 arm).
  * 5. `idx_plan_runtime_state_device` does NOT exist: V78 created it for a
@@ -100,18 +103,14 @@ function seedRuntimeRow(db, workspaceId, planId, deviceId, fields) {
     const driver = db.getDriver();
     driver.run(
         `INSERT OR REPLACE INTO plan_runtime_state
-            (plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide, dispatched_terminal,
-             dispatched_team_group, dispatched_at, last_liveness_at, blocked_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
+             dispatched_team_group, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
             planId, deviceId, workspaceId,
             fields.dispatched_agent ?? '',
             fields.dispatched_ide ?? '',
-            fields.dispatched_terminal ?? '',
             fields.dispatched_team_group ?? '',
-            fields.dispatched_at ?? null,
-            fields.last_liveness_at ?? null,
-            fields.blocked_at ?? null,
             new Date().toISOString(),
         ]
     );
@@ -165,7 +164,7 @@ async function test_forty_thousand_plan_read_succeeds(tmpRoot) {
     console.log(`Pass: a ${COUNT}-plan board read succeeds (bound-parameter ceiling unreachable)`);
 }
 
-/** Invariant 2 — merge semantics byte-identical, including the empty-string asymmetry. */
+/** Invariant 2 — merge shape unchanged: empty runtime strings invent nothing, non-empty ones overlay. */
 async function test_merge_semantics_unchanged(tmpRoot) {
     const wsRoot = path.join(tmpRoot, 'ws-sem');
     const wsId = 'ceiling000000002';
@@ -173,31 +172,24 @@ async function test_merge_semantics_unchanged(tmpRoot) {
     const device = getMachineId();
 
     seedPlans(db, wsId, 3, 'sem');
-    // plans.dispatched_agent is SHARED state and survives V74 — set one so the
-    // empty-string guard has something to (not) clear.
-    db.getDriver().run(`UPDATE plans SET dispatched_agent = 'stale-agent' WHERE plan_id = 'sem-0'`);
-
-    // sem-0: empty strings must NOT clear the shared value.
-    seedRuntimeRow(db, wsId, 'sem-0', device, { dispatched_agent: '', dispatched_terminal: '' });
-    // sem-1: a non-empty string DOES overlay.
-    seedRuntimeRow(db, wsId, 'sem-1', device, { dispatched_terminal: 'term-42', dispatched_agent: 'live-agent' });
-    // sem-2: an explicit NULL timestamp DOES overlay (the row exists → honoured).
-    seedRuntimeRow(db, wsId, 'sem-2', device, { dispatched_at: null, blocked_at: '2026-09-14T00:00:00.000Z' });
+    // sem-0: empty strings must NOT invent a value — the row's own default stands.
+    seedRuntimeRow(db, wsId, 'sem-0', device, { dispatched_agent: '', dispatched_ide: '' });
+    // sem-1: non-empty runtime strings overlay.
+    seedRuntimeRow(db, wsId, 'sem-1', device, {
+        dispatched_agent: 'live-agent', dispatched_ide: 'ide-1', dispatched_team_group: 'g1',
+    });
 
     const all = await db.getAllPlans(wsId);
     const byId = new Map(all.map(p => [p.planId, p]));
 
-    assert.strictEqual(byId.get('sem-0').dispatchedAgent, 'stale-agent',
-        "dispatched_agent = '' must NOT clear the shared value (the empty-string asymmetry is preserved deliberately)");
-    assert.strictEqual(byId.get('sem-0').dispatchedTerminal, '',
-        "dispatched_terminal = '' leaves the row's own value standing");
-    assert.strictEqual(byId.get('sem-1').dispatchedTerminal, 'term-42', 'a non-empty runtime string overlays');
+    assert.strictEqual(byId.get('sem-0').dispatchedAgent, '',
+        'an empty runtime dispatched_agent must not invent a delivery record');
     assert.strictEqual(byId.get('sem-1').dispatchedAgent, 'live-agent', 'a non-empty runtime agent overlays');
-    assert.strictEqual(byId.get('sem-2').dispatchedAt, null, 'a NULL dispatched_at overlays (row present → honoured)');
-    assert.strictEqual(byId.get('sem-2').blockedAt, '2026-09-14T00:00:00.000Z', 'blocked_at overlays');
+    assert.strictEqual(byId.get('sem-1').dispatchedIde, 'ide-1', 'a non-empty runtime ide overlays');
+    assert.strictEqual(byId.get('sem-1').dispatchedTeamGroup, 'g1', 'a non-empty runtime team group overlays');
 
     await KanbanDatabase.invalidateWorkspace(wsRoot);
-    console.log('Pass: merge semantics unchanged (empty-string asymmetry preserved, null timestamps honoured)');
+    console.log('Pass: merge semantics unchanged (empty runtime strings invent nothing, non-empty ones overlay)');
 }
 
 /** Invariant 3 — another device's runtime rows never leak into this device's merge. */
@@ -207,13 +199,13 @@ async function test_other_device_rows_never_merge(tmpRoot) {
     const db = await buildWorkspace(wsRoot, wsId);
 
     seedPlans(db, wsId, 2, 'dev');
-    seedRuntimeRow(db, wsId, 'dev-0', 'some-other-device-id', { dispatched_terminal: 'other-box-terminal' });
-    seedRuntimeRow(db, wsId, 'dev-1', getMachineId(), { dispatched_terminal: 'this-box-terminal' });
+    seedRuntimeRow(db, wsId, 'dev-0', 'some-other-device-id', { dispatched_agent: 'other-box-agent' });
+    seedRuntimeRow(db, wsId, 'dev-1', getMachineId(), { dispatched_agent: 'this-box-agent' });
 
     const all = await db.getAllPlans(wsId);
     const byId = new Map(all.map(p => [p.planId, p]));
-    assert.strictEqual(byId.get('dev-0').dispatchedTerminal, '', "another device's runtime row must not merge");
-    assert.strictEqual(byId.get('dev-1').dispatchedTerminal, 'this-box-terminal', "this device's runtime row merges");
+    assert.strictEqual(byId.get('dev-0').dispatchedAgent, '', "another device's runtime row must not merge");
+    assert.strictEqual(byId.get('dev-1').dispatchedAgent, 'this-box-agent', "this device's runtime row merges");
 
     await KanbanDatabase.invalidateWorkspace(wsRoot);
     console.log('Pass: runtime rows for a different device_id never appear in the merge');

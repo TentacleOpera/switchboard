@@ -145,6 +145,21 @@
     const agentEndpointEl = document.getElementById('agent-control-endpoint');
     const agentModelEl = document.getElementById('agent-control-model');
     const agentKeyEl = document.getElementById('agent-control-key');
+    // Same controller, same table, as the mobile command surface — see
+    // sharedUtils.js. Binding it here rather than reimplementing the rules is
+    // what keeps the two copies of this row from drifting apart.
+    const agentProviderRow = window.SwitchboardAgentProviderRow
+        ? window.SwitchboardAgentProviderRow.create({
+            provider: document.getElementById('agent-control-provider'),
+            endpoint: agentEndpointEl,
+            endpointLabel: document.getElementById('agent-control-endpoint-label'),
+            modelSelect: document.getElementById('agent-control-model-select'),
+            modelInput: agentModelEl,
+            modelLabel: document.getElementById('agent-control-model-label'),
+            key: agentKeyEl,
+            keyLabel: document.getElementById('agent-control-key-label'),
+        })
+        : null;
     const agentConfigSaveBtn = document.getElementById('agent-control-config-save');
     const agentConfigStatusEl = document.getElementById('agent-control-config-status');
 
@@ -264,16 +279,11 @@
             // The config row renders the stored values verbatim — including a
             // value the resolver rejects — so the operator sees and fixes it.
             // The key field is write-only: it renders set/unset, never the value.
-            if (agentEndpointEl && document.activeElement !== agentEndpointEl) {
-                agentEndpointEl.value = cfg.endpoint || '';
-            }
-            if (agentModelEl && document.activeElement !== agentModelEl) {
-                agentModelEl.value = cfg.model || '';
-            }
-            if (agentKeyEl) {
-                agentKeyEl.value = '';
-                agentKeyEl.placeholder = cfg.keySet ? 'API key is set (write-only — type to replace)' : 'API key (unset)';
-            }
+            if (agentProviderRow) { agentProviderRow.applyConfig(cfg); }
+            // The key placeholder is set by the provider row controller — it is
+            // PER PROVIDER (`cfg.providers[<id>].keySet`), and a surface-wide
+            // `cfg.keySet` written here would claim the active provider's state
+            // for whichever provider is selected next.
             if (cfg.modelError) {
                 setAgentConfigStatus(cfg.modelError, true);
             } else {
@@ -455,12 +465,12 @@
 
     /** Save the endpoint/model/key the surface's config row holds. */
     async function saveAgentControlConfig() {
-        const payload = {};
-        if (agentEndpointEl) { payload.endpoint = agentEndpointEl.value.trim(); }
-        if (agentModelEl) { payload.model = agentModelEl.value.trim(); }
+        const payload = agentProviderRow ? agentProviderRow.payload() : {};
         // The key field is write-only: an empty field means "leave the stored
-        // key unchanged", so it is only sent when the operator typed one.
-        if (agentKeyEl && agentKeyEl.value.trim()) { payload.apiKey = agentKeyEl.value.trim(); }
+        // key unchanged", so it is only sent when the operator typed one. A
+        // provider that takes no key (local server) never sends one either.
+        const wantsKey = !agentProviderRow || agentProviderRow.needsKey();
+        if (wantsKey && agentKeyEl && agentKeyEl.value.trim()) { payload.apiKey = agentKeyEl.value.trim(); }
         try {
             const res = await fetch('/agent/control/config', {
                 method: 'POST', credentials: 'same-origin',

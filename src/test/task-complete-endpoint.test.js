@@ -37,9 +37,9 @@ function card(planId, kanbanColumn, extra = {}) {
         topic: planId,
         kanbanColumn,
         featureId: '',
-        dispatchedAt: null,
-        dispatchedTerminal: '',
-        queuePosition: null,
+        ownerSince: null,
+        ownerSeat: '',
+        columnOrder: null,
         completedAt: null,
         ...extra,
     };
@@ -89,6 +89,18 @@ function makeServer(opts = {}) {
         resolveTeamMembers: opts.resolveTeamMembers || (async () => ['Coding', 'Coder-1']),
         resolveTeamPacing: opts.resolveTeamPacing || (async () => 'head'),
         getRegisteredTerminals: opts.getRegisteredTerminals,
+        // V81: the accepted coding seat is resolved from the advisory
+        // `owner_seat` stamp plus the live fleet role (the old `dispatchedTerminal`
+        // + `routedTo` read is gone).
+        terminalVerb: opts.terminalVerb || (async (verb) => {
+            if (verb === 'ptyListTerminals') {
+                return { success: true, terminals: [
+                    { friendlyName: 'Coding', role: 'lead_coder' },
+                    { friendlyName: 'Coder-1', role: 'coder' },
+                ] };
+            }
+            return { success: true };
+        }),
         clearTerminalContext: opts.clearTerminalContext || (async (_ws, term) => {
             clears.push(term);
             return { cleared: true };
@@ -152,7 +164,7 @@ async function run() {
 
     await check('idempotent: two identical calls produce one write', async () => {
         const { server, plans, events } = makeServer();
-        plans.set('plan-1', card('plan-1', 'CODER CODED', { dispatchedTerminal: 'Coder-1' }));
+        plans.set('plan-1', card('plan-1', 'CODER CODED', { ownerSeat: 'Coder-1' }));
 
         const r1 = await postComplete(server, { from: 'Coding', planId: 'plan-1' }, 'test-token');
         assert.strictEqual(r1.status, 200, 'first call succeeds');
@@ -214,7 +226,7 @@ async function run() {
 
     await check('no dispatch side effect: no terminal receives a prompt', async () => {
         const { server, plans, dispatched } = makeServer();
-        plans.set('plan-4', card('plan-4', 'CODER CODED', { dispatchedTerminal: 'Coder-1' }));
+        plans.set('plan-4', card('plan-4', 'CODER CODED', { ownerSeat: 'Coder-1' }));
 
         const r = await postComplete(server, { from: 'Coding', planId: 'plan-4' }, 'test-token');
         assert.strictEqual(r.status, 200);
@@ -223,7 +235,7 @@ async function run() {
 
     await check('no column move: card stays in its coding column', async () => {
         const { server, plans } = makeServer();
-        plans.set('plan-5', card('plan-5', 'CODER CODED', { dispatchedTerminal: 'Coder-1' }));
+        plans.set('plan-5', card('plan-5', 'CODER CODED', { ownerSeat: 'Coder-1' }));
 
         await postComplete(server, { from: 'Coding', planId: 'plan-5' }, 'test-token');
         assert.strictEqual(plans.get('plan-5').kanbanColumn, 'CODER CODED', 'column unchanged');
@@ -233,8 +245,8 @@ async function run() {
 
     await check('board scan honours completed_at: completed card in coding column does not pin team', async () => {
         const board = [
-            card('done-card', 'CODER CODED', { dispatchedTerminal: 'Coder-1', completedAt: '2026-08-24T12:00:00Z' }),
-            card('next', 'STAGING', { queuePosition: 1 }),
+            card('done-card', 'CODER CODED', { ownerSeat: 'Coder-1', completedAt: '2026-08-24T12:00:00Z' }),
+            card('next', 'STAGING', { columnOrder: 1 }),
         ];
         const { server, dispatched } = makeServer({
             board,
@@ -247,10 +259,12 @@ async function run() {
         assert.deepStrictEqual(dispatched, ['next'], 'the next queued card is dispatched');
     });
 
-    await check('board scan: uncompleted card in coding column still pins team', async () => {
+    await check('board scan: an uncompleted coding card does not pin the team (V81)', async () => {
+        // V81 deleted the in-flight refusal: an un-posted card no longer refuses
+        // the pop. The next staged card is handed out — duplicate work is cheap.
         const board = [
-            card('busy-card', 'CODER CODED', { dispatchedTerminal: 'Coder-1', completedAt: null }),
-            card('next', 'STAGING', { queuePosition: 1 }),
+            card('busy-card', 'CODER CODED', { ownerSeat: 'Coder-1', ownerSince: '2026-08-20T00:00:00Z', completedAt: null }),
+            card('next', 'STAGING', { columnOrder: 1 }),
         ];
         const { server, dispatched } = makeServer({
             board,
@@ -259,8 +273,8 @@ async function run() {
         });
 
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 409, 'pop refused — uncompleted card pins the team');
-        assert.deepStrictEqual(dispatched, [], 'nothing dispatched while team is in flight');
+        assert.strictEqual(out.status, 200, 'the pop is never refused — ownership is advisory');
+        assert.deepStrictEqual(dispatched, ['next'], 'the next queued card is dispatched');
     });
 
     // ── Accepted coder clearing on completion ───────────────────────────
@@ -268,7 +282,7 @@ async function run() {
     await check('first task-complete clears the host-resolved accepted coder once', async () => {
         const { server, plans, clears } = makeServer();
         plans.set('plan-coder-1', card('plan-coder-1', 'CODER CODED', {
-            dispatchedTerminal: 'Coder-1',
+            ownerSeat: 'Coder-1',
             routedTo: 'coder'
         }));
 
@@ -290,7 +304,7 @@ async function run() {
         const { server, plans, clears } = makeServer();
         // Even if routedTo was lead or dispatchedTerminal was Coding, never clear Coding
         plans.set('plan-lead-card', card('plan-lead-card', 'LEAD CODED', {
-            dispatchedTerminal: 'Coding',
+            ownerSeat: 'Coding',
             routedTo: 'lead'
         }));
 
@@ -306,7 +320,7 @@ async function run() {
             clearTerminalContext: async () => ({ cleared: false, error: 'PTY busy' })
         });
         plans.set('plan-fail-clear', card('plan-fail-clear', 'CODER CODED', {
-            dispatchedTerminal: 'Coder-1',
+            ownerSeat: 'Coder-1',
             routedTo: 'coder'
         }));
 

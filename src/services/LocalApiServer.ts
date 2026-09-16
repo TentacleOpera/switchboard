@@ -79,7 +79,7 @@ function _canonColumnRef(s: string): string {
  * asking for the next card at once must not receive the same card: the
  * second caller re-reads a queue the first has already drained. The chain
  * wraps the dispatch too (not just the select) so the in-flight check the
- * second caller runs cannot read `dispatched_at` state the first has not
+ * second caller runs cannot read `owner_since` state the first has not
  * yet written. Per-process — every caller (route, schedule timer, handoff)
  * goes through `dispatchNextFromQueue` and therefore through this chain.
  */
@@ -104,80 +104,23 @@ export function enqueueOnQueueChain<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Shared in-flight predicate: true when card is held by a team member with no completion post.
- * (completed_at is NULL).
+ * V81: "does any roster seat currently have a card out for work?" — an advisory
+ * read for the `onTeamReleased` hook and the queue-listing `inFlight` display
+ * flag. It is never a dispatch gate.
  *
- * After the dispatch-timeout card (`a-dispatch-has-a-timeout-and-a-failure-can-be-retried`):
- * a `timed out` card has its seat RELEASED — `releaseDispatchHolder` nulls
- * `dispatched_terminal` (and `dispatched_at`) together — so it correctly leaves this
- * in-flight predicate even though `completed_at` stays NULL. A timeout is an
- * abandonment, not a completion (consistent with the note at `bootstrap.ts:1113`),
- * so `completed_at` is deliberately NOT written on the timeout path; the
- * `dispatched_terminal` null is what takes the card out of flight. The dispatch
- * timeout is the sole writer that nulls `dispatched_at` for a live-but-silent seat
- * now that the activity-light sweep (`clearStaleWorkingState`) no longer does —
- * the conflation fix that lets the dispatch-stall nudge and the dispatch timeout
- * see silent seats. This predicate does not read `dispatched_at`, so the longer-
- * lived stamp the conflation fix produces does not change `heldByTeam`'s result.
- *
- * `dispatched_at` is INTENTIONALLY absent from this predicate. It serves two
- * unrelated jobs: the activity-light source ("an agent is working on this now")
- * and a join key the release path could use to find a seat's card. Column moves
- * legitimately clear the first meaning and would destroy the second if the
- * release path depended on it. The release path (`_runQueueDone`'s candidates
- * select) is keyed on the SAME field this predicate is — `dispatched_terminal`
- * — so the two cannot drift apart on what "held" means: every card this
- * predicate counts as in flight is one the seat's own `queue/done` post can
- * reach, in any column.
- *
- * `queue/done` releasing a hold WITHOUT writing `completed_at` is correct, not
- * a gap. `completed_at` is the LEAD's assertion that a plan is finished
- * (`POST /kanban/task/complete`), a different fact from *this seat is no longer
- * working on it*. A seat that posts `queue/done` and never `task/complete`
- * leaves `completed_at` NULL — the team is unblocked (the holder is cleared)
- * but the card is not asserted finished, which is the existing contract.
+ * A card is out for work when `owner_since` is set and its advisory
+ * `owner_seat` names a roster seat. `completed_at` is deliberately not part of
+ * the predicate — completion and "seat still holding" are different facts, and
+ * the hook callers ask the second.
  */
-export function heldByTeam(p: any, teamSet: Set<string>): boolean {
-    return !!p
-        && !p.completedAt
-        && typeof p.dispatchedTerminal === 'string'
-        && p.dispatchedTerminal.length > 0
-        && teamSet.has(p.dispatchedTerminal);
-}
-
-/**
- * Resolves whether a team is currently in flight.
- * A team is in flight when any active card HELD by one of its seats has no
- * completion fact (dispatched_terminal names a team member and completed_at is NULL).
- */
-export async function resolveTeamInFlight(
-    db: any,
-    teamMemberNames: string[]
-): Promise<{ inFlight: boolean; planId?: string; kanbanColumn?: string; dispatchedTerminal?: string }> {
+export async function teamHasLiveWork(db: any, teamMemberNames: string[]): Promise<boolean> {
     if (!db || !Array.isArray(teamMemberNames) || teamMemberNames.length === 0) {
-        return { inFlight: false };
+        return false;
     }
     const teamSet = new Set<string>(teamMemberNames);
     const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
     const board: any[] = (await db.getBoard?.(wsId)) || [];
-    for (const candidate of board.filter(p => heldByTeam(p, teamSet))) {
-        let inFlightCard: any = candidate;
-        try {
-            const fresh: any = await db.getPlanByPlanId?.(candidate.planId);
-            if (fresh) {
-                inFlightCard = fresh;
-            }
-        } catch { /* fall back to candidate */ }
-        if (heldByTeam(inFlightCard, teamSet)) {
-            return {
-                inFlight: true,
-                planId: inFlightCard.planId,
-                kanbanColumn: inFlightCard.kanbanColumn,
-                dispatchedTerminal: inFlightCard.dispatchedTerminal,
-            };
-        }
-    }
-    return { inFlight: false };
+    return board.some(p => p && p.ownerSince && typeof p.ownerSeat === 'string' && teamSet.has(p.ownerSeat));
 }
 
 /**
@@ -525,11 +468,11 @@ interface LocalApiServerOptions {
      * Resolve the roster of terminal names on the same registered team as
      * `headTerminal` (the head itself plus its members), or null when the
      * head names no live team. Reads `terminals.groups` through the same
-     * path `resolveTeamRoleTerminal` uses, so the in-flight predicate in
+     * path `resolveTeamRoleTerminal` uses, so the advisory work-check in
      * `dispatchNextFromQueue` derives team membership from the card's
-     * `dispatched_terminal` identically to dispatch routing. Optional —
-     * absent in headless/test harnesses, where the in-flight check
-     * degrades to a `dispatched_terminal === from` match (head-only).
+     * `owner_seat` identically to dispatch routing. Optional —
+     * absent in headless/test harnesses, where the check
+     * degrades to a `owner_seat === from` match (head-only).
      */
     resolveTeamMembers?: (workspaceRoot: string, headTerminal: string) => Promise<string[] | null>;
     /**
@@ -569,10 +512,22 @@ interface LocalApiServerOptions {
      */
     onTeamReleased?: (workspaceRoot: string, teamMemberNames: string[]) => Promise<void>;
     /**
+     * Fired after a mutation that changes which cards exist, for handlers that do
+     * NOT route through the kanbanVerb `default:` arm (which pushes for its own
+     * mutations). Deletion is the case this exists for: `_handleDeletePlan` removes
+     * the row and returns, so a connected board keeps rendering a card that is gone
+     * until the operator refreshes by hand.
+     *
+     * Wire it to whatever the host uses to resync clients — `schedulePushFullState`
+     * in the standalone host. Optional — absent in headless/test harnesses, where
+     * the omission means no push, NOT a failed delete.
+     */
+    onBoardMutated?: (reason: string) => void;
+    /**
      * Fired when a seat's working state is cleared (non-NULL→NULL transition) via
      * queue/done. Mirrors PlanIngestionEngine._onWorkingStateCleared →
      * broadcastAgentCompleted. The record is the pre-clear read (still has
-     * dispatchedAt, dispatchedTerminal, etc.) so the broadcast can include them.
+     * ownerSince, ownerSeat, etc.) so the broadcast can include them.
      * Optional — absent in headless/test harnesses (no broadcast, pop still
      * proceeds).
      */
@@ -1101,7 +1056,7 @@ type CodingRoundRow = {
     ordinal: number;
     totalRegistered: number;
     state: string;
-    subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }>;
+    subtaskPlanIds: string[];
     registeredAt: string;
     dispatchedAt: string | null;
     closedAt: string | null;
@@ -1206,7 +1161,7 @@ export class LocalApiServer {
     // In-flight acked-dispatch state for GET /kanban/dispatch/state. Keyed by
     // planId so two dispatches to the same seat (which queue behind each other
     // in the per-terminal paste queue) are distinguishable. The poll is also
-    // answerable from persisted state alone (dispatched_at advancing) when the
+    // answerable from persisted state alone (owner_since advancing) when the
     // client supplies `since`/`deadline` query params — this map is the
     // fallback for a bare probe and the source of the seat name mid-delivery.
     private static readonly DEFAULT_LIVENESS_WINDOW_MS = 90 * 1000;
@@ -1225,13 +1180,13 @@ export class LocalApiServer {
         this._seatsAtRest.delete(`${ws}\0${seat}`);
     }
 
-    public isSeatAtRest(workspaceRoot: string, seat: string, planDispatchedAt?: string | null): boolean {
+    public isSeatAtRest(workspaceRoot: string, seat: string, planOwnerSince?: string | null): boolean {
         if (!seat) return false;
         const ws = workspaceRoot || this._options.workspaceRoot || '';
         const entry = this._seatsAtRest.get(`${ws}\0${seat}`);
         if (!entry) return false;
-        if (planDispatchedAt) {
-            const dAt = Date.parse(planDispatchedAt);
+        if (planOwnerSince) {
+            const dAt = Date.parse(planOwnerSince);
             if (!isNaN(dAt) && dAt > entry.at) {
                 return false;
             }
@@ -1244,9 +1199,9 @@ export class LocalApiServer {
         workspaceRoot: string,
         seat: string,
         planId: string,
-        existingDispatchedAt?: string | null
+        existingOwnerSince?: string | null
     ): Promise<{ shouldClear: boolean; reason?: string; movedTo?: string }> {
-        if (this.isSeatAtRest(workspaceRoot, seat, existingDispatchedAt)) {
+        if (this.isSeatAtRest(workspaceRoot, seat, existingOwnerSince)) {
             return { shouldClear: false, reason: `Seat '${seat}' already cleared for this run` };
         }
 
@@ -1265,14 +1220,14 @@ export class LocalApiServer {
             if (typeof db.getBoard === 'function') {
                 const board: any[] = (await db.getBoard(wsId)) || [];
                 const seatCards = board.filter((p: any) =>
-                    p && typeof p.dispatchedTerminal === 'string'
-                    && p.dispatchedTerminal.trim() === seat
-                    && (p.dispatchedAt || !p.completedAt)
+                    p && typeof p.ownerSeat === 'string'
+                    && p.ownerSeat.trim() === seat
+                    && (p.ownerSince || !p.completedAt)
                 );
                 if (seatCards.length > 0) {
                     seatCards.sort((a, b) => {
-                        const atA = a.dispatchedAt ? Date.parse(a.dispatchedAt) : (a.updatedAt ? Date.parse(a.updatedAt) : 0);
-                        const atB = b.dispatchedAt ? Date.parse(b.dispatchedAt) : (b.updatedAt ? Date.parse(b.updatedAt) : 0);
+                        const atA = a.ownerSince ? Date.parse(a.ownerSince) : (a.updatedAt ? Date.parse(a.updatedAt) : 0);
+                        const atB = b.ownerSince ? Date.parse(b.ownerSince) : (b.updatedAt ? Date.parse(b.updatedAt) : 0);
                         return atB - atA;
                     });
                     if (seatCards[0].planId && seatCards[0].planId !== planId) {
@@ -3221,7 +3176,7 @@ export class LocalApiServer {
      * The terminal name recorded against a plan, or '' when what is recorded is
      * not a terminal name. Delegates to the shared pure `plausibleOriginTerminal`
      * so the API dispatch path and the drag path apply the identical filter.
-     * `dispatched_terminal` is only ever a real name; `dispatched_agent` can also
+     * `owner_seat` is only ever a real name; `dispatched_agent` can also
      * be 'unknown', an IDE-shaped "<IDE> <role>" string, or a bare role word
      * (the paste-attribution path writes the role there).
      */
@@ -3251,8 +3206,11 @@ export class LocalApiServer {
             const { record, sessionId, targetColumn, gate, isPromptMode, teamOverride, teamRouting, routing, kanbanVerb, db } = pre.ctx;
 
             // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
-            //    then dispatches (the known move↔dispatch coupling order).
-            const dispatchedAtBefore = record.dispatchedAt ?? null;
+            //    then dispatches (the known move↔dispatch coupling order). The
+            //    dispatch write itself (inside triggerAction → the shared
+            //    `updateDispatchInfoByPlanFile`) resets `completed_at` and stamps
+            //    the advisory owner unconditionally — no claim, no refusal.
+            const ownerSinceBefore = record.ownerSince ?? null;
             await db.clearCompletedAt?.(record.planId);
             await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal, skipClear: !!dispatchOptions?.skipClear, clearBeforePrompt: dispatchOptions?.clearBeforePrompt }, workspaceRoot);
 
@@ -3260,11 +3218,11 @@ export class LocalApiServer {
             const after: any = await db.getPlanByPlanId(record.planId);
             const column = after?.kanbanColumn ?? record.kanbanColumn;
             const moved = column === targetColumn;
-            const dispatchObserved = !!after?.dispatchedAt && after.dispatchedAt !== dispatchedAtBefore;
+            const dispatchObserved = !!after?.ownerSince && after.ownerSince !== ownerSinceBefore;
             const dispatched = isPromptMode ? moved : dispatchObserved;
             const success = moved && dispatched;
             if (success) {
-                const targetTerm = teamOverride || after?.dispatchedTerminal || record?.dispatchedTerminal;
+                const targetTerm = teamOverride || after?.ownerSeat || record?.ownerSeat;
                 if (targetTerm) {
                     this.markSeatActive(workspaceRoot, String(targetTerm).trim());
                 }
@@ -3283,12 +3241,12 @@ export class LocalApiServer {
                     moved,
                     dispatched,
                     dispatchedAgent: after?.dispatchedAgent || null,
-                    dispatchedAt: after?.dispatchedAt || null,
+                    ownerSince: after?.ownerSince || null,
                     ...(teamRouting ? { teamRouting } : {}),
                     ...(success ? {} : {
                         error: !moved
                             ? `Card did not land in '${targetColumn}' (currently '${column}')`
-                            : 'Move persisted but no dispatch was recorded (dispatchedAt unchanged) — check the terminal agent'
+                            : 'Move persisted but no dispatch was recorded (owner_since unchanged) — check the terminal agent'
                     })
                 }
             };
@@ -3374,11 +3332,15 @@ export class LocalApiServer {
             }
         }
         const isPromptMode = gate?.dragDropMode === 'prompt';
+        // V81: no live-terminal refusal. The dispatch write happens regardless;
+        // when no seat is live the delivery layer falls back to the clipboard
+        // and the verify step below reports what actually happened (502 with
+        // owner_since unchanged) rather than a refusal the card carries.
         if (!isPromptMode) {
             let terminals: string[] | undefined;
             try { terminals = this._options.getRegisteredTerminals?.(); } catch { /* health-style guard */ }
             if (terminals !== undefined && terminals.length === 0) {
-                return fail(409, 'No terminal agent is live right now — dispatch would fall back to the clipboard and nothing would run. If you have set up agents before, just open your agent terminal(s) (AGENT SETUP tab / your saved agent grid) so they re-register; run Guided setup only if you have never configured one. API callers can open the saved grid themselves: POST /taskViewer/verb/createAgentGrid (check /health.selectedWorkspaceRoot matches your root first; POST /kanban/verb/selectWorkspace if not).');
+                console.warn('[LocalApiServer] dispatch proceeding with no live terminal — delivery will fall back to the clipboard and verify reports the outcome');
             }
         }
 
@@ -3386,28 +3348,22 @@ export class LocalApiServer {
         //     reviewer on the SAME team that produced the work. Role resolution
         //     downstream is workspace-wide and would pick an arbitrary reviewer once
         //     a second team is live. Origin precedence: explicit `from` (the head
-        //     naming itself) → the plan's dispatched_terminal → its dispatched_agent
+        //     naming itself) → the plan's owner_seat → its dispatched_agent
         //     → none. `unknown`, IDE-shaped names and bare role words are not
         //     terminal names. `record` is the PRE-move read (step 1): after step 4
         //     these fields name the reviewer, not the coder.
         //
-        // Feature dispatch invariant: a feature dispatch seats exactly one agent —
-        // the lead of the originating team. It is never fanned to a set, and never
-        // falls back to workspace-wide resolution. If exactly one lead seat cannot
-        // be resolved, the dispatch is refused with the relevant teamRouting
-        // string. This inverts restrictToOriginTeam for feature dispatch ONLY:
-        // team-scoped resolution refuses on a miss instead of falling through. The
-        // queue/next path (restrictToOriginTeam: true) is unchanged — it already
-        // refuses. Non-feature dispatch keeps the fall-through behaviour.
+        // Feature dispatch guidance: a feature dispatch prefers the lead of the
+        // originating team. V81: a miss is no longer a refusal — the board never
+        // refuses a dispatch, so team-scoped resolution falls back to
+        // workspace-wide with the miss named in `teamRouting`. Routing is
+        // guidance, not a gate.
         const isFeatureDispatch = !!(record?.isFeature);
         let teamOverride: string | undefined = dispatchOptions?.targetTerminalOverride;
         let teamRouting: string | undefined;
         if (!teamOverride && this._options.resolveTeamRoleTerminal) {
             if (!gate?.role) {
                 teamRouting = 'team-scoped: dispatch role unavailable on this host — fell back to workspace-wide';
-                if (isFeatureDispatch) {
-                    return fail(409, `Feature dispatch refused: dispatch role unavailable on this host. A feature dispatch seats exactly one lead — workspace-wide resolution is not a fallback for it. Add the role seat to this host, or dispatch the card yourself with an explicit target.`);
-                }
             } else {
                 const origin = (dispatchOptions?.originTerminal || '').trim()
                     || this._plausibleOriginTerminal(record);
@@ -3416,30 +3372,16 @@ export class LocalApiServer {
                     if (hit) {
                         teamOverride = hit;
                         teamRouting = `team-scoped: ${origin} → ${hit}`;
-                    } else if (dispatchOptions?.restrictToOriginTeam || isFeatureDispatch) {
-                        // Opt-in (the external-headed queue/next branch) OR a feature
-                        // dispatch (the invariant): a miss is a refusal, never a
-                        // fall-through to workspace-wide routing.
-                        return fail(409, `No ${gate.role} on ${origin}'s team — the card stays staged. Dispatching workspace-wide would hand this team's card to another team's terminal. Add a ${gate.role} seat to the team, or dispatch the card yourself with an explicit target.`);
                     } else {
                         teamRouting = `team-scoped: no ${gate.role} on ${origin}'s team — fell back to workspace-wide`;
                     }
                 } else {
                     teamRouting = 'team-scoped: no origin terminal — fell back to workspace-wide';
-                    if (isFeatureDispatch) {
-                        return fail(409, `Feature dispatch refused: no origin terminal — the originating team could not be identified. A feature dispatch seats exactly one lead — add a ${gate.role} seat to the team, or dispatch the card yourself with an explicit target.`);
-                    }
                 }
             }
         }
-
-        // Safety-net count check: a feature dispatch must resolve to exactly one
-        // terminal. teamOverride is set (exactly one) or the chain above refused.
-        // An explicit targetTerminalOverride is exactly one by definition. If
-        // neither path set a target (e.g. resolveTeamRoleTerminal not wired), refuse
-        // rather than falling through to workspace-wide set resolution downstream.
         if (isFeatureDispatch && !teamOverride) {
-            return fail(409, `Feature dispatch refused: no lead seat resolved. A feature dispatch seats exactly one lead — add a ${gate?.role ?? 'lead'} seat to the team, or dispatch the card yourself with an explicit target.`);
+            console.warn(`[LocalApiServer] feature dispatch of ${record.planId} found no lead seat — proceeding with workspace-wide resolution (the board never refuses a dispatch)`);
         }
 
         return {
@@ -3453,7 +3395,7 @@ export class LocalApiServer {
      * the same gate pre-flight (so 400/409 refusals still arrive immediately and
      * loudly — the ack is NEVER sent for a dispatch that is about to fail), then
      * fires `triggerAction` WITHOUT awaiting the paced prompt paste. Returns an
-     * ack the moment the dispatch is committed, with the pre-move `dispatchedAt`
+     * ack the moment the dispatch is committed, with the pre-move `ownerSince`
      * baseline and a 60s deadline the client echoes back to
      * `GET /kanban/dispatch/state`.
      *
@@ -3486,7 +3428,7 @@ export class LocalApiServer {
                 return { status: pre.status, payload: pre.payload };
             }
             const { record, sessionId, targetColumn, gate, teamOverride, routing, teamRouting, kanbanVerb } = pre.ctx;
-            const dispatchedAtBefore = record.dispatchedAt ?? null;
+            const dispatchedAtBefore = record.ownerSince ?? null;
             const planId = record.planId;
             const seat = teamOverride || null;
 
@@ -3519,7 +3461,7 @@ export class LocalApiServer {
             // slow part this whole split exists to hide from the UI.
             const delivery = kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal, skipClear: !!dispatchOptions?.skipClear, clearBeforePrompt: dispatchOptions?.clearBeforePrompt }, workspaceRoot);
             // Retain the promise so a rejection is recorded, never unhandled. A
-            // rejection (e.g. terminal closed mid-chunk) leaves dispatchedAt
+            // rejection (e.g. terminal closed mid-chunk) leaves ownerSince
             // unchanged, so the poll times out to `unknown` at the deadline — the
             // surface does not spin forever.
             void delivery.catch((err: unknown) => {
@@ -3555,14 +3497,14 @@ export class LocalApiServer {
     /**
      * GET /kanban/dispatch/state?planId=…&since=…&deadline=…&workspaceRoot=…
      * Auth-gated read of an in-flight acked dispatch's delivery phase. Answers
-     * from persisted state (`dispatched_at` advancing past the client-supplied
+     * from persisted state (`owner_since` advancing past the client-supplied
      * `since` baseline) plus a 60s `deadline`; falls back to the in-memory
      * `_ackedDispatchState` map when the client omits the baseline (e.g. a bare
      * probe), so a reconnecting phone that lost its in-memory poll can resume.
      *
      * States:
-     *   delivering — dispatchedAt unchanged from `since` and the deadline not passed.
-     *   dispatched — dispatchedAt advanced; carries dispatchedAgent/dispatchedAt/seat.
+     *   delivering — ownerSince unchanged from `since` and the deadline not passed.
+     *   dispatched — ownerSince advanced; carries dispatchedAgent/ownerSince/seat.
      *   unknown    — deadline passed without an advance; reuses the synchronous
      *                502 wording so the operator sees one vocabulary in both paths.
      *                This is a UI timeout, NOT a delivery verdict: a slow prompt
@@ -3605,14 +3547,14 @@ export class LocalApiServer {
             const since = sinceParam !== null ? (sinceParam || null) : (memEntry?.since ?? null);
             const deadline = deadlineParam !== null ? Number(deadlineParam) : (memEntry?.deadline ?? 0);
             // Only the ack-time team-scoped override is a seat name for a
-            // delivery still in flight. `record.dispatchedTerminal` is the
+            // delivery still in flight. `record.ownerSeat` is the
             // PRE-move value here, so on a re-dispatch it names the PREVIOUS
             // run's terminal — reported as `delivering`'s seat it is a
             // confident wrong answer. The `dispatched` branch below reads it
-            // only once `dispatched_at` has advanced, when it is current.
+            // only once `owner_since` has advanced, when it is current.
             const seat = memEntry?.seat ?? null;
 
-            const currentAt = record.dispatchedAt ?? null;
+            const currentAt = record.ownerSince ?? null;
             const advanced = !!currentAt && currentAt !== since;
             if (advanced) {
                 // Delivery confirmed — clear the in-flight entry.
@@ -3624,7 +3566,7 @@ export class LocalApiServer {
                     planId,
                     dispatchedAgent: record.dispatchedAgent || null,
                     dispatchedAt: currentAt,
-                    seat: record.dispatchedTerminal || seat
+                    seat: record.ownerSeat || seat
                 }));
                 return;
             }
@@ -3645,7 +3587,7 @@ export class LocalApiServer {
                 success: true,
                 state: 'unknown',
                 planId,
-                error: 'Move persisted but no dispatch was recorded (dispatchedAt unchanged) — delivery status uncertain; the prompt may still be pasting. Check the terminal agent.'
+                error: 'Move persisted but no dispatch was recorded (ownerSince unchanged) — delivery status uncertain; the prompt may still be pasting. Check the terminal agent.'
             }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanDispatchState error:', err);
@@ -3671,13 +3613,10 @@ export class LocalApiServer {
      * **Pacing.** `pacing` selects who receives the popped card:
      * - `'head'` (default, the regression gate for ~4,000 installs): the
      *   requesting head is the terminal — `targetTerminalOverride: from` — and
-     *   the head delegates subtasks itself. The one-in-one-out in-flight
-     *   refusal (below) applies.
+     *   the head delegates subtasks itself.
      * - `'seat'`: complexity routing picks the column AND the routed role's
      *   seat on this team receives the card directly — `restrictToOriginTeam:
-     *   true` with no override. No head, no review hop. The in-flight refusal
-     *   applies on this path too: the scan checks `!p.completedAt`, so a
-     *   completed card no longer pins the team regardless of pacing mode.
+     *   true` with no override. No head, no review hop.
      *   An external head (non-terminal agent) forces the seat branch
      *   regardless of pacing: it has no terminal, so
      *   `targetTerminalOverride: from` would name a terminal that does not
@@ -3686,50 +3625,18 @@ export class LocalApiServer {
      * Resolution: the explicit argument → the requesting team's stored `pacing`
      *   field (subtask 3 writes it; absent reads as `'head'`) → `'head'`.
      *
-     * In-flight refusal (BOTH pacing modes — the one-in-one-out contract): a
-     * team is in flight when any active card HELD by one of its seats has no
-     * completion fact — `dispatched_terminal` names a team member and
-     * `completed_at` is NULL. Team membership is resolved from the card's
-     * `dispatched_terminal` through the same path `resolveTeamRoleTerminal`
-     * uses (`resolveTeamMembers`).
-     *
-     * EXACTLY ONE fact releases a team: `completed_at`, written by the lead's
-     * POST /kanban/task/complete. `kanban_column` is NOT in the predicate.
-     * Board position records where a card is, never whether a team may take
-     * more work, so moving a card — by the lead, an operator drag, or any
-     * other actor — releases nothing. The second release signal that used to
-     * live here (the card leaving a coding column, which the lead triggered by
-     * dispatching the feature to a reviewer) is deleted: it let the lead pull
-     * its next subtask while a reviewer or a fix round was still editing the
-     * same worktree, landing in the same commit.
-     *
-     * There is deliberately NO release valve for an un-posted card. Any valve
-     * is a second signal under a new name, and restores that concurrency the
-     * moment a lead reaches for it instead of posting. The 409 names the
-     * blocking card's planId, column and seat so the lead can close it out.
-     * The consequence is intended and load-bearing: a card held by a team seat
-     * in ANY column — including one resting in `CODE REVIEWED` — holds the
-     * team until completion is posted for it. A card returning to the queue
-     * has its holder released (`releaseDispatchHolder`), which is what keeps
-     * the escalation ladder from deadlocking on the card it just re-staged.
-     *
-     * V77 INVERTS the "no release valve" rule above — deliberately, and only
-     * because `completeCardInternal` now requires a non-empty `outcome`, so a
-     * completion means "finished, with a statement" and cannot be used as a
-     * silent unlock. The release valve (`POST /kanban/card/release`,
-     * `POST /kanban/team/release`) writes `released_at` (NOT `completed_at`)
-     * and clears the holder, freeing the team without claiming the work is
-     * done. The 409 below names the release door. The inversion is safe ONLY
-     * because the forced-outcome gate makes completion meaningful — without
-     * it, the valve is exactly the "second signal under a new name" the
-     * original comment feared. See
-     * `completion-is-the-only-way-to-release-a-team-so-it-gets-posted-early.md`.
+     * V81: the board never refuses a dispatch. There is no in-flight
+     * predicate, no one-in-one-out contract, and no release valve. A card is a
+     * column, a completion state, and an append-only event log; `owner_seat` /
+     * `owner_since` are advisory display metadata written unconditionally by
+     * every dispatch and cleared unconditionally by `queue/done`. A duplicate
+     * dispatch is valid: it overwrites the advisory owner and clears
+     * `completed_at`, and the second agent reads the plan, sees the work done,
+     * and says so.
      *
      * Completion is an asserted event, not a trace derived from board
      * position, so no plan-file `mtime` side effect and no staleness sweep can
-     * corrupt it. The seat-paced path does not skip this scan — the skip
-     * existed only because board position never released, and the completion
-     * fact makes that reason obsolete.
+     * corrupt it.
      *
      * `targetTerminalOverride: from` (head pacing) short-circuits the
      * team-scoped resolver, so complexity routing chooses the *column* and the
@@ -3765,11 +3672,11 @@ export class LocalApiServer {
         if (!from) { return fail(400, 'Missing required field: from (the requesting head\'s terminal name)'); }
         const pacingOverride = args?.pacing === 'seat' || args?.pacing === 'head' ? args.pacing : undefined;
 
-        // Serialize the pop. The chain wraps select → in-flight check → dispatch
-        // as one critical section: the second caller re-reads a queue the first
-        // has already drained, and its in-flight check reads `dispatched_at`
-        // state the first has already written. Releasing the lock before the
-        // dispatch reopens the race it exists to close.
+        // Serialize the pop. The chain wraps select → dispatch as one critical
+        // section: the second caller re-reads a queue the first has already
+        // drained, and its owner stamp reads `owner_since` state the first has
+        // already written. Releasing the lock before the dispatch reopens the
+        // race it exists to close.
         return new Promise((resolve) => {
             _queueNextChain = _queueNextChain.then(async () => {
                 try { resolve(await this._runQueuePop(workspaceRoot, from, pacingOverride)); }
@@ -3845,10 +3752,9 @@ export class LocalApiServer {
             // resolver at all (headless/test harness — degrade to head-only
             // match, the pre-fallback behaviour). False ONLY when the resolver
             // is present and returned null/empty — the non-team fallback path
-            // (workspace-wide routing, skip in-flight check, install global
+            // (workspace-wide routing, install global
             // queue/done order).
             const isTeamDispatch = rosterFromResolver || !hasRosterResolver;
-            const teamSet = new Set<string>(roster && roster.length ? roster : [from]);
 
             // ── Pacing resolution ──────────────────────────────────────
             // Explicit override → team's stored field → 'head'. Subtask 3
@@ -3862,34 +3768,18 @@ export class LocalApiServer {
                 } catch (err) { console.warn('[LocalApiServer] resolveTeamPacing failed:', err); }
             }
 
-            // ── In-flight refusal (BOTH PACING MODES) ─────────────────
-            // A team is in flight when any card belonging to it is held by
-            // a team member and has no completion post (completed_at is NULL).
-            //
-            // Exactly ONE fact releases a team: `completed_at` (the lead's
-            // explicit POST /kanban/task/complete). Board position (kanban_column)
-            // is not part of the predicate — moving a card never releases a team.
-            // A card returning to the queue has its holder cleared via
-            // `releaseDispatchHolder`.
-            //
-            // The scan re-reads the canonical row before refusing to avoid
-            // false 409s from race conditions between board load and completion post.
-            if (isTeamDispatch) {
-                const inFlightCheck = await resolveTeamInFlight(db, Array.from(teamSet));
-                if (inFlightCheck.inFlight) {
-                    return fail(409, `Team already in flight: card '${inFlightCheck.planId}' is in '${inFlightCheck.kanbanColumn}' held by '${inFlightCheck.dispatchedTerminal}' with no completion post. Completion is for FINISHED work — POST /kanban/task/complete. To free the team WITHOUT claiming the work is done, POST /kanban/card/release with { from, planId: '${inFlightCheck.planId}' } (or POST /kanban/team/release with { from } to release every held card).`, {
-                        inFlight: {
-                            planId: inFlightCheck.planId,
-                            kanbanColumn: inFlightCheck.kanbanColumn,
-                            dispatchedTerminal: inFlightCheck.dispatchedTerminal,
-                        }
-                    });
-                }
-            }
+            // V81: the in-flight refusal is deleted outright. There is no
+            // "team already in flight" 409 — a card's owner is advisory
+            // (`owner_seat`/`owner_since`), never a gate, and a duplicate
+            // dispatch is legal and cheap (the agent reads the plan, sees the
+            // work is done, and says so). A seat that already holds a card and
+            // asks for the next one simply gets the next one; last writer wins
+            // on the advisory owner stamp.
 
             // ── Queue source ───────────────────────────────────────────
-            // STAGING is THE queue, ordered by queue_position ASC NULLS
-            // LAST then board order. Subtask exclusion: empty `featureId`
+            // STAGING is THE queue, ordered by the shared precedence
+            // (column_order ASC, NULL first, then board order). Subtask
+            // exclusion: empty `featureId`
             // (switchboard-contracts #6) — a subtask nested under a feature
             // must not leak into the pop.
             //
@@ -3982,15 +3872,20 @@ export class LocalApiServer {
                 }
             }
 
+            // V81: queueable = incomplete + top-level + not dependency-blocked.
+            // Ownership is deliberately NOT here — `owner_since`/`owner_seat`
+            // are advisory display metadata and never make a card unavailable.
+            // The queue reports empty only when every card in the column is
+            // complete (or excluded as a subtask / dependency-blocked).
             const isQueueable = (p: any): boolean =>
                 !!p
-                && (!p.dispatchedAt)
+                && (!p.completedAt)
                 && (!p.featureId || p.featureId === '')
                 && !dependencyBlockers.has(String(p.planId));
 
             // V63: the queue pop uses the shared precedence resolver so a
             // starred card is picked before any unstarred one, then by
-            // queue_position (STAGING's manual order), then the board's
+            // column_order (STAGING's manual order), then the board's
             // existing fallback (column_entered_at DESC → createdAt DESC).
             // This replaces the inline byQueueThenBoard comparator with the
             // SAME logic the frontend display sort and _distributePlannerDispatch
@@ -4016,16 +3911,21 @@ export class LocalApiServer {
                     if (blocked.length > 0) {
                         const planId = String(blocked[0].planId);
                         const blockedBy = dependencyBlockers.get(planId) || '';
-                        return fail(409, `Dependency predecessor '${blockedBy}' has not completed (completed_at is NULL). Card '${planId}' cannot be dispatched, and no other staged card is unblocked.`, {
+                        // 200, not a refusal: the queue is simply not ready.
+                        // `reason` + `dependencyBlocked` carry the diagnosis a
+                        // lead needs; the poll retries on its next tick.
+                        return { status: 200, payload: {
+                            success: true, dispatched: null,
+                            reason: `dependency-blocked: predecessor '${blockedBy}' has not completed; card '${planId}' and no other staged card is unblocked`,
                             dependencyBlocked: { planId, blockedBy }
-                        });
+                        } };
                     }
                 }
                 return { status: 200, payload: { success: true, dispatched: null, reason: 'queue empty' } };
             }
             // Precedence decides the order; it never decides eligibility. Anything
-            // that makes a card ineligible — already dispatched, a subtask, and (when
-            // the streams plan lands) a dependency predecessor that has not asserted
+            // that makes a card ineligible — complete, a subtask, or a dependency
+            // predecessor that has not asserted
             // completion — belongs in isQueueable above, as a filter. The plan's own
             // rule: "In-progress exclusion stays a filter, never a sort."
             //
@@ -4106,11 +4006,7 @@ export class LocalApiServer {
             // the seat/external branch only. Without the override,
             // performKanbanDispatch resolves the routed role on the origin's
             // team and, on a miss, falls back to workspace-wide routing — which
-            // would hand this team's card to another team's terminal. That leak
-            // is worse than a refusal twice over: the in-flight predicate keys
-            // on team membership, so a card held by a foreign terminal is
-            // invisible to it and the one-in-one-out pacing this endpoint exists
-            // to enforce silently stops applying.
+            // would hand this team's card to another team's terminal.
             const useSeatBranch = pacing === 'seat' || isExternalHead;
             const dispatchOpts = useSeatBranch
                 ? { originTerminal: from, restrictToOriginTeam: true }
@@ -4150,10 +4046,10 @@ export class LocalApiServer {
                 dispatchOpts
             );
 
-            // A failed dispatch (no live terminal → 409, card not found →
-            // 404, card dragged out → 502) is passed through unchanged and
-            // the card stays staged with its queue position intact. A pop
-            // must never consume a card it did not start.
+            // A failed dispatch (card not found → 404, card dragged out →
+            // 502) is passed through unchanged and the card stays staged with
+            // its queue position intact. A pop must never consume a card it
+            // did not start.
             if (outcome.status < 200 || outcome.status >= 300) {
                 return outcome;
             }
@@ -4219,8 +4115,8 @@ export class LocalApiServer {
      *   cannot release another seat's card.
      *
      * Contract (mirrors `POST /phone-a-friend/done`'s 200-no-op shape):
-     * - No active card for `from` (none with `dispatchedTerminal === from` and
-     *   `dispatched_at` set) → **200 no-op** with `reason: "duplicate"`. Never
+     * - No active card for `from` (none with `ownerSeat === from` and
+     *   `owner_since` set) → **200 no-op** with `reason: "duplicate"`. Never
      *   4xx a duplicate. `dispatched` reflects the prior pop (non-null when one
      *   was recorded) so a retried report is not misread as "queue empty".
      * - `clearWorkingState` returns false (the plan-file mtime watcher cleared
@@ -4298,7 +4194,7 @@ export class LocalApiServer {
      */
     /**
      * The single seat-at-rest clear. Reached from every completion path
-     * (`completeCardInternal`, `releaseCardInternal`, `_handleKanbanRoundComplete`,
+     * (`completeCardInternal`, `_handleKanbanRoundComplete`,
      * `_completeFeatureCore`, `_runQueueDone`) so "why was this seat cleared?" and
      * "why was it not?" are answerable from one function. Owns the decision:
      * calls `clearTerminalContext`, marks the seat at rest, and fires
@@ -4341,33 +4237,29 @@ export class LocalApiServer {
 
     /**
      * Resolve the accepted coding seat from HOST evidence only — never from the
-     * request body, and never `from` (the poster). Shared by
-     * `completeCardInternal` and `releaseCardInternal` so the two at-rest clear
-     * paths cannot resolve a coding seat differently (the verbatim duplication
-     * of this block was the drift seam; extracting it is what prevents the two
-     * paths from diverging).
+     * request body, and never `from` (the poster). Used by
+     * `completeCardInternal`'s at-rest clear.
      *
      * The `CODING_ROLES` gate (`coder`/`intern`) is the entire protection
      * against clearing a non-coding seat: a lead/planner/reviewer's
-     * `dispatchedTerminal` can never equal a coding seat resolved here, so a
+     * `ownerSeat` can never equal a coding seat resolved here, so a
      * name-based guard comparing the resolved seat to `from` on top of it is provably
      * redundant for its stated intent and provably harmful for the self-report
      * case (the only case it can ever fire on), which it suppresses. That guard
-     * was deleted from both call sites; this helper is the one place that
+     * was deleted; this helper is the one place that
      * enforces "host evidence only, never `from`, never the request body".
      *
-     * Returns the seat name when the dispatched terminal resolves to a coding
+     * V81: `routed_to` is gone — the role check now goes through the live
+     * fleet lookup only.
+     *
+     * Returns the seat name when the attributed seat resolves to a coding
      * role, `undefined` otherwise. The caller keeps its own `dispatchedSeat`
      * local for the no-seat diagnostic branch (`dispatchedSeat === from` →
      * self-report), which is why this helper does not return it.
      */
     private async _resolveAcceptedCodingSeat(existing: any, workspaceRoot: string): Promise<string | undefined> {
         const CODING_ROLES = new Set(['coder', 'intern']);
-        const dispatchedSeat = String(existing.dispatchedTerminal || '').trim();
-        const rowRole = String(existing.routedTo || '').toLowerCase();
-        if (dispatchedSeat && CODING_ROLES.has(rowRole)) {
-            return dispatchedSeat;
-        }
+        const dispatchedSeat = String(existing.ownerSeat || '').trim();
         if (dispatchedSeat && this._options.terminalVerb) {
             try {
                 const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
@@ -4385,19 +4277,19 @@ export class LocalApiServer {
     /**
      * Resolve ALL coding seats currently attributed to a plan via live dispatch
      * attribution. Used by `completeCardInternal`'s multi-seat clear (plan
-     * no-op #3) and as the fallback when the plan row's `dispatchedTerminal`
+     * no-op #3) and as the fallback when the plan row's `ownerSeat`
      * is empty (no-op #2).
      *
      * `getLiveDispatchAttribution` returns one row per active plan with
-     * `dispatched_at IS NOT NULL` — the CURRENT dispatch, not historical. A
-     * seat that worked the subtask, released, and took a NEW subtask appears
+     * `owner_since IS NOT NULL` — the CURRENT attribution, not historical. A
+     * seat that worked the subtask and took a NEW subtask appears
      * under the NEW plan's row, not this one, so it is never cleared mid-turn
-     * on its new work (the "released and moved on" guard the plan's Complexity
+     * on its new work (the "moved on" guard the plan's Complexity
      * Audit requires).
      *
      * Two tiers, matching `attributePlansToTerminals`:
-     *   1. name — row.dispatchedTerminal === a live terminal's friendlyName
-     *   2. path — worktree-path matching for rows with no dispatchedTerminal
+     *   1. name — row.ownerSeat === a live terminal's friendlyName
+     *   2. path — worktree-path matching for rows with no ownerSeat
      *      (extension-host dispatch does not record a terminal name)
      *
      * Each seat is gated on `CODING_ROLES` (coder/intern) via the live fleet
@@ -4419,15 +4311,15 @@ export class LocalApiServer {
 
             // Tier 1 — direct name match. Rows that name their terminal.
             for (const r of matching) {
-                const name = String(r.dispatchedTerminal || '').trim();
+                const name = String(r.ownerSeat || '').trim();
                 if (name && !seats.includes(name)) seats.push(name);
             }
 
-            // Tier 2 — worktree-path match for rows with no dispatchedTerminal.
+            // Tier 2 — worktree-path match for rows with no ownerSeat.
             // Uses the same `attributePlansToTerminals` projection
             // `ptyListTerminals` carries, so the server-side clear and the UI
             // attribution agree on which seat holds the card.
-            const unnamed = matching.filter((r: any) => !r.dispatchedTerminal);
+            const unnamed = matching.filter((r: any) => !r.ownerSeat);
             if (unnamed.length > 0 && this._options.terminalVerb) {
                 const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
                 const terminals = (listed?.terminals || []).map((t: any) => ({
@@ -4457,7 +4349,7 @@ export class LocalApiServer {
                     const role = roleMap.get(name);
                     // If the role is unknown (terminal not in the fleet list),
                     // keep the seat — the primary `_resolveAcceptedCodingSeat`
-                    // already role-checked the dispatchedTerminal case, and a
+                    // already role-checked the ownerSeat case, and a
                     // name-match from attribution is a stronger signal than
                     // a missing role entry.
                     return !role || CODING_ROLES.has(role);
@@ -4468,12 +4360,12 @@ export class LocalApiServer {
     }
 
     /**
-     * Shared completion helper for both POST /kanban/task/complete and POST /kanban/team/release.
+     * Shared completion helper for POST /kanban/task/complete and its callers.
      * Performs:
      *   1. Idempotency check via getPlanByPlanId.
-     *   2. Coding-seat resolution from HOST evidence (row's dispatchedTerminal + routedTo, then live fleet role).
+     *   2. Coding-seat resolution from HOST evidence (row's ownerSeat, then live fleet role).
      *   3. setCompletedAt timestamp write.
-     *   4. appendPlanEventByPlanId with the specified workflow ('task-complete' or 'operator-release').
+     *   4. appendPlanEventByPlanId with the specified workflow ('task-complete').
      *   5. clearSeatAtRest for the resolved coding seat (skipping `from`).
      */
     public async completeCardInternal(
@@ -4496,7 +4388,7 @@ export class LocalApiServer {
         clearError?: string;
         clearReason?: string;
         acceptedCodingSeat?: string;
-        dispatchedTerminal?: string;
+        ownerSeat?: string;
         idempotent?: boolean;
         notFound?: boolean;
         badRequest?: boolean;
@@ -4513,8 +4405,8 @@ export class LocalApiServer {
             return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
         }
 
-        const isStaleCompletedAt = !!existing.completedAt && !!existing.dispatchedAt &&
-            Date.parse(existing.completedAt) < Date.parse(existing.dispatchedAt);
+        const isStaleCompletedAt = !!existing.completedAt && !!existing.ownerSince &&
+            Date.parse(existing.completedAt) < Date.parse(existing.ownerSince);
         const isIdempotent = !!existing.completedAt && !isStaleCompletedAt;
 
         // NO agent is asked to write a summary. `outcome` is accepted and stored
@@ -4541,7 +4433,7 @@ export class LocalApiServer {
         // non-coding `from` can never equal a coding seat the gate just
         // confirmed — and provably harmful for the self-report case, the only
         // case it could ever fire on, which it suppressed).
-        const dispatchedSeat = String(existing.dispatchedTerminal || '').trim();
+        const dispatchedSeat = String(existing.ownerSeat || '').trim();
         const acceptedCodingSeat = await this._resolveAcceptedCodingSeat(existing, workspaceRoot);
 
         // 3. Write completed_at timestamp (only on first write).
@@ -4554,12 +4446,8 @@ export class LocalApiServer {
                 return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
             }
 
-            // V77: stamp outcome/workflow onto the plans row so consumers read what
-            // happened without going to plan_events. Best-effort — the event log
-            // still holds the record if this write fails.
-            await db.setPlanOutcomeWorkflow?.(planId, outcome, workflow);
-
-            // 4. Record to plan_events for queryability.
+            // 4. Record to plan_events for queryability. V81: outcome/workflow
+            // live ONLY on the event — the plans row no longer carries them.
             await db.appendPlanEventByPlanId?.(planId, {
                 eventType: 'completed',
                 workflow,
@@ -4568,7 +4456,7 @@ export class LocalApiServer {
         }
 
         // 5. Clear every coding seat currently attributed to this plan. The
-        // primary accepted seat (from `dispatchedTerminal` + `CODING_ROLES`)
+        // primary accepted seat (from `ownerSeat` + `CODING_ROLES`)
         // is the first candidate; attribution evidence
         // (`getLiveDispatchAttribution`) adds any other seat currently holding
         // this card — the escalation-ladder case where a second seat touched
@@ -4587,7 +4475,7 @@ export class LocalApiServer {
 
         const seatsToClear = new Set<string>();
         if (acceptedCodingSeat) seatsToClear.add(acceptedCodingSeat);
-        // No-op #2: when `dispatchedTerminal` is empty, `_resolveAcceptedCodingSeat`
+        // No-op #2: when `ownerSeat` is empty, `_resolveAcceptedCodingSeat`
         // returns undefined. The attribution fallback finds the seat via live
         // dispatch evidence instead.
         const attributed = await this._resolveAttributedCodingSeats(db, workspaceRoot, planId);
@@ -4634,7 +4522,7 @@ export class LocalApiServer {
                     workspaceRoot,
                     seat,
                     planId,
-                    existing.dispatchedAt
+                    existing.ownerSince
                 );
                 if (!check.shouldClear) {
                     failedClears.push({ name: seat, reason: check.reason || 'seat moved on' });
@@ -4677,200 +4565,11 @@ export class LocalApiServer {
             ...(clearError ? { clearError } : {}),
             ...(clearReason ? { clearReason } : {}),
             ...(acceptedCodingSeat ? { acceptedCodingSeat } : {}),
-            ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {}),
+            ...(existing.ownerSeat ? { ownerSeat: existing.ownerSeat } : {}),
             ...(isIdempotent ? { idempotent: true } : {})
         };
     }
 
-    /**
-     * V77 release valve — the door that frees a team WITHOUT claiming the work
-     * is done. The mirror image of `completeCardInternal`: writes `released_at`
-     * (NOT `completed_at`), records a `workflow='operator-release'` event, clears
-     * the dispatch holder so the in-flight predicate (`heldByTeam`) returns false
-     * (the team is free for `POST /kanban/queue/next`), and clears the coding
-     * seat. A released card does NOT read as completed anywhere — `completed_at`
-     * stays NULL, the column is unchanged, and the next agent that picks it up
-     * sees an unfinished card.
-     *
-     * Idempotency: a repeat release returns the existing `released_at` without
-     * re-writing. A release of an ALREADY COMPLETED card is a no-op (the card is
-     * done; the team is already free via `completed_at`) — returns idempotent.
-     * This is the "already released" guard the plan requires. Note the guard is
-     * one-directional by design: a completed card refuses a release, and a
-     * released card refuses a SECOND release, but a released card remains
-     * completable — releasing says "not finished yet", so finishing it later is
-     * the expected sequel, and the row then carries both stamps truthfully.
-     *
-     * Called by `POST /kanban/card/release` (per-card) and `POST /kanban/team/release`
-     * (bulk) — the two release verbs share this one helper, the same way the two
-     * completion verbs share `completeCardInternal`.
-     */
-    public async releaseCardInternal(
-        db: any,
-        planId: string,
-        from: string,
-        opts: {
-            workspaceRoot: string;
-            note?: string;
-        }
-    ): Promise<{
-        success: boolean;
-        planId: string;
-        released_at?: string;
-        note?: string;
-        /** True when the dispatch holder was actually cleared — i.e. the team is
-         *  genuinely unblocked. False (with `freeError`) when the clear was
-         *  skipped or threw: the row carries `released_at` but the team is still
-         *  in flight, which must not read as an unqualified success. */
-        freed?: boolean;
-        freeError?: string;
-        cleared?: boolean;
-        clearError?: string;
-        clearReason?: string;
-        acceptedCodingSeat?: string;
-        dispatchedTerminal?: string;
-        idempotent?: boolean;
-        alreadyCompleted?: boolean;
-        notFound?: boolean;
-        error?: string;
-    }> {
-        const workspaceRoot = opts.workspaceRoot;
-        const note = typeof opts.note === 'string' ? opts.note.trim() : '';
-        const workflow = 'operator-release';
-
-        // 1. Read the canonical plan row.
-        const existing = await db.getPlanByPlanId?.(planId);
-        if (!existing) {
-            return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
-        }
-
-        // Already completed → release is a no-op. The team is already free via
-        // `completed_at` (the in-flight predicate keys on it), and writing
-        // `released_at` on a completed row would make a finished card read as
-        // "released, not finished" — the exact conflation this valve exists to
-        // remove. Return idempotent so a release-then-complete sequence never
-        // leaves a card both released and completable.
-        if (existing.completedAt) {
-            return {
-                success: true,
-                planId,
-                idempotent: true,
-                alreadyCompleted: true,
-                released_at: undefined,
-                note,
-            };
-        }
-
-        // Already released → idempotent. Return the existing stamp without
-        // re-writing (the release is a one-shot, like completion).
-        if (existing.releasedAt) {
-            return {
-                success: true,
-                planId,
-                idempotent: true,
-                released_at: existing.releasedAt,
-                note,
-                ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {}),
-            };
-        }
-
-        // 2. Resolve the accepted coding seat (same HOST-evidence path as
-        // completeCardInternal — never from the request body, never `from`).
-        // The shared `_resolveAcceptedCodingSeat` helper enforces the
-        // `CODING_ROLES` gate and the `ptyListTerminals` fallback; the
-        // name-based guard comparing the resolved seat to `from` that used to sit below
-        // it is deleted (same reasoning as completeCardInternal — provably
-        // redundant for its stated intent, provably harmful for the
-        // self-report case it suppressed).
-        const dispatchedSeat = String(existing.dispatchedTerminal || '').trim();
-        const acceptedCodingSeat = await this._resolveAcceptedCodingSeat(existing, workspaceRoot);
-
-        // 3. Write released_at (NOT completed_at). Idempotent setter — a
-        // concurrent release racing this one loses the UPDATE (WHERE
-        // released_at IS NULL) and the loser reads the winner's stamp.
-        const timestamp = new Date().toISOString();
-        const stamped = await db.setReleasedAt?.(planId, timestamp);
-        if (!stamped) {
-            // A concurrent release won the race OR the row vanished. Re-read to
-            // distinguish; treat a now-released row as idempotent success.
-            const fresh = await db.getPlanByPlanId?.(planId);
-            if (fresh?.releasedAt) {
-                return { success: true, planId, idempotent: true, released_at: fresh.releasedAt, note };
-            }
-            return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
-        }
-
-        // 4. Stamp workflow/outcome onto the row + record the event. The
-        // operator is not made to type an outcome — the release verb sets its
-        // own ('Released by <from>'), the same way round/feature-complete do.
-        await db.setPlanOutcomeWorkflow?.(planId, `Released by ${from}`, workflow);
-        await db.appendPlanEventByPlanId?.(planId, {
-            eventType: 'released',
-            workflow,
-            payload: JSON.stringify({ from, note, acceptedCodingSeat })
-        });
-
-        // 5. Clear the dispatch holder so `heldByTeam` returns false — this is
-        // what frees the team for POST /kanban/queue/next. `completed_at` stays
-        // NULL (a release is not a completion), so the holder clear is the ONLY
-        // release signal the in-flight predicate reads.
-        //
-        // Because it is the only signal, a skipped or failed clear means the
-        // release did nothing — the card is stamped `released_at` and the team
-        // is still blocked. That must not be reported as plain success: the
-        // caller is an agent staring at a 409 it was told this verb would clear.
-        // `freed` carries the answer and `freeError` the reason.
-        let freed = false;
-        let freeError: string | undefined;
-        if (existing.planFile && existing.workspaceId) {
-            try {
-                await db.releaseDispatchHolder?.(existing.planFile, existing.workspaceId);
-                freed = true;
-            } catch (err) {
-                freeError = err instanceof Error ? err.message : String(err);
-                console.warn('[LocalApiServer] releaseCardInternal releaseDispatchHolder failed:', err);
-            }
-        } else {
-            freeError = `Card '${planId}' has no planFile/workspaceId on its row, so its dispatch holder could not be cleared — the team is NOT freed.`;
-            console.warn(`[LocalApiServer] releaseCardInternal: ${freeError}`);
-        }
-
-        // 6. Clear the accepted coding seat (same path as completeCardInternal).
-        let cleared = false;
-        let clearError: string | undefined;
-        let clearReason: string | undefined;
-        if (acceptedCodingSeat && this._options.clearTerminalContext) {
-            const clr = await this.clearSeatAtRest(workspaceRoot, acceptedCodingSeat, planId, 'releaseCardInternal');
-            cleared = clr.cleared;
-            if (clr.error) { clearError = clr.error; clearReason = clr.error; }
-            else if (clr.reason) { clearReason = clr.reason; }
-        } else if (!acceptedCodingSeat) {
-            cleared = false;
-            // Same correction as the complete path above: the poster being the
-            // dispatched seat means self-report, not lead.
-            clearReason = dispatchedSeat === from
-                ? `Seat '${from}' posted its own release — a self-report does not clear context; the proactive clear runs when a lead posts acceptance for this seat`
-                : 'No coding seat attributed to plan';
-        }
-
-        return {
-            success: true,
-            planId,
-            released_at: timestamp,
-            note,
-            // `freed` is the answer to the question the caller actually asked —
-            // "is my team unblocked?" — and is false when the holder clear was
-            // skipped or threw. Never omitted, so a reader cannot mistake its
-            // absence for a yes.
-            freed,
-            ...(freeError ? { freeError } : {}),
-            cleared,
-            ...(clearError ? { clearError } : {}),
-            ...(clearReason ? { clearReason } : {}),
-            ...(acceptedCodingSeat ? { acceptedCodingSeat } : {}),
-            ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {}),
-        };
-    }
 
     /**
      * POST /kanban/task/complete — the asserted completion signal. A lead
@@ -5043,7 +4742,7 @@ export class LocalApiServer {
                     // enforces it), but the first match is taken defensively.
                     const currentRound = teamRounds.find(r =>
                         (r.state === 'dispatched' || r.state === 'partial')
-                        && Object.prototype.hasOwnProperty.call(r.subtaskSeats || {}, planId)
+                        && (r.subtaskPlanIds || []).includes(planId)
                     );
 
                     if (currentRound) {
@@ -5060,8 +4759,8 @@ export class LocalApiServer {
                                 completedByPlanId.add(String(p.planId));
                             }
                         }
-                        const roundSubtaskPlanIds = Object.keys(currentRound.subtaskSeats || {});
-                        const allComplete = roundSubtaskPlanIds.every(pid => completedByPlanId.has(pid));
+                        const roundSubtaskPlanIds = currentRound.subtaskPlanIds || [];
+                        const allComplete = roundSubtaskPlanIds.every((pid: string) => completedByPlanId.has(pid));
 
                         if (allComplete) {
                             // Last accept in the round. Close it conditionally —
@@ -5189,7 +4888,7 @@ export class LocalApiServer {
             // suppressed — two release paths is how onTeamReleased gets
             // double-fired.
             if (result.success && !roundAdvanced && this._options.onTeamReleased) {
-                const terminal = result.dispatchedTerminal || from;
+                const terminal = result.ownerSeat || from;
                 void (async () => {
                     try {
                         let roster: string[] | null = null;
@@ -5197,8 +4896,7 @@ export class LocalApiServer {
                             roster = await this._options.resolveTeamMembers(workspaceRoot, terminal);
                         }
                         const teamMembers = (roster && roster.length > 0) ? roster : (terminal ? [terminal] : [from]);
-                        const inFlightCheck = await resolveTeamInFlight(db, teamMembers);
-                        if (!inFlightCheck.inFlight) {
+                        if (!(await teamHasLiveWork(db, teamMembers))) {
                             await this._options.onTeamReleased!(workspaceRoot, teamMembers);
                         }
                     } catch (releaseErr) {
@@ -5307,11 +5005,11 @@ export class LocalApiServer {
             const board: any[] = (await db.getBoard?.(wsId)) || [];
             const rosterSet = new Set(roster);
             const outstanding = board.filter((p: any) =>
-                p && typeof p.dispatchedTerminal === 'string'
-                && rosterSet.has(p.dispatchedTerminal.trim())
+                p && typeof p.ownerSeat === 'string'
+                && rosterSet.has(p.ownerSeat.trim())
                 && !p.completedAt
-                // Never the feature row. A feature dispatched to the lead has a
-                // dispatchedTerminal and no completedAt, so it matched here and got
+                // Never the feature row. A feature dispatched to the lead has an
+                // ownerSeat and no completedAt, so it matched here and got
                 // completed_at stamped — the exact write task/complete now rejects.
                 // A round completes subtasks; the feature is closed by
                 // POST /kanban/feature/complete.
@@ -5345,7 +5043,7 @@ export class LocalApiServer {
                 for (const card of outstanding) {
                     const planId = card.planId || card.sessionId;
                     if (!planId) continue;
-                    const seat = String(card.dispatchedTerminal || '').trim();
+                    const seat = String(card.ownerSeat || '').trim();
                     const result = await this.completeCardInternal(db, planId, from, {
                         workspaceRoot,
                         workflow: 'round-complete',
@@ -5365,8 +5063,7 @@ export class LocalApiServer {
                 // Run the release check once.
                 if (this._options.onTeamReleased) {
                     try {
-                        const inFlightCheck = await resolveTeamInFlight(db, roster);
-                        if (!inFlightCheck.inFlight) {
+                        if (!(await teamHasLiveWork(db, roster))) {
                             await this._options.onTeamReleased(workspaceRoot, roster);
                         }
                     } catch (releaseErr) {
@@ -5459,7 +5156,7 @@ export class LocalApiServer {
             for (const card of outstanding) {
                 const planId = card.planId || card.sessionId;
                 if (!planId) continue;
-                const seat = String(card.dispatchedTerminal || '').trim();
+                const seat = String(card.ownerSeat || '').trim();
                 const result = await this.completeCardInternal(db, planId, from, {
                     workspaceRoot,
                     workflow: 'round-complete',
@@ -5720,7 +5417,7 @@ export class LocalApiServer {
             }
             // Include subtasks already routed in kept (dispatched/closed) rounds.
             for (const r of keptRounds) {
-                for (const pid of Object.keys(r.subtaskSeats)) {
+                for (const pid of r.subtaskPlanIds || []) {
                     routedPlanIds.add(pid);
                 }
             }
@@ -5733,13 +5430,13 @@ export class LocalApiServer {
                 added: insertedRounds.map(r => ({ ordinal: r.ordinal, subtasks: r.subtasks })),
                 dropped: oldRegisteredRounds.map(r => ({
                     ordinal: r.ordinal,
-                    subtasks: Object.keys(r.subtaskSeats),
+                    subtasks: r.subtaskPlanIds || [],
                 })),
                 kept: keptRounds.map(r => ({
                     roundId: r.roundId,
                     ordinal: r.ordinal,
                     state: r.state,
-                    subtasks: Object.keys(r.subtaskSeats),
+                    subtasks: r.subtaskPlanIds || [],
                 })),
             };
 
@@ -5811,18 +5508,16 @@ export class LocalApiServer {
      *     true so the roster barrier is skipped).
      *  4. Delivers each prompt through the existing dispatch machinery
      *     (performKanbanDispatch).
-     *  5. Records per-subtask { seat, delivered, delivered_at } in
-     *     coding_rounds.subtask_seats.
-     *  6. Updates round state: 'dispatched' when every subtask delivered,
-     *     'partial' when any failed.
+     *  5. Stamps the round state 'dispatched'. `coding_rounds.subtask_seats`
+     *     holds only the ordered plan-ID list — seat assignment is display
+     *     guidance read from each card's `owner_seat`, never round state.
      *
      * Body: `{ from, roundId, workspaceRoot? }`.
      * `from` is the lead's terminal name (used to resolve the team roster and
      * exclude the lead from the seat pool).
      *
-     * Re-dispatching an already-dispatched round is allowed: it re-attempts
-     * failed subtasks and recomputes the state. Already-delivered subtasks are
-     * NOT re-sent (idempotent).
+     * Re-dispatching an already-dispatched round is allowed: the board never
+     * refuses a dispatch, so a re-dispatch re-sends each subtask's prompt.
      */
     private async _handleKanbanRoundDispatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -5865,13 +5560,10 @@ export class LocalApiServer {
                 res.end(JSON.stringify({ success: false, error: `Round '${roundId}' not found` }));
                 return;
             }
-            // Only registered or partial rounds can be dispatched. A closed
-            // round is immutable.
-            if (round.state === 'closed') {
-                res.writeHead(409, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: `Round '${roundId}' is closed — cannot re-dispatch a closed round` }));
-                return;
-            }
+            // V81: no closed-round refusal. The board never refuses a
+            // dispatch — re-dispatching a closed round re-sends its subtasks,
+            // each an unconditional reset. The agents read their plans, see
+            // the work is done, and say so.
 
             // Resolve the team roster.
             let roster: string[] | null = null;
@@ -5898,7 +5590,7 @@ export class LocalApiServer {
             }
 
             // The subtask planIds in round order.
-            const subtaskPlanIds = Object.keys(round.subtaskSeats);
+            const subtaskPlanIds = round.subtaskPlanIds || [];
             if (subtaskPlanIds.length === 0) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: `Round '${roundId}' has no subtasks` }));
@@ -5922,11 +5614,11 @@ export class LocalApiServer {
      * subtask 03). Assigns each subtask to a seat round-robin (excluding the
      * lead), delivers each prompt through `performKanbanDispatch` with
      * `skipClear: true` (the roster barrier is skipped; the destination seat
-     * is cleared via clearBeforePrompt), records per-subtask
-     * `{ seat, delivered, delivered_at }` in `coding_rounds.subtask_seats`,
-     * and updates the round state (`dispatched` when every subtask delivered,
-     * `partial` otherwise). Idempotent: already-delivered subtasks are not
-     * re-sent.
+     * is cleared via clearBeforePrompt), and stamps the round state
+     * `dispatched`. The round row carries only the ordered plan-ID list —
+     * per-subtask seat/delivery is reported in the response and on each
+     * card's advisory `owner_seat`, never persisted on the round.
+     * Re-dispatch is allowed: the board never refuses a dispatch.
      *
      * Called by `_handleKanbanRoundDispatch` (the `POST /kanban/round/dispatch`
      * HTTP handler) and by `_handleKanbanRoundComplete` (subtask 04) to
@@ -5957,16 +5649,15 @@ export class LocalApiServer {
         const roundId = round.roundId;
         // The lead is never a dispatched seat. Exclude the lead from the pool.
         const seats = roster.filter(s => s !== from);
-        const subtaskPlanIds = Object.keys(round.subtaskSeats || {});
+        const subtaskPlanIds: string[] = round.subtaskPlanIds || [];
 
         // An empty seat pool (a roster that is the lead alone) is a real state on
         // the auto-advance path: round/complete validates the ROSTER, not the
         // pool, before calling here. Without this guard `seats[cursor % 0]` is
         // `seats[NaN]` — `undefined` — and every subtask dispatches with no
         // targetTerminalOverride, which routes the round's work to whatever seat
-        // the default resolution picks. Record the honest state instead: every
-        // subtask `seat: null, delivered: false`, round `partial`, which is also
-        // the recovery input subtask 03 specifies for a subtask with no seat.
+        // the default resolution picks. Report the honest result instead: every
+        // subtask `seat: null, delivered: false`, and the round row is untouched.
         if (seats.length === 0) {
             const noSeatResults = subtaskPlanIds.map(planId => ({
                 planId,
@@ -5975,48 +5666,26 @@ export class LocalApiServer {
                 deliveredAt: null,
                 error: `No seat available — the team roster is the lead '${from}' alone`,
             }));
-            const noSeatSeats: CodingRoundRow['subtaskSeats'] = { ...(round.subtaskSeats || {}) };
-            for (const planId of subtaskPlanIds) {
-                noSeatSeats[planId] = { seat: '', delivered: false, delivered_at: null };
-            }
-            await db.updateCodingRoundAfterDispatch?.(
-                roundId,
-                JSON.stringify(noSeatSeats),
-                'partial',
-                round.dispatchedAt || null
-            );
             return {
                 success: false,
                 roundId,
                 featureId: round.featureId,
-                state: 'partial',
+                state: round.state,
                 dispatchedAt: round.dispatchedAt || null,
                 subtasks: noSeatResults,
                 error: `Team roster has no seats excluding the lead '${from}' — nothing was dispatched`,
             };
         }
 
-        // Assign seats round-robin. Skip subtasks already delivered
-        // (idempotent re-dispatch: do not re-send delivered subtasks).
+        // Assign seats round-robin. A re-dispatch re-sends every subtask —
+        // the board never refuses a dispatch and the round row keeps no
+        // per-subtask delivery ledger.
         const now = new Date().toISOString();
-        const subtaskSeats = { ...(round.subtaskSeats || {}) };
         const results: Array<{ planId: string; seat: string | null; delivered: boolean; deliveredAt: string | null; error?: string }> = [];
         let seatCursor = 0;
         let firstDispatchedAt = round.dispatchedAt || null;
 
         for (const planId of subtaskPlanIds) {
-            const existing = subtaskSeats[planId];
-            // Idempotent: skip already-delivered subtasks.
-            if (existing && existing.delivered) {
-                results.push({
-                    planId,
-                    seat: existing.seat || null,
-                    delivered: true,
-                    deliveredAt: existing.delivered_at || null,
-                });
-                continue;
-            }
-
             // Assign the next seat (round-robin).
             const seat = seats[seatCursor % seats.length];
             seatCursor++;
@@ -6034,11 +5703,6 @@ export class LocalApiServer {
 
             const delivered = dispatchRes.status === 200 && dispatchRes.payload?.success === true;
             const deliveredAt = delivered ? now : null;
-            subtaskSeats[planId] = {
-                seat: delivered ? seat : (seat || ''),
-                delivered,
-                delivered_at: deliveredAt,
-            };
             if (firstDispatchedAt === null && delivered) {
                 firstDispatchedAt = now;
             }
@@ -6051,29 +5715,22 @@ export class LocalApiServer {
             });
         }
 
-        // Compute aggregate state.
-        const allDelivered = results.every(r => r.delivered);
-        const newState = allDelivered ? 'dispatched' : 'partial';
-
-        // Persist the updated subtask_seats, state, and dispatched_at.
-        // dispatched_at is stamped on the first successful dispatch and
-        // left untouched on re-dispatch (the round was already dispatched).
+        // Stamp the round dispatched. dispatched_at is stamped on the first
+        // successful dispatch and left untouched on re-dispatch.
         const updated = await db.updateCodingRoundAfterDispatch?.(
             roundId,
-            JSON.stringify(subtaskSeats),
-            newState,
             firstDispatchedAt
         );
         if (!updated) {
             console.warn(`[LocalApiServer] round dispatch: failed to persist round state for round '${roundId}'`);
         }
 
-        const success = allDelivered;
+        const success = results.every(r => r.delivered);
         return {
             success,
             roundId,
             featureId: round.featureId,
-            state: newState,
+            state: 'dispatched',
             dispatchedAt: firstDispatchedAt,
             subtasks: results,
             ...(success ? {} : { error: 'One or more subtasks failed to deliver — see subtasks for details' }),
@@ -6082,20 +5739,21 @@ export class LocalApiServer {
 
     /**
      * POST /kanban/round/redeliver — re-send a single subtask's prompt to its
-     * recorded seat (Coding Rounds feature, subtask 03). The seat is being
+     * attributed seat (Coding Rounds feature, subtask 03). The seat is being
      * repaired, not handed new work, so:
      *
      *  - skipClear: true (skip the roster barrier — do not clear the roster)
      *  - clearBeforePrompt: false (do not clear the destination seat)
      *
-     * The subtask's recorded seat is read from coding_rounds.subtask_seats. If
-     * the seat is empty (no seat was assigned), the redeliver fails — the
-     * subtask must be dispatched first via round/dispatch.
+     * V81: the round row keeps only the ordered plan-ID list. The subtask's
+     * seat is read from the CARD's advisory `owner_seat` — written by the
+     * dispatch itself — so redelivery targets wherever the card currently
+     * points. If the card carries no owner, the redeliver fails: the subtask
+     * must be dispatched first via round/dispatch.
      *
-     * On success, the subtask's entry is updated to { delivered: true,
-     * delivered_at: <now> } and the round state is recomputed (partial may
-     * become dispatched). Idempotent: re-sending a delivered subtask is a
-     * no-op that returns success.
+     * Re-delivery is a normal dispatch under the hood: the board never
+     * refuses, so there is no delivered flag to consult — the call re-sends
+     * the prompt and reports the outcome.
      *
      * Body: `{ from, roundId, planId, workspaceRoot? }`.
      */
@@ -6146,40 +5804,25 @@ export class LocalApiServer {
                 res.end(JSON.stringify({ success: false, error: `Round '${roundId}' not found` }));
                 return;
             }
-            if (round.state === 'closed') {
-                res.writeHead(409, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: `Round '${roundId}' is closed — cannot redeliver to a closed round` }));
-                return;
-            }
+            // V81: no closed-round refusal — redelivery is a re-dispatch,
+            // which the board never refuses.
 
-            // Find the subtask's recorded seat.
-            const entry = round.subtaskSeats[planId];
-            if (!entry) {
+            // Membership check — the plan-ID list is the whole of what the
+            // round row knows about its subtasks.
+            if (!(round.subtaskPlanIds || []).includes(planId)) {
                 res.writeHead(404, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: `Subtask '${planId}' is not part of round '${roundId}'` }));
                 return;
             }
 
-            // Idempotent: already delivered — no-op success.
-            if (entry.delivered) {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    success: true,
-                    roundId,
-                    planId,
-                    seat: entry.seat || null,
-                    delivered: true,
-                    deliveredAt: entry.delivered_at,
-                    message: 'Subtask already delivered — no-op',
-                }));
-                return;
-            }
-
-            // The recorded seat must be non-empty.
-            const seat = entry.seat;
-            if (!seat || seat.trim() === '') {
+            // The subtask's seat is the CARD's advisory owner_seat — written
+            // by the dispatch itself, current even after a re-dispatch moved
+            // the card. No owner means the round was never dispatched.
+            const card = await db.getPlanByPlanId?.(planId);
+            const seat = String(card?.ownerSeat || '').trim();
+            if (!seat) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: `Subtask '${planId}' has no recorded seat — dispatch the round first via /kanban/round/dispatch` }));
+                res.end(JSON.stringify({ success: false, error: `Subtask '${planId}' has no attributed seat — dispatch the round first via /kanban/round/dispatch` }));
                 return;
             }
 
@@ -6195,32 +5838,7 @@ export class LocalApiServer {
             });
 
             const delivered = dispatchRes.status === 200 && dispatchRes.payload?.success === true;
-            const now = new Date().toISOString();
-            const deliveredAt = delivered ? now : null;
-
-            // Update the subtask's entry.
-            const subtaskSeats: CodingRoundRow['subtaskSeats'] = { ...round.subtaskSeats };
-            subtaskSeats[planId] = {
-                seat,
-                delivered,
-                delivered_at: deliveredAt,
-            };
-
-            // Recompute round state.
-            const allDelivered = Object.values(subtaskSeats).every(s => s.delivered);
-            const newState = allDelivered ? 'dispatched' : 'partial';
-
-            // Persist. dispatched_at is NOT updated on re-delivery (the round
-            // was already dispatched).
-            const updated = await db.updateCodingRoundAfterDispatch?.(
-                roundId,
-                JSON.stringify(subtaskSeats),
-                newState,
-                null
-            );
-            if (!updated) {
-                console.warn(`[LocalApiServer] round/redeliver: failed to persist round state for round '${roundId}'`);
-            }
+            const deliveredAt = delivered ? new Date().toISOString() : null;
 
             if (delivered) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -6231,7 +5849,6 @@ export class LocalApiServer {
                     seat,
                     delivered: true,
                     deliveredAt,
-                    roundState: newState,
                 }));
             } else {
                 res.writeHead(502, { 'Content-Type': 'application/json' });
@@ -6241,7 +5858,6 @@ export class LocalApiServer {
                     planId,
                     seat,
                     delivered: false,
-                    roundState: newState,
                     error: dispatchRes.payload?.error || 'Re-delivery failed',
                 }));
             }
@@ -6395,7 +6011,7 @@ export class LocalApiServer {
         for (const sub of subtasks) {
             const subPlanId = sub.planId || sub.sessionId;
             if (!subPlanId || sub.completedAt) continue;
-            const seat = String(sub.dispatchedTerminal || '').trim();
+            const seat = String(sub.ownerSeat || '').trim();
             const result = await this.completeCardInternal(db, subPlanId, from, {
                 workspaceRoot,
                 workflow: 'feature-complete',
@@ -6418,9 +6034,8 @@ export class LocalApiServer {
         // nobody else.
         //
         // completeCardInternal states the same invariant ("Never clear the
-        // lead in `from`") and team/release respects it by iterating
-        // coderSeats. The feature/complete HTTP path was the only one that did
-        // not — that is the default here.
+        // lead in `from`"). The feature/complete HTTP path was the only one
+        // that did not — that is the default here.
         //
         // clearLead=true (the round/complete last-round delegation path): the
         // feature is done, the lead is NOT mid-turn, and the acceptance clause
@@ -6451,223 +6066,6 @@ export class LocalApiServer {
         return { success: true, completed, cleared };
     }
 
-    /**
-     * POST /kanban/card/release — the per-card release valve (V77). Frees the
-     * team holding THIS card WITHOUT claiming the work is done. The door the
-     * 409 from `POST /kanban/queue/next` names instead of `task/complete`: an
-     * agent blocked by an un-posted card releases it here, not by completing it.
-     *
-     * Body: `{ from, planId, workspaceRoot?, note? }`.
-     * - `from` — the releaser's terminal name (lead or operator).
-     * - `planId` — the card to release. Validated shape-only (no path
-     *   separators), same as `task/complete` — the plan does not add auth.
-     * - `workspaceRoot` — defaults to the server's primary root.
-     * - `note` — optional, recorded in the release event.
-     *
-     * Contract:
-     * - Writes `released_at`, NOT `completed_at`. A released card does NOT read
-     *   as completed anywhere.
-     * - Clears the dispatch holder so `heldByTeam` returns false → the team is
-     *   free for `POST /kanban/queue/next`.
-     * - Idempotent: a repeat release returns the existing `released_at`. A
-     *   release of an already-completed card is a no-op (`alreadyCompleted: true`).
-     * - Derives the held set server-side via `releaseCardInternal` (reads the
-     *   row's `dispatchedTerminal`); the caller does not supply a seat.
-     */
-    private async _handleKanbanCardRelease(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (!await this._checkAuth(req, true)) {
-            this._sendUnauthorized(res);
-            return;
-        }
-        try {
-            const body = await this._parseJsonBody(req);
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
-            const from = String(body?.from || '').trim();
-            const planId = String(body?.planId || '').trim();
-            const note = typeof body?.note === 'string' ? body.note.trim() : '';
-
-            if (!workspaceRoot) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
-                return;
-            }
-            if (!from) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the releaser's terminal name)" }));
-                return;
-            }
-            if (!planId) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Missing required field: planId' }));
-                return;
-            }
-            if (planId.includes('/') || planId.includes('\\') || planId.includes('..')) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Invalid planId: path separators not allowed' }));
-                return;
-            }
-
-            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
-            if (!db) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
-                return;
-            }
-
-            const result = await this.releaseCardInternal(db, planId, from, { workspaceRoot, note });
-
-            if (!result.success) {
-                const status = result.notFound ? 404 : 500;
-                res.writeHead(status, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: result.error || 'Release failed' }));
-                return;
-            }
-
-            // Trigger advance-when-ready hook if the team is now free — same
-            // path as task/complete. A release frees the team exactly as a
-            // completion does; the hook fires on either.
-            if (result.success && this._options.onTeamReleased) {
-                const terminal = result.dispatchedTerminal || from;
-                void (async () => {
-                    try {
-                        let roster: string[] | null = null;
-                        if (this._options.resolveTeamMembers && terminal) {
-                            roster = await this._options.resolveTeamMembers(workspaceRoot, terminal);
-                        }
-                        const teamMembers = (roster && roster.length > 0) ? roster : (terminal ? [terminal] : [from]);
-                        const inFlightCheck = await resolveTeamInFlight(db, teamMembers);
-                        if (!inFlightCheck.inFlight) {
-                            await this._options.onTeamReleased!(workspaceRoot, teamMembers);
-                        }
-                    } catch (releaseErr) {
-                        console.warn('[LocalApiServer] onTeamReleased hook error (card/release):', releaseErr);
-                    }
-                })();
-            }
-
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result));
-        } catch (err) {
-            console.error('[LocalApiServer] kanbanCardRelease error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanCardRelease failed' }));
-        }
-    }
-
-    /**
-     * POST /kanban/team/release — operator release control for a team.
-     * Releases every card the scoped team holds that has no completion post.
-     *
-     * Body: `{ from, workspaceRoot? }`.
-     * - `from` — the team's head name.
-     * - `workspaceRoot` — defaults to the server's primary root.
-     * - Any caller-supplied planIds in the body are ignored (server derives the set).
-     *
-     * Contract:
-     * - Resolves roster via `resolveTeamMembers` (same path in-flight check uses).
-     * - Scans active cards via `heldByTeam(p, teamSet)`.
-     * - Calls `completeCardInternal` with `workflow: 'operator-release'` for each card.
-     * - Returns `{ success: true, released: string[], failed: Array<{ planId: string; error: string }>, releasedSeats: string[] }`.
-     * - A per-card failure does not abort the rest.
-     */
-    private async _handleKanbanTeamRelease(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (!await this._checkAuth(req, true)) {
-            this._sendUnauthorized(res);
-            return;
-        }
-        try {
-            const body = await this._parseJsonBody(req);
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
-            const from = String(body?.from || '').trim();
-
-            if (!workspaceRoot) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
-                return;
-            }
-            if (!from) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the team head's terminal name)" }));
-                return;
-            }
-
-            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
-            if (!db) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
-                return;
-            }
-
-            let roster: string[] | null = null;
-            if (this._options.resolveTeamMembers) {
-                try {
-                    roster = await this._options.resolveTeamMembers(workspaceRoot, from);
-                } catch (err) {
-                    console.warn('[LocalApiServer] resolveTeamMembers failed in team/release:', err);
-                }
-            }
-            const teamSet = new Set<string>(roster && roster.length ? roster : [from]);
-
-            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
-            const board: any[] = (await db.getBoard?.(wsId)) || [];
-
-            const candidates = board.filter(p => heldByTeam(p, teamSet));
-            const released: string[] = [];
-            const releasedSeats: string[] = [];
-            const failed: Array<{ planId: string; error: string }> = [];
-
-            for (const candidate of candidates) {
-                let targetCard = candidate;
-                try {
-                    const fresh = await db.getPlanByPlanId?.(candidate.planId);
-                    if (fresh) {
-                        targetCard = fresh;
-                    }
-                } catch { /* fall back to candidate */ }
-
-                if (!heldByTeam(targetCard, teamSet)) {
-                    continue;
-                }
-
-                try {
-                    const result = await this.releaseCardInternal(db, targetCard.planId, from, {
-                        workspaceRoot,
-                    });
-                    if (result.success && result.freed === false) {
-                        // Stamped but not unblocked — report it as a failure, not
-                        // as a release, or the operator reads "released" for a
-                        // team that is still in flight.
-                        failed.push({ planId: targetCard.planId, error: result.freeError || 'Release did not clear the dispatch holder' });
-                    } else if (result.success) {
-                        released.push(targetCard.planId);
-                        const seat = result.acceptedCodingSeat || targetCard.dispatchedTerminal;
-                        if (seat && !releasedSeats.includes(seat)) {
-                            releasedSeats.push(seat);
-                        }
-                    } else {
-                        failed.push({ planId: targetCard.planId, error: result.error || 'Release failed' });
-                    }
-                } catch (err) {
-                    failed.push({
-                        planId: targetCard.planId,
-                        error: err instanceof Error ? err.message : String(err)
-                    });
-                }
-            }
-
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success: true,
-                released,
-                failed,
-                releasedSeats
-            }));
-        } catch (err) {
-            console.error('[LocalApiServer] kanbanTeamRelease error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanTeamRelease failed' }));
-        }
-    }
 
     private async _handleKanbanDependencies(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -6950,52 +6348,34 @@ export class LocalApiServer {
                     const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
                     const board: any[] = await db.getBoard?.(wsId) || [];
 
-                    // Find the active card this seat holds. Keyed on the HOLDER
-                    // (dispatched_terminal), NOT on dispatched_at: every column
-                    // move nulls dispatched_at and deliberately keeps the holder
-                    // stamp (KanbanDatabase.ts:2664, :6810), so requiring the
-                    // timestamp here made a card unreleasable by its own seat the
-                    // moment the board advanced it — while heldByTeam (above),
-                    // which reads only dispatched_terminal + completed_at, went on
-                    // counting it as in flight. 569 of 571 blocked cards were in
-                    // that state. A seat cannot release another seat's card
-                    // (dispatched_terminal === from is unchanged).
+                    // Find the card this seat holds. Keyed on the advisory
+                    // holder (`owner_seat`), NOT on `owner_since`: column moves
+                    // and the working-state clear null the stamp but keep the
+                    // holder, so requiring the timestamp would make a card
+                    // unreleasable by its own seat. A seat cannot release
+                    // another seat's card (`owner_seat === from` is unchanged).
                     //
-                    // This is NOT the deleted column-release valve
-                    // (LocalApiServer.ts:2040-2056, the comment at :3645-3663).
-                    // Board position still releases nothing; the seat's explicit
-                    // post is still the only release. The post can now find its
-                    // card, which is all that changes.
-                    //
-                    // Ordering: a live card (dispatched_at set) wins over an
+                    // Ordering: a live card (owner_since set) wins over an
                     // orphaned one, so a seat holding exactly one live card
                     // behaves exactly as before. With only orphans and no planId,
                     // the most recently dispatched wins — deliberate, and the
                     // completion directives send planId so it is a transitional
                     // case only.
                     //
-                    // `!p.completedAt` keeps the select a strict SUBSET of
-                    // heldByTeam. A completed card keeps its dispatched_terminal
-                    // stamp — the lead's acceptance post writes completed_at and
-                    // clears the seat's CONTEXT, it never nulls the holder — so
-                    // without this a finished card with a newer dispatchedAt sorts ahead
-                    // of the orphan the seat is actually still holding — the
-                    // post releases the wrong row and the team stays blocked,
-                    // which is the exact defect this select exists to repair.
-                    // heldByTeam already ignores completed cards, so nothing is
-                    // left un-released by skipping them here.
+                    // `!p.completedAt` keeps a finished card from winning the
+                    // sort over the card the seat is actually still holding.
                     const candidates = board
                         .filter((p: any) =>
-                            p && typeof p.dispatchedTerminal === 'string'
-                            && p.dispatchedTerminal === from
+                            p && typeof p.ownerSeat === 'string'
+                            && p.ownerSeat === from
                             && !p.completedAt)
                         .sort((a: any, b: any) =>
-                            (b.dispatchedAt || '').localeCompare(a.dispatchedAt || ''));
+                            (b.ownerSince || '').localeCompare(a.ownerSince || ''));
                     let held: any;
                     if (planId) {
                         held = candidates.find((p: any) => p.planId === planId);
                         // planId named a card the seat does not hold. The
-                        // filter is dispatched_terminal === from, so another
+                        // filter is owner_seat === from, so another
                         // seat's card never enters candidates — a missing
                         // match means the seat holds OTHER cards but not
                         // this one, which is a mismatch (refused), NOT a
@@ -7019,35 +6399,17 @@ export class LocalApiServer {
                         return;
                     }
 
-                    // Release the latch via the existing off-switch the
-                    // plan-file watcher uses. Returns true only on a real
-                    // non-NULL→NULL transition — the duplicate answer for
-                    // free (a watcher-first clear returns false → no-op).
+                    // Release the seat's stamp in one unconditional write —
+                    // `owner_since` (the activity latch) AND `owner_seat` (the
+                    // holder fact). Returns true only on a real transition —
+                    // the duplicate answer for free (a watcher-first clear
+                    // returns false → no-op). Covers the orphan case for free:
+                    // the WHERE needs something to clear, not a live stamp.
                     let transitioned = false;
                     try {
-                        transitioned = await db.clearWorkingState(held.planFile, held.workspaceId || wsId);
+                        transitioned = await db.clearOwnerStamp(held.planFile, held.workspaceId || wsId);
                     } catch (clrErr) {
-                        console.error('[LocalApiServer] clearWorkingState failed:', clrErr);
-                    }
-                    // Orphan fallback. clearWorkingState's WHERE clause
-                    // requires `dispatched_at IS NOT NULL`, so an orphaned
-                    // card (column move nulled dispatched_at, kept
-                    // dispatched_terminal) is a no-op for it — the UPDATE
-                    // matches 0 rows and it returns false. Without this
-                    // fallback the orphan is found by the select above but
-                    // never released, so the defect this card repairs would
-                    // persist. releaseDispatchHolder nulls dispatched_terminal
-                    // (the field heldByTeam reads) with no IS NOT NULL gate,
-                    // so it clears the holder stamp and the card leaves the
-                    // in-flight predicate. For a live card (dispatched_at
-                    // set) clearWorkingState already transitioned and this
-                    // branch is skipped — live-card behaviour is unchanged.
-                    if (!transitioned) {
-                        try {
-                            transitioned = await db.releaseDispatchHolder?.(held.planFile, held.workspaceId || wsId);
-                        } catch (relErr) {
-                            console.error('[LocalApiServer] releaseDispatchHolder orphan fallback failed:', relErr);
-                        }
+                        console.error('[LocalApiServer] clearOwnerStamp failed:', clrErr);
                     }
                     if (!transitioned) {
                         // Already cleared (mtime watcher got there first, or a
@@ -7121,7 +6483,7 @@ export class LocalApiServer {
                     // here. Each callback is independently optional, so an unset
                     // notifier leaves the broadcast intact and vice versa. The
                     // record is the pre-clear `held` read (still has
-                    // dispatchedAt, dispatchedTerminal, etc.).
+                    // ownerSince, ownerSeat, etc.).
                     //
                     // GATED ON `outcome === 'finished'`. A `failed` report is a
                     // release, NOT a completion: the standing orders tell a seat
@@ -7139,7 +6501,7 @@ export class LocalApiServer {
                         if (this._options.onWorkingStateCleared) {
                             // ── Turn size, NOT a broadcast gate ─────────────────
                             // One fan-out stamps every card of a batch with the same
-                            // `dispatched_terminal`, so a seat handed six subtasks holds
+                            // `owner_seat`, so a seat handed six subtasks holds
                             // six live rows. This POST clears exactly ONE of them (the
                             // `held` row found above), and the shipped standing order is
                             // one POST per TURN — "Do NOT post after finishing individual
@@ -7157,7 +6519,7 @@ export class LocalApiServer {
                             // light — the exact stuck light this signalling work exists to
                             // remove. The turn size is display-only: it renders as
                             // "<title> +N more" in the completion toast.
-                            const terminalName = (held.dispatchedTerminal || from || '').trim();
+                            const terminalName = (held.ownerSeat || from || '').trim();
                             const remaining = terminalName && typeof (db as any).countActiveDispatchedByTerminal === 'function'
                                 ? await db.countActiveDispatchedByTerminal(held.workspaceId || wsId, terminalName)
                                 : 0;
@@ -7347,43 +6709,54 @@ export class LocalApiServer {
                     // the pop — so a re-staged card is the next thing
                     // dispatched. The ladder needs no new state: getFallbackRole
                     // encodes intern → coder → lead (terminal at lead), and the
-                    // card already records routedTo. The override is carried on
+                    // rung is derived from the card's coding column. The override
+                    // is carried on
                     // the dispatch only (plan step 5) — routingMapConfig and
                     // the stored complexity are never mutated.
                     let escalated: 'restaged' | 'parked' | 'none' = 'none';
                     let parkReason: string | undefined;
                     if (outcome === 'failed') {
-                        const routedTo = String(held.routedTo || '').toLowerCase();
+                        // The rung the failed dispatch landed on. `routed_to` is
+                        // gone (V81) — the role is derivable without storing it:
+                        // the coding column the card rests in maps to a role
+                        // through the same dispatch gate the pop uses. Unknown /
+                        // unmapped columns read as 'lead' (the top rung → park).
+                        let failedRung = 'lead';
+                        try {
+                            const failedGate = this._options.resolveKanbanDispatch
+                                ? await this._options.resolveKanbanDispatch(workspaceRoot, held.kanbanColumn)
+                                : undefined;
+                            const r = String(failedGate?.role || '').toLowerCase();
+                            if (r === 'intern' || r === 'coder' || r === 'lead') { failedRung = r; }
+                        } catch { /* unresolved column → treated as lead → park */ }
                         // Guard against double re-stage: the watch (subtask 3)
                         // may have already re-staged this card to STAGING and
-                        // released its holder. A late `failed` report from the
-                        // original seat must check the card's CURRENT holder,
-                        // not the pre-release `held` read.
-                        // Re-read the card; if dispatched_terminal is empty, the
-                        // watch already re-staged it (the ladder releases the holder)
-                        // — treat as a no-op (same contract as a duplicate report).
-                        // A card an operator merely DRAGGED back still names its
-                        // holder, so it re-stages here: that releases the stale
-                        // holder and re-queues it, which is the correct end state
-                        // for a queued card, not a double re-stage. This
-                        // closes the read-modify-write gap on routedTo
-                        // (re-staging does not update routedTo; dispatch does).
-                        let currentDispatchedTerminal = typeof held.dispatchedTerminal === 'string' ? held.dispatchedTerminal : '';
+                        // cleared its stamp. A late `failed` report from the
+                        // original seat must check the card's CURRENT column,
+                        // not the pre-release `held` read — `clearOwnerStamp`
+                        // above already cleared the advisory owner fields, so a
+                        // fresh owner_seat read would always look released.
+                        // Re-read the card: if it rests in STAGING, the watch
+                        // already re-staged it (or an operator dragged it back —
+                        // the same correct end state), so this is a no-op.
+                        // A card still in a coding column with no completion
+                        // re-stages here.
+                        let currentColumn = typeof held.kanbanColumn === 'string' ? held.kanbanColumn : '';
                         let currentCompletedAt = held.completedAt ?? null;
                         try {
                             const fresh: any = await db.getPlanByPlanId?.(held.planId);
                             if (fresh) {
-                                currentDispatchedTerminal = typeof fresh.dispatchedTerminal === 'string' ? fresh.dispatchedTerminal : '';
+                                currentColumn = typeof fresh.kanbanColumn === 'string' ? fresh.kanbanColumn : currentColumn;
                                 currentCompletedAt = fresh.completedAt ?? null;
                             }
                         } catch { /* fall back to held */ }
-                        const stillCoding = currentDispatchedTerminal.length > 0 && !currentCompletedAt;
+                        const stillCoding = currentColumn !== 'STAGING' && !currentCompletedAt;
                         if (!stillCoding) {
                             // Card already released/re-staged (watch re-staged it,
                             // or an operator dragged it). No re-stage, no park —
                             // fall through to the pop.
                             escalated = 'none';
-                        } else if (routedTo === 'intern' || routedTo === 'coder') {
+                        } else if (failedRung === 'intern' || failedRung === 'coder') {
                             // Step up one rung: re-stage the card into STAGING
                             // at the FRONT so it is the next thing dispatched,
                             // and carry a role override to getFallbackRole so
@@ -7392,18 +6765,19 @@ export class LocalApiServer {
                             // the dispatch holder FIRST, move the card's
                             // kanban_column back to STAGING, then rewrite the
                             // queue order with the failed card first.
-                            // setQueuePositions only sets queue_position — it
+                            // setColumnOrders only sets column_order — it
                             // does NOT move the column, so without the move the
                             // card would keep its coding column and never be
                             // picked by the pop's `kanbanColumn === 'STAGING'`
                             // filter. appendQueuePositions is NOT used — it
                             // appends to the BACK (MAX+1), which would send the
                             // failed card behind every other staged card.
-                            const fallbackRole = getFallbackRole(routedTo as 'intern' | 'coder');
+                            const fallbackRole = getFallbackRole(failedRung as 'intern' | 'coder');
                             try {
-                                // 1. Release the dispatch holder FIRST so the holder fact is cleared
-                                // when returning to the queue (contracts #1).
-                                await db.releaseDispatchHolder?.(held.planFile, held.workspaceId || wsId);
+                                // 1. Release the holder stamp FIRST so the
+                                // owner fact is cleared when returning to the
+                                // queue.
+                                await db.clearOwnerStamp?.(held.planFile, held.workspaceId || wsId);
 
                                 // 2. Move the card back to STAGING. This is
                                 // legitimate (contracts #1): the card moves
@@ -7425,12 +6799,12 @@ export class LocalApiServer {
                                     const liveBoard: any[] = await db.getBoard?.(wsId) || [];
                                     const staged = liveBoard
                                         .filter((p: any) => p && p.kanbanColumn === 'STAGING'
-                                            && (!p.dispatchedAt)
+                                            && (!p.completedAt)
                                             && (!p.featureId || p.featureId === '')
                                             && p.planId !== held.planId)
                                         .sort((a: any, b: any) => {
-                                            const qa = a?.queuePosition ?? null;
-                                            const qb = b?.queuePosition ?? null;
+                                            const qa = a?.columnOrder ?? null;
+                                            const qb = b?.columnOrder ?? null;
                                             if (qa != null && qb != null) return Number(qa) - Number(qb);
                                             if (qa != null) return -1;
                                             if (qb != null) return 1;
@@ -7438,7 +6812,7 @@ export class LocalApiServer {
                                         })
                                         .map((p: any) => p.planId);
                                     const newOrder = [held.planId, ...staged];
-                                    const ok = await db.setQueuePositions(wsId, newOrder);
+                                    const ok = await db.setColumnOrders(wsId, newOrder);
                                     if (ok) {
                                         // Carry the override on the next
                                         // dispatch only — consumed and deleted
@@ -7451,7 +6825,7 @@ export class LocalApiServer {
                                         // dispatchable, just not next. Log and
                                         // carry the override so it steps up when
                                         // it does dispatch.
-                                        console.warn(`[LocalApiServer] setQueuePositions failed for failed card ${held.planId}; card staged at back`);
+                                        console.warn(`[LocalApiServer] setColumnOrders failed for failed card ${held.planId}; card staged at back`);
                                         _dispatchRoleOverride.set(held.planId, fallbackRole);
                                         escalated = 'restaged';
                                     }
@@ -7461,7 +6835,7 @@ export class LocalApiServer {
                                 escalated = 'none';
                             }
                         } else {
-                            // routedTo is 'lead' (or unknown/empty treated as
+                            // failedRung is 'lead' (or unknown/empty treated as
                             // lead): PARK. getFallbackRole('lead') is 'lead' —
                             // re-dispatching to the same seat is the loop this
                             // rule prevents. Leave the card where it is (coding
@@ -7506,17 +6880,7 @@ export class LocalApiServer {
                     // queue and an idle team. A successful pop already armed
                     // (onDispatch) inside _runQueuePop; an empty queue has
                     // nothing staged to watch (do NOT arm — test #10).
-                    // NOT armed on the team-in-flight refusal (`inFlight` on the
-                    // pop payload). That 409 means a team seat still HOLDS a card
-                    // with no completion post — it is not an idle team behind a
-                    // staged queue, which is the only state this watch exists to
-                    // nudge. It is also the NORMAL pop result for a head-paced team
-                    // member reporting done (its own just-released card is still
-                    // held, wherever it rests), and arming REBINDS the
-                    // workspace watch's `headTerminal` to the finishing seat —
-                    // so a coder posting done would silently redirect every later
-                    // queue-stall nudge from the lead to itself.
-                    if (pop && (pop.status < 200 || pop.status >= 300) && !pop.payload?.inFlight && this._options.armQueueWatch) {
+                    if (pop && (pop.status < 200 || pop.status >= 300) && this._options.armQueueWatch) {
                         try { await this._options.armQueueWatch(workspaceRoot, from, { onDispatch: false }); }
                         catch (armErr) { console.warn('[LocalApiServer] armQueueWatch (release) failed:', armErr); }
                     }
@@ -7524,40 +6888,18 @@ export class LocalApiServer {
                     // Forward the pop result, annotating with the release
                     // metadata. The `done` call has already SUCCEEDED by the
                     // time the pop runs — the working-state latch cleared
-                    // (`transitioned`, gated at :6495) and the relay fired — so
-                    // the response resolves 200 regardless of the pop's
-                    // status. The pop's own refusal (team still in flight
-                    // because `completed_at` is the lead's separate
-                    // `task/complete` post, NOT something `done` writes) is
-                    // nested under `next` for diagnostics, NOT forwarded as
-                    // the `done` call's own failure. Forwarding `pop.status`
-                    // here produced a 409 carrying `released: <planId>` — a
-                    // contradiction a caller cannot act on (the seat that hit
-                    // this in production read non-zero exit + the 409 body and
-                    // concluded its `done` had failed, then spent its
-                    // remaining turns reading source to work out what to send).
-                    // Preserve `dispatched`/`reason` from the pop so the CLI's
+                    // (`transitioned`) and the relay fired — so the response
+                    // resolves 200 regardless of the pop's status. The pop's own
+                    // outcome is nested under `next` for diagnostics, NOT
+                    // forwarded as the `done` call's own failure. Preserve
+                    // `dispatched`/`reason` from the pop so the CLI's
                     // "Next card popped" / "Queue empty" render branches
                     // (cli.ts:2043-2049) still fire on a 200.
                     const popFailed = pop.status < 200 || pop.status >= 300;
                     const popPayload = pop.payload || {};
-                    // A refused pop has three distinct causes and they are NOT
-                    // interchangeable: the team still holds an uncompleted card
-                    // (`inFlight`), the next staged card's dependency predecessor
-                    // has not completed (`dependencyBlocked`), or the dispatch
-                    // itself failed (neither field set — no live seat, delivery
-                    // error). Labelling all three 'team in flight' would be a
-                    // default that reads exactly like a measured value: the
-                    // caller would wait on a blocker that is not there, and the
-                    // real one would never be named. Each refusal reports its own
-                    // kind, and the pop's own diagnostic objects ride under
-                    // `next` so "which refusal was it?" is answerable after the
-                    // fact rather than guessed from one borrowed label.
-                    const nextReason = popPayload.inFlight
-                        ? 'team in flight'
-                        : popPayload.dependencyBlocked
-                            ? 'dependency blocked'
-                            : 'next dispatch refused';
+                    const nextReason = popPayload.dependencyBlocked
+                        ? 'dependency blocked'
+                        : 'next dispatch failed';
                     const payload: any = {
                         success: true,
                         released: held.planId,
@@ -7572,7 +6914,6 @@ export class LocalApiServer {
                         ...(popFailed ? { next: {
                             status: pop.status,
                             error: popPayload.error,
-                            ...(popPayload.inFlight ? { inFlight: popPayload.inFlight } : {}),
                             ...(popPayload.dependencyBlocked ? { dependencyBlocked: popPayload.dependencyBlocked } : {}),
                         } } : {}),
                     };
@@ -8347,8 +7688,8 @@ export class LocalApiServer {
                         const board: any[] = (await db.getBoard?.(wsId)) || [];
                         const counts: Record<string, number> = {};
                         for (const p of board) {
-                            if (p && !p.completedAt && typeof p.dispatchedTerminal === 'string' && p.dispatchedTerminal.trim().length > 0) {
-                                const term = p.dispatchedTerminal.trim();
+                            if (p && !p.completedAt && typeof p.ownerSeat === 'string' && p.ownerSeat.trim().length > 0) {
+                                const term = p.ownerSeat.trim();
                                 counts[term] = (counts[term] || 0) + 1;
                             }
                         }
@@ -9603,8 +8944,7 @@ export class LocalApiServer {
                     const roster: string[] = Array.isArray(group.order) && group.order.length
                         ? group.order
                         : (Array.isArray(group.members) ? group.members : []);
-                    const check = await resolveTeamInFlight(db, roster);
-                    inFlight = !!check.inFlight;
+                    inFlight = await teamHasLiveWork(db, roster);
                 }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ ...result, inFlight }));
@@ -11223,30 +10563,93 @@ export class LocalApiServer {
     //  the-agent-control-surface-cannot-be-configured-and-is-driven-by-typing.
     // ═══════════════════════════════════════════════════════════════════════
 
+    /** Which provider a bare endpoint belongs to. Used ONLY by the migration. */
+    private static _providerIdForEndpoint(endpoint: string): string {
+        const u = String(endpoint || '');
+        if (/generativelanguage\.googleapis\.com/i.test(u)) { return 'google'; }
+        if (/openrouter\.ai/i.test(u)) { return 'openrouter'; }
+        if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|192\.168\.|10\.)/i.test(u)) { return 'local'; }
+        return 'custom';
+    }
+
     /**
-     * The surface's configured model endpoint. Reads the surface's OWN key
-     * (`agents.agentControlEndpoint`, written by POST /agent/control/config)
-     * and nothing else — the unreleased `agents.startupCommands` URL overload
-     * took a clean break: a URL typed into the startup-command field is a CLI
-     * command, never an endpoint.
+     * The ACTIVE provider row: the pointer (`agents.agentControlProvider`)
+     * looked up in the rows (`agents.agentControlProviders`). Each provider owns
+     * its own endpoint/model, so switching the pointer recalls that provider's
+     * values rather than reusing a name the new provider never coined.
+     *
+     * The result is TAGGED with `source`, so "this row is configured" is never
+     * indistinguishable from "this was migrated" or "nothing is set".
+     *
+     * Migration: an install configured before normalisation has flat
+     * `agentControlEndpoint`/`agentControlModel` and no row. Those are read ONCE,
+     * written into the row they belong to, then cleared — a flat value is not a
+     * standing fallback, because a stale one winning over a row is precisely the
+     * divergence the row shape exists to prevent.
+     */
+    private async _resolveAgentControlRow(): Promise<{
+        providerId: string; endpoint: string; model: string;
+        source: 'row' | 'migrated-flat' | 'unset';
+    } | { error: string }> {
+        let providerId = '';
+        let rows: Record<string, { endpoint?: string; model?: string }> = {};
+        let flatEndpoint = '';
+        let flatModel = '';
+        try {
+            providerId = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlProvider') || '').trim();
+            rows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, { endpoint?: string; model?: string }>>('agentControlProviders')) || {};
+            flatEndpoint = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint') || '').trim();
+            flatModel = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel') || '').trim();
+        } catch (err) {
+            console.error('[LocalApiServer] agent-control: config unreadable:', err);
+            return { error: 'Agent-control config could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
+        }
+
+        const row = providerId ? rows[providerId] : undefined;
+        if (row && (row.endpoint || row.model)) {
+            return {
+                providerId,
+                endpoint: String(row.endpoint || '').trim(),
+                model: String(row.model || '').trim(),
+                source: 'row',
+            };
+        }
+
+        if (flatEndpoint || flatModel) {
+            const migratedId = providerId || LocalApiServer._providerIdForEndpoint(flatEndpoint);
+            const next = { ...rows, [migratedId]: { endpoint: flatEndpoint, model: flatModel } };
+            try {
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlProviders', next);
+                if (!providerId) { await GlobalIntegrationConfigService.setAgentConfig('agentControlProvider', migratedId); }
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', '');
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlModel', '');
+                console.log(`[LocalApiServer] agent-control: migrated flat config into provider row '${migratedId}'`);
+            } catch (err) {
+                console.error('[LocalApiServer] agent-control: row migration write failed:', err);
+            }
+            return { providerId: migratedId, endpoint: flatEndpoint, model: flatModel, source: 'migrated-flat' };
+        }
+
+        return { providerId, endpoint: '', model: '', source: 'unset' };
+    }
+
+    /**
+     * The active provider's endpoint, read from its ROW (never from a flat key —
+     * see `_resolveAgentControlRow`). The `agents.startupCommands` URL overload
+     * remains gone: a URL typed into a startup-command field is a CLI command.
      *
      * Returns `{ url }`, `null` when unconfigured, or `{ error }` when the
      * config is unreadable or holds a non-URL value — three outcomes, never
      * collapsed (a corrupt file is not an unconfigured one).
      */
     private async _resolveAgentControlEndpoint(): Promise<{ url: string } | { error: string } | null> {
-        let endpoint = '';
-        try {
-            endpoint = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint') || '').trim();
-        } catch (err) {
-            console.error('[LocalApiServer] agent-control: endpoint config unreadable:', err);
-            return { error: 'Agent-control config could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
+        const row = await this._resolveAgentControlRow();
+        if ('error' in row) { return row; }
+        if (!row.endpoint) { return null; }
+        if (!/^https?:\/\//i.test(row.endpoint)) {
+            return { error: `Configured agent-control endpoint "${row.endpoint}" is not an http(s) URL.` };
         }
-        if (!endpoint) { return null; }
-        if (!/^https?:\/\//i.test(endpoint)) {
-            return { error: `Configured agent-control endpoint "${endpoint}" is not an http(s) URL.` };
-        }
-        return { url: endpoint };
+        return { url: row.endpoint };
     }
 
     /**
@@ -11255,18 +10658,48 @@ export class LocalApiServer {
      * override). An unreadable store is `{ error }`, never silently "unset" —
      * that conflation made a locked keychain look like a missing credential.
      */
-    private async _resolveAgentControlApiKey(): Promise<{ apiKey: string; keySource: 'secrets-store' | 'env' } | { error: string }> {
+    private async _resolveAgentControlApiKey(providerId?: string): Promise<{ apiKey: string; keySource: 'secrets-store' | 'env' } | { error: string }> {
         const secretsStore = this._options.encryptedSecretsStore;
         if (secretsStore && typeof secretsStore.get === 'function') {
             try {
+                // Per-provider key FIRST. Each provider issues its own credential,
+                // so one shared slot could only ever hold one of them — switching
+                // provider would present the previous provider's key and 401
+                // against an endpoint that was configured correctly.
+                if (providerId) {
+                    const scoped = String(await secretsStore.get(`switchboard.agentControl.apiKey.${providerId}`) || '');
+                    if (scoped) { return { apiKey: scoped, keySource: 'secrets-store' }; }
+                }
+                // The pre-normalisation shared key, so an existing install keeps
+                // working; the surface rewrites it under its provider on next save.
                 const stored = String(await secretsStore.get('switchboard.agentControl.apiKey') || '');
-                if (stored) { return { apiKey: stored, keySource: 'secrets-store' }; }
+                if (stored) {
+                    console.log(`[LocalApiServer] agent-control: using the pre-normalisation shared API key for provider '${providerId || 'unset'}'`);
+                    return { apiKey: stored, keySource: 'secrets-store' };
+                }
             } catch (err) {
                 console.error('[LocalApiServer] agent-control: secrets store read failed:', err);
                 return { error: 'The stored API key could not be read (secrets store unavailable).' };
             }
         }
         return { apiKey: String(process.env.SWITCHBOARD_AGENT_API_KEY || ''), keySource: 'env' };
+    }
+
+    /**
+     * The configured provider id ('google' | 'openai' | 'local' | 'custom'),
+     * TAGGED with where it came from. An unset provider is reported as such
+     * rather than substituted: "nobody chose a provider" and "somebody chose
+     * Google" must not be the same value, because only one of them means the
+     * endpoint below was derived rather than typed.
+     */
+    private async _resolveAgentControlProvider(): Promise<{ value: string; source: 'config' | 'unset' }> {
+        try {
+            const raw = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlProvider') || '').trim();
+            if (raw) { return { value: raw, source: 'config' }; }
+        } catch (err) {
+            console.error('[LocalApiServer] agent-control: provider config unreadable:', err);
+        }
+        return { value: '', source: 'unset' };
     }
 
     /**
@@ -11277,42 +10710,47 @@ export class LocalApiServer {
      * reported, never collapsed into "unconfigured" or silently defaulted.
      */
     private async _resolveAgentControlModel(): Promise<{
-        url: string; model: string; apiKey: string; keySource: 'secrets-store' | 'env';
+        url: string; model: string; apiKey: string; keySource: 'secrets-store' | 'env'; provider: string;
     } | { error: string } | null> {
         const endpoint = await this._resolveAgentControlEndpoint();
         if (endpoint === null) { return null; }
         if ('error' in endpoint) { return endpoint; }
 
-        let modelName = '';
-        try {
-            modelName = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel') || '').trim();
-        } catch (err) {
-            console.error('[LocalApiServer] agent-control: model config unreadable:', err);
-            return { error: 'Agent-control config could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
-        }
-        // Unset means unset: a wrong model that answers is worse than none, so
-        // endpoint-without-model is an error the surface reports beside the
-        // model field — not a guess at a default.
-        if (!modelName) {
-            return { error: `Model endpoint ${endpoint.url} is configured but no model is set (agents.agentControlModel).` };
+        // ONE read of the active row: the endpoint above and the model here are
+        // fields of the SAME row, so they can never be read from different states.
+        // Unset means unset — a wrong model that answers is worse than none, so
+        // endpoint-without-model is an error reported beside the model field,
+        // not a guess at a default.
+        const row = await this._resolveAgentControlRow();
+        if ('error' in row) { return row; }
+        const modelName = row.model;
+        const provider = { value: row.providerId };
+        // A local server names its own model, so an empty model is legal for
+        // that provider ALONE. Every other provider keeps the hard error: a
+        // wrong model that answers is worse than no model at all.
+        if (!modelName && provider.value !== 'local') {
+            return { error: `Model endpoint ${endpoint.url} is configured but no model is set for provider '${row.providerId || 'unset'}'.` };
         }
 
-        const key = await this._resolveAgentControlApiKey();
+        const key = await this._resolveAgentControlApiKey(row.providerId);
         if ('error' in key) { return key; }
-        if (!key.apiKey) {
+        // A local server is not authenticated — the surface shows no key field
+        // for it, so requiring one would block a provider on a credential the
+        // operator was never asked for.
+        if (!key.apiKey && provider.value !== 'local') {
             // A truthy { url } with an empty credential reported TRUE for
             // `modelConfigured` once, and every call 401'd behind a UI claiming
             // it was configured. An endpoint with no key is a misconfiguration,
             // and it says so.
-            return { error: `Model endpoint ${endpoint.url} is configured but no API key is set (switchboard.agentControl.apiKey or SWITCHBOARD_AGENT_API_KEY).` };
+            return { error: `Model endpoint ${endpoint.url} is configured but no API key is set for provider '${row.providerId || 'unset'}' (switchboard.agentControl.apiKey.${row.providerId || '<provider>'} or SWITCHBOARD_AGENT_API_KEY).` };
         }
-        return { url: endpoint.url, model: modelName, apiKey: key.apiKey, keySource: key.keySource };
+        return { url: endpoint.url, model: modelName, apiKey: provider.value === 'local' ? '' : key.apiKey, keySource: key.keySource, provider: provider.value };
     }
 
     /** Narrow the tagged result to a usable model, or null. */
     private static _usableAgentModel(
-        m: { url: string; model: string; apiKey: string; keySource: string } | { error: string } | null
-    ): { url: string; model: string; apiKey: string; keySource: string } | null {
+        m: { url: string; model: string; apiKey: string; keySource: string; provider?: string } | { error: string } | null
+    ): { url: string; model: string; apiKey: string; keySource: string; provider?: string } | null {
         return m && !('error' in m) ? m : null;
     }
 
@@ -11331,7 +10769,21 @@ export class LocalApiServer {
             const usable = LocalApiServer._usableAgentModel(model);
             const endpoint = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint');
             const modelName = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel');
-            const key = await this._resolveAgentControlApiKey();
+            const provider = await this._resolveAgentControlProvider();
+            const key = await this._resolveAgentControlApiKey(provider.value);
+            // EVERY row, so the surface can switch provider and show that
+            // provider's saved values without a round trip. Key VALUES are never
+            // included — each row reports only whether one is set.
+            const allRows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, { endpoint?: string; model?: string }>>('agentControlProviders')) || {};
+            const providers: Record<string, { endpoint: string; model: string; keySet: boolean }> = {};
+            for (const id of Object.keys(allRows)) {
+                const rowKey = await this._resolveAgentControlApiKey(id);
+                providers[id] = {
+                    endpoint: String(allRows[id]?.endpoint || ''),
+                    model: String(allRows[id]?.model || ''),
+                    keySet: !('error' in rowKey) && !!rowKey.apiKey,
+                };
+            }
             // The mechanical actions below need no model, and stay available
             // when it is broken — plan edge case 1: "a control surface that
             // goes blank is worse than a terminal". The by-id actions take
@@ -11362,6 +10814,16 @@ export class LocalApiServer {
                 modelName: usable ? usable.model : null,
                 modelKeySource: usable ? usable.keySource : null,
                 modelError: model && 'error' in model ? model.error : null,
+                // The provider the surface should preselect, and whether it was
+                // actually CHOSEN. `providerSource: 'unset'` tells the surface to
+                // infer one from the endpoint rather than render Google-because-
+                // it-is-first as though the operator had picked it.
+                provider: provider.value || null,
+                providerSource: provider.source,
+                // The saved row for every provider the operator has configured.
+                // Switching the dropdown reads from here — nothing is retyped and
+                // nothing is carried across from the previously selected one.
+                providers,
                 quickActions,
             };
         });
@@ -11376,7 +10838,7 @@ export class LocalApiServer {
      * rather than "new endpoint, no key", which is the configured-but-keyless
      * state the resolver already flags as an error.
      *
-     * Body: { endpoint?: string, model?: string, apiKey?: string }
+     * Body: { provider?: string, endpoint?: string, model?: string, apiKey?: string }
      *   apiKey absent → stored key unchanged
      *   apiKey ''     → stored key deleted (explicit clear)
      *   apiKey <v>    → written to the encrypted secrets store
@@ -11391,6 +10853,12 @@ export class LocalApiServer {
         }
         try {
             const body = await this._parseJsonBody(req);
+            // The row this write targets: the provider named in the body, else
+            // the active pointer. Every field below lands in THAT row — there is
+            // no surface-wide endpoint/model/key any more.
+            const targetProvider = typeof body?.provider === 'string' && body.provider.trim()
+                ? body.provider.trim()
+                : (await this._resolveAgentControlProvider()).value;
             if (typeof body?.apiKey === 'string') {
                 const secretsStore = this._options.encryptedSecretsStore;
                 if (!secretsStore || typeof secretsStore.store !== 'function' || typeof secretsStore.delete !== 'function') {
@@ -11404,24 +10872,48 @@ export class LocalApiServer {
                     return;
                 }
                 const trimmed = body.apiKey.trim();
-                if (trimmed) { await secretsStore.store('switchboard.agentControl.apiKey', trimmed); }
-                else { await secretsStore.delete('switchboard.agentControl.apiKey'); }
+                // A key has no meaning without the provider it authenticates to.
+                // Refuse rather than park it under a sentinel slot: a key stored
+                // at '…apiKey.unset' looks stored, reports keySet, and is read by
+                // nothing.
+                if (!targetProvider) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        error: 'Cannot store an API key without a provider: send `provider` with the key, or select one first.',
+                    }));
+                    return;
+                }
+                // Scoped to the provider it belongs to: each provider issues its
+                // own credential, and a shared slot would make switching provider
+                // silently present the wrong one.
+                const keyName = `switchboard.agentControl.apiKey.${targetProvider}`;
+                if (trimmed) { await secretsStore.store(keyName, trimmed); }
+                else { await secretsStore.delete(keyName); }
             }
-            if (typeof body?.endpoint === 'string') {
-                await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', body.endpoint.trim());
+            if (typeof body?.provider === 'string') {
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlProvider', targetProvider);
             }
-            if (typeof body?.model === 'string') {
-                await GlobalIntegrationConfigService.setAgentConfig('agentControlModel', body.model.trim());
+            // endpoint/model are fields OF THE ROW. Written together, read back
+            // together, and absent from the surface-wide keys entirely.
+            if (typeof body?.endpoint === 'string' || typeof body?.model === 'string') {
+                const rows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, { endpoint?: string; model?: string }>>('agentControlProviders')) || {};
+                const existing = rows[targetProvider] || {};
+                rows[targetProvider] = {
+                    endpoint: typeof body?.endpoint === 'string' ? body.endpoint.trim() : (existing.endpoint || ''),
+                    model: typeof body?.model === 'string' ? body.model.trim() : (existing.model || ''),
+                };
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlProviders', rows);
             }
-            const key = await this._resolveAgentControlApiKey();
-            const endpoint = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint');
-            const modelName = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel');
+            const row = await this._resolveAgentControlRow();
+            const key = await this._resolveAgentControlApiKey(targetProvider);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 success: true,
                 keySet: !('error' in key) && !!key.apiKey,
-                endpoint: endpoint ? String(endpoint) : '',
-                model: modelName ? String(modelName) : '',
+                endpoint: 'error' in row ? '' : row.endpoint,
+                model: 'error' in row ? '' : row.model,
+                provider: targetProvider || '',
             }));
         } catch (err) {
             console.error('[LocalApiServer] agentControlConfig write error:', err);
@@ -11441,7 +10933,7 @@ export class LocalApiServer {
      * OpenAI-compatible chat completions request format.
      */
     private async _callModelForAction(
-        model: { url: string; model: string; apiKey: string },
+        model: { url: string; model: string; apiKey: string; provider?: string },
         card: any,
         board: any[]
     ): Promise<{ action: string; column?: string; reply: string } | null> {
@@ -11465,8 +10957,11 @@ export class LocalApiServer {
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userContent },
         ];
+        // An empty model reaches here only for the local provider, which names
+        // its own. Omit the field rather than sending `model: ""` — a server
+        // that would have used its default otherwise rejects the empty string.
         const body = JSON.stringify({
-            model: model.model,
+            ...(model.model ? { model: model.model } : {}),
             messages,
             temperature: 0,
             max_tokens: 300,
@@ -11943,6 +11438,15 @@ export class LocalApiServer {
                     try { await fs.unlink(abs); fileDeleted = true; } catch { /* already gone */ }
                 }
             }
+            // Tell connected clients the card is gone. Without this the row is
+            // deleted and every open board keeps rendering it until a manual
+            // refresh re-fetches /kanban/board. The move path already resyncs via
+            // the kanbanVerb `default:` arm; this handler does not go through it.
+            if (ok) {
+                try { this._options.onBoardMutated?.('deletePlan'); }
+                catch (pushErr) { console.warn('[LocalApiServer] deletePlan: onBoardMutated failed:', pushErr); }
+            }
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: ok, fileDeleted }));
         } catch (err) {
@@ -13880,10 +13384,6 @@ export class LocalApiServer {
                 await this._handleKanbanRoundRedeliver(req, res);
             } else if (pathname === '/kanban/feature/complete' && req.method === 'POST') {
                 await this._handleKanbanFeatureComplete(req, res);
-            } else if (pathname === '/kanban/team/release' && req.method === 'POST') {
-                await this._handleKanbanTeamRelease(req, res);
-            } else if (pathname === '/kanban/card/release' && req.method === 'POST') {
-                await this._handleKanbanCardRelease(req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
                 await this._handleKanbanMove(req, res);
             } else if (pathname === '/kanban/feature' && req.method === 'POST') {

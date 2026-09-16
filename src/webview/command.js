@@ -882,8 +882,11 @@
             lockBanner.classList.add('hidden');
         }
 
-        btnDispatch.disabled = locked || selectedDispatchCardIds.size === 0;
-        btnMove.disabled = locked || selectedMoveCardIds.size === 0;
+        // V81: the lock is display-only — an in-flight mission shows its
+        // progress view, but it must not disable dispatch. The board never
+        // refuses a dispatch; a duplicate dispatch resets the card.
+        btnDispatch.disabled = selectedDispatchCardIds.size === 0;
+        btnMove.disabled = selectedMoveCardIds.size === 0;
     }
 
     function getComplexityClass(score) {
@@ -1201,8 +1204,8 @@
                 // KanbanPlanRecord — `title` and `completedAt` are NOT in that literal,
                 // so the topic and the column are what actually answer here.
                 title: card ? (card.topic || card.planFile || id) : id,
-                seat: card ? (card.dispatchedTerminal || '') : '',
-                dispatchedAt: card ? (card.dispatchedAt || null) : null,
+                seat: card ? (card.ownerSeat || '') : '',
+                ownerSince: card ? (card.ownerSince || null) : null,
                 completed: Boolean(card && (card.kanbanColumn || card.column) === 'COMPLETED'),
             };
         });
@@ -1223,7 +1226,7 @@
 
             missionProgressCodename.textContent = missionLabel('OPERATION IN FLIGHT');
             const members = missionMembers();
-            const stamps = members.map(m => m.dispatchedAt).filter(Boolean).map(v => new Date(v).getTime())
+            const stamps = members.map(m => m.ownerSince).filter(Boolean).map(v => new Date(v).getTime())
                 .filter(n => Number.isFinite(n));
             const startedAt = stamps.length ? Math.min(...stamps) : 0;
             const elapsedSec = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
@@ -1803,7 +1806,7 @@
     }
 
     async function executeDispatch() {
-        if (selectedDispatchCardIds.size === 0 || isMissionInFlight()) return;
+        if (selectedDispatchCardIds.size === 0) return;
 
         // A new dispatch supersedes any in-flight poll for a previous card.
         cancelDispatchPoll();
@@ -1864,7 +1867,7 @@
     }
 
     async function executeMove() {
-        if (selectedMoveCardIds.size === 0 || isMissionInFlight()) return;
+        if (selectedMoveCardIds.size === 0) return;
         const targetCol = selectedMoveTargetColumn;
         if (!targetCol) return;
 
@@ -2629,6 +2632,22 @@
     const agentEndpointElMobile = document.getElementById('agent-control-endpoint');
     const agentModelElMobile = document.getElementById('agent-control-model');
     const agentKeyElMobile = document.getElementById('agent-control-key');
+    // The provider row's field-visibility rules and its model table live in
+    // sharedUtils.js — dock.js binds the SAME controller to its own copy of
+    // this row, so the two surfaces cannot disagree about which field applies
+    // to which provider.
+    const agentProviderRowMobile = window.SwitchboardAgentProviderRow
+        ? window.SwitchboardAgentProviderRow.create({
+            provider: document.getElementById('agent-control-provider'),
+            endpoint: agentEndpointElMobile,
+            endpointLabel: document.getElementById('agent-control-endpoint-label'),
+            modelSelect: document.getElementById('agent-control-model-select'),
+            modelInput: agentModelElMobile,
+            modelLabel: document.getElementById('agent-control-model-label'),
+            key: agentKeyElMobile,
+            keyLabel: document.getElementById('agent-control-key-label'),
+        })
+        : null;
     const agentConfigSaveBtnMobile = document.getElementById('btn-agent-config-save');
     const agentConfigStatusElMobile = document.getElementById('agent-control-config-status');
 
@@ -2661,16 +2680,11 @@
             // The config row renders the stored values verbatim — including a
             // value the resolver rejects — so the operator sees and fixes it.
             // The key field is write-only: it renders set/unset, never the value.
-            if (agentEndpointElMobile && document.activeElement !== agentEndpointElMobile) {
-                agentEndpointElMobile.value = cfg.endpoint || '';
-            }
-            if (agentModelElMobile && document.activeElement !== agentModelElMobile) {
-                agentModelElMobile.value = cfg.model || '';
-            }
-            if (agentKeyElMobile) {
-                agentKeyElMobile.value = '';
-                agentKeyElMobile.placeholder = cfg.keySet ? 'API key is set (write-only — type to replace)' : 'API key (unset)';
-            }
+            if (agentProviderRowMobile) { agentProviderRowMobile.applyConfig(cfg); }
+            // The key placeholder is set by the provider row controller — it is
+            // PER PROVIDER (`cfg.providers[<id>].keySet`), and a surface-wide
+            // `cfg.keySet` written here would claim the active provider's state
+            // for whichever provider is selected next.
             setAgentConfigStatusMobile(cfg.modelError || '', !!cfg.modelError);
             if (agentModelConfigured) {
                 setAgentStatusMobile('Model configured (' + (cfg.modelName || '') + '). Mechanical actions always available.', 'model');
@@ -2848,12 +2862,15 @@
 
     /** Save the endpoint/model/key the surface's config row holds. */
     async function saveAgentControlConfigMobile() {
-        const payload = {};
-        if (agentEndpointElMobile) { payload.endpoint = agentEndpointElMobile.value.trim(); }
-        if (agentModelElMobile) { payload.model = agentModelElMobile.value.trim(); }
+        const payload = agentProviderRowMobile ? agentProviderRowMobile.payload() : {};
         // The key field is write-only: an empty field means "leave the stored
-        // key unchanged", so it is only sent when the operator typed one.
-        if (agentKeyElMobile && agentKeyElMobile.value.trim()) { payload.apiKey = agentKeyElMobile.value.trim(); }
+        // key unchanged", so it is only sent when the operator typed one. A
+        // provider that takes no key (local server) never sends one either —
+        // it has no key field to type into.
+        const wantsKey = !agentProviderRowMobile || agentProviderRowMobile.needsKey();
+        if (wantsKey && agentKeyElMobile && agentKeyElMobile.value.trim()) {
+            payload.apiKey = agentKeyElMobile.value.trim();
+        }
         try {
             const res = await fetch('/agent/control/config', {
                 method: 'POST', credentials: 'same-origin',

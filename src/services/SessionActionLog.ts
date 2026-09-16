@@ -521,7 +521,6 @@ export class SessionActionLog {
                     sourceType: 'local',
                     brainSourcePath: normalized.brainSourcePath || '',
                     mirrorPath: '',
-                    routedTo: '',
                     dispatchedAgent: '',
                     dispatchedIde: ''
                 } as KanbanPlanRecord);

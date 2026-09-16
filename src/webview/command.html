@@ -1126,11 +1126,19 @@
                              meant to reach, so it cannot depend on a CLI or an
                              env var. The key field is write-only. -->
                         <div style="display:flex; flex-direction:column; gap:5px; padding:6px; background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px;">
-                            <label for="agent-control-endpoint" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Model endpoint</label>
-                            <input type="text" id="agent-control-endpoint" placeholder="https://… (unset)" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
-                            <label for="agent-control-model" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Model</label>
-                            <input type="text" id="agent-control-model" placeholder="model name (unset)" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
-                            <label for="agent-control-key" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">API key</label>
+                            <label for="agent-control-provider" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Provider</label>
+                            <select id="agent-control-provider" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;"></select>
+                            <!-- Endpoint: only for providers that do not carry a
+                                 fixed URL (local server, custom endpoint). -->
+                            <label for="agent-control-endpoint" id="agent-control-endpoint-label" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Server URL</label>
+                            <input type="text" id="agent-control-endpoint" placeholder="http://… (unset)" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
+                            <!-- Model: a dropdown of the provider's models, a
+                                 free-text name, or neither (local server names
+                                 its own). Both controls carry the same label. -->
+                            <label for="agent-control-model-select" id="agent-control-model-label" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Model</label>
+                            <select id="agent-control-model-select" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;"></select>
+                            <input type="text" id="agent-control-model" placeholder="model name" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
+                            <label for="agent-control-key" id="agent-control-key-label" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">API key</label>
                             <input type="password" id="agent-control-key" placeholder="(unset)" autocomplete="off" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
                             <button class="secondary-action-btn" id="btn-agent-config-save" style="align-self:flex-end; padding:6px 14px;">Save config</button>
                             <div id="agent-control-config-status" style="font-size:10px; color:var(--text-dim);"></div>

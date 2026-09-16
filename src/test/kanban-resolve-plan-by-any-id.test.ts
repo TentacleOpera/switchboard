@@ -47,7 +47,7 @@ suite('KanbanDatabase.resolvePlanByAnyId', () => {
         sourceType: 'local' as any,
         brainSourcePath: '',
         mirrorPath: '',
-        routedTo: '',
+        ownerSeat: '',
         dispatchedAgent: '',
         dispatchedIde: ''
     });

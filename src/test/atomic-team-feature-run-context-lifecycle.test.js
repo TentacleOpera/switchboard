@@ -45,9 +45,8 @@ function card(planId, kanbanColumn, extra = {}) {
         topic: planId,
         kanbanColumn,
         featureId: '',
-        dispatchedAt: null,
-        dispatchedTerminal: '',
-        queuePosition: null,
+        ownerSeat: '',
+        ownerSince: null,
         completedAt: null,
         ...extra,
     };
@@ -94,29 +93,23 @@ function makeServer(board, opts = {}) {
             calls.push({ kind: 'event', planId, event });
             return true;
         },
-        // V77 release valve: released_at is a DIFFERENT write from completed_at.
-        setReleasedAt: async (planId, timestamp) => {
-            const p = plans.get(planId);
-            if (!p || p.releasedAt) return false;
-            p.releasedAt = timestamp;
-            return true;
+        // V81: the advisory owner pair is the only holder record. The release
+        // valve and released_at are gone.
+        clearOwnerStamp: async (planFile) => {
+            const row = board.find(p => p && p.planFile === planFile);
+            if (!row) return false;
+            const had = !!(row.ownerSince || row.ownerSeat);
+            row.ownerSeat = '';
+            row.ownerSince = null;
+            calls.push({ kind: 'clearOwnerStamp', planFile });
+            return had;
         },
+        countActiveDispatchedByTerminal: async () => 0,
         setPlanOutcomeWorkflow: async (planId, outcome, workflow) => {
             const p = plans.get(planId);
             if (!p) return;
             p.outcome = outcome;
             p.workflow = workflow;
-        },
-        releaseDispatchHolder: async (planFile) => {
-            const row = board.find(p => p && p.planFile === planFile);
-            if (row) { row.dispatchedTerminal = ''; row.dispatchedAt = null; }
-            calls.push({ kind: 'releaseHolder', planFile });
-            return true;
-        },
-        clearWorkingState: async () => {
-            const row = board.find(p => p && p.dispatchedAt);
-            if (row) { row.dispatchedAt = null; }
-            return true;
         },
         ...(opts.db || {}),
     };
@@ -135,6 +128,13 @@ function makeServer(board, opts = {}) {
         getRegisteredTerminals: opts.getRegisteredTerminals || (() => []),
         terminalVerb: async (verb, payload) => {
             calls.push({ kind: 'verb', verb, name: payload && payload.name, payload });
+            if (verb === 'ptyListTerminals') {
+                return { success: true, terminals: [
+                    { friendlyName: 'Coding', role: 'lead_coder' },
+                    { friendlyName: 'Coder 1', role: 'coder' },
+                    { friendlyName: 'SoloAgent', role: 'coder' },
+                ] };
+            }
             return { success: true };
         },
         clearTerminalContext: async (workspaceRoot, terminalName) => {
@@ -185,33 +185,6 @@ async function postComplete(server, body) {
     return { status, body: responseBody };
 }
 
-async function postRelease(server, body) {
-    const req = {
-        method: 'POST',
-        url: '/kanban/card/release',
-        // Guard 4 (cross-site) admits a non-browser caller only when it carries
-        // the client marker; without it every state-changing POST is refused 403
-        // before the handler runs.
-        headers: { 'content-type': 'application/json', 'authorization': 'Bearer test-token', 'x-switchboard-client': 'contract-test' },
-        on: (event, cb) => {
-            if (event === 'data') cb(Buffer.from(JSON.stringify(body)));
-            else if (event === 'end') cb();
-        },
-        socket: { destroy: () => {}, remoteAddress: '127.0.0.1' },
-    };
-    let status = 0;
-    let responseBody = null;
-    const res = {
-        writeHead: (code) => { status = code; },
-        setHeader: () => {},
-        getHeaders: () => ({}),
-        getHeader: () => undefined,
-        end: (data) => { responseBody = data ? JSON.parse(data) : null; },
-    };
-    await server._handleRequest(req, res);
-    return { status, body: responseBody };
-}
-
 async function run() {
     console.log('\n--- Running Atomic Team Feature Run Context Lifecycle Tests ---\n');
 
@@ -251,13 +224,13 @@ async function run() {
     await check('team queue/done does not clear reporting coder context', async () => {
         const board = [
             card('held-1', 'CODER CODED', {
-                dispatchedAt: '2026-08-25T00:00:00Z',
-                dispatchedTerminal: 'Coder 1',
+                ownerSince: '2026-08-25T00:00:00Z',
+                ownerSeat: 'Coder 1',
                 planFile: '/tmp/held-1.md',
                 featureId: 'feat-1',
                 workspaceId: 'ws1',
             }),
-            card('next-1', 'STAGING', { queuePosition: 1 }),
+            card('next-1', 'STAGING', { columnOrder: 1 }),
         ];
         const { server, calls } = makeServer(board, {
             groups: [group('Coding', ['Coder 1'])],
@@ -286,8 +259,7 @@ async function run() {
     await check('lead task/complete clears accepted coder once and is idempotent', async () => {
         const board = [
             card('sub-task-1', 'CODER CODED', {
-                dispatchedTerminal: 'Coder 1',
-                routedTo: 'coder',
+                ownerSeat: 'Coder 1',
                 featureId: 'feat-1',
             }),
         ];
@@ -314,11 +286,10 @@ async function run() {
     });
 
     // 5. Lead acceptance never clears lead
-    await check('lead task/complete never clears lead even if dispatchedTerminal matches lead', async () => {
+    await check('lead task/complete never clears lead even if owner_seat matches lead', async () => {
         const board = [
             card('lead-task', 'LEAD CODED', {
-                dispatchedTerminal: 'Coding',
-                routedTo: 'lead',
+                ownerSeat: 'Coding',
                 featureId: 'feat-1',
             }),
         ];
@@ -347,8 +318,7 @@ async function run() {
     await check('task/complete with no outcome is ACCEPTED — completion is asserted, not written', async () => {
         const board = [
             card('needs-outcome', 'LEAD CODED', {
-                dispatchedTerminal: 'Coding',
-                routedTo: 'lead',
+                ownerSeat: 'Coding',
                 featureId: 'feat-1',
             }),
         ];
@@ -369,74 +339,34 @@ async function run() {
         assert.strictEqual(withOutcome.status, 200, 'the same post with an outcome is still accepted');
     });
 
-    // 5c. V77: the release valve. The plan's load-bearing negative invariant —
-    //      a release frees the team and the card does NOT read as completed.
-    //      Without a test that can tell released from completed apart, the valve
-    //      passes every existing suite while writing the wrong field.
-    await check('card/release frees the team and writes released_at, NOT completed_at', async () => {
-        const board = [
-            card('held-by-team', 'CODER CODED', {
-                dispatchedAt: '2026-09-10T00:00:00Z',
-                dispatchedTerminal: 'Coder 1',
-                planFile: '/tmp/held-by-team.md',
-                workspaceId: 'ws1',
-                routedTo: 'coder',
-                releasedAt: null,
-            }),
-        ];
-        const { server, calls, plans } = makeServer(board, {
-            groups: [group('Coding', ['Coder 1'])],
-            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
-        });
-
-        const r = await postRelease(server, { from: 'Coding', planId: 'held-by-team' });
-        assert.strictEqual(r.status, 200, r.body && r.body.error);
-        assert.strictEqual(r.body.success, true);
-        assert.ok(r.body.released_at, 'a release must stamp released_at');
-        assert.strictEqual(r.body.freed, true, 'the release must report that the team was actually freed');
-
-        const row = plans.get('held-by-team');
-        assert.strictEqual(row.completedAt, null, 'a release must NOT write completed_at');
-        assert.ok(row.releasedAt, 'the row carries released_at');
-        assert.strictEqual(row.workflow, 'operator-release', 'the row records WHICH write produced it');
-        assert.strictEqual(board[0].dispatchedTerminal, '',
-            'the dispatch holder is cleared — this is what frees the team for queue/next');
-        assert.strictEqual(calls.filter(c => c.kind === 'releaseHolder').length, 1);
-
-        const released = calls.filter(c => c.kind === 'event' && c.event.eventType === 'released');
-        assert.strictEqual(released.length, 1, 'a release records its own event type, not a completion');
-
-        // Idempotent: a second release returns the existing stamp and does not re-clear.
-        const again = await postRelease(server, { from: 'Coding', planId: 'held-by-team' });
-        assert.strictEqual(again.status, 200);
-        assert.strictEqual(again.body.idempotent, true);
-        assert.strictEqual(calls.filter(c => c.kind === 'releaseHolder').length, 1,
-            'a repeat release must not clear the holder a second time');
+    // 5c. V81: release ceased to exist as a concept. `card/release`,
+    //     `team/release` and `released_at` are deleted — there is nothing to
+    //     release from once ownership is advisory and dispatch is never refused.
+    await check('card/release and released_at are deleted outright', async () => {
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        assert.strictEqual(src.includes('/kanban/card/release'), false, 'card/release route must be absent');
+        assert.strictEqual(src.includes('/kanban/team/release'), false, 'team/release route must be absent');
+        assert.strictEqual(/\breleaseCardInternal\b/.test(src), false, 'releaseCardInternal must be deleted');
+        const dbSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanDatabase.ts'), 'utf8');
+        assert.strictEqual(/\breleasedAt\b/.test(dbSrc), false, 'the releasedAt record field must be gone');
     });
 
-    // 5d. The 409 the agent actually reads must name the release door. Change 4
-    //     of the release plan is the adoption mechanism: fixing the endpoint and
-    //     leaving the 409 pointing at completion changes nothing about what
-    //     agents do, and the invariants pass green on a dead verb.
-    await check('the queue/next 409 body names card/release, not only task/complete', async () => {
+    // 5d. The in-flight 409 the agent used to read is gone: dispatch is never
+    //     refused on ownership. The queue pop hands out the next staged card.
+    await check('the queue/next in-flight 409 is deleted', async () => {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
-        const idx = src.indexOf('Team already in flight:');
-        assert.ok(idx > 0, 'the in-flight 409 body was not found');
-        const body = src.slice(idx, idx + 900);
-        assert.ok(body.includes('/kanban/card/release'),
-            'the 409 must name the release door for a team that is not finished');
-        assert.ok(body.includes('/kanban/task/complete'),
-            'the 409 must still name completion for finished work');
-        assert.ok(/FINISHED|when the work is done/.test(body),
-            'the 409 must say plainly that completion is for finished work');
+        assert.strictEqual(src.includes('Team already in flight:'), false,
+            'the in-flight refusal body must be deleted — there is no in-flight gate');
+        assert.strictEqual(/\bresolveTeamInFlight\b/.test(src), false, 'resolveTeamInFlight must be deleted');
+        assert.strictEqual(/\bheldByTeam\b/.test(src), false, 'heldByTeam must be deleted');
     });
 
     // 6. Non-team terminal clears on queue/done
     await check('standalone terminal clears on queue/done', async () => {
         const board = [
             card('standalone-task', 'CODER CODED', {
-                dispatchedAt: '2026-08-25T00:00:00Z',
-                dispatchedTerminal: 'SoloAgent',
+                ownerSince: '2026-08-25T00:00:00Z',
+                ownerSeat: 'SoloAgent',
                 planFile: '/tmp/solo.md',
                 workspaceId: 'ws1',
             }),

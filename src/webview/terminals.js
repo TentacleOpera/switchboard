@@ -6776,8 +6776,8 @@
          * branches write to the PTY from outside xterm (server-side ptySendPrompt, or a
          * raw ws.send), and term.onData fires only for locally typed/pasted input. So the
          * drop has to attribute itself. Same verb, same writer (attributePasteDispatch),
-         * same deliberately-narrow column set — dispatched_agent / dispatched_terminal /
-         * dispatched_at, never routed_to or dispatched_ide.
+         * same deliberately-narrow column set — owner_seat / owner_since on the
+         * card and dispatched_agent on the runtime row, never dispatched_ide.
          *
          * planIds is an ARRAY on purpose: a multi-select drag dispatches N plans in one
          * prompt, and attributePastedPrompt already attributes each id independently.
@@ -6896,13 +6896,11 @@
                     // up: this branch writes over the raw input WebSocket, and
                     // term.onData only fires for input typed or pasted INTO xterm — so
                     // an unattributed shift-drop stays permanently dark (no activity
-                    // light, no plan strip, no liveness — recordLiveness only touches
-                    // rows with a dispatched_terminal, KanbanDatabase.ts:9995).
+                    // light, no plan strip — the owner stamp is what lights them).
                     // ws.send() returns void, so the readyState guard above is the only
                     // success signal available; do not invent an ack protocol for it.
                     // Attribution is therefore early by the seconds the operator spends
-                    // reviewing, and it self-corrects the moment output starts
-                    // (recordLiveness nulls blocked_at). An abandoned shift-drop reads
+                    // reviewing. An abandoned shift-drop reads
                     // as "Waiting on you", which is what it is.
                     attributeDropDispatch(targetName, ids, workspaceRoot);
                 } else {
@@ -11139,7 +11137,7 @@
         if (soloTerminalName) { return; }
         const { planTitle, role, terminalName, worktreePath } = msg;
 
-        // The host resolves terminalName from the plan's dispatched_terminal column and
+        // The host resolves terminalName from the plan's owner_seat column and
         // already falls back to a role+worktree fleet match. This client-side pass is the
         // last resort (host too old to send either field). It scopes by worktree first —
         // three coders in three checkouts all match on role alone, so a role-only match
@@ -11162,7 +11160,7 @@
             renderPaneGrid();
             postFleetStateToShell();
 
-            // Unconditional refetch: the completion clear has nulled dispatched_at,
+            // Unconditional refetch: the completion clear has nulled owner_since,
             // so this retires the plan strip in the same beat as the DONE badge.
             fetchTerminalList();
         }

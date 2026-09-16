@@ -431,7 +431,7 @@ export class PlanIngestionEngine {
 
     /**
      * Per-seat dedupe state for the member completion reminder sweep. Keyed on
-     * `${workspaceRoot}:${seatName}`, and carrying the card's `dispatchedAt` so
+     * `${workspaceRoot}:${seatName}`, and carrying the card's `ownerSince` so
      * the budget below is scoped to ONE dispatch of one card.
      *
      * **Why the budget is not "re-arm on new output".** The plan asks for a
@@ -447,13 +447,13 @@ export class PlanIngestionEngine {
      *
      * So item 4 is honoured as a BOUNDED second re-delivery:
      * `MAX_MEMBER_REMINDERS_PER_DISPATCH` per dispatch of a card, with the
-     * counter re-armed only by a NEW `dispatchedAt` — new work, the one signal
+     * counter re-armed only by a NEW `ownerSince` — new work, the one signal
      * the reminder cannot manufacture. `_runQueueNudgeSweep` reaches the same
      * conclusion more bluntly with `nudgeCount >= 1` ("One nudge, then stop.
      * A pacer that ignored the first nudge is not going to answer a second —
      * repeating every window is the noise this fix exists to eliminate").
      */
-    private _memberReminderState = new Map<string, { dispatchedAt: string; count: number; remindedAt: number }>();
+    private _memberReminderState = new Map<string, { ownerSince: string; count: number; remindedAt: number }>();
 
     /**
      * Reminders per dispatch of a card. Two, not one: the plan explicitly wants
@@ -468,13 +468,13 @@ export class PlanIngestionEngine {
      * condition needs: when the nudge last fired, the plan-file mtime and the
      * seat's `lastDataAt` observed at that nudge. A subsequent stall re-arms
      * (gets a fresh nudge) ONLY when one of those has advanced since — see the
-     * sweep for why re-arming on `dispatchedAt` (the existing feature nudge's
+     * sweep for why re-arming on `ownerSince` (the existing feature nudge's
      * choice) fails for this case.
      *
      * In-memory only, deliberately NOT a watch registry (plan edge-case 4c): a
      * predicate over card fields has no arming, dropping, `nudgeCount` or
      * `lastNudgedAt`-per-feature surface. A card stops matching the predicate
-     * when its completion is posted or its `dispatched_at` is cleared; the
+     * when its completion is posted or its `owner_since` is cleared; the
      * state is dropped on the next tick where the card no longer matches, so
      * nothing leaks and no separate lifecycle exists to get wrong.
      */
@@ -491,6 +491,20 @@ export class PlanIngestionEngine {
 
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
+    }
+
+    /**
+     * Fired after the purge sweep removes rows for plan files that no longer exist.
+     * The sweep deleted the row, logged it, and told nobody — so a connected board
+     * kept rendering a purged card until the operator refreshed by hand. Hosts wire
+     * this to their client resync (`schedulePushFullState` in standalone).
+     *
+     * Unwired means no push, NOT a failed purge — the rows are already gone.
+     */
+    private _onBoardMutated?: (reason: string) => void;
+
+    public setOnBoardMutated(cb: (reason: string) => void): void {
+        this._onBoardMutated = cb;
     }
 
     /**
@@ -585,11 +599,6 @@ export class PlanIngestionEngine {
                 }
                 const activityCfg = this._host.getConfig('activityLight');
                 const timeoutMs = activityCfg.getNumber('timeoutMs', 10 * 60 * 1000);
-                // Liveness window: how recently a dispatched terminal must have
-                // produced output for the sweep to refresh its activity heartbeat.
-                // Default 90s; older heartbeats fall through to the working-state
-                // timeout.
-                const livenessWindowMs = activityCfg.getNumber('livenessWindowMs', 90000);
                 // Turn-end silence prevents a stall nudge from being injected into
                 // an active PTY turn. Completion remains an explicit API signal.
                 const turnEndSilenceMs = activityCfg.getNumber('turnEndSilenceMs', 90000);
@@ -600,7 +609,7 @@ export class PlanIngestionEngine {
                 // with no completion posted before the dispatch-stall nudge fires
                 // once for its lead. Default 30 min. Independent of the queue, of
                 // seat activity, and of the card's column — the only inputs are
-                // dispatched_at, completed_at and a clock. See
+                // owner_since, completed_at and a clock. See
                 // `_runDispatchStallSweep`.
                 const dispatchStallMs = activityCfg.getNumber('dispatchStallMs', 1800000);
                 // Dispatch-timeout threshold: how long a dispatched card may be out
@@ -608,7 +617,7 @@ export class PlanIngestionEngine {
                 // the attempt in a `timed out` state and releases the seat. Default
                 // 4 hours — well past the 30-min dispatch-stall nudge, so a human has
                 // a long window to act between the nudge and the abandonment. The
-                // sole abandonment path that nulls `dispatched_at` for a live-but-
+                // sole abandonment path that nulls `owner_since` for a live-but-
                 // silent seat now that the activity-light sweep no longer does (the
                 // conflation fix in `clearStaleWorkingState`). See
                 // `_runDispatchTimeoutSweep`. Invariant: dispatchStallMs <
@@ -643,23 +652,16 @@ export class PlanIngestionEngine {
                     }
                 }
                 const nowMs = Date.now();
-                const liveNames: string[] = [];
                 const forceTerminals: string[] = [];
                 for (const entry of liveness) {
                     if (!entry.friendlyName) continue;
                     if (entry.status === 'exited') {
-                        // Exited terminal = positive evidence of NOT working — the
-                        // one case where liveness shortens the window. Force-clear
-                        // on the next tick regardless of age.
+                        // Exited terminal = positive evidence of NOT working —
+                        // clear its owner_since so the activity light goes off
+                        // immediately rather than aging out at the read window.
                         forceTerminals.push(entry.friendlyName);
-                    } else if (nowMs - entry.lastDataAt < livenessWindowMs) {
-                        // Active AND recently produced output → stamp its heartbeat
-                        // so the widened age basis keeps its card lit past timeout.
-                        liveNames.push(entry.friendlyName);
                     }
                 }
-                let recordedLiveness = 0;
-                const livenessIso = new Date(nowMs).toISOString();
                 for (const folder of folders) {
                     try {
                         const db = KanbanDatabase.forWorkspace(folder);
@@ -667,26 +669,11 @@ export class PlanIngestionEngine {
                         const wsId = await db.getWorkspaceId();
                         if (!wsId) continue;
                         const notifiedSeatsThisTick = new Set<string>();
-                        // Persist heartbeats for live active terminals BEFORE the
-                        // sweep so the widened basis is in the row the sweep reads.
-                        // ~1 write per live card per 10s — well within the sql.js
-                        // WASM-heap budget (NOT per output flush).
-                        if (liveNames.length > 0) {
-                            try {
-                                recordedLiveness += await db.recordLiveness(wsId, liveNames, livenessIso);
-                            } catch (livenessErr) {
-                                this._host.logger.appendLine(
-                                    `[GlobalPlanWatcher] recordLiveness failed for ${folder}: ${livenessErr}`
-                                );
-                            }
-                        }
                         const cleared = await db.clearStaleWorkingState(wsId, timeoutMs, { forceTerminals });
                         if (cleared > 0) {
                             this._host.logger.appendLine(
-                                `[GlobalPlanWatcher] Activity-light timeout sweep cleared ${cleared} stale working card(s) in ${folder}` +
-                                (recordedLiveness > 0 || forceTerminals.length > 0
-                                    ? ` (liveness: recorded=${recordedLiveness}, forced=${forceTerminals.length})`
-                                    : '')
+                                `[GlobalPlanWatcher] Activity-light sweep cleared ${cleared} dead-seat working card(s) in ${folder}` +
+                                (forceTerminals.length > 0 ? ` (forced=${forceTerminals.length})` : '')
                             );
                             this._firePlanDiscovered(folder);
                         }
@@ -740,7 +727,7 @@ export class PlanIngestionEngine {
                         // The backstop for a card that has been dispatched for
                         // longer than the threshold with no completion posted.
                         // Independent of the queue, of seat activity, and of the
-                        // card's column — the only inputs are dispatched_at,
+                        // card's column — the only inputs are owner_since,
                         // completed_at and a clock. Fires once per stall for the
                         // lead of the team holding the card; re-arms on evidence
                         // of progress (plan-file mtime advancing or the seat
@@ -1074,6 +1061,15 @@ export class PlanIngestionEngine {
                         }
                     }
                 }
+
+                // One resync for the whole sweep, not one per row — a purge of N
+                // plans is a single board change from a client's point of view.
+                // Fired only when something was actually purged, so a sweep that
+                // finds nothing stays silent.
+                if (missingPlans.length > 0 && this._onBoardMutated) {
+                    try { this._onBoardMutated('purgeMissingPlans'); }
+                    catch (pushErr) { this._host.logger.appendLine(`[GlobalPlanWatcher] onBoardMutated failed after purge: ${pushErr}`); }
+                }
             }
         } catch (err) {
             this._host.logger.appendLine(`[GlobalPlanWatcher] Error in purge sweep: ${err}`);
@@ -1196,7 +1192,7 @@ export class PlanIngestionEngine {
      *
      * NOTE: this sweep no longer suppresses on an outstanding dispatch (the old
      * gate 4a is removed). A dispatched subtask is covered by the
-     * `_runDispatchStallSweep` backstop, which keys on elapsed-since-`dispatchedAt`
+     * `_runDispatchStallSweep` backstop, which keys on elapsed-since-`ownerSince`
      * — the window this sweep handed to an imaginary mechanism. The remaining gates
      * (head silence, team liveness) still suppress the feature nudge in the normal
      * "a coder is working" case, so the two sweeps do not double-wake: the feature
@@ -1291,7 +1287,7 @@ export class PlanIngestionEngine {
             // (4b) No completion notice for one of the feature's seats fired this tick.
             // A seat that just reported completion already woke the head, so a nudge
             // on top of it would be a double-wake about the same stall.
-            const seatNotifiedThisTick = remaining.some(s => !!s.dispatchedTerminal && notifiedSeatsThisTick.has(s.dispatchedTerminal));
+            const seatNotifiedThisTick = remaining.some(s => !!s.ownerSeat && notifiedSeatsThisTick.has(s.ownerSeat));
             if (seatNotifiedThisTick) {
                 kept.push(watch);
                 continue;
@@ -1371,13 +1367,13 @@ export class PlanIngestionEngine {
             // on your coders" has to re-derive everything.
             const lines: string[] = [`[switchboard:turn-end] Feature stall — you armed a watch on feature ${watch.featureId} and have gone idle with ${remaining.length} un-accepted subtask(s) remaining:`];
             for (const s of remaining) {
-                const seat = s.dispatchedTerminal ? `seat '${s.dispatchedTerminal}'` : 'no seat attributed';
-                const seatLastDataAt = s.dispatchedTerminal ? (livenessByName.get(s.dispatchedTerminal)?.lastDataAt ?? 0) : 0;
+                const seat = s.ownerSeat ? `seat '${s.ownerSeat}'` : 'no seat attributed';
+                const seatLastDataAt = s.ownerSeat ? (livenessByName.get(s.ownerSeat)?.lastDataAt ?? 0) : 0;
                 const silentFor = seatLastDataAt > 0 ? `, silent ${Math.round((nowMs - seatLastDataAt) / 1000)}s` : '';
                 // Plan-file mtime is the OTHER half of the evidence: a seat that has
                 // been quiet for minutes but whose plan file was written seconds ago
                 // finished and never reported. Absolute age, not a compare against
-                // `dispatchedAt` — these subtasks have no outstanding dispatch (that
+                // `ownerSince` — these subtasks have no outstanding dispatch (that
                 // is gate 4a), so there is no dispatch stamp to compare against.
                 let writtenAgo = '';
                 try {
@@ -1529,7 +1525,7 @@ export class PlanIngestionEngine {
             // staged instead of ending quietly.
             const queueCards = board.filter(p =>
                 p && p.kanbanColumn === 'STAGING'
-                && (!p.dispatchedAt)
+                && (!p.completedAt)
                 && (!p.featureId || p.featureId === '')
             );
             if (queueCards.length === 0) {
@@ -1563,11 +1559,11 @@ export class PlanIngestionEngine {
             if (pacing === 'seat') {
                 // ── Seat pacing: resolve the pacer from board state ──────
                 // The pacer is whichever seat currently holds a card — a card
-                // with `dispatched_at` set and `completed_at` NULL. Cards resting
-                // in coding columns with `dispatched_at` cleared or `completed_at`
+                // with `owner_since` set and `completed_at` NULL. Cards resting
+                // in coding columns with `owner_since` cleared or `completed_at`
                 // set are NOT evidence of work in progress (they are coded cards
                 // that belong there per switchboard-contracts #1) and must not
-                // suppress the escalation branch. Two conditions: `dispatched_at`
+                // suppress the escalation branch. Two conditions: `owner_since`
                 // set and `completed_at` NULL.
                 let teamMembers: Set<string> | null = null;
                 if (this._queueTeamMembersResolver && watch.headTerminal) {
@@ -1580,15 +1576,15 @@ export class PlanIngestionEngine {
                     }
                 }
                 const heldCard = board.find(p =>
-                    p && p.dispatchedAt
+                    p && p.ownerSince
                     && !p.completedAt
-                    && typeof p.dispatchedTerminal === 'string'
-                    && p.dispatchedTerminal.length > 0
-                    && (!teamMembers || teamMembers.has(p.dispatchedTerminal))
+                    && typeof p.ownerSeat === 'string'
+                    && p.ownerSeat.length > 0
+                    && (!teamMembers || teamMembers.has(p.ownerSeat))
                 );
 
                 if (!heldCard) {
-                    // (3 re-pointed) No pacer — no card has `dispatched_at`
+                    // (3 re-pointed) No pacer — no card has `owner_since`
                     // set and the queue is non-empty. Nothing is working and
                     // there is no agent to nudge. Skip the agent nudge
                     // entirely and escalate to the operator on the FIRST
@@ -1628,7 +1624,7 @@ export class PlanIngestionEngine {
                 }
 
                 // Pacer resolved — the seat holding the card.
-                const pacerSeat = heldCard.dispatchedTerminal!;
+                const pacerSeat = heldCard.ownerSeat!;
 
                 // (4 re-pointed) Pacer present in the record but absent or
                 // `exited` → the seat died holding the card. Notify the
@@ -1654,7 +1650,7 @@ export class PlanIngestionEngine {
                     // that fails transiently (db unavailable, a throw) recovers
                     // on the next tick — muting the retry alongside the notice
                     // would pin the card in its coding column with
-                    // `dispatched_at` set until a human intervened. Once the
+                    // `owner_since` set until a human intervened. Once the
                     // release lands, `heldCard` no longer names this seat and
                     // the branch is not re-entered, so the retry is bounded by
                     // its own success.
@@ -1883,9 +1879,9 @@ export class PlanIngestionEngine {
 
             // (5) Any card in flight for this team → keep, stay silent, and
             // reset nudge state. The lead just dispatched — a fresh stall
-            // window starts from this dispatch. The in-flight predicate is
-            // `dispatchNextFromQueue`'s, verbatim: a card HELD by a team seat
-            // (`dispatched_terminal`) with NO completion fact (`completed_at`
+            // window starts from this dispatch. The in-flight predicate reads
+            // the advisory owner stamp: a card HELD by a team seat
+            // (`owner_seat` + `owner_since`) with NO completion fact (`completed_at`
             // is NULL). Board position is NOT an input — completion is asserted
             // via POST /kanban/task/complete and never inferred from a column.
             // Keying on the column instead would muzzle this sweep permanently:
@@ -1910,11 +1906,11 @@ export class PlanIngestionEngine {
             }
             const headTeamSet = headTeamMembers ?? new Set([watch.headTerminal]);
             const inFlight = board.some(p =>
-                p && !!p.dispatchedAt
+                p && !!p.ownerSince
                 && !p.completedAt
-                && typeof p.dispatchedTerminal === 'string'
-                && p.dispatchedTerminal.length > 0
-                && headTeamSet.has(p.dispatchedTerminal)
+                && typeof p.ownerSeat === 'string'
+                && p.ownerSeat.length > 0
+                && headTeamSet.has(p.ownerSeat)
             );
             if (inFlight) {
                 if (watch.nudgeCount > 0 || watch.lastNudgedAt > 0 || watch.escalatedAt) {
@@ -2054,7 +2050,7 @@ export class PlanIngestionEngine {
      * Gates (mirrors the hard-won guards of the feature/queue sweeps):
      *  1. No notifier → nothing to do.
      *  2. Empty liveness → no evidence (not "everyone is quiet").
-     *  3. Card has `dispatchedAt` set and `completedAt` NULL — the seat is
+     *  3. Card has `ownerSince` set and `completedAt` NULL — the seat is
      *     holding a card nobody has asserted complete. Keyed on `completedAt`,
      *     NEVER on `kanbanColumn` — same predicate `_runQueueNudgeSweep` uses
      *     for its held card, and a column advances when work STARTS.
@@ -2082,12 +2078,12 @@ export class PlanIngestionEngine {
      *     actively working injects text into a running turn (plan edge-case 2).
      *  5b. And the quiet is POST-DISPATCH quiet: the card has been held for at
      *     least one silence window, and the seat has produced output since
-     *     `dispatchedAt`. Without both, gate 5 reads a cached pre-dispatch
+     *     `ownerSince`. Without both, gate 5 reads a cached pre-dispatch
      *     `lastDataAt` as "silent for hours" and fires seconds after dispatch —
      *     see the measurement in the gate itself.
      *  6. Not already notified this tick (shared `notifiedSeatsThisTick` set).
      *  7. Dedupe: a bounded budget per dispatch of the card, re-armed only by
-     *     a new `dispatchedAt`, with a `nudgeSilenceMs` floor between reminders
+     *     a new `ownerSince`, with a `nudgeSilenceMs` floor between reminders
      *     — see `_memberReminderState` for why "re-arm when the seat produces
      *     output" is an unbounded nag rather than plan change 4.
      *
@@ -2197,15 +2193,15 @@ export class PlanIngestionEngine {
         if (board.length === 0) return;
 
         const heldCards = board.filter(p =>
-            p && p.dispatchedAt
+            p && p.ownerSince
             && !p.completedAt
-            && typeof p.dispatchedTerminal === 'string'
-            && p.dispatchedTerminal.length > 0
+            && typeof p.ownerSeat === 'string'
+            && p.ownerSeat.length > 0
         );
         if (heldCards.length === 0) return;
 
         for (const card of heldCards) {
-            const seatName = card.dispatchedTerminal!;
+            const seatName = card.ownerSeat!;
             const team = seatToTeam.get(seatName);
             // (4) Not a team member (standalone seat, head, or unknown) → skip.
             if (!team) { continue; }
@@ -2250,17 +2246,17 @@ export class PlanIngestionEngine {
             // A seat that produced nothing at all since dispatch is either still
             // booting or dead; the dispatch-stall sweep owns that case, and
             // re-sending orders to it helps nobody.
-            const dispatchedAtMs = Date.parse(String(card.dispatchedAt));
-            if (!dispatchedAtMs || Number.isNaN(dispatchedAtMs)) { continue; } // unreadable stamp is no evidence
-            if (nowMs - dispatchedAtMs < turnEndSilenceMs) { continue; }
-            if (live.lastDataAt <= dispatchedAtMs) { continue; }
+            const ownerSinceMs = Date.parse(String(card.ownerSince));
+            if (!ownerSinceMs || Number.isNaN(ownerSinceMs)) { continue; } // unreadable stamp is no evidence
+            if (nowMs - ownerSinceMs < turnEndSilenceMs) { continue; }
+            if (live.lastDataAt <= ownerSinceMs) { continue; }
 
             // (7) Dedupe: a bounded budget per dispatch of this card.
             const stateKey = `${folder}:${seatName}`;
-            const cardDispatchedAt = String(card.dispatchedAt);
+            const cardOwnerSince = String(card.ownerSince);
             const state = this._memberReminderState.get(stateKey);
             if (state) {
-                if (state.dispatchedAt !== cardDispatchedAt) {
+                if (state.ownerSince !== cardOwnerSince) {
                     // A NEW dispatch — new work, and the one re-arm signal the
                     // reminder cannot manufacture for itself. Drop the state.
                     this._memberReminderState.delete(stateKey);
@@ -2325,10 +2321,10 @@ export class PlanIngestionEngine {
                 this._host.logger.appendLine(`[GlobalPlanWatcher] member completion reminder notifier failed for seat '${seatName}' in ${folder}: ${cbErr}`);
             }
             notifiedSeatsThisTick.add(seatName);
-            const priorCount = (this._memberReminderState.get(stateKey)?.dispatchedAt === cardDispatchedAt)
+            const priorCount = (this._memberReminderState.get(stateKey)?.ownerSince === cardOwnerSince)
                 ? this._memberReminderState.get(stateKey)!.count
                 : 0;
-            this._memberReminderState.set(stateKey, { dispatchedAt: cardDispatchedAt, count: priorCount + 1, remindedAt: nowMs });
+            this._memberReminderState.set(stateKey, { ownerSince: cardOwnerSince, count: priorCount + 1, remindedAt: nowMs });
             this._host.logger.appendLine(
                 `[GlobalPlanWatcher] Member completion reminder ${priorCount + 1}/${PlanIngestionEngine.MAX_MEMBER_REMINDERS_PER_DISPATCH}`
                 + ` fired for seat '${seatName}' in ${folder} → holding '${card.planId}'`
@@ -2352,7 +2348,7 @@ export class PlanIngestionEngine {
      * The rule is a predicate evaluated each sweep, not a watch that is armed
      * and dropped:
      *
-     *     dispatched_at set  AND  completed_at NULL  AND  now - dispatched_at > threshold
+     *     owner_since set  AND  completed_at NULL  AND  now - owner_since > threshold
      *
      * A card stops matching when the lead posts its completion. That is the
      * only intended off switch. Two things must NOT turn it off:
@@ -2361,16 +2357,16 @@ export class PlanIngestionEngine {
      *   - the end of a queue (nothing about what is or is not staged has any
      *     bearing on whether a dispatched card has been out too long).
      *
-     * One thing that WILL turn it off, silently, and is accepted: `dispatched_at`
+     * One thing that WILL turn it off, silently, and is accepted: `owner_since`
      * being cleared. A column move clears the stamp (KanbanDatabase
-     * `moveCardToColumn` / `moveFeatureCards` reset `dispatched_at = NULL`),
+     * `moveCardToColumn` / `moveFeatureCards` reset `owner_since = NULL`),
      * which is the bf23c37f path. When the stamp is cleared the card leaves the
      * predicate and is not looked at again — that is correct, because a card
      * whose dispatch was cleared is no longer "out": it has been moved (re-
      * staged, dragged to another column). The predicate watches dispatched
      * cards, and a cleared stamp means the dispatch ended by a path other than
      * completion. Re-staging re-dispatches and re-stamps, re-entering the
-     * predicate with a fresh `dispatched_at`.
+     * predicate with a fresh `owner_since`.
      *
      * Gates, in order:
      *  1. No notifier → nothing to do.
@@ -2381,8 +2377,8 @@ export class PlanIngestionEngine {
      *     `terminals.groups` path the member reminder sweep uses).
      *  5. Re-arm check: if the card was nudged before, suppress UNLESS the
      *     plan-file mtime advanced or the seat produced output after the last
-     *     nudge. Re-arming on `dispatched_at` (the feature nudge's choice)
-     *     fails for this case — `dispatched_at` is stamped once at dispatch
+     *     nudge. Re-arming on `owner_since` (the feature nudge's choice)
+     *     fails for this case — `owner_since` is stamped once at dispatch
      *     and does not change while a coder stalls, resumes and stalls again,
      *     so it allows one nudge per dispatch, ever, leaving a second stall
      *     silent.
@@ -2421,56 +2417,18 @@ export class PlanIngestionEngine {
     }
 
     /**
-     * The active board with each row's **machine-local dispatch stamp** hydrated
-     * onto it (`dispatchedAt`, `dispatchedTerminal`).
+     * The active board for the dispatch sweeps. Under V81 the owner stamp is
+     * shared `plans` state (`owner_seat`/`owner_since`), so `getBoard()` rows
+     * already carry `ownerSeat`/`ownerSince` via `_readRows` — no join, no
+     * hydration overlay.
      *
-     * `getBoard()` selects `PLAN_COLUMNS`, and `PLAN_COLUMNS` does **not** list
-     * `dispatched_at` / `dispatched_terminal`: the V74 storage-tier split moved
-     * them out of `plans` into `plan_runtime_state` and narrowed the SELECT with
-     * them. `_readRows` still maps both fields, so every row `getBoard()` returns
-     * carries `dispatchedAt: null` and `dispatchedTerminal: ''` — a default that
-     * is indistinguishable from "this card was never dispatched" no matter what
-     * is stored. Any sweep whose predicate keys on the stamp therefore matched
-     * NOTHING, on every board, silently: the dispatch-stall nudge and the
-     * dispatch-timeout sweep both read the stamp and both went dead.
-     *
-     * `getLiveDispatchAttribution` is the tier-aware reader (legacy columns while
-     * `plans` still has them, the `plan_runtime_state` JOIN afterwards) and is
-     * already scoped to `status = 'active' AND dispatched_at IS NOT NULL`, the
-     * same rows `getBoard` returns. Joining it back by `plan_id` is what makes a
-     * dispatched card visible to a sweep at all.
-     *
-     * Returns `[]` when the board is unreadable — no evidence, try next tick. A
-     * readable board with an unreadable stamp read returns the board unhydrated
-     * rather than dropping it: the callers' predicates then match nothing, which
-     * is the same "no evidence" outcome without losing the rows.
+     * Returns `[]` when the board is unreadable — no evidence, try next tick.
      */
     private async _readBoardWithDispatchStamps(db: KanbanDatabase): Promise<KanbanPlanRecord[]> {
-        let board: KanbanPlanRecord[] = [];
-        let wsId = '';
         try {
-            wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
-            board = await db.getBoard(wsId) || [];
+            const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+            return await db.getBoard(wsId) || [];
         } catch { return []; } // unreadable board is no evidence — try next tick.
-        if (board.length === 0) return [];
-
-        try {
-            const stamps = await db.getLiveDispatchAttribution(wsId);
-            if (stamps.length === 0) return board;
-            const byPlanId = new Map(stamps.map(s => [s.planId, s]));
-            for (const card of board) {
-                if (!card || !card.planId) continue;
-                const stamp = byPlanId.get(card.planId);
-                if (!stamp) continue;
-                card.dispatchedAt = stamp.dispatchedAt || null;
-                card.dispatchedTerminal = stamp.dispatchedTerminal || '';
-            }
-        } catch (err) {
-            this._host.logger.appendLine(
-                `[GlobalPlanWatcher] dispatch-stamp hydration failed; dispatch sweeps see no dispatched cards this tick: ${err}`
-            );
-        }
-        return board;
     }
 
     private async _runDispatchStallSweep(args: {
@@ -2499,23 +2457,20 @@ export class PlanIngestionEngine {
         }
 
         // (3) Read the board and filter to cards matching the predicate.
-        // Via _readBoardWithDispatchStamps, NOT getBoard: getBoard's SELECT list
-        // carries no dispatch stamp at all (see that helper's docblock), so this
-        // predicate matched nothing on any board.
         const board = await this._readBoardWithDispatchStamps(db);
         if (board.length === 0) return;
 
-        // The predicate is exactly the plan's rule: dispatched_at set AND
+        // The predicate is exactly the plan's rule: owner_since set AND
         // completed_at NULL. It deliberately does NOT also require
-        // `dispatchedTerminal`. `updateDispatchInfoByPlanFile` and
-        // `attributePasteDispatch` both stamp `dispatched_at` while writing
-        // `dispatched_terminal = ''` whenever the caller omits the name, and
+        // `ownerSeat`. `updateDispatchInfoByPlanFile` and
+        // `attributePasteDispatch` both stamp `owner_since` while writing
+        // `owner_seat = ''` whenever the caller omits the name, and
         // every row dispatched before V57 carries '' as well. Gating on it makes
         // "no seat attributed to this card" indistinguishable from "this card is
         // not dispatched", silently dropping the exact class of card this
         // backstop exists for. An unattributed card still nudges — it takes the
         // operator path below (plan edge-case 2: decide, do not silently drop).
-        const stalledCards = board.filter(p => p && p.dispatchedAt && !p.completedAt);
+        const stalledCards = board.filter(p => p && p.ownerSince && !p.completedAt);
         if (stalledCards.length === 0) {
             // Nothing matches — drop any state we held for cards that no longer
             // match the predicate (completion posted or dispatch cleared). This
@@ -2580,9 +2535,9 @@ export class PlanIngestionEngine {
             const planId = card.planId;
             stillStalled.add(planId);
             const stateKey = `${folder}:${planId}`;
-            const dispatchedAtMs = new Date(card.dispatchedAt!).getTime();
-            if (!dispatchedAtMs || Number.isNaN(dispatchedAtMs)) { continue; } // unreadable stamp is no evidence
-            const elapsed = nowMs - dispatchedAtMs;
+            const ownerSinceMs = new Date(card.ownerSince!).getTime();
+            if (!ownerSinceMs || Number.isNaN(ownerSinceMs)) { continue; } // unreadable stamp is no evidence
+            const elapsed = nowMs - ownerSinceMs;
             if (elapsed < dispatchStallMs) {
                 // Below threshold — not stalled yet. Drop any prior state so a
                 // later stall starts fresh (the card re-entered the predicate
@@ -2595,7 +2550,7 @@ export class PlanIngestionEngine {
 
             // '' = no seat attributed (a pre-V57 row, or a dispatch path that
             // passed no terminal name). Never treated as a seat name.
-            const seatName = (card.dispatchedTerminal || '').trim();
+            const seatName = (card.ownerSeat || '').trim();
             const team = seatName ? seatToTeam.get(seatName) : undefined;
             const headName = team?.headName ?? '';
             // Resolve the addressee: the lead of the team holding the card. If
@@ -2609,8 +2564,8 @@ export class PlanIngestionEngine {
 
             // (5) Re-arm check. If the card was nudged before, suppress UNLESS
             // the plan-file mtime advanced or the seat produced output after
-            // the last nudge. Re-arming on `dispatched_at` fails for this case
-            // (see the docblock) — `dispatched_at` is stamped once and does not
+            // the last nudge. Re-arming on `owner_since` fails for this case
+            // (see the docblock) — `owner_since` is stamped once and does not
             // change while a coder stalls, resumes and stalls again.
             const prior = this._dispatchStallState.get(stateKey);
             if (prior) {
@@ -2774,18 +2729,18 @@ export class PlanIngestionEngine {
      * Dispatch-timeout sweep — the bounded end state for a dispatched card that
      * never reports. The dispatch-stall nudge (`_runDispatchStallSweep`) tells a
      * human a card has been quiet; this sweep records that nobody did and ends
-     * the attempt. The two share `dispatched_at` and must stay ordered: the nudge
+     * the attempt. The two share `owner_since` and must stay ordered: the nudge
      * (default 30 min) fires first, this (default 4 h) fires hours later — kept
      * apart by config, not by luck (invariant `dispatchStallMs < dispatchTimeoutMs`).
      *
      * Runs on the same tick as the other sweeps, AFTER `clearStaleWorkingState`.
      * The conflation fix in `clearStaleWorkingState` (it no longer nulls
-     * `dispatched_at` for silent seats) is what makes this sweep able to see
+     * `owner_since` for silent seats) is what makes this sweep able to see
      * silent seats at all — before the fix the 10-min activity-light sweep nulled
      * the stamp and dropped the card out of this predicate.
      *
      * Predicate (exactly the plan's rule):
-     *   dispatched_at set  AND  completed_at NULL  AND  now - dispatched_at > dispatchTimeoutMs
+     *   owner_since set  AND  completed_at NULL  AND  now - owner_since > dispatchTimeoutMs
      *
      * On match, per card:
      *  1. Write a `timed out` end state into `last_action`, recording the seat and
@@ -2793,8 +2748,8 @@ export class PlanIngestionEngine {
      *     silence — it means the attempt was abandoned because nothing was heard.
      *     `last_action` is part of `PLAN_COLUMNS`, so the state survives into
      *     everything that reads the card.
-     *  2. Release the seat via `releaseDispatchHolder` (nulls `dispatched_at` AND
-     *     `dispatched_terminal` together — atomic, so the card never passes through
+     *  2. Release the seat via `clearOwnerStamp` (nulls `owner_since` AND
+     *     `owner_seat` together — atomic, so the card never passes through
      *     the orphan state `bf23c37f` is about).
      *  3. Do NOT write `completed_at`. A timed-out card is neither done nor proven
      *     undone — the coder may have finished and failed to report. Completion
@@ -2805,7 +2760,7 @@ export class PlanIngestionEngine {
      * retry remains the only lever and remains destructive. See the plan's "Why
      * this card does not retry" section.
      *
-     * Idempotent across ticks: once the seat is released, `dispatched_at` is NULL
+     * Idempotent across ticks: once the seat is released, `owner_since` is NULL
      * and the card leaves the predicate, so the sweep does not act on it again. One
      * record per card. The nudge already owns telling people; this sweep does not
      * notify.
@@ -2818,22 +2773,20 @@ export class PlanIngestionEngine {
     }): Promise<void> {
         const { db, folder, nowMs, dispatchTimeoutMs } = args;
 
-        // Read the board with the dispatch stamp hydrated; filter to cards
-        // matching the predicate. Via _readBoardWithDispatchStamps, NOT getBoard:
-        // getBoard's SELECT list carries no dispatch stamp at all (see that
-        // helper's docblock), so this predicate would match nothing on any board.
+        // Read the board (owner stamp is shared `plans` state under V81) and
+        // filter to cards matching the predicate.
         const board = await this._readBoardWithDispatchStamps(db);
         if (board.length === 0) return;
 
         let acted = 0;
         for (const card of board) {
-            if (!card || !card.dispatchedAt || card.completedAt) continue;
-            const dispatchedAtMs = new Date(card.dispatchedAt).getTime();
-            if (!dispatchedAtMs || Number.isNaN(dispatchedAtMs)) continue; // unreadable stamp is no evidence
-            const elapsed = nowMs - dispatchedAtMs;
+            if (!card || !card.ownerSince || card.completedAt) continue;
+            const ownerSinceMs = new Date(card.ownerSince).getTime();
+            if (!ownerSinceMs || Number.isNaN(ownerSinceMs)) continue; // unreadable stamp is no evidence
+            const elapsed = nowMs - ownerSinceMs;
             if (elapsed <= dispatchTimeoutMs) continue; // below threshold — not abandoned yet.
 
-            const seat = (card.dispatchedTerminal || '').trim();
+            const seat = (card.ownerSeat || '').trim();
             const elapsedHuman = _formatElapsedMs(elapsed);
             const lastAction = seat
                 ? `timed out (seat=${seat}, elapsed=${elapsedHuman})`
@@ -2841,7 +2794,7 @@ export class PlanIngestionEngine {
 
             // (1) Record the `timed out` end state. Written BEFORE the release so
             // the stamp the message names is still on the row while we compose it;
-            // releaseDispatchHolder nulls dispatched_at but not last_action.
+            // clearOwnerStamp nulls owner_since but not last_action.
             try {
                 await db.updateLastActionByPlanFile(card.planFile, card.workspaceId, lastAction);
             } catch (recErr) {
@@ -2850,11 +2803,11 @@ export class PlanIngestionEngine {
                 );
             }
 
-            // (2) Release the seat atomically (nulls dispatched_at AND
-            // dispatched_terminal together — no orphan state). Do NOT write
+            // (2) Release the seat atomically (nulls owner_since AND
+            // owner_seat together — no orphan state). Do NOT write
             // completed_at (step 3).
             try {
-                const released = await db.releaseDispatchHolder(card.planFile, card.workspaceId);
+                const released = await db.clearOwnerStamp(card.planFile, card.workspaceId);
                 if (released) {
                     acted++;
                     this._host.logger.appendLine(
@@ -3100,7 +3053,6 @@ export class PlanIngestionEngine {
                     sourceType: 'local',
                     brainSourcePath: '',
                     mirrorPath: '',
-                    routedTo: '',
                     dispatchedAgent: '',
                     dispatchedIde: '',
                     clickupTaskId: importClickupTaskId,
@@ -3213,7 +3165,7 @@ export class PlanIngestionEngine {
                 if (metadata.feature && !relativePath.startsWith('.switchboard/features/')) {
                     await this._applyFeatureLink(db, updatedRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
                 }
-                if (updatedRecord.dispatchedAt) {
+                if (updatedRecord.ownerSince) {
                     this._host.logger.appendLine(
                         `[GlobalPlanWatcher] Plan file edited while dispatched (mtime-based completion retired — waiting for POST /kanban/queue/done): ${relativePath}`
                     );
@@ -3428,7 +3380,7 @@ export const TURN_END_VERIFY_INSTRUCTION_STANDALONE =
  * (see `_runQueueDone`, which suppresses the turn-end live send when it fires).
  */
 export function composeCompletionEvidence(
-    record: Pick<KanbanPlanRecord, 'topic' | 'kanbanColumn' | 'featureId' | 'dispatchedAt'>,
+    record: Pick<KanbanPlanRecord, 'topic' | 'kanbanColumn' | 'featureId' | 'ownerSince'>,
     nowMs: number
 ): string {
     const rawTopic = String(record?.topic || '').replace(/[\r\n]+/g, ' ').trim();
@@ -3444,8 +3396,8 @@ export function composeCompletionEvidence(
     if (record?.featureId) {
         clauses.push(`feature ${record.featureId}`);
     }
-    if (record?.dispatchedAt) {
-        const parsed = Date.parse(record.dispatchedAt);
+    if (record?.ownerSince) {
+        const parsed = Date.parse(record.ownerSince);
         if (Number.isFinite(parsed)) {
             const ms = Math.max(0, nowMs - parsed);
             const duration = ms < 120000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}m`;
@@ -3459,7 +3411,7 @@ export function composeCompletionEvidence(
 }
 
 export function composeCompletedTurnEndBody(
-    record: Pick<KanbanPlanRecord, 'topic' | 'kanbanColumn' | 'featureId' | 'dispatchedAt'>,
+    record: Pick<KanbanPlanRecord, 'topic' | 'kanbanColumn' | 'featureId' | 'ownerSince'>,
     seatName: string,
     planFile: string,
     nowMs: number

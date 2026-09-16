@@ -89,9 +89,15 @@ function makeServer(opts = {}) {
 async function run() {
     console.log('\ncompletion-asserted-never-inferred\n');
 
-    // ── Board position cannot complete anything ──────────────────────────
+    // ── Board position cannot complete anything, and cannot refuse either ──
+    // V81 deleted the in-flight refusal: a card in a coding column with no
+    // completion post no longer pins its team, so the next staged card is
+    // handed out. Duplicate dispatch is not a failure mode — the agent reads
+    // the plan and says the work is done. What survives is the ORIGINAL
+    // invariant: a column move never writes `completed_at`, so board position
+    // cannot complete anything.
 
-    await check('board position cannot complete: cards in coding columns with no completion post do not advance', async () => {
+    await check('board position cannot complete: an un-posted coding card never advances the board', async () => {
         const board = [
             card('sub1', 'CODER CODED', { dispatchedTerminal: 'Coder-1', completedAt: null }),
             card('sub2', 'CODER CODED', { dispatchedTerminal: 'Coder-1', completedAt: null }),
@@ -103,28 +109,15 @@ async function run() {
             resolveTeamPacing: async () => 'head',
         });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 409, 'uncompleted cards pin the team — no inference from column position');
-        assert.deepStrictEqual(dispatched, [], 'nothing dispatched without a completion post');
+        assert.strictEqual(out.status, 200, 'dispatch is never refused');
+        assert.deepStrictEqual(dispatched, ['next'], 'the next staged card is handed out');
+        assert.strictEqual(board.find(p => p.planId === 'sub1').completedAt, null,
+            'the un-posted card is NOT marked complete — board position completes nothing');
     });
 
-    // ── In-flight reads the fact, no fact means busy ─────────────────────
+    // ── An un-posted card does not pin the team ──────────────────────────
 
-    await check('in-flight reads completed_at: NULL means busy, non-NULL means released', async () => {
-        const board = [
-            card('done', 'CODER CODED', { dispatchedTerminal: 'Coder-1', completedAt: '2026-08-24T12:00:00Z' }),
-            card('next', 'STAGING', { queuePosition: 1 }),
-        ];
-        const { server, dispatched } = makeServer({
-            board,
-            resolveTeamMembers: async () => ['Coding', 'Coder-1'],
-            resolveTeamPacing: async () => 'head',
-        });
-        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 200, 'completed card releases the team');
-        assert.deepStrictEqual(dispatched, ['next']);
-    });
-
-    await check('in-flight: completed_at NULL refuses even in a coding column', async () => {
+    await check('an uncompleted card does not refuse the next dispatch (head pacing)', async () => {
         const board = [
             card('busy', 'LEAD CODED', { dispatchedTerminal: 'Coding', completedAt: null }),
             card('next', 'STAGING', { queuePosition: 1 }),
@@ -135,14 +128,11 @@ async function run() {
             resolveTeamPacing: async () => 'head',
         });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 409, 'NULL completed_at means busy');
-        assert.deepStrictEqual(dispatched, []);
+        assert.strictEqual(out.status, 200, 'a NULL completed_at no longer means "busy"');
+        assert.deepStrictEqual(dispatched, ['next']);
     });
 
-    // ── Seat-pacing skip is gone ─────────────────────────────────────────
-
-    await check('seat pacing runs the same in-flight check as head pacing', async () => {
-        // A completed card in a coding column should NOT pin the team under seat pacing.
+    await check('a completed card does not block the next dispatch either', async () => {
         const board = [
             card('done', 'CODER CODED', { dispatchedTerminal: 'Coder-1', completedAt: '2026-08-24T12:00:00Z' }),
             card('next', 'STAGING', { queuePosition: 1 }),
@@ -150,14 +140,16 @@ async function run() {
         const { server, dispatched } = makeServer({
             board,
             resolveTeamMembers: async () => ['Coding', 'Coder-1'],
-            resolveTeamPacing: async () => 'seat',
+            resolveTeamPacing: async () => 'head',
         });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 200, 'seat pacing honours completed_at — no skip');
+        assert.strictEqual(out.status, 200, 'completed_at never gates dispatch');
         assert.deepStrictEqual(dispatched, ['next']);
     });
 
-    await check('seat pacing: uncompleted card still pins team', async () => {
+    // ── Pacing mode does not change whether dispatch is refused ──────────
+
+    await check('seat pacing dispatches the next card regardless of an uncompleted card', async () => {
         const board = [
             card('busy', 'CODER CODED', { dispatchedTerminal: 'Coder-1', completedAt: null }),
             card('next', 'STAGING', { queuePosition: 1 }),
@@ -168,8 +160,8 @@ async function run() {
             resolveTeamPacing: async () => 'seat',
         });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 409, 'seat pacing refuses when card is uncompleted');
-        assert.deepStrictEqual(dispatched, []);
+        assert.strictEqual(out.status, 200, 'seat pacing refuses nothing — the in-flight scan is gone');
+        assert.deepStrictEqual(dispatched, ['next']);
     });
 
     // ── queue/done is not completion ─────────────────────────────────────
@@ -292,30 +284,41 @@ async function run() {
             'the fragment body must not instruct a seat to move work to CODE REVIEWED');
     });
 
-    await check('column transitions clear dispatch state for cards and feature cascades', async () => {
+    await check('column transitions clear the advisory working stamp for cards and feature cascades', async () => {
         const directStart = kanbanDbSrc.indexOf('public async updateColumnByPlanFileWithReason(');
         const directEnd = kanbanDbSrc.indexOf('public async updateColumnByPlanFile(', directStart);
         const directBody = kanbanDbSrc.slice(directStart, directEnd);
-        assert.ok(directBody.includes('dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL'),
-            'a direct column transition must clear dispatch state in the same update');
+        assert.ok(directBody.includes('_columnMoveDispatchClearSql()'),
+            'a direct column transition must clear the advisory working stamp in the same update');
+
+        // The helper itself NULLs owner_since — V81 replaced the old
+        // dispatched_at/last_liveness_at/blocked_at clears, whose columns are gone.
+        const helperStart = kanbanDbSrc.indexOf('private _columnMoveDispatchClearSql(');
+        assert.notStrictEqual(helperStart, -1, '_columnMoveDispatchClearSql must exist');
+        const helperBody = kanbanDbSrc.slice(helperStart, kanbanDbSrc.indexOf('\n    }', helperStart));
+        assert.ok(helperBody.includes('owner_since = NULL'),
+            'the column-move clear must NULL owner_since — the advisory "out for work" stamp');
 
         const cascadeStart = kanbanDbSrc.indexOf('public async cascadeFeatureByPlanId(');
         const cascadeEnd = kanbanDbSrc.indexOf('public async isOwnedActive(', cascadeStart);
         const cascadeBody = kanbanDbSrc.slice(cascadeStart, cascadeEnd);
-        const clears = cascadeBody.match(/dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL/g) || [];
-        assert.strictEqual(clears.length, 2,
-            'a feature cascade must clear dispatch state for both the feature and its subtasks');
+        const clears = cascadeBody.match(/dispatchClear/g) || [];
+        assert.ok(clears.length >= 2,
+            'a feature cascade must clear the working stamp for both the feature and its subtasks');
     });
 
-    await check('seat-pacing skip is gone — in-flight scan runs for both pacing modes and contains no column check', async () => {
-        // The guard must be `if (isTeamDispatch)` — NOT `if (pacing !== 'seat' && isTeamDispatch)`.
-        // The scan reads completed_at and contains no column comparison (CODING_COLUMNS).
-        assert.ok(/if \(isTeamDispatch\)\s*\{[\s\S]*?!p\.completedAt/.test(localApiSrc),
-            'in-flight scan must run on `if (isTeamDispatch)` and read `!p.completedAt`');
-        assert.ok(!/if \(isTeamDispatch\)\s*\{[\s\S]*?CODING_COLUMNS/.test(localApiSrc),
-            'in-flight scan must contain no CODING_COLUMNS / column comparison');
+    await check('the in-flight refusal is deleted — no scan remains in the pop', async () => {
+        // V81 removed the whole concept: ownership is advisory, and a duplicate
+        // dispatch is legal. The two predicates and the pop's in-flight arm are gone.
+        assert.ok(!/\bresolveTeamInFlight\b/.test(localApiSrc), 'resolveTeamInFlight must be deleted');
+        assert.ok(!/\bheldByTeam\b/.test(localApiSrc), 'heldByTeam must be deleted');
         assert.ok(!/pacing !== 'seat' && isTeamDispatch/.test(localApiSrc),
             'the seat-pacing skip (`pacing !== \'seat\' && isTeamDispatch`) must be deleted');
+        const popStart = localApiSrc.indexOf('private async _runQueuePop(');
+        assert.notStrictEqual(popStart, -1, '_runQueuePop must exist');
+        const popBody = localApiSrc.slice(popStart, localApiSrc.indexOf('\n    /**', popStart + 10));
+        assert.ok(!/inFlight/.test(popBody),
+            'the pop must carry no in-flight refusal — it hands out the next staged card, whoever holds what');
     });
 
     await check('no in-flight consumer derives completion from a kanban column', async () => {

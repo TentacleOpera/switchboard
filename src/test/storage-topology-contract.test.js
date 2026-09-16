@@ -213,17 +213,27 @@ async function run() {
     assert.deepStrictEqual(doubleTiered, [],
         `A plans column cannot be both tiers. Both: ${doubleTiered.join(', ')}`);
 
-    // The four columns V74 physically removed must be absent from the DDL, and
-    // present in the local-tier table (absent HERE, present THERE — the paired
-    // positive the tier-split plan's Goal Invariants require).
+    // The four columns V74 removed from `plans` were then removed from
+    // `plan_runtime_state` by V81 (the refusal machinery is gone). They are now
+    // absent from BOTH tiers and from the fresh DDLs. Scope the DDL check to the
+    // fresh `plan_runtime_state` block — historical MIGRATION_V74_SQL bodies
+    // still name them by design.
+    const runtimeDdl = (kanbanDbSrc.match(/CREATE TABLE IF NOT EXISTS plan_runtime_state\s*\(([\s\S]*?)\n\)/) || ['', ''])[1];
+    assert.ok(runtimeDdl, 'the fresh plan_runtime_state DDL must be found');
     for (const dropped of ['dispatched_terminal', 'dispatched_at', 'last_liveness_at', 'blocked_at']) {
         assert.ok(!ddlColumns.includes(dropped),
-            `${dropped} must be absent from the plans DDL after the V74 tier split.`);
-        assert.ok(local.has(dropped), `${dropped} must be named as a local-tier column.`);
-        assert.ok(
-            new RegExp(`CREATE TABLE IF NOT EXISTS plan_runtime_state[\\s\\S]*?${dropped}`).test(kanbanDbSrc),
-            `${dropped} must be resolvable in plan_runtime_state.`
-        );
+            `${dropped} must be absent from the plans DDL.`);
+        assert.ok(!local.has(dropped) && !shared.has(dropped),
+            `${dropped} was dropped by V81 — it must be in neither tier list.`);
+        assert.ok(!new RegExp(`\\b${dropped}\\b`).test(runtimeDdl),
+            `${dropped} must be gone from the fresh plan_runtime_state DDL too.`);
+    }
+    // Paired positive: the machine-local fields that DO survive the split stay
+    // named as local-tier and resolvable in plan_runtime_state.
+    for (const kept of ['dispatched_agent', 'dispatched_ide', 'dispatched_team_group']) {
+        assert.ok(local.has(kept), `${kept} must be named as a local-tier column.`);
+        assert.ok(new RegExp(`\\b${kept}\\b`).test(runtimeDdl),
+            `${kept} must be resolvable in the fresh plan_runtime_state DDL.`);
     }
     assert.ok(
         /PRIMARY KEY \(plan_id, device_id\)/.test(kanbanDbSrc),

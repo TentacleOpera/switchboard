@@ -58,12 +58,12 @@ export interface WorktreeRow {
     workspace_id?: string;
 }
 
-/** Row projected for live terminal-to-plan attribution. */
+/** Row projected for live seat-to-plan attribution. */
 export interface LiveDispatchAttributionRow {
     planId: string;
     topic: string;
-    dispatchedTerminal: string;
-    dispatchedAt: string;
+    ownerSeat: string;
+    ownerSince: string;
     featureId: string | null;
     project: string | null;
 }
@@ -98,15 +98,19 @@ export interface KanbanPlanRecord {
     sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation' | 'clickup-import' | 'linear-import' | 'notion-import' | 'notion-automation';
     brainSourcePath: string;
     mirrorPath: string;
-    routedTo: string;        // agent role dispatched to: 'lead' | 'coder' | 'intern' | ''
     dispatchedAgent: string; // terminal/tool name: 'claude cli', 'copilot cli', etc.
     dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
-    /** Friendly name of the exact terminal this card was dispatched to. '' for rows dispatched
-     *  before V57 and for hosts that don't record it — consumers must treat empty as "unknown"
-     *  and fall back to a role+worktree fleet match, never assume a name is present. */
-    dispatchedTerminal?: string;
     /**
-     * V76: id of the registered terminal group whose roster held the seat at the
+     * V81: the seat this card was last dispatched to. ADVISORY display metadata —
+     * it answers "who did the board last hand this to?", never "may this card be
+     * dispatched?". No conditional may read it to refuse, skip, or early-return:
+     * the board never refuses a dispatch. '' means "no dispatch recorded" (a
+     * never-dispatched card, or a host that predates the field).
+     * Shared on `plans` so every machine that opens the store sees the same card.
+     */
+    ownerSeat?: string;
+    /**
+     * V81: id of the registered terminal group whose roster held the seat at the
      * moment this card was dispatched to it. '' (or absent) means the seat was
      * dispatched as a standalone agent (no team), or the host predates V76.
      *
@@ -119,20 +123,13 @@ export interface KanbanPlanRecord {
      * null resolution must not behave like "not a team member").
      */
     dispatchedTeamGroup?: string;
-    dispatchedAt?: string | null; // ISO timestamp the card was dispatched; NULL = not working. Activity-light source.
     /**
-     * ISO timestamp of the most recent PTY-fleet output heartbeat persisted by the
-     * activity-light sweep (V58). Widens the working-state age basis to
-     * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)`. NULL on fleet-less hosts
-     * and on re-dispatch. Never rewritten except by `recordLiveness` and working-state clears.
+     * V81: ISO timestamp of the last dispatch. NULL means "not currently out for
+     * work" — cleared by the turn-end off-switch (`clearWorkingState`) and by
+     * column moves, stamped by every dispatch. Advisory: it drives the activity
+     * light and "still out" displays, and it is never a dispatch gate.
      */
-    lastLivenessAt?: string | null;
-    /**
-     * ISO timestamp the agent is blocked / waiting on the operator (V59).
-     *
-     * Dead column — writer was removed. Retained for schema compatibility.
-     */
-    blockedAt?: string | null;
+    ownerSince?: string | null;
     clickupTaskId?: string;
     linearIssueId?: string;
     notionPageId?: string;
@@ -142,15 +139,6 @@ export interface KanbanPlanRecord {
     featureId?: string;
     workspaceName?: string;
     projectId?: number | null;
-    /**
-     * V60: 1-based position within the STAGING session queue. NULL = not staged
-     * (sorts last). Assigned by stageForQueue (append from MAX+1), rewritten by
-     * reorderQueue (one transaction), and cleared by clearQueuePosition when a
-     * card leaves STAGING (dispatch to a coder, or a drag out) so a card that
-     * returns to the board does not carry a stale position and jump the queue
-     * on re-stage. Read through PLAN_COLUMNS alongside dispatchedAt.
-     */
-    queuePosition?: number | null;
     /**
      * V61: ISO timestamp of the last real column transition. Distinct from
      * updatedAt (which any touch bumps) and createdAt (which is when the plan
@@ -178,13 +166,12 @@ export interface KanbanPlanRecord {
      */
     priorityStarred?: number;
     /**
-     * V63: 1-based sort key for non-STAGING columns, analogous to
-     * queue_position but scoped to the card's current non-STAGING column.
+     * V63: 1-based sort key for a column, scoped to the card's current column.
      * NULL means "never manually arranged in this column": such a card sorts
      * after every card that carries a position, then by column_entered_at DESC
      * then createdAt DESC (the board's existing display fallback), so an
-     * un-arranged column is ordered exactly as it is today. STAGING keeps
-     * queue_position exclusively — column_order is never read or written there.
+     * un-arranged column is ordered exactly as it is today. V81 folded
+     * STAGING's queue_position into this column — one ordering everywhere.
      * Cleared on every cross-column move — the number is per-column and must
      * not travel — and nothing is written in its place. Preserved on upsert
      * conflict.
@@ -202,33 +189,6 @@ export interface KanbanPlanRecord {
      * (binary override) — this field describes, the star directs.
      */
     priority?: number | null;
-    /**
-     * V77: free-text outcome the lead supplied when it posted completion. The
-     * completion contract now requires a non-empty outcome (POST /kanban/task/complete
-     * rejects without one), so a row with a `completed_at` and an empty `outcome`
-     * is a pre-V77 completion backfilled best-effort from `plan_events`, NOT a
-     * going-forward completion. Read this column instead of re-reading
-     * `plan_events` for any consumer that needs to know what happened.
-     */
-    outcome?: string;
-    /**
-     * V77: the workflow that produced the `outcome`/`completed_at`/`released_at`
-     * — `'task-complete'`, `'round-complete'`, `'feature-complete'`, or
-     * `'operator-release'`. Distinguishes a genuine finish from an operator
-     * release on the row itself, not just in the event log.
-     */
-    workflow?: string;
-    /**
-     * V77: asserted release timestamp. Written by the release valve
-     * (POST /kanban/card/release, POST /kanban/team/release) when a team is freed
-     * WITHOUT claiming the work is done. Deliberately distinct from `completed_at`
-     * — a released card does NOT read as completed anywhere (board, rollups,
-     * next pickup). `completed_at` stays NULL on a release; `released_at` stays
-     * NULL on a completion. The in-flight predicate treats a released card as
-     * not-held (the holder is cleared), so a release frees the team for
-     * POST /kanban/queue/next.
-     */
-    releasedAt?: string | null;
 }
 
 export interface ImportedDocEntry {
@@ -305,10 +265,11 @@ export interface DatabaseStorageStats {
 
 /**
  * A coding round row, as read back from the `coding_rounds` table (Coding
- * Rounds feature, subtask 01). The `subtaskSeats` JSON column is parsed into
- * an object keyed by planId, each holding `{ seat, delivered, delivered_at }`.
- * This is RECORD-KEEPING state — the operational `dispatched_at` lives on the
- * plans row (see the schema comment in SCHEMA_TABLES_SQL).
+ * Rounds feature, subtask 01). The `subtask_seats` JSON column is parsed into
+ * the ordered list of subtask plan IDs — the caller-defined set/order, nothing
+ * more. This is RECORD-KEEPING state — the operational activity stamp lives
+ * on the plans row as `owner_since` (see the schema comment in
+ * SCHEMA_TABLES_SQL).
  */
 /**
  * A `plan_tickets` row, as read back from the board store — the board's own record
@@ -379,7 +340,15 @@ export interface CodingRoundRecord {
     ordinal: number;
     totalRegistered: number;
     state: 'registered' | 'dispatched' | 'closed' | string;
-    subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }>;
+    /**
+     * V81: the set of subtask plan ids in this round — an unordered set with
+     * display order, nothing more. Seat assignment is advisory display metadata
+     * read off the subtask cards' `ownerSeat`; it is not stored here, because a
+     * stored copy is a second record of the same fact that can disagree with
+     * the card. Older databases stored `{ planId: { seat, delivered, ... } }`
+     * objects; the V81 migration rewrites them to this list.
+     */
+    subtaskPlanIds: string[];
     registeredAt: string;
     dispatchedAt: string | null;
     closedAt: string | null;
@@ -412,9 +381,6 @@ CREATE TABLE IF NOT EXISTS plans (
     source_type   TEXT DEFAULT 'local',
     brain_source_path TEXT DEFAULT '',
     mirror_path       TEXT DEFAULT '',
-    routed_to         TEXT DEFAULT '',
-    dispatched_agent  TEXT DEFAULT '',
-    dispatched_ide    TEXT DEFAULT '',
     clickup_task_id   TEXT DEFAULT '',
     linear_issue_id   TEXT DEFAULT '',
     notion_page_id    TEXT DEFAULT '',
@@ -424,16 +390,14 @@ CREATE TABLE IF NOT EXISTS plans (
     feature_id           TEXT DEFAULT '',
     workspace_name    TEXT DEFAULT '',
     project_id        INTEGER DEFAULT NULL,
-    queue_position    INTEGER DEFAULT NULL,
     column_entered_at TEXT DEFAULT NULL,
     completed_at      TEXT DEFAULT NULL,
     priority_starred  INTEGER DEFAULT 0,
     column_order      INTEGER DEFAULT NULL,
     map_fingerprint   TEXT DEFAULT NULL,
     priority          INTEGER DEFAULT NULL,
-    outcome           TEXT DEFAULT '',
-    workflow          TEXT DEFAULT '',
-    released_at       TEXT DEFAULT NULL
+    owner_seat        TEXT DEFAULT '',
+    owner_since       TEXT DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS plan_runtime_state (
     plan_id             TEXT NOT NULL,
@@ -441,11 +405,7 @@ CREATE TABLE IF NOT EXISTS plan_runtime_state (
     workspace_id        TEXT NOT NULL,
     dispatched_agent    TEXT DEFAULT '',
     dispatched_ide      TEXT DEFAULT '',
-    dispatched_terminal TEXT DEFAULT '',
     dispatched_team_group TEXT DEFAULT '',
-    dispatched_at       TEXT DEFAULT NULL,
-    last_liveness_at    TEXT DEFAULT NULL,
-    blocked_at          TEXT DEFAULT NULL,
     updated_at          TEXT NOT NULL,
     PRIMARY KEY (plan_id, device_id)
 );
@@ -658,6 +618,17 @@ CREATE TABLE IF NOT EXISTS mission_milestones (
     workspace_id TEXT NOT NULL,
     synced_at    TEXT NOT NULL
 );
+-- linear_managed_artifacts: provenance for tracker objects Switchboard itself
+-- created — issue relations and milestone memberships. The Linear reconciler may
+-- only ever remove what this table records; a link or membership absent here was
+-- drawn by a person in Linear and is not ours to delete.
+CREATE TABLE IF NOT EXISTS linear_managed_artifacts (
+    kind         TEXT NOT NULL,
+    remote_key   TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (kind, remote_key, workspace_id)
+);
 CREATE TABLE IF NOT EXISTS control_plane (
     name TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -673,14 +644,12 @@ CREATE TABLE IF NOT EXISTS control_plane (
 -- coding_rounds: one row per coding round (Coding Rounds feature, subtask 01).
 -- Records the durable round state that previously lived only in the lead's context:
 -- which feature/team the round belongs to, its ordinal among the registered rounds,
--- the per-subtask seat map, the round state, and the registered/dispatched/closed
--- timestamps. This is RECORD-KEEPING state only — the operational source of "when
--- was this subtask dispatched" remains plans.dispatched_at, which isStaleCompletedAt
--- reads (LocalApiServer.ts). The round row's subtask_seats.dispatched_at describes
--- what happened for audit/recovery; the plans row drives behaviour. They are written
--- together in the same dispatch operation (subtask 03) so they agree at write time,
--- but they serve different readers and MUST NOT be unified — the plans row is read
--- by completion logic that predates this feature.
+-- the SET of subtask plan ids, the round state, and the registered/dispatched/closed
+-- timestamps. This is RECORD-KEEPING state only. V81 reduced subtask_seats from a
+-- per-subtask { seat, delivered, delivered_at } object to a bare plan-id list:
+-- seat assignment is advisory and read off the cards' owner_seat, and delivery
+-- history lives in plan_events — a stored copy is a second record of the same
+-- fact that can disagree with the card.
 CREATE TABLE IF NOT EXISTS coding_rounds (
     round_id         TEXT PRIMARY KEY,
     feature_id       TEXT NOT NULL,
@@ -689,7 +658,7 @@ CREATE TABLE IF NOT EXISTS coding_rounds (
     ordinal          INTEGER NOT NULL,
     total_registered INTEGER NOT NULL DEFAULT 0,
     state            TEXT NOT NULL DEFAULT 'registered',
-    subtask_seats    TEXT NOT NULL DEFAULT '{}',
+    subtask_seats    TEXT NOT NULL DEFAULT '[]',
     registered_at    TEXT NOT NULL,
     dispatched_at    TEXT DEFAULT NULL,
     closed_at        TEXT DEFAULT NULL,
@@ -714,6 +683,7 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_members_member ON mission_members(member_id)`,
     `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_linear_managed_artifacts_workspace ON linear_managed_artifacts(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_control_plane_kind ON control_plane(kind)`,
     `CREATE INDEX IF NOT EXISTS idx_activity_workspace ON activity_log(workspace_id, timestamp)`,
     `CREATE INDEX IF NOT EXISTS idx_board_move_workspace ON board_move_requests(workspace_id, timestamp)`,
@@ -1236,6 +1206,21 @@ const MIGRATION_V79_SQL = [
     `DROP INDEX IF EXISTS idx_plan_runtime_state_device`,
 ];
 
+// V80: linear_managed_artifacts — provenance for tracker objects Switchboard
+// created (issue relations, milestone memberships). The reconcile pass may only
+// delete what this table records; anything else in Linear is a person's work and
+// must survive the poll. Fresh DBs get the table from SCHEMA_TABLES_SQL.
+const MIGRATION_V80_SQL = [
+    `CREATE TABLE IF NOT EXISTS linear_managed_artifacts (
+        kind         TEXT NOT NULL,
+        remote_key   TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        PRIMARY KEY (kind, remote_key, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_linear_managed_artifacts_workspace ON linear_managed_artifacts(workspace_id)`,
+];
+
 /**
  * Bound-parameter cap for the runtime overlay's `plan_id IN (…)` list in
  * `_readRows`. SQLite's ceiling is 32,766 bound parameters (probed against this
@@ -1578,13 +1563,10 @@ const MIGRATION_V35_SQL = [
 const UPSERT_PLAN_INSERT_COLUMNS = [
     'plan_id', 'session_id', 'topic', 'plan_file', 'kanban_column', 'status', 'complexity', 'tags',
     'repo_scope', 'project', 'workspace_id', 'created_at', 'updated_at', 'last_action', 'source_type',
-    'brain_source_path', 'mirror_path', 'routed_to', 'dispatched_agent', 'dispatched_ide', 'dispatched_at',
+    'brain_source_path', 'mirror_path',
     'clickup_task_id', 'linear_issue_id', 'notion_page_id', 'worktree_id', 'is_feature', 'feature_id',
-    'workspace_name', 'project_id', 'column_entered_at',
+    'workspace_name', 'project_id', 'column_entered_at', 'owner_seat', 'owner_since',
 ] as const;
-
-/** The runtime-tier column the V74 split removed from `plans`. */
-const UPSERT_PLAN_LOCAL_TIER_COLUMN = 'dispatched_at';
 
 const UPSERT_PLAN_CONFLICT_SQL = `
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
@@ -1635,7 +1617,6 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
           OR plans.source_type       IS NOT excluded.source_type
           OR plans.brain_source_path IS NOT excluded.brain_source_path
           OR plans.mirror_path       IS NOT excluded.mirror_path
-          OR plans.routed_to         IS NOT excluded.routed_to
           OR plans.clickup_task_id   IS NOT excluded.clickup_task_id
           OR plans.linear_issue_id   IS NOT excluded.linear_issue_id
           OR plans.notion_page_id    IS NOT excluded.notion_page_id
@@ -1650,9 +1631,6 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     source_type = excluded.source_type,
     brain_source_path = excluded.brain_source_path,
     mirror_path = excluded.mirror_path,
-    routed_to = excluded.routed_to,
-    dispatched_agent = excluded.dispatched_agent,
-    dispatched_ide = excluded.dispatched_ide,
     clickup_task_id = excluded.clickup_task_id,
     linear_issue_id = excluded.linear_issue_id,
     notion_page_id = excluded.notion_page_id,
@@ -1665,10 +1643,8 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     project_id = COALESCE(excluded.project_id, plans.project_id)
 `;
 
-function buildUpsertPlanSql(includeLocalTierColumn: boolean): string {
-    const cols = UPSERT_PLAN_INSERT_COLUMNS.filter(
-        c => includeLocalTierColumn || c !== UPSERT_PLAN_LOCAL_TIER_COLUMN
-    );
+function buildUpsertPlanSql(): string {
+    const cols = UPSERT_PLAN_INSERT_COLUMNS;
     return `
 INSERT INTO plans (
     ${cols.join(', ')}
@@ -1676,21 +1652,19 @@ INSERT INTO plans (
 `;
 }
 
-/** Pre-V74 board: `plans` still carries `dispatched_at`. */
-const UPSERT_PLAN_SQL = buildUpsertPlanSql(true);
-/** Post-V74 board: runtime state lives in `plan_runtime_state`, not `plans`. */
-const UPSERT_PLAN_SQL_SHARED_TIER = buildUpsertPlanSql(false);
+/** V81: one shape only — runtime state lives in `plan_runtime_state`, never `plans`. */
+const UPSERT_PLAN_SQL = buildUpsertPlanSql();
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
 const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
-                       brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                       brain_source_path, mirror_path,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
-                       workspace_name, project_id, queue_position, column_entered_at, completed_at,
+                       workspace_name, project_id, column_entered_at, completed_at,
                        priority_starred, column_order, map_fingerprint, priority,
-                       outcome, workflow, released_at`;
+                       owner_seat, owner_since`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -2910,13 +2884,6 @@ export class KanbanDatabase {
             resolved.push(await this._resolveProjectForInsert(record, isExisting));
         }
 
-        // Which shape does THIS store's `plans` table have? The V74 tier split removed
-        // `dispatched_at`, so the statement and its parameter list must match the table
-        // in front of us — the hot board and the cold archive can be at different
-        // migration versions, and a fresh archive file is created at the current one.
-        const hasLocalTierColumn = this._tableHasColumn('plans', UPSERT_PLAN_LOCAL_TIER_COLUMN);
-        const upsertSql = hasLocalTierColumn ? UPSERT_PLAN_SQL : UPSERT_PLAN_SQL_SHARED_TIER;
-
         this._db.run('BEGIN');
         try {
             for (let i = 0; i < records.length; i++) {
@@ -2940,23 +2907,19 @@ export class KanbanDatabase {
                     record.sourceType,    // 15
                     this._ensureRelativePlanFile(record.brainSourcePath), // 16
                     this._ensureRelativePlanFile(record.mirrorPath), // 17
-                    record.routedTo || '',       // 18
-                    record.dispatchedAgent || '', // 19
-                    record.dispatchedIde || '',   // 20
-                    // 21 — dispatched_at, pre-V74 only (preserved on conflict via omitted
-                    // ON CONFLICT clause). Omitted entirely post-V74; the runtime tier owns it.
-                    ...(hasLocalTierColumn ? [record.dispatchedAt ?? null] : []),
-                    record.clickupTaskId || '',   // 22
-                    record.linearIssueId || '',   // 23
-                    record.notionPageId || '',    // 24
-                    record.worktreeId ?? null,      // 25
-                    record.isFeature ?? 0,              // 26 — DEFAULT 0, not NULL (prevents is_feature=NULL clobber)
-                    record.featureId || '',             // 27
-                    record.workspaceName || '',      // 28
-                    r.projectId,         // 29 — resolved (auto-created if needed)
-                    record.columnEnteredAt ?? record.createdAt ?? null // 30 — column_entered_at (preserved on conflict)
+                    record.clickupTaskId || '',   // 18
+                    record.linearIssueId || '',   // 19
+                    record.notionPageId || '',    // 20
+                    record.worktreeId ?? null,      // 21
+                    record.isFeature ?? 0,              // 22 — DEFAULT 0, not NULL (prevents is_feature=NULL clobber)
+                    record.featureId || '',             // 23
+                    record.workspaceName || '',      // 24
+                    r.projectId,         // 25 — resolved (auto-created if needed)
+                    record.columnEnteredAt ?? record.createdAt ?? null, // 26 — column_entered_at (preserved on conflict)
+                    record.ownerSeat || '',          // 27 — advisory owner stamp (preserved on conflict)
+                    record.ownerSince ?? null        // 28 — advisory owner stamp (preserved on conflict)
                 ];
-                this._db.run(upsertSql, params);
+                this._db.run(UPSERT_PLAN_SQL, params);
             }
             this._db.run('COMMIT');
         } catch (error) {
@@ -3025,13 +2988,13 @@ export class KanbanDatabase {
             INSERT INTO plans (
                 plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                 repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
-                brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                brain_source_path, mirror_path,
                 clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_feature, column_entered_at, priority
             ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '',
                 CASE WHEN COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)) IS NOT NULL
                      THEN ? ELSE '' END,
                 COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)),
-                ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?, ?, ?)
+                ?, ?, ?, '', ?, '', '', '', '', '', ?, ?, ?, ?)
             ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
                 topic = excluded.topic,
                 complexity = excluded.complexity,
@@ -3698,73 +3661,6 @@ export class KanbanDatabase {
             return affected > 0;
         } catch (error) {
             console.error('[KanbanDatabase] setCompletedAt failed:', error);
-            return false;
-        }
-    }
-
-    /**
-     * V77: stamp the `outcome` and `workflow` of a completion onto the plans row.
-     * Called by `completeCardInternal` alongside `setCompletedAt` so the row
-     * carries what happened, not just when — consumers read the column instead of
-     * re-reading `plan_events`. `workflow` is `'task-complete'` |
-     * `'round-complete'` | `'feature-complete'` | `'operator-release'`. Best-effort
-     * write; a failure logs and never aborts the completion (the event log still
-     * holds the record).
-     */
-    public async setPlanOutcomeWorkflow(planId: string, outcome: string, workflow: string): Promise<void> {
-        if (!(await this.ensureReady()) || !this._db || !planId) return;
-        try {
-            this._db.run(
-                'UPDATE plans SET outcome = ?, workflow = ?, updated_at = ? WHERE plan_id = ?',
-                [outcome || '', workflow || '', new Date().toISOString(), planId]
-            );
-            await this._persist();
-        } catch (error) {
-            console.error('[KanbanDatabase] setPlanOutcomeWorkflow failed:', error);
-        }
-    }
-
-    /**
-     * V77: stamp the release timestamp onto the plans row. Called by the release
-     * valve (`releaseCardInternal`) — a release frees the team WITHOUT claiming
-     * the work is done, so it writes `released_at` and leaves `completed_at`
-     * NULL. Idempotent: a repeat call with the same planId returns true without
-     * re-writing (the release is a one-shot, like completion). Returns false when
-     * the row is missing or already released.
-     */
-    public async setReleasedAt(planId: string, timestamp: string): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db || !planId) return false;
-        try {
-            this._db.run(
-                'UPDATE plans SET released_at = ?, updated_at = ? WHERE plan_id = ? AND released_at IS NULL',
-                [timestamp, timestamp, planId]
-            );
-            const affected = this._db.getRowsModified();
-            await this._persist();
-            return affected > 0;
-        } catch (error) {
-            console.error('[KanbanDatabase] setReleasedAt failed:', error);
-            return false;
-        }
-    }
-
-    /**
-     * V77: clear the release timestamp on a plan (e.g. on re-dispatch, alongside
-     * `clearCompletedAt`). A re-dispatched card is neither released nor
-     * completed, so both stamps reset together.
-     */
-    public async clearReleasedAt(planId: string): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db || !planId) return false;
-        try {
-            this._db.run(
-                'UPDATE plans SET released_at = NULL, updated_at = ? WHERE plan_id = ?',
-                [new Date().toISOString(), planId]
-            );
-            const affected = this._db.getRowsModified();
-            await this._persist();
-            return affected > 0;
-        } catch (error) {
-            console.error('[KanbanDatabase] clearReleasedAt failed:', error);
             return false;
         }
     }
@@ -4715,26 +4611,17 @@ export class KanbanDatabase {
 
     /**
      * In-flight predicate shared by the working-set read. A card is in-flight
-     * if it has an active worktree row, a live dispatched_at (activity light
-     * — now on plan_runtime_state after the V74 tier split, not plans), or a
-     * worktree_id pointing at an active worktree. `worktree_id IS NOT NULL`
-     * alone is wrong — stale ids after close would pin forever.
+     * if it has an active worktree row, a live `owner_since` (activity light —
+     * the advisory "currently out for work" stamp), or a worktree_id pointing
+     * at an active worktree. `worktree_id IS NOT NULL` alone is wrong — stale
+     * ids after close would pin forever.
      *
-     * V74 moved `dispatched_at` out of `plans` into `plan_runtime_state`
-     * (keyed by plan_id + device_id). A correlated EXISTS subquery reads it
-     * from there without changing the outer FROM clause. Any device's
-     * dispatched_at being non-null means the card is in flight somewhere —
-     * the same semantics the pre-V74 `dispatched_at IS NOT NULL` had when
-     * plans carried one device's row.
-     *
-     * All column refs are qualified with an explicit alias because the subquery
-     * introduces `plan_runtime_state prs`, and an unqualified `plan_id`
-     * would be ambiguous. The alias is a parameter so the same predicate can be
-     * applied to the outer row (`plans`) and to a feature-unit sibling (`sib`)
-     * in the cohesion guard below.
+     * The alias is a parameter so the same predicate can be applied to the
+     * outer row (`plans`) and to a feature-unit sibling (`sib`) in the cohesion
+     * guard below.
      */
     private static _inFlightSql(alias: string): string {
-        return `(${alias}.worktree_status = 'active' OR EXISTS (SELECT 1 FROM plan_runtime_state prs WHERE prs.plan_id = ${alias}.plan_id AND prs.dispatched_at IS NOT NULL) OR (${alias}.worktree_id IS NOT NULL AND ${alias}.worktree_id IN (SELECT id FROM worktrees WHERE status = 'active')))`;
+        return `(${alias}.worktree_status = 'active' OR ${alias}.owner_since IS NOT NULL OR (${alias}.worktree_id IS NOT NULL AND ${alias}.worktree_id IN (SELECT id FROM worktrees WHERE status = 'active')))`;
     }
 
     /**
@@ -5715,10 +5602,11 @@ export class KanbanDatabase {
     /**
      * Clear this machine's runtime dispatch state for a set of plans.
      *
-     * A column move ends the dispatch, and post-V74 that state lives in
-     * `plan_runtime_state`, not in `plans`. Every column-move path calls this after its
-     * `plans` UPDATE so a moved card releases its seat on both tiers. Keyed by
-     * `device_id`: another machine's dispatch is not ours to clear.
+     * A column move ends the dispatch. The team-group stamp lives in
+     * `plan_runtime_state`; every column-move path calls this after its
+     * `plans` UPDATE so a moved card drops the team-delivery record on both
+     * tiers. Keyed by `device_id`: another machine's dispatch is not ours to
+     * clear.
      *
      * Best-effort and synchronous — the caller owns the persist. Silent on a store that
      * has no `plan_runtime_state` yet (pre-V74), where the `plans` UPDATE did the job.
@@ -5729,7 +5617,7 @@ export class KanbanDatabase {
         try {
             const placeholders = planIds.map(() => '?').join(', ');
             this._db.run(
-                `UPDATE plan_runtime_state SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ?
+                `UPDATE plan_runtime_state SET dispatched_team_group = '', updated_at = ?
                  WHERE device_id = ? AND plan_id IN (${placeholders})`,
                 [new Date().toISOString(), getMachineId(), ...planIds]
             );
@@ -5739,14 +5627,13 @@ export class KanbanDatabase {
     }
 
     /**
-     * The `SET` fragment that clears dispatch state on a column move, for THIS store's
-     * schema. Post-V74 the four runtime columns are gone from `plans`, and naming them
-     * makes the whole UPDATE fail — which silently broke every card move. Pre-V74 they
-     * are still there and must still be cleared, so the fragment is derived, not fixed.
+     * The `SET` fragment that clears the advisory working stamp on a column
+     * move. `owner_since` NULL = "not currently out for work"; `owner_seat`
+     * stays — it records the last seat the card was handed to.
      */
     private _columnMoveDispatchClearSql(): string {
-        return this._tableHasColumn('plans', 'dispatched_at')
-            ? ', dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL'
+        return this._tableHasColumn('plans', 'owner_since')
+            ? ', owner_since = NULL'
             : '';
     }
 
@@ -6171,9 +6058,9 @@ export class KanbanDatabase {
             // to a feature that has any recent/in-flight subtask, OR are a subtask of a
             // recent/in-flight feature. Feature cohesion keeps the whole unit hot if any
             // member is hot.
-            // In-flight pin: active worktree row OR live dispatched_at (activity light).
+            // In-flight pin: active worktree row OR live owner_since (activity light).
             // worktree_id IS NOT NULL alone is wrong — stale ids after close would pin forever.
-            const inFlight = `(worktree_status = 'active' OR dispatched_at IS NOT NULL OR (worktree_id IS NOT NULL AND worktree_id IN (SELECT id FROM worktrees WHERE status = 'active')))`;
+            const inFlight = `(worktree_status = 'active' OR owner_since IS NOT NULL OR (worktree_id IS NOT NULL AND worktree_id IN (SELECT id FROM worktrees WHERE status = 'active')))`;
             const hotSetSql = `
                 SELECT plan_id FROM plans
                 WHERE workspace_id = ? AND updated_at >= ?
@@ -7421,6 +7308,10 @@ export class KanbanDatabase {
     public async setLinearIssueLink(issueId: string, planPath: string, syncedAt?: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const now = syncedAt || new Date().toISOString();
+        // One link row per plan_path: the temp `creating_*` marker row and the
+        // real issue row must not coexist — getLinearIssueLinkByPlan is LIMIT 1
+        // and would keep returning the marker after the real id lands.
+        this._db.run('DELETE FROM linear_issue_links WHERE plan_path = ? AND issue_id != ?', [planPath, issueId]);
         this._db.run(
             'INSERT INTO linear_issue_links (issue_id, plan_path, synced_at) VALUES (?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET plan_path = excluded.plan_path, synced_at = excluded.synced_at',
             [issueId, planPath, now]
@@ -8298,13 +8189,12 @@ export class KanbanDatabase {
 
     /**
      * Insert a single coding_rounds row. Called by the round/register handler
-     * (subtask 02) for each round in the lead's posted plan. The subtask_seats
-     * JSON is keyed by planId, holding { seat, delivered, delivered_at } per
-     * subtask — initialised here with seat='' (unassigned) and delivered=false
-     * so the dispatch step (subtask 03) can fill the seat, and the close step
-     * (subtask 04) can flip delivered. This is RECORD-KEEPING state; the
-     * operational dispatched_at lives on the plans row (see the schema comment
-     * in SCHEMA_TABLES_SQL).
+     * (subtask 02) for each round in the lead's posted plan. subtask_seats
+     * stores the ordered list of subtask plan IDs — the caller-defined set and
+     * order, nothing else. Seat assignment is derived by reading each subtask
+     * card's ownerSeat; delivery state is not stored (the board never refuses
+     * a dispatch, so a re-sent prompt is just a dispatch event, not a round
+     * mutation). This is RECORD-KEEPING state.
      */
     public async insertCodingRound(params: {
         roundId: string;
@@ -8317,10 +8207,6 @@ export class KanbanDatabase {
         registeredAt: string;
     }): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
-        const subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
-        for (const pid of params.subtaskPlanIds) {
-            subtaskSeats[pid] = { seat: '', delivered: false, delivered_at: null };
-        }
         try {
             this._db.run(
                 `INSERT INTO coding_rounds
@@ -8333,7 +8219,7 @@ export class KanbanDatabase {
                     params.workspaceId,
                     params.ordinal,
                     params.totalRegistered,
-                    JSON.stringify(subtaskSeats),
+                    JSON.stringify(params.subtaskPlanIds),
                     params.registeredAt,
                 ]
             );
@@ -8345,10 +8231,30 @@ export class KanbanDatabase {
     }
 
     /**
+     * Parse the subtask_seats JSON column into the ordered plan-ID list. The
+     * current shape is a JSON array of plan IDs; pre-V81 rows stored an object
+     * keyed by planId ({ seat, delivered, delivered_at }), whose keys ARE the
+     * plan IDs in registration order — take the keys as a tolerance read.
+     * Corrupt JSON yields an empty list.
+     */
+    private _parseSubtaskPlanIds(json: unknown): string[] {
+        try {
+            const parsed = JSON.parse(String(json ?? '[]'));
+            if (Array.isArray(parsed)) {
+                return parsed.filter((p): p is string => typeof p === 'string' && p.length > 0);
+            }
+            if (parsed && typeof parsed === 'object') {
+                return Object.keys(parsed);
+            }
+        } catch { /* corrupt JSON — treat as empty */ }
+        return [];
+    }
+
+    /**
      * Read all coding_rounds rows for a feature, ordered by ordinal ASC.
-     * Returns the subtask_seats JSON parsed back into an object. Used by the
-     * round/register handler to compute the re-registration diff and by
-     * subtasks 03/04 to read round state.
+     * Returns the subtask_seats JSON parsed back into the ordered plan-ID
+     * list. Used by the round/register handler to compute the re-registration
+     * diff and by subtasks 03/04 to read round state.
      */
     public async getCodingRoundsByFeature(featureId: string): Promise<CodingRoundRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -8361,13 +8267,6 @@ export class KanbanDatabase {
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
-                let subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
-                try {
-                    const parsed = JSON.parse(String(r.subtask_seats ?? '{}'));
-                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                        subtaskSeats = parsed as any;
-                    }
-                } catch { /* corrupt JSON — treat as empty */ }
                 rows.push({
                     roundId: String(r.round_id ?? ''),
                     featureId: String(r.feature_id ?? ''),
@@ -8376,7 +8275,7 @@ export class KanbanDatabase {
                     ordinal: Number(r.ordinal ?? 0),
                     totalRegistered: Number(r.total_registered ?? 0),
                     state: String(r.state ?? 'registered'),
-                    subtaskSeats,
+                    subtaskPlanIds: this._parseSubtaskPlanIds(r.subtask_seats),
                     registeredAt: String(r.registered_at ?? ''),
                     dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
                     closedAt: r.closed_at ? String(r.closed_at) : null,
@@ -8429,13 +8328,6 @@ export class KanbanDatabase {
         try {
             if (stmt.step()) {
                 const r = stmt.getAsObject();
-                let subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
-                try {
-                    const parsed = JSON.parse(String(r.subtask_seats ?? '{}'));
-                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                        subtaskSeats = parsed as any;
-                    }
-                } catch { /* corrupt JSON — treat as empty */ }
                 return {
                     roundId: String(r.round_id ?? ''),
                     featureId: String(r.feature_id ?? ''),
@@ -8444,7 +8336,7 @@ export class KanbanDatabase {
                     ordinal: Number(r.ordinal ?? 0),
                     totalRegistered: Number(r.total_registered ?? 0),
                     state: String(r.state ?? 'registered'),
-                    subtaskSeats,
+                    subtaskPlanIds: this._parseSubtaskPlanIds(r.subtask_seats),
                     registeredAt: String(r.registered_at ?? ''),
                     dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
                     closedAt: r.closed_at ? String(r.closed_at) : null,
@@ -8457,33 +8349,32 @@ export class KanbanDatabase {
     }
 
     /**
-     * Update a coding_rounds row's subtask_seats, state, and dispatched_at
-     * after a dispatch or re-delivery (subtask 03). The caller passes the full
-     * subtask_seats JSON (already updated with per-subtask { seat, delivered,
-     * delivered_at }) and the resolved round state ('dispatched' when every
-     * subtask recorded delivered:true, 'partial' when any recorded
-     * delivered:false). dispatched_at is stamped on the first successful
-     * dispatch and left untouched on re-delivery (the round was already
-     * dispatched). Returns true when a row was updated.
+     * Stamp a coding_rounds row as dispatched: set state='dispatched' and
+     * dispatched_at. The subtask list is never mutated — a re-dispatch is just
+     * another dispatch event on the cards, not a round mutation. dispatched_at
+     * is stamped on the first successful dispatch and left untouched on
+     * re-delivery (the round was already dispatched) — pass null for
+     * dispatchedAt on re-delivery. Returns true when a row was updated.
      */
     public async updateCodingRoundAfterDispatch(
         roundId: string,
-        subtaskSeatsJson: string,
-        state: string,
         dispatchedAt: string | null
     ): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         try {
             if (dispatchedAt !== null) {
                 this._db.run(
-                    `UPDATE coding_rounds SET subtask_seats = ?, state = ?, dispatched_at = ? WHERE round_id = ?`,
-                    [subtaskSeatsJson, state, dispatchedAt, roundId]
+                    `UPDATE coding_rounds SET state = 'dispatched', dispatched_at = ? WHERE round_id = ?`,
+                    [dispatchedAt, roundId]
                 );
             } else {
-                this._db.run(
-                    `UPDATE coding_rounds SET subtask_seats = ?, state = ? WHERE round_id = ?`,
-                    [subtaskSeatsJson, state, roundId]
-                );
+                // Nothing was delivered (every seat dispatch failed). Leave the
+                // state alone: stamping 'dispatched' with a NULL dispatched_at
+                // makes round/complete treat this as the in-flight round and
+                // close or auto-advance a round for which no prompt ever landed.
+                // Recording a delivery that did not happen is not the same as
+                // refusing to dispatch.
+                return false;
             }
             return true;
         } catch (e) {
@@ -8498,7 +8389,7 @@ export class KanbanDatabase {
      * rounds — to find the in-flight (dispatched/partial) round to close, to
      * decide whether the closed round was the last, and to identify the next
      * registered round to auto-dispatch. The subtask_seats JSON is parsed back
-     * into an object (same shape as getCodingRoundsByFeature).
+     * into the ordered plan-ID list (same shape as getCodingRoundsByFeature).
      */
     public async getCodingRoundsByTeam(teamId: string): Promise<CodingRoundRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -8511,13 +8402,6 @@ export class KanbanDatabase {
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
-                let subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
-                try {
-                    const parsed = JSON.parse(String(r.subtask_seats ?? '{}'));
-                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                        subtaskSeats = parsed as any;
-                    }
-                } catch { /* corrupt JSON — treat as empty */ }
                 rows.push({
                     roundId: String(r.round_id ?? ''),
                     featureId: String(r.feature_id ?? ''),
@@ -8526,7 +8410,7 @@ export class KanbanDatabase {
                     ordinal: Number(r.ordinal ?? 0),
                     totalRegistered: Number(r.total_registered ?? 0),
                     state: String(r.state ?? 'registered'),
-                    subtaskSeats,
+                    subtaskPlanIds: this._parseSubtaskPlanIds(r.subtask_seats),
                     registeredAt: String(r.registered_at ?? ''),
                     dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
                     closedAt: r.closed_at ? String(r.closed_at) : null,
@@ -8602,7 +8486,7 @@ export class KanbanDatabase {
      * registered rounds must NOT show "round 1 of 1" — that is a fabrication).
      * A workspace with zero rows yields an empty array, and the board renders
      * no round indicator for any feature. The subtask_seats JSON is parsed
-     * back into an object (same shape as getCodingRoundsByTeam).
+     * back into the ordered plan-ID list (same shape as getCodingRoundsByTeam).
      */
     public async getCodingRoundsByWorkspace(workspaceId: string): Promise<CodingRoundRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -8615,13 +8499,6 @@ export class KanbanDatabase {
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
-                let subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
-                try {
-                    const parsed = JSON.parse(String(r.subtask_seats ?? '{}'));
-                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                        subtaskSeats = parsed as any;
-                    }
-                } catch { /* corrupt JSON — treat as empty */ }
                 rows.push({
                     roundId: String(r.round_id ?? ''),
                     featureId: String(r.feature_id ?? ''),
@@ -8630,7 +8507,7 @@ export class KanbanDatabase {
                     ordinal: Number(r.ordinal ?? 0),
                     totalRegistered: Number(r.total_registered ?? 0),
                     state: String(r.state ?? 'registered'),
-                    subtaskSeats,
+                    subtaskPlanIds: this._parseSubtaskPlanIds(r.subtask_seats),
                     registeredAt: String(r.registered_at ?? ''),
                     dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
                     closedAt: r.closed_at ? String(r.closed_at) : null,
@@ -9080,7 +8957,7 @@ export class KanbanDatabase {
 
     /**
      * Map of feature ID to its active subtasks' working rollup.
-     * A feature is `working` if any active subtask has a live `dispatched_at`
+     * A feature is `working` if any active subtask has a live `owner_since`
      * inside the widened age basis.
      */
     public async getFeatureWorkingStates(
@@ -9090,38 +8967,17 @@ export class KanbanDatabase {
         const workingStates = new Map<string, { working: boolean }>();
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return workingStates;
         const cutoff = new Date(Date.now() - timeoutMs).toISOString();
-        // V74 moved the runtime columns off `plans` into `plan_runtime_state`
-        // (keyed plan_id + device_id). This read was never migrated with them, and
-        // it is on the BOARD's read path: getFullStateMessages -> _buildBoardCards
-        // -> here, with a catch that returns []. So the moment V74 actually
-        // succeeded, every card vanished from the board — not a degraded working
-        // light, an empty board. Same guarded shape as getLiveDispatchAttribution.
-        const hasLegacyRuntimeCols = this._tableHasColumn('plans', 'dispatched_at');
-        const stmt = hasLegacyRuntimeCols
-            ? this._db.prepare(
-                `SELECT feature_id AS featureId,
-                        MAX(dispatched_at IS NOT NULL
-                            AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?) AS anyWorking
-                 FROM plans
-                 WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
-                   AND status = 'active' AND is_feature = 0
-                 GROUP BY feature_id`,
-                [cutoff, workspaceId]
-            )
-            // LEFT JOIN, not JOIN: a plan with no runtime row on THIS device is not
-            // working, and must still be counted into its feature's rollup.
-            : this._db.prepare(
-                `SELECT p.feature_id AS featureId,
-                        MAX(r.dispatched_at IS NOT NULL
-                            AND MAX(r.dispatched_at, COALESCE(r.last_liveness_at, r.dispatched_at)) >= ?) AS anyWorking
-                 FROM plans p
-                 LEFT JOIN plan_runtime_state r
-                        ON p.plan_id = r.plan_id AND r.device_id = ?
-                 WHERE p.workspace_id = ? AND p.feature_id IS NOT NULL AND p.feature_id != ''
-                   AND p.status = 'active' AND p.is_feature = 0
-                 GROUP BY p.feature_id`,
-                [cutoff, getMachineId(), workspaceId]
-            );
+        // V81: the working stamp is the shared `owner_since` — advisory display
+        // metadata ("not currently out for work" when NULL), never a gate.
+        const stmt = this._db.prepare(
+            `SELECT feature_id AS featureId,
+                    MAX(owner_since IS NOT NULL AND owner_since >= ?) AS anyWorking
+             FROM plans
+             WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
+               AND status = 'active' AND is_feature = 0
+             GROUP BY feature_id`,
+            [cutoff, workspaceId]
+        );
         try {
             while (stmt.step()) {
                 const row = stmt.getAsObject();
@@ -11325,6 +11181,32 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V79 migration completed: dropped idx_plan_runtime_state_device (no reader; the device-scoped overlay it served was rejected)');
         }
 
+        // V80: linear_managed_artifacts — provenance for tracker objects
+        // Switchboard created (issue relations, milestone memberships). The
+        // reconcile pass deletes only what this table records; anything else in
+        // Linear is a person's work and must survive the poll. Additive; fresh
+        // DBs already get the table from SCHEMA_TABLES_SQL.
+        const v80 = await this.getMigrationVersion();
+        if (v80 < 80) {
+            for (const sql of MIGRATION_V80_SQL) {
+                try { this._db.exec(sql); } catch { /* table/index already exists */ }
+            }
+            await this.setMigrationVersion(80);
+            console.log('[KanbanDatabase] V80 migration completed: linear_managed_artifacts provenance table added');
+        }
+
+        // V81: the-board-never-refuses-a-dispatch — advisory owner pair on
+        // plans, ownership/refusal columns dropped (values preserved as
+        // state-migrated-v81 events first), coding_rounds reduced to plan-id
+        // lists, queue_position folded into column_order. See
+        // _runMigrationV81 for the verified-count contract.
+        const v81 = await this.getMigrationVersion();
+        if (v81 < 81) {
+            await this._runMigrationV81();
+            await this.setMigrationVersion(81);
+            console.log('[KanbanDatabase] V81 migration completed: advisory owner stamp, refusal columns dropped, coding rounds reduced to plan-id lists');
+        }
+
         // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue
         // continuously (a plan deleted or archived elsewhere leaves this machine's
         // runtime row behind), so this is maintenance rather than a migration step.
@@ -11336,7 +11218,7 @@ export class KanbanDatabase {
         if (!this._db) return;
         try {
             const stmt = this._db.prepare(
-                "SELECT plan_id, workspace_id, is_feature FROM plans WHERE kanban_column = 'STAGING' AND plan_id NOT IN (SELECT member_id FROM mission_members) ORDER BY queue_position ASC, column_entered_at ASC, created_at ASC"
+                "SELECT plan_id, workspace_id, is_feature FROM plans WHERE kanban_column = 'STAGING' AND plan_id NOT IN (SELECT member_id FROM mission_members) ORDER BY column_order ASC, column_entered_at ASC, created_at ASC"
             );
             const orphans: Array<{ planId: string; workspaceId: string; isFeature: boolean }> = [];
             try {
@@ -12579,6 +12461,296 @@ export class KanbanDatabase {
         return index;
     }
 
+    /**
+     * Rebuild a table without the named columns — the SQLite column-drop
+     * procedure (pragma off, create new, copy, drop, rename, pragma on),
+     * preserving any unknown/legacy columns PRAGMA table_info reports and
+     * reconstructing the primary key (single-column `c PRIMARY KEY`, composite
+     * as a table-level clause in pk-position order). `postIndexes` re-applies
+     * the indexes the rebuild dropped.
+     *
+     * `PRAGMA foreign_keys=OFF` is MANDATORY and must bracket the transaction:
+     * `plan_events` declares `FOREIGN KEY (plan_id) REFERENCES plans(plan_id)`,
+     * and real boards carry orphaned event rows that make the drop/rename fail
+     * under enforcement (the 2026-09-11 outage V74 documents).
+     */
+    private _rebuildTableDroppingColumns(table: string, dropCols: Set<string>, postIndexes: string[] = []): void {
+        if (!this._db) return;
+        const cols = this._getTableColumns(table).filter(c => !dropCols.has(c.name));
+        if (cols.length === this._getTableColumns(table).length) return; // nothing to drop
+        if (cols.length === 0) throw new Error(`[KanbanDatabase] rebuild of ${table} would drop every column — refusing`);
+
+        const pkCols = cols.filter(c => c.pk > 0).sort((a, b) => a.pk - b.pk);
+        const colDefs: string[] = [];
+        const copyColNames: string[] = [];
+        for (const c of cols) {
+            copyColNames.push(c.name);
+            let def = `${c.name} ${c.type || 'TEXT'}`;
+            if (c.notnull) def += ' NOT NULL';
+            if (c.dflt_value !== null && c.dflt_value !== undefined) def += ` DEFAULT (${c.dflt_value})`;
+            if (pkCols.length === 1 && c.pk === 1) def += ' PRIMARY KEY';
+            colDefs.push(def);
+        }
+        if (pkCols.length > 1) {
+            colDefs.push(`PRIMARY KEY (${pkCols.map(c => c.name).join(', ')})`);
+        }
+
+        let fkWasOn = true;
+        try {
+            const v = this._selectSingleValue('PRAGMA foreign_keys');
+            fkWasOn = String(v) === '1' || v === 1 || (v as unknown) === true;
+        } catch { /* older driver: assume on, restoring it is the safe default */ }
+        try { this._db.exec('PRAGMA foreign_keys=OFF'); } catch { /* best effort */ }
+
+        this._db.exec('BEGIN TRANSACTION');
+        try {
+            this._db.exec(`DROP TABLE IF EXISTS ${table}_v81`);
+            this._db.exec(`CREATE TABLE ${table}_v81 (\n${colDefs.join(',\n')}\n)`);
+            this._db.exec(`INSERT INTO ${table}_v81 (${copyColNames.join(', ')}) SELECT ${copyColNames.join(', ')} FROM ${table}`);
+            this._db.exec(`DROP TABLE ${table}`);
+            this._db.exec(`ALTER TABLE ${table}_v81 RENAME TO ${table}`);
+            for (const sql of postIndexes) {
+                try { this._db.exec(sql); } catch { /* index already exists or not applicable */ }
+            }
+            this._db.exec('COMMIT');
+        } catch (err) {
+            try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+            if (fkWasOn) { try { this._db.exec('PRAGMA foreign_keys=ON'); } catch { /* best effort */ } }
+            throw err;
+        }
+        if (fkWasOn) { try { this._db.exec('PRAGMA foreign_keys=ON'); } catch { /* best effort */ } }
+    }
+
+    /**
+     * V81: the-board-never-refuses-a-dispatch.
+     *
+     * `plans` loses every refusal/ownership column — `routed_to`,
+     * `dispatched_agent`, `dispatched_ide`, `dispatched_terminal`,
+     * `dispatched_at`, `queue_position`, `released_at`, `outcome`, `workflow`,
+     * `last_liveness_at`, `blocked_at` — and gains the advisory owner pair
+     * `owner_seat`/`owner_since` (display metadata, never a gate).
+     * `plan_runtime_state` loses `dispatched_terminal`, `dispatched_at`,
+     * `last_liveness_at`, `blocked_at`; the delivered-by trio
+     * `dispatched_agent`/`dispatched_ide`/`dispatched_team_group` stays.
+     * `coding_rounds.subtask_seats` is rewritten from per-subtask
+     * `{seat, delivered, delivered_at}` objects to an ordered plan-id array,
+     * with non-empty seats backfilled onto the cards' `owner_seat` first.
+     *
+     * Before any column is dropped, one `state-migrated-v81` event is written
+     * per card carrying the doomed values and the emitted count is verified
+     * against the affected count — a migration that cannot preserve the data
+     * must not proceed to delete it (same contract as V74's verified copy).
+     *
+     * Runs against whatever shape the store actually has — a DB that never
+     * reached V74 has no `plan_runtime_state` and carries the runtime columns
+     * on `plans` directly; every read here is existence-gated.
+     */
+    private async _runMigrationV81(): Promise<void> {
+        if (!this._db) return;
+        const tables = this._getExistingTableNames();
+        if (!tables.has('plans')) return;
+        const hasRuntime = tables.has('plan_runtime_state');
+        const has = (t: string, c: string) => this._tableHasColumn(t, c);
+        const now = new Date().toISOString();
+        const machineId = getMachineId();
+        let wsFallback = await this.getWorkspaceId();
+        if (!wsFallback && this._workspaceRoot) { wsFallback = this._getWorkspaceIdFallback(); }
+        if (!wsFallback) { wsFallback = 'default'; }
+
+        // 1. Advisory owner columns on plans (fresh-schema DBs already have them).
+        if (!has('plans', 'owner_seat')) {
+            this._db.exec(`ALTER TABLE plans ADD COLUMN owner_seat TEXT DEFAULT ''`);
+        }
+        if (!has('plans', 'owner_since')) {
+            this._db.exec(`ALTER TABLE plans ADD COLUMN owner_since TEXT DEFAULT NULL`);
+        }
+
+        // 2. Backfill owner_seat/owner_since from the dispatch record. The seat
+        //    was stored as dispatched_terminal and the stamp as dispatched_at —
+        //    on plan_runtime_state post-V74, on plans directly before it.
+        if (hasRuntime && has('plan_runtime_state', 'dispatched_terminal')) {
+            this._db.exec(`UPDATE plans SET
+                owner_seat = COALESCE((
+                    SELECT r.dispatched_terminal FROM plan_runtime_state r
+                    WHERE r.plan_id = plans.plan_id AND r.dispatched_terminal IS NOT NULL AND r.dispatched_terminal != ''
+                    ORDER BY r.dispatched_at DESC LIMIT 1
+                ), owner_seat),
+                owner_since = COALESCE((
+                    SELECT r.dispatched_at FROM plan_runtime_state r
+                    WHERE r.plan_id = plans.plan_id AND r.dispatched_at IS NOT NULL
+                    ORDER BY r.dispatched_at DESC LIMIT 1
+                ), owner_since)`);
+        } else if (has('plans', 'dispatched_terminal')) {
+            this._db.exec(`UPDATE plans SET
+                owner_seat = CASE WHEN dispatched_terminal IS NOT NULL AND dispatched_terminal != ''
+                                  THEN dispatched_terminal ELSE owner_seat END,
+                owner_since = COALESCE(dispatched_at, owner_since)`);
+        }
+
+        // 3. queue_position → column_order: the single ordering survives. STAGING
+        //    keeps working — its order is now column_order like everywhere else.
+        if (has('plans', 'queue_position')) {
+            this._db.exec(`UPDATE plans SET column_order = queue_position
+                WHERE column_order IS NULL AND queue_position IS NOT NULL`);
+        }
+
+        // 4. coding_rounds.subtask_seats: per-subtask seat objects → ordered
+        //    plan-id array. Non-empty recorded seats backfill owner_seat on the
+        //    subtask cards BEFORE the blob is discarded.
+        if (tables.has('coding_rounds')) {
+            const rStmt = this._db.prepare(`SELECT round_id, subtask_seats FROM coding_rounds`);
+            const conversions: Array<{ roundId: string; ids: string[]; seats: Array<[string, string]> }> = [];
+            try {
+                while (rStmt.step()) {
+                    const r = rStmt.getAsObject();
+                    try {
+                        const parsed = JSON.parse(String(r.subtask_seats ?? '[]'));
+                        if (Array.isArray(parsed)) { continue; }
+                        if (parsed && typeof parsed === 'object') {
+                            const ids = Object.keys(parsed);
+                            const seats: Array<[string, string]> = [];
+                            for (const pid of ids) {
+                                const s = parsed[pid]?.seat;
+                                if (typeof s === 'string' && s.length > 0) { seats.push([pid, s]); }
+                            }
+                            conversions.push({ roundId: String(r.round_id), ids, seats });
+                        }
+                    } catch { /* corrupt JSON — rewrite to empty list */ 
+                        conversions.push({ roundId: String(r.round_id), ids: [], seats: [] });
+                    }
+                }
+            } finally {
+                rStmt.free();
+            }
+            for (const c of conversions) {
+                for (const [pid, seat] of c.seats) {
+                    this._db.run(
+                        `UPDATE plans SET owner_seat = ? WHERE plan_id = ? AND (owner_seat IS NULL OR owner_seat = '')`,
+                        [seat, pid]
+                    );
+                }
+                this._db.run(
+                    `UPDATE coding_rounds SET subtask_seats = ? WHERE round_id = ?`,
+                    [JSON.stringify(c.ids), c.roundId]
+                );
+            }
+            if (conversions.length > 0) {
+                console.log(`[KanbanDatabase] V81: rewrote ${conversions.length} coding_rounds row(s) to plan-id lists`);
+            }
+        }
+
+        // 5. One `state-migrated-v81` event per affected card BEFORE the columns
+        //    go. "Affected" = carrying any doomed field (plans-side or runtime-
+        //    side). The payload preserves the values being dropped.
+        const planDoomed: Array<{ col: string; text: boolean }> = [];
+        for (const c of ['routed_to', 'dispatched_agent', 'dispatched_ide', 'dispatched_terminal',
+            'queue_position', 'released_at', 'outcome', 'workflow']) {
+            if (has('plans', c)) {
+                planDoomed.push({ col: c, text: c === 'routed_to' || c === 'dispatched_agent' || c === 'dispatched_ide' || c === 'dispatched_terminal' || c === 'outcome' || c === 'workflow' });
+            }
+        }
+        // dispatched_at / last_liveness_at / blocked_at on plans are the pre-V74 shape.
+        for (const c of ['dispatched_at', 'last_liveness_at', 'blocked_at']) {
+            if (has('plans', c)) { planDoomed.push({ col: c, text: false }); }
+        }
+        const rtDoomed = hasRuntime
+            ? ['dispatched_agent', 'dispatched_ide', 'dispatched_terminal', 'dispatched_at',
+               'last_liveness_at', 'blocked_at', 'dispatched_team_group']
+                .filter(c => has('plan_runtime_state', c))
+            : [];
+
+        const preds: string[] = planDoomed.map(d => d.text ? `(${d.col} IS NOT NULL AND ${d.col} != '')` : `${d.col} IS NOT NULL`);
+        if (rtDoomed.length > 0) {
+            const rtPred = rtDoomed.map(c =>
+                c.endsWith('_at') ? `r.${c} IS NOT NULL` : `(r.${c} IS NOT NULL AND r.${c} != '')`
+            ).join(' OR ');
+            preds.push(`EXISTS (SELECT 1 FROM plan_runtime_state r WHERE r.plan_id = plans.plan_id AND (${rtPred}))`);
+        }
+
+        if (preds.length > 0) {
+            const selCols = ['plan_id', 'workspace_id', ...planDoomed.map(d => d.col)];
+            const stmt = this._db.prepare(
+                `SELECT ${selCols.join(', ')} FROM plans WHERE ${preds.join(' OR ')}`
+            );
+            const affected: Array<Record<string, unknown>> = [];
+            try {
+                while (stmt.step()) { affected.push(stmt.getAsObject()); }
+            } finally {
+                stmt.free();
+            }
+
+            // Runtime payload per affected plan (small set — per-row reads are fine).
+            const rtSelect = rtDoomed.length > 0
+                ? `SELECT ${rtDoomed.map(c => `r.${c}`).join(', ')} FROM plan_runtime_state r WHERE r.plan_id = ?`
+                : null;
+
+            let emitted = 0;
+            for (const row of affected) {
+                const planId = String(row.plan_id || '');
+                const payload: Record<string, unknown> = { dropped: {} };
+                const dropped = payload.dropped as Record<string, unknown>;
+                for (const d of planDoomed) {
+                    const v = row[d.col];
+                    if (v !== null && v !== undefined && v !== '') { dropped[d.col] = v; }
+                }
+                if (rtSelect) {
+                    const rStmt = this._db.prepare(rtSelect, [planId]);
+                    try {
+                        const rt: Record<string, unknown> = {};
+                        while (rStmt.step()) {
+                            const r = rStmt.getAsObject();
+                            for (const c of rtDoomed) {
+                                const v = r[c];
+                                if (v !== null && v !== undefined && v !== '') { rt[c] = v; }
+                            }
+                        }
+                        if (Object.keys(rt).length > 0) { dropped['plan_runtime_state'] = rt; }
+                    } finally {
+                        rStmt.free();
+                    }
+                }
+                this._db.run(
+                    `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, user_id, payload, workspace_id)
+                     VALUES (?, 'state-migrated-v81', 'migration', 'schema-v81', ?, ?, '', ?, ?)`,
+                    [planId, now, machineId, JSON.stringify(payload), String(row.workspace_id || wsFallback)]
+                );
+                emitted += this._db.getRowsModified();
+            }
+            if (emitted !== affected.length) {
+                throw new Error(
+                    `[KanbanDatabase] V81 aborted: emitted ${emitted} state-migrated-v81 event(s) for ` +
+                    `${affected.length} affected card(s). No columns were dropped; the pre-migration database stays readable.`
+                );
+            }
+            if (emitted > 0) {
+                console.log(`[KanbanDatabase] V81: recorded ${emitted} state-migrated-v81 event(s) before dropping ownership columns`);
+            }
+        }
+
+        // 6. Rebuild the two tables without the dropped columns.
+        this._rebuildTableDroppingColumns('plans', new Set([
+            'routed_to', 'dispatched_agent', 'dispatched_ide', 'dispatched_terminal',
+            'dispatched_at', 'queue_position', 'released_at', 'outcome', 'workflow',
+            'last_liveness_at', 'blocked_at',
+        ]), [
+            'CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column)',
+            'CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id)',
+            'CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)',
+            'CREATE INDEX IF NOT EXISTS idx_plans_workspace_name ON plans(workspace_name)',
+            'CREATE INDEX IF NOT EXISTS idx_plans_project_id ON plans(project_id)',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id)',
+            'CREATE INDEX IF NOT EXISTS idx_plans_notion_page ON plans(workspace_id, notion_page_id)',
+            'CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)',
+            'CREATE INDEX IF NOT EXISTS idx_plans_clickup_task ON plans(workspace_id, clickup_task_id)',
+            'CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)',
+        ]);
+        if (hasRuntime) {
+            this._rebuildTableDroppingColumns('plan_runtime_state', new Set([
+                'dispatched_terminal', 'dispatched_at', 'last_liveness_at', 'blocked_at',
+            ]));
+        }
+    }
+
     private _safeExec(label: string, sql: string): void {
         if (!this._db) return;
         try {
@@ -12774,11 +12946,10 @@ FROM plans
                 // feature link), which is the restore's purpose.
                 //
                 // Only the five machine-local path/name fields below are bound
-                // by UPSERT_PLAN_SQL; dispatched_terminal, last_liveness_at,
-                // blocked_at, queue_position, column_order, completed_at,
-                // priority_starred and map_fingerprint are not in its column
-                // list at all, so they are preserved by the SQL itself and need
-                // no record field here.
+                // by UPSERT_PLAN_SQL; owner_seat, owner_since, column_order,
+                // completed_at, priority_starred and map_fingerprint are not in
+                // its column list at all, so they are preserved by the SQL
+                // itself and need no record field here.
                 const existingRow = existingByPlanFile.get(planFile.replace(/\\/g, '/')) ?? null;
                 // `?? ` is not enough: _readRows maps a NULL column to '', so an
                 // existing row's empty machine-local field would beat a real
@@ -12807,10 +12978,10 @@ FROM plans
                     // plan-path invariant survives a restore over existing rows.
                     brainSourcePath: preferExisting(existingRow?.brainSourcePath, p.brain_source_path || p.brainSourcePath || ''),
                     mirrorPath: preferExisting(existingRow?.mirrorPath, p.mirror_path || p.mirrorPath || ''),
-                    routedTo: (existingRow?.routedTo) || (p.routed_to || p.routedTo || ''),
                     dispatchedAgent: (existingRow?.dispatchedAgent) || (p.dispatched_agent || p.dispatchedAgent || ''),
                     dispatchedIde: (existingRow?.dispatchedIde) || (p.dispatched_ide || p.dispatchedIde || ''),
-                    dispatchedAt: existingRow ? (existingRow.dispatchedAt ?? null) : (p.dispatched_at ?? p.dispatchedAt ?? null),
+                    ownerSeat: (existingRow?.ownerSeat) || (p.owner_seat || p.ownerSeat || ''),
+                    ownerSince: existingRow ? (existingRow.ownerSince ?? null) : (p.owner_since ?? p.ownerSince ?? null),
                     clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
                     linearIssueId: p.linear_issue_id || p.linearIssueId || '',
                     notionPageId: p.notion_page_id || p.notionPageId || '',
@@ -12828,12 +12999,13 @@ FROM plans
                         record.status, record.complexity, record.tags, record.repoScope,
                         record.project,
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
-                        record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
-                        record.dispatchedIde, record.dispatchedAt ?? null, record.clickupTaskId, record.linearIssueId, record.notionPageId || '',
+                        record.brainSourcePath, record.mirrorPath,
+                        record.clickupTaskId, record.linearIssueId, record.notionPageId || '',
                         record.worktreeId ?? null,
                         record.isFeature ?? null, record.featureId || '',
                         record.workspaceName || '', record.projectId ?? null,
-                        record.columnEnteredAt ?? record.createdAt ?? null
+                        record.columnEnteredAt ?? record.createdAt ?? null,
+                        record.ownerSeat || null, record.ownerSince ?? null
                     ]);
                     restored++;
                 } catch (e) {
@@ -13231,6 +13403,92 @@ FROM plans
                 wsId || null
             ]
         );
+    }
+
+    /**
+     * Append a `checkpoint` event — a previous run's report of where the card
+     * should resume, read back into the next dispatch's prompt. The text is
+     * sanitised before it lands: HTML-comment markers are rejected outright
+     * (the payload is rendered inside a prompt document where `<!--` would
+     * break structure), and the body is capped so a checkpoint stays a few
+     * sentences, not a second plan file.
+     *
+     * A rejected or absent checkpoint never affects dispatch eligibility —
+     * the prompt builder reads it opportunistically.
+     */
+    public static readonly CHECKPOINT_MAX_CHARS = 600;
+
+    public sanitizeCheckpointText(text: string): { ok: true; text: string } | { ok: false; error: string } {
+        if (typeof text !== 'string' || text.trim().length === 0) {
+            return { ok: false, error: 'checkpoint text is empty' };
+        }
+        if (text.includes('<!--') || text.includes('-->')) {
+            return { ok: false, error: 'checkpoint text must not contain HTML comment markers' };
+        }
+        const trimmed = text.trim();
+        return { ok: true, text: trimmed.length > KanbanDatabase.CHECKPOINT_MAX_CHARS ? trimmed.slice(0, KanbanDatabase.CHECKPOINT_MAX_CHARS) : trimmed };
+    }
+
+    public async appendCheckpointEvent(planId: string, text: string, workspaceId?: string): Promise<{ ok: boolean; error?: string }> {
+        const sanitized = this.sanitizeCheckpointText(text);
+        if (!sanitized.ok) { return { ok: false, error: sanitized.error }; }
+        const appended = await this.appendPlanEventByPlanId(planId, {
+            eventType: 'checkpoint',
+            action: 'checkpoint',
+            payload: JSON.stringify({ text: sanitized.text }),
+            workspaceId
+        });
+        return appended ? { ok: true } : { ok: false, error: 'event write failed' };
+    }
+
+    /**
+     * Latest checkpoint for a card, or null. Event-type gated — never a
+     * `plans` column, never a dispatch gate.
+     */
+    public async getLatestCheckpointByPlanId(planId: string): Promise<{ text: string; timestamp: string } | null> {
+        if (!(await this.ensureReady()) || !this._db) { return null; }
+        const stmt = this._db.prepare(
+            `SELECT payload, timestamp FROM plan_events
+             WHERE plan_id = ? AND event_type = 'checkpoint'
+             ORDER BY timestamp DESC, event_id DESC LIMIT 1`,
+            [planId]
+        );
+        try {
+            if (!stmt.step()) { return null; }
+            const row = stmt.getAsObject();
+            let text = '';
+            try { text = String(JSON.parse(String(row.payload || '{}')).text || ''); } catch { /* malformed payload — no checkpoint */ }
+            if (!text) { return null; }
+            return { text, timestamp: String(row.timestamp || '') };
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /** Batch read — one query over a plan-id set (feature dispatch reads subtask checkpoints). */
+    public async getLatestCheckpointsByPlanIds(planIds: string[]): Promise<Map<string, { text: string; timestamp: string }>> {
+        const out = new Map<string, { text: string; timestamp: string }>();
+        if (planIds.length === 0 || !(await this.ensureReady()) || !this._db) { return out; }
+        const marks = planIds.map(() => '?').join(', ');
+        const stmt = this._db.prepare(
+            `SELECT plan_id, payload, timestamp FROM plan_events
+             WHERE plan_id IN (${marks}) AND event_type = 'checkpoint'
+             ORDER BY timestamp DESC, event_id DESC`,
+            planIds
+        );
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                const pid = String(row.plan_id || '');
+                if (out.has(pid)) { continue; } // first row per plan is the newest
+                let text = '';
+                try { text = String(JSON.parse(String(row.payload || '{}')).text || ''); } catch { /* skip */ }
+                if (text) { out.set(pid, { text, timestamp: String(row.timestamp || '') }); }
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
     }
 
     /** @deprecated plan_events now keys by plan_id; use appendPlanEventByPlanId instead. */
@@ -13983,42 +14241,36 @@ FROM plans
     }
 
     /**
-     * Update dispatch identity fields for a plan (routing analytics).
+     * The dispatch write — the ONE place a dispatch touches board state.
+     *
+     * Unconditional by design (plan: the-board-never-refuses-a-dispatch):
+     * stamps `owner_seat`/`owner_since` (advisory display metadata — never a
+     * gate), stamps `column_entered_at`, and clears `completed_at` in a single
+     * UPDATE so a previous attempt's completion cannot survive into a new
+     * dispatch. Then appends a `dispatched` event to `plan_events` — the
+     * append-only history. No `WHERE owner_seat …` claim, no failure path for
+     * an already-owned card: a duplicate dispatch is legal and last-writer-wins
+     * is correct.
      */
     public async updateDispatchInfoByPlanFile(planFile: string, workspaceId: string, info: {
-        routedTo: string;
+        /**
+         * The seat the card was handed to (terminal/pane friendly name, or the
+         * IDE-dispatch agent label when there is no terminal). Stamped onto
+         * `plans.owner_seat` — advisory display metadata, read by no gate.
+         */
+        ownerSeat: string;
         dispatchedAgent: string;
         dispatchedIde: string;
-        dispatchedTerminal?: string;
     }): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
-        // dispatched_at = now is the dispatch-identity stamp (and the activity-light
-        // SOURCE — the visible light is the read-time derive `isWorkingState`, not
-        // this field's NULLness). Re-dispatch overwrites it (resets the clock). It is
-        // cleared by clearWorkingState (marker parse), releaseDispatchHolder (seat
-        // release, incl. the dispatch-timeout sweep and the exited-terminal arm of
-        // clearStaleWorkingState) — all of which null dispatched_at AND
-        // dispatched_terminal together. clearStaleWorkingState's age-based arm no
-        // longer nulls the stamp (conflation fix — the stamp survives silence so the
-        // dispatch-stall nudge and the dispatch-timeout sweep can see silent seats).
-        // NOTE: For feature cards, the working flag is derived from subtasks' dispatched_at
-        // values, but we still write/clear the feature row's own dispatched_at for dispatch-identity.
-        const terminalName = info.dispatchedTerminal || '';
+        const seat = info.ownerSeat || '';
         const now = new Date().toISOString();
 
-        // 1. Shared tier update: routed_to, completed_at, updated_at on plans (plus backwards-compat columns if table not yet migrated)
-        let ok = false;
-        if (this._tableHasColumn('plans', 'dispatched_terminal')) {
-            ok = await this._persistedUpdate(
-                'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_terminal = ?, dispatched_at = ?, completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                [info.routedTo, info.dispatchedAgent, info.dispatchedIde, terminalName, now, now, normalized, workspaceId]
-            );
-        } else {
-            ok = await this._persistedUpdate(
-                'UPDATE plans SET routed_to = ?, completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                [info.routedTo, now, normalized, workspaceId]
-            );
-        }
+        // Shared tier: advisory owner stamp + completion reset, one statement.
+        const ok = await this._persistedUpdate(
+            'UPDATE plans SET owner_seat = ?, owner_since = ?, column_entered_at = ?, completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [seat, now, now, now, normalized, workspaceId]
+        );
 
         // V76: resolve the dispatching team group HERE, in the one writer every
         // dispatch path reaches — the HTTP door (`performKanbanDispatch`), the
@@ -14029,29 +14281,26 @@ FROM plans
         // two config keys `LocalApiServer._readRegisteredTeamGroups` does; '' when
         // the seat is on no roster (a genuine standalone dispatch), which also
         // resets any stale id from a prior team dispatch of this plan.
-        const teamGroupId = await this._resolveDispatchedTeamGroupId(terminalName);
+        const teamGroupId = await this._resolveDispatchedTeamGroupId(seat);
 
-        // 2. Machine-local runtime tier update: upsert into plan_runtime_state
+        // Machine-local runtime tier update: delivered-by identity only.
+        let planId: string | null = null;
         if (this._db) {
             try {
-                const planId = this.getPlanIdByPlanFileSync(normalized, workspaceId);
+                planId = this.getPlanIdByPlanFileSync(normalized, workspaceId);
                 if (planId) {
                     const machineId = getMachineId();
                     this._db.run(
                         `INSERT INTO plan_runtime_state (
                             plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
-                            dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+                            dispatched_team_group, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(plan_id, device_id) DO UPDATE SET
                             dispatched_agent = excluded.dispatched_agent,
                             dispatched_ide = excluded.dispatched_ide,
-                            dispatched_terminal = excluded.dispatched_terminal,
                             dispatched_team_group = excluded.dispatched_team_group,
-                            dispatched_at = excluded.dispatched_at,
-                            last_liveness_at = NULL,
-                            blocked_at = NULL,
                             updated_at = excluded.updated_at`,
-                        [planId, machineId, workspaceId, info.dispatchedAgent, info.dispatchedIde, terminalName, teamGroupId, now, now]
+                        [planId, machineId, workspaceId, info.dispatchedAgent, info.dispatchedIde, teamGroupId, now]
                     );
                     await this._persist();
                 }
@@ -14059,24 +14308,35 @@ FROM plans
                 console.warn('[KanbanDatabase] updateDispatchInfoByPlanFile runtime state upsert failed:', err);
             }
         }
+
+        // Append-only history: one `dispatched` event per dispatch. This is the
+        // forward record — clearing completed_at above loses nothing because
+        // the prior attempt's events still stand.
+        if (planId) {
+            try {
+                await this.appendPlanEventByPlanId(planId, {
+                    eventType: 'dispatched',
+                    action: 'dispatch',
+                    payload: JSON.stringify({
+                        seat,
+                        agent: info.dispatchedAgent,
+                        ide: info.dispatchedIde,
+                        teamGroup: teamGroupId,
+                    }),
+                    workspaceId,
+                });
+            } catch (err) {
+                console.warn('[KanbanDatabase] updateDispatchInfoByPlanFile event append failed:', err);
+            }
+        }
         return ok;
     }
 
     /** @deprecated session_id is no longer the unique key; use updateDispatchInfoByPlanFile instead. */
     public async updateDispatchInfo(sessionId: string, info: {
-        routedTo: string;
+        ownerSeat: string;
         dispatchedAgent: string;
         dispatchedIde: string;
-        /**
-         * The terminal name the card was dispatched to. Forwarded to
-         * `updateDispatchInfoByPlanFile` which stamps `dispatched_terminal`.
-         * Without it the column stamps `''`, and `attributePlansToTerminals`
-         * name tier skips the row — so planTitle reads null on the fleet
-         * list even though the card IS dispatched. The standalone host
-         * passes this directly; the extension's `_recordDispatchIdentity`
-         * is the caller that was omitting it.
-         */
-        dispatchedTerminal?: string;
     }): Promise<boolean> {
         const plan = await this.getPlanBySessionId(sessionId);
         if (!plan) { return false; }
@@ -14085,48 +14345,48 @@ FROM plans
 
     /**
      * Paste-attribution writer for the activity light. Mirrors
-     * updateDispatchInfoByPlanFile but deliberately omits `routed_to` and
-     * `dispatched_ide` — the paste knows the pane and role, not the routing
-     * decision, so leaving those analytics untouched is preferable to guessing.
+     * updateDispatchInfoByPlanFile but deliberately omits `dispatched_ide` —
+     * the paste knows the pane and role, not the routing decision, so leaving
+     * that analytic untouched is preferable to guessing.
      * The off-switches (`clearWorkingState`, `clearStaleWorkingState`) are unchanged
      * and already cover this writer.
      */
     public async attributePasteDispatch(planFile: string, workspaceId: string, info: {
         dispatchedAgent: string;
-        dispatchedTerminal?: string;
+        /** The seat the paste targeted — stamped onto `plans.owner_seat` (advisory). */
+        seat?: string;
         /**
-         * Explicit `dispatched_at` stamp. The fleet delivery-layer backstop
+         * Explicit `owner_since` stamp. The fleet delivery-layer backstop
          * captures this BEFORE the send is dispatched and passes it in, because
          * fire-and-forget registration lands AFTER the send and stamping at
-         * write time would invert the `plan-file mtime > dispatched_at`
+         * write time would invert the `plan-file mtime > owner_since`
          * completion compare the turn-end notifier depends on. Defaults to now
          * so every existing caller (the strict `payload.dispatch` branch, the
          * paste/drop path) is byte-identical.
          */
-        dispatchedAt?: string;
+        since?: string;
     }): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
-        const terminalName = info.dispatchedTerminal || '';
-        const stamp = info.dispatchedAt || new Date().toISOString();
+        // `owner_seat` is an identity/routing read: it must be a real terminal name
+        // or empty. `dispatchedAgent` is a bare ROLE word ('coder', 'lead') from the
+        // paste/drop caller, so falling back to it stamps a seat named 'coder' that
+        // is indistinguishable from a configured one — plausibleOriginTerminal
+        // returns it verbatim before its role-word filter, and the cwd-attribution
+        // paths (restricted to EMPTY owner_seat) stop firing. Empty is the correct
+        // "not attributed" value; do not reintroduce a fallback here.
+        const seat = info.seat || '';
+        const stamp = info.since || new Date().toISOString();
         const now = new Date().toISOString();
 
-        let ok = false;
-        if (this._tableHasColumn('plans', 'dispatched_terminal')) {
-            ok = await this._persistedUpdate(
-                'UPDATE plans SET dispatched_agent = ?, dispatched_terminal = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                [info.dispatchedAgent, terminalName, stamp, now, normalized, workspaceId]
-            );
-        } else {
-            ok = await this._persistedUpdate(
-                'UPDATE plans SET updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                [now, normalized, workspaceId]
-            );
-        }
+        const ok = await this._persistedUpdate(
+            'UPDATE plans SET owner_seat = ?, owner_since = ?, completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [seat, stamp, now, normalized, workspaceId]
+        );
 
         // V76: same shared resolution as updateDispatchInfoByPlanFile — a paste
         // into a team seat is a dispatch to that team, and '' here would read at
         // completion time as "was never on a team".
-        const teamGroupId = await this._resolveDispatchedTeamGroupId(terminalName);
+        const teamGroupId = await this._resolveDispatchedTeamGroupId(seat);
 
         // Machine-local runtime tier update
         if (this._db) {
@@ -14137,17 +14397,13 @@ FROM plans
                     this._db.run(
                         `INSERT INTO plan_runtime_state (
                             plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
-                            dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at, updated_at
-                        ) VALUES (?, ?, ?, ?, '', ?, ?, ?, NULL, NULL, ?)
+                            dispatched_team_group, updated_at
+                        ) VALUES (?, ?, ?, ?, '', ?, ?)
                         ON CONFLICT(plan_id, device_id) DO UPDATE SET
                             dispatched_agent = excluded.dispatched_agent,
-                            dispatched_terminal = excluded.dispatched_terminal,
                             dispatched_team_group = excluded.dispatched_team_group,
-                            dispatched_at = excluded.dispatched_at,
-                            last_liveness_at = NULL,
-                            blocked_at = NULL,
                             updated_at = excluded.updated_at`,
-                        [planId, machineId, workspaceId, info.dispatchedAgent, terminalName, teamGroupId, stamp, now]
+                        [planId, machineId, workspaceId, info.dispatchedAgent, teamGroupId, now]
                     );
                     await this._persist();
                 }
@@ -14218,34 +14474,32 @@ FROM plans
     }
 
     /**
-     * Activity-light OFF-switch (marker-driven). Nulls `dispatched_at` so the derived
+     * Activity-light OFF-switch (marker-driven). Nulls `owner_since` so the derived
      * `working` flag reads false on the next board render. Called by the plan watcher
      * when a `**Stage Complete:**` marker is parsed from the plan file. No-op when
      * already NULL. Scoped by workspace_id so a same-named file in another workspace
      * is untouched.
      *
      * Returns TRUE only on a real non-NULL→NULL transition — the WHERE carries
-     * `dispatched_at IS NOT NULL` and the result is `getRowsModified()`, not a
+     * `owner_since IS NOT NULL` and the result is `getRowsModified()`, not a
      * persist ack. That makes it the transition gate the completion broadcast
      * needs the moment a SECOND concurrent clearer exists: without it, two
      * clearers racing the same turn both fire `broadcastAgentCompleted`,
      * because the plan watcher's `setOnWorkingStateCleared` gates on an
-     * in-memory `dispatchedAt` read that a concurrent clear can invalidate.
+     * in-memory `ownerSince` read that a concurrent clear can invalidate.
      * Exactly one caller wins the UPDATE; only that caller broadcasts. Keep
      * this contract — any future completion signal depends on it.
      */
     public async clearWorkingState(planFile: string, workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const normalized = this._ensureRelativePlanFile(planFile);
-        // Null last_liveness_at and blocked_at alongside dispatched_at so a
-        // re-dispatch starts from a clean widened basis (no stale heartbeat or
-        // blocked stamp from a prior run).
         try {
             let transitioned = false;
-            if (this._tableHasColumn('plans', 'dispatched_at')) {
+            let cleanedTeamGroup = false;
+            if (this._tableHasColumn('plans', 'owner_since')) {
                 this._db.run(
-                    'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
-                    'WHERE plan_file = ? AND workspace_id = ? AND dispatched_at IS NOT NULL',
+                    'UPDATE plans SET owner_since = NULL ' +
+                    'WHERE plan_file = ? AND workspace_id = ? AND owner_since IS NOT NULL',
                     [normalized, workspaceId]
                 );
                 if (this._db.getRowsModified() > 0) {
@@ -14253,21 +14507,27 @@ FROM plans
                 }
             }
 
-            // Also clear in machine-local plan_runtime_state
+            // Also clear the machine-local team-delivery stamp.
             const planId = this.getPlanIdByPlanFileSync(normalized, workspaceId);
-            if (planId) {
+            if (planId && this._getExistingTableNames().has('plan_runtime_state')) {
                 const machineId = getMachineId();
                 this._db.run(
-                    'UPDATE plan_runtime_state SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, dispatched_team_group = \'\', updated_at = ? ' +
-                    'WHERE plan_id = ? AND device_id = ? AND dispatched_at IS NOT NULL',
+                    'UPDATE plan_runtime_state SET dispatched_team_group = \'\', updated_at = ? ' +
+                    'WHERE plan_id = ? AND device_id = ? AND dispatched_team_group != \'\'',
                     [new Date().toISOString(), planId, machineId]
                 );
-                if (this._db.getRowsModified() > 0) {
-                    transitioned = true;
-                }
+                // Deliberately does NOT set `transitioned`. The working-state
+                // transition this method reports is `owner_since` going
+                // non-NULL -> NULL, and only that fires the completion
+                // broadcast. `owner_since` is also nulled by every column move
+                // (_columnMoveDispatchClearSql), so a team-dispatched card that
+                // was advanced a column still carries dispatched_team_group —
+                // counting this clear would report a completion for a card that
+                // had no working-state transition. This is a side cleanup.
+                if (this._db.getRowsModified() > 0) { cleanedTeamGroup = true; }
             }
 
-            if (transitioned) { await this._persist(); }
+            if (transitioned || cleanedTeamGroup) { await this._persist(); }
             return transitioned;
         } catch (error) {
             console.error('[KanbanDatabase] clearWorkingState failed:', error);
@@ -14276,81 +14536,51 @@ FROM plans
     }
 
     /**
-     * Release a card's dispatch holder and working state when returning to the queue.
-     * Nulls dispatched_terminal, dispatched_at, last_liveness_at, and blocked_at.
-     * Scoped by plan_file + workspace_id.
+     * Release a seat's card at `queue/done`: clears BOTH `owner_since` (the
+     * activity stamp) and `owner_seat` (the advisory holder) in one
+     * unconditional write. Unlike `clearWorkingState` — which keeps
+     * `owner_seat` as the "last owner" display and only fires on a real
+     * non-NULL→NULL transition — this is the seat's explicit release, so the
+     * holder fact goes too.
+     *
+     * Returns TRUE only on a real transition (the WHERE requires something to
+     * clear) — that preserves the single-fire contract `clearWorkingState`
+     * established: of two racing clearers, exactly one sees `true` and gets to
+     * broadcast.
      */
-    public async releaseDispatchHolder(planFile: string, workspaceId: string): Promise<boolean> {
+    public async clearOwnerStamp(planFile: string, workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const normalized = this._ensureRelativePlanFile(planFile);
         try {
-            let transitioned = false;
-            const now = new Date().toISOString();
-            if (this._tableHasColumn('plans', 'dispatched_terminal')) {
-                this._db.run(
-                    'UPDATE plans SET dispatched_terminal = NULL, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ? ' +
-                    'WHERE plan_file = ? AND workspace_id = ?',
-                    [now, normalized, workspaceId]
-                );
-                if (this._db.getRowsModified() > 0) {
-                    transitioned = true;
-                }
-            } else {
-                this._db.run(
-                    'UPDATE plans SET updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                    [now, normalized, workspaceId]
-                );
-                if (this._db.getRowsModified() > 0) {
-                    transitioned = true;
-                }
-            }
-
-            // Also null in machine-local plan_runtime_state
-            const planId = this.getPlanIdByPlanFileSync(normalized, workspaceId);
-            if (planId) {
-                const machineId = getMachineId();
-                this._db.run(
-                    'UPDATE plan_runtime_state SET dispatched_terminal = \'\', dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, dispatched_team_group = \'\', updated_at = ? ' +
-                    'WHERE plan_id = ? AND device_id = ?',
-                    [now, planId, machineId]
-                );
-                if (this._db.getRowsModified() > 0) {
-                    transitioned = true;
-                }
-            }
-
+            // `updated_at` MUST move. getBoardWorkingSet's hot-set window and
+            // dbMerge's last-writer-wins both key on it, so a release that leaves
+            // the stamp untouched is invisible to them — on a bundle merge the
+            // other side's stale owner_seat wins. releaseDispatchHolder, which
+            // this replaced, bumped it.
+            this._db.run(
+                `UPDATE plans SET owner_seat = '', owner_since = NULL, updated_at = ?
+                 WHERE plan_file = ? AND workspace_id = ?
+                   AND ((owner_seat IS NOT NULL AND owner_seat != '') OR owner_since IS NOT NULL)`,
+                [new Date().toISOString(), normalized, workspaceId]
+            );
+            const transitioned = this._db.getRowsModified() > 0;
             if (transitioned) { await this._persist(); }
             return transitioned;
         } catch (error) {
-            console.error('[KanbanDatabase] releaseDispatchHolder failed:', error);
+            console.error('[KanbanDatabase] clearOwnerStamp failed:', error);
             return false;
         }
     }
 
-    /**
-     * V60 — clear a card's queue_position when it leaves STAGING (dispatch to
-     * a coder, or a drag out to another column). A card that returns to the
-     * board later does not carry a stale position and jump the queue on
-     * re-stage. Scoped by plan_id + workspace_id. Idempotent (NULL → NULL is a
-     * no-op). Does NOT touch dispatched_at — clearing the working state is a
-     * separate concern owned by clearWorkingState.
-     */
-    public async clearQueuePosition(planId: string, workspaceId: string): Promise<boolean> {
-        if (!planId || !workspaceId) return false;
-        return this._persistedUpdate(
-            'UPDATE plans SET queue_position = NULL WHERE plan_id = ? AND workspace_id = ?',
-            [planId, workspaceId]
-        );
-    }
 
     /**
-     * V60 — append queue positions to the given plan ids, in the caller's
-     * order, starting from MAX(queue_position)+1 within the workspace's
-     * STAGING set. NULL positions (pre-existing staged cards, or cards staged
-     * before V60) sort last and are not renumbered here — they keep working
-     * and drop to the end. A card already in STAGING is re-positioned rather
-     * than duplicated (its row is updated, not inserted). Callers MUST pass the
-     * selection order, not board order, for the webview staging arm.
+     * Append STAGING positions to the given plan ids, in the caller's
+     * order, starting from MAX(column_order)+1 within the workspace's
+     * STAGING set. NULL positions (pre-existing staged cards) sort last and
+     * are not renumbered here — they keep working and drop to the end. A card
+     * already in STAGING is re-positioned rather than duplicated (its row is
+     * updated, not inserted). Callers MUST pass the selection order, not board
+     * order, for the webview staging arm.
      */
     public async appendQueuePositions(workspaceId: string, orderedPlanIds: string[], missionId?: string): Promise<boolean> {
         if (!workspaceId || !Array.isArray(orderedPlanIds) || orderedPlanIds.length === 0) return false;
@@ -14360,7 +14590,7 @@ FROM plans
             // NULL positions do not contribute to MAX — they sort last by design.
             let maxPos = 0;
             // The workspace-wide STAGING max is the FLOOR, always. The queue pop
-            // (`_runQueuePop`) orders by queue_position across the whole STAGING
+            // (`_runQueuePop`) orders by column_order across the whole STAGING
             // column, not per mission — so a mission-scoped max alone would restart
             // a new mission's numbering at 1 and make its cards sort ahead of an
             // older mission's, i.e. launching mission A would pop mission B's card.
@@ -14370,7 +14600,7 @@ FROM plans
             // is read so a caller's intent is explicit at the seam and the
             // mission's own max can never exceed the floor.
             const stmt = this._db.prepare(
-                'SELECT COALESCE(MAX(queue_position), 0) AS m FROM plans WHERE workspace_id = ? AND kanban_column = ?',
+                'SELECT COALESCE(MAX(column_order), 0) AS m FROM plans WHERE workspace_id = ? AND kanban_column = ?',
                 [workspaceId, 'STAGING']
             );
             try {
@@ -14383,7 +14613,7 @@ FROM plans
             for (const planId of orderedPlanIds) {
                 next += 1;
                 this._db.run(
-                    'UPDATE plans SET queue_position = ?, kanban_column = ?, column_entered_at = ? WHERE plan_id = ? AND workspace_id = ?',
+                    'UPDATE plans SET column_order = ?, kanban_column = ?, column_entered_at = ? WHERE plan_id = ? AND workspace_id = ?',
                     [next, 'STAGING', dispatchNow, planId, workspaceId]
                 );
             }
@@ -14395,45 +14625,10 @@ FROM plans
         }
     }
 
-    /**
-     * V60 — rewrite queue positions for the given ordered plan ids in ONE
-     * transaction, assigning 1..N in the caller's order. The caller passes the
-     * full ordered id list (the post-drop order). Cards not in the list keep
-     * their positions. A partial rewrite leaves duplicate positions, which the
-     * render comparator tie-breaks on the board's existing order (ts descending)
-     * rather than randomly — see the plan's Race Conditions note. The
-     * transaction wraps all writes so a failure rolls back to the prior order.
-     */
-    public async setQueuePositions(workspaceId: string, orderedPlanIds: string[]): Promise<boolean> {
-        if (!workspaceId || !Array.isArray(orderedPlanIds) || orderedPlanIds.length === 0) return false;
-        if (!(await this.ensureReady()) || !this._db) return false;
-        try {
-            this._db.exec('BEGIN');
-            try {
-                let pos = 0;
-                for (const planId of orderedPlanIds) {
-                    pos += 1;
-                    this._db.run(
-                        'UPDATE plans SET queue_position = ? WHERE plan_id = ? AND workspace_id = ?',
-                        [pos, planId, workspaceId]
-                    );
-                }
-                this._db.exec('COMMIT');
-            } catch (inner) {
-                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
-                throw inner;
-            }
-            await this._persist();
-            return true;
-        } catch (error) {
-            console.error('[KanbanDatabase] setQueuePositions failed:', error);
-            return false;
-        }
-    }
 
     /**
      * V63 — clear a card's column_order when it moves to a different column
-     * (analogous to clearQueuePosition for STAGING). The number is per-column,
+     * (the same write the queue's reorder path uses). The number is per-column,
      * so it must not travel: a card that was 2nd in CREATED would otherwise
      * land ahead of the cards deliberately placed 3rd and 4th wherever it moves
      * to. Nothing is written in its place — a column move is a stage change,
@@ -14449,8 +14644,7 @@ FROM plans
      * the honest answer: they ordered the cards that were there, and this one
      * was not.
      *
-     * Scoped by plan_id + workspace_id. Idempotent. Does NOT touch
-     * queue_position — STAGING's order is owned by clearQueuePosition.
+     * Scoped by plan_id + workspace_id. Idempotent.
      */
     public async clearColumnOrder(planId: string, workspaceId: string): Promise<boolean> {
         if (!planId || !workspaceId) return false;
@@ -14463,13 +14657,13 @@ FROM plans
     /**
      * V63 — rewrite column_order for the given ordered plan ids in ONE
      * transaction, assigning 1..N in the caller's order. Analogous to
-     * setQueuePositions but for non-STAGING columns. The caller passes the
+     * the queue's reorder path but for non-STAGING columns. The caller passes the
      * full ordered id list (the post-drop order). Cards not in the list keep
      * their positions. A partial rewrite leaves duplicate positions, which the
      * render comparator tie-breaks on column_entered_at DESC (the board's
      * existing order) rather than randomly — see the plan's Race Conditions
      * note. The transaction wraps all writes so a failure rolls back to the
-     * prior order. Does NOT touch queue_position.
+     * prior order.
      */
     public async setColumnOrders(workspaceId: string, orderedPlanIds: string[]): Promise<boolean> {
         if (!workspaceId || !Array.isArray(orderedPlanIds) || orderedPlanIds.length === 0) return false;
@@ -14569,35 +14763,26 @@ FROM plans
     }
 
     /**
-     * Resolve the live dispatched plan row for a terminal name (V59). Returns
-     * the most-recently-dispatched active row whose `dispatched_terminal`
-     * matches AND whose `dispatched_at` is still live, or null. This is the
-     * primary terminal→plan attribution for any completion signal that
-     * identifies itself by terminal name — mechanism-agnostic, so it outlives
-     * the removed hook route that first introduced it. Empty
-     * `dispatched_terminal` never matches (it is written as `''` when the
-     * dispatcher had no terminal name — unresolvable, by design).
+     * Resolve the live dispatched plan row for a terminal name. Returns the
+     * most-recently-dispatched active row whose `owner_seat` matches AND whose
+     * `owner_since` is still live, or null. This is the primary terminal→plan
+     * attribution for any completion signal that identifies itself by terminal
+     * name — mechanism-agnostic, so it outlives the removed hook route that
+     * first introduced it. Empty `owner_seat` never matches (it is written as
+     * `''` when the dispatcher had no terminal name — unresolvable, by design).
      *
-     * Note: Keys on `dispatched_at IS NOT NULL`. A card returning to the queue
-     * has its holder released via `releaseDispatchHolder` (nulling dispatched_terminal
-     * and dispatched_at), so queued cards never match here.
+     * Note: Keys on `owner_since IS NOT NULL` — the advisory "currently out
+     * for work" stamp, cleared by `clearWorkingState` and column moves.
      */
     public async getActiveDispatchedByTerminal(workspaceId: string, terminalName: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return null;
-        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
-        const sql = hasTerminalCol
-            ? `SELECT ${PLAN_COLUMNS} FROM plans
-               WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-                 AND dispatched_terminal = ? AND dispatched_at IS NOT NULL
-               ORDER BY dispatched_at DESC LIMIT 1`
-            : `SELECT p.* FROM plans p
-               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
-               WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
-                 AND r.device_id = ? AND r.dispatched_terminal = ? AND r.dispatched_at IS NOT NULL
-               ORDER BY r.dispatched_at DESC LIMIT 1`;
-        const machineId = getMachineId();
-        const params = hasTerminalCol ? [workspaceId, terminalName] : [workspaceId, machineId, terminalName];
-        const stmt = this._db.prepare(sql, params);
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+               AND owner_seat = ? AND owner_since IS NOT NULL
+             ORDER BY owner_since DESC LIMIT 1`,
+            [workspaceId, terminalName]
+        );
         try {
             const rows = this._readRows(stmt);
             return rows[0] ?? null;
@@ -14627,18 +14812,12 @@ FROM plans
      */
     public async countActiveDispatchedByTerminal(workspaceId: string, terminalName: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return 0;
-        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
-        const sql = hasTerminalCol
-            ? `SELECT COUNT(*) AS n FROM plans
-               WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-                 AND dispatched_terminal = ? AND dispatched_at IS NOT NULL`
-            : `SELECT COUNT(*) AS n FROM plans p
-               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
-               WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
-                 AND r.device_id = ? AND r.dispatched_terminal = ? AND r.dispatched_at IS NOT NULL`;
-        const machineId = getMachineId();
-        const params = hasTerminalCol ? [workspaceId, terminalName] : [workspaceId, machineId, terminalName];
-        const stmt = this._db.prepare(sql, params);
+        const stmt = this._db.prepare(
+            `SELECT COUNT(*) AS n FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+               AND owner_seat = ? AND owner_since IS NOT NULL`,
+            [workspaceId, terminalName]
+        );
         try {
             if (stmt.step()) {
                 return Number((stmt.getAsObject() as any)?.n ?? 0);
@@ -14664,20 +14843,13 @@ FROM plans
         limit = 50
     ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return [];
-        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
-        const sql = hasTerminalCol
-            ? `SELECT ${PLAN_COLUMNS} FROM plans
-               WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-                 AND dispatched_terminal = ? AND dispatched_at IS NOT NULL
-               ORDER BY dispatched_at DESC LIMIT ?`
-            : `SELECT p.* FROM plans p
-               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
-               WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
-                 AND r.device_id = ? AND r.dispatched_terminal = ? AND r.dispatched_at IS NOT NULL
-               ORDER BY r.dispatched_at DESC LIMIT ?`;
-        const machineId = getMachineId();
-        const params = hasTerminalCol ? [workspaceId, terminalName, limit] : [workspaceId, machineId, terminalName, limit];
-        const stmt = this._db.prepare(sql, params);
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+               AND owner_seat = ? AND owner_since IS NOT NULL
+             ORDER BY owner_since DESC LIMIT ?`,
+            [workspaceId, terminalName, limit]
+        );
         try {
             return this._readRows(stmt);
         } finally {
@@ -14694,7 +14866,7 @@ FROM plans
      * in one statement rather than N round-trips on the delivery path.
      *
      * Same row shape and filter as the singular reader
-     * (`status = 'active' AND is_feature = 0 AND dispatched_at IS NOT NULL`).
+     * (`status = 'active' AND is_feature = 0 AND owner_since IS NOT NULL`).
      * Empty `names` returns `[]` without touching the DB. Row order is
      * unspecified by design — the caller deduplicates AND `.sort()`s the ids
      * before rendering, because the seat block is memoised per agentInstanceId
@@ -14706,32 +14878,18 @@ FROM plans
         const filtered = names.filter(n => !!n);
         if (filtered.length === 0) return [];
         const placeholders = filtered.map(() => '?').join(', ');
-        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
-        const machineId = getMachineId();
 
-        const sql = hasTerminalCol
-            ? `WITH ranked AS (
+        const sql = `WITH ranked AS (
                 SELECT ${PLAN_COLUMNS},
-                       ROW_NUMBER() OVER (PARTITION BY dispatched_terminal ORDER BY dispatched_at DESC) AS _rn
+                       ROW_NUMBER() OVER (PARTITION BY owner_seat ORDER BY owner_since DESC) AS _rn
                 FROM plans
                 WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-                  AND dispatched_at IS NOT NULL
-                  AND dispatched_terminal IN (${placeholders})
+                  AND owner_since IS NOT NULL
+                  AND owner_seat IN (${placeholders})
             )
-            SELECT ${PLAN_COLUMNS} FROM ranked WHERE _rn = 1`
-            : `WITH ranked AS (
-                SELECT p.*,
-                       ROW_NUMBER() OVER (PARTITION BY r.dispatched_terminal ORDER BY r.dispatched_at DESC) AS _rn
-                FROM plans p
-                JOIN plan_runtime_state r ON p.plan_id = r.plan_id
-                WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
-                  AND r.device_id = ? AND r.dispatched_at IS NOT NULL
-                  AND r.dispatched_terminal IN (${placeholders})
-            )
-            SELECT * FROM ranked WHERE _rn = 1`;
+            SELECT ${PLAN_COLUMNS} FROM ranked WHERE _rn = 1`;
 
-        const params = hasTerminalCol ? [workspaceId, ...filtered] : [workspaceId, machineId, ...filtered];
-        const stmt = this._db.prepare(sql, params);
+        const stmt = this._db.prepare(sql, [workspaceId, ...filtered]);
         try {
             return this._readRows(stmt);
         } finally {
@@ -14748,34 +14906,24 @@ FROM plans
      * `worktrees.path = ?`. Returns the most-recently-dispatched live row, or
      * null.
      *
-     * Restricted to rows with an EMPTY `dispatched_terminal`. A row that names
-     * its terminal is already resolvable by name, so matching it here could let
+     * Restricted to rows with an EMPTY `owner_seat`. A row that names
+     * its seat is already resolvable by name, so matching it here could let
      * a signal from terminal A clear a card dispatched to terminal B that
      * happens to share a worktree. Only genuinely unattributed dispatches are
      * in scope — preserve this restriction when wiring a new caller.
      */
     public async getActiveDispatchedByCwd(workspaceId: string, cwd: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !cwd) return null;
-        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
-        const machineId = getMachineId();
 
-        const sql = hasTerminalCol
-            ? `SELECT ${PLAN_COLUMNS} FROM plans
-               WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-                 AND dispatched_at IS NOT NULL
-                 AND (dispatched_terminal IS NULL OR dispatched_terminal = '')
-                 AND worktree_id IN (SELECT id FROM worktrees WHERE path = ?)
-               ORDER BY dispatched_at DESC LIMIT 1`
-            : `SELECT p.* FROM plans p
-               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
-               WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
-                 AND r.device_id = ? AND r.dispatched_at IS NOT NULL
-                 AND (r.dispatched_terminal IS NULL OR r.dispatched_terminal = '')
-                 AND p.worktree_id IN (SELECT id FROM worktrees WHERE path = ?)
-               ORDER BY r.dispatched_at DESC LIMIT 1`;
-
-        const params = hasTerminalCol ? [workspaceId, cwd] : [workspaceId, machineId, cwd];
-        const stmt = this._db.prepare(sql, params);
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+               AND owner_since IS NOT NULL
+               AND (owner_seat IS NULL OR owner_seat = '')
+               AND worktree_id IN (SELECT id FROM worktrees WHERE path = ?)
+             ORDER BY owner_since DESC LIMIT 1`,
+            [workspaceId, cwd]
+        );
         try {
             const rows = this._readRows(stmt);
             return rows[0] ?? null;
@@ -14790,39 +14938,29 @@ FROM plans
      * terminal count. No join to worktrees, no `worktree_id` read, no `is_feature`
      * predicate — the resolver and the panel need the same row shape.
      *
-     * Note: Keys on `dispatched_at IS NOT NULL`. A card returning to the queue
-     * has its holder released via `releaseDispatchHolder` (nulling dispatched_terminal
-     * and dispatched_at), so queued cards never match here.
+     * Note: Keys on `owner_since IS NOT NULL` — the advisory "currently out for
+     * work" stamp, cleared by `clearWorkingState` and column moves.
      */
     public async getLiveDispatchAttribution(workspaceId: string): Promise<LiveDispatchAttributionRow[]> {
         const out: LiveDispatchAttributionRow[] = [];
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return out;
-        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
-        const machineId = getMachineId();
 
-        const sql = hasTerminalCol
-            ? `SELECT plan_id, topic, dispatched_terminal, dispatched_at, feature_id, project
-               FROM plans
-               WHERE workspace_id = ? AND status = 'active'
-                 AND dispatched_at IS NOT NULL
-               ORDER BY dispatched_at DESC`
-            : `SELECT p.plan_id, p.topic, r.dispatched_terminal, r.dispatched_at, p.feature_id, p.project
-               FROM plans p
-               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
-               WHERE p.workspace_id = ? AND p.status = 'active'
-                 AND r.device_id = ? AND r.dispatched_at IS NOT NULL
-               ORDER BY r.dispatched_at DESC`;
-
-        const params = hasTerminalCol ? [workspaceId] : [workspaceId, machineId];
-        const stmt = this._db.prepare(sql, params);
+        const stmt = this._db.prepare(
+            `SELECT plan_id, topic, owner_seat, owner_since, feature_id, project
+             FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+               AND owner_since IS NOT NULL
+             ORDER BY owner_since DESC`,
+            [workspaceId]
+        );
         try {
             while (stmt.step()) {
                 const row = stmt.getAsObject();
                 out.push({
                     planId: String(row.plan_id ?? ''),
                     topic: String(row.topic ?? '').trim(),
-                    dispatchedTerminal: String(row.dispatched_terminal ?? '').trim(),
-                    dispatchedAt: String(row.dispatched_at ?? ''),
+                    ownerSeat: String(row.owner_seat ?? '').trim(),
+                    ownerSince: String(row.owner_since ?? ''),
                     featureId: row.feature_id ? String(row.feature_id) : null,
                     project: row.project ? String(row.project) : null,
                 });
@@ -14836,188 +14974,44 @@ FROM plans
     }
 
     /**
-     * Activity-light timeout backstop. Widened (V58) to consult `last_liveness_at`
-     * so a card whose agent is demonstrably still producing output is spared at the
-     * timeout. The age basis is
-     * `MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at))`: a row clears
-     * when its basis is older than `cutoff`.
+     * Dead-seat display sweep. `opts.forceTerminals` — names of terminals the
+     * fleet reports as exited — clears `owner_since` on rows whose `owner_seat`
+     * is in the set, so a dead seat's activity light goes off immediately
+     * rather than aging out at the read-time derive's window.
      *
-     * **Conflation fix (this card).** This sweep used to null `dispatched_at` (and
-     * `last_liveness_at`) for silent seats every tick — serving the activity light.
-     * But the read-time derive `isWorkingState` (`KanbanProvider.ts:180`) already
-     * turns the light off at `maxAgeMs` from `MAX(dispatched_at, last_liveness_at)`
-     * *without* nulling the stamp, so the null was redundant for the light and
-     * destructive for dispatch identity: it dropped the card out of the dispatch-
-     * stall nudge (`0417d620`) and the dispatch-timeout sweep, and orphaned the seat
-     * (`bf23c37f` — `dispatched_at` NULL while `dispatched_terminal` stayed set). The
-     * age-based arm now nulls ONLY `blocked_at` (a transient flag, not a dispatch-
-     * identity stamp); the stamp survives silence so the nudge and the dispatch
-     * timeout can see silent seats. The dispatch-timeout sweep
-     * (`_runDispatchTimeoutSweep` in `PlanIngestionEngine`) is the sole abandonment
-     * path that nulls `dispatched_at` for a live-but-silent seat.
+     * V81: there is no longer an age-based arm. `blocked_at` and
+     * `last_liveness_at` are gone, and `owner_since` deliberately survives
+     * silence — the read-time derive `isWorkingState` owns the visible light,
+     * and the surviving stamp is what the dispatch-stall nudge and the
+     * dispatch-timeout sweep key on. `maxAgeMs` is accepted for call-site
+     * compatibility and deliberately unused.
      *
-     * There is deliberately NO hard cap on `dispatched_at` — see the comment on the
-     * UPDATE. A long turn is not an abandoned one, and this row is what
-     * `POST /kanban/queue/done` matches on, so retiring it under a live agent threw
-     * that agent's completion report away.
-     *
-     * `opts.forceTerminals` — names of terminals the fleet reports as exited —
-     * triggers a release of rows whose `dispatched_terminal` is in the set
-     * regardless of age (the dead-agent fast-clear). This is the one case where
-     * liveness shortens rather than extends the window. Routed through
-     * `releaseDispatchHolder` so `dispatched_at` AND `dispatched_terminal` null
-     * TOGETHER (atomic) — the half-clear that left `dispatched_terminal` set while
-     * nulling `dispatched_at` produced the orphan state `bf23c37f` is about.
-     *
-     * With `opts` omitted and `last_liveness_at` NULL everywhere,
-     * `MAX(dispatched_at, COALESCE(NULL, dispatched_at))` is `dispatched_at`. The
-     * age-based arm now only touches `blocked_at`, so the fleet-less compatibility
-     * contract is "no observable change to dispatch identity on a silent seat" —
-     * the read-time derive owns the visible light. Returns the count of rows the
-     * sweep acted on (age-based touches + exited-terminal releases) so the caller
-     * can gate a board refresh on `> 0`.
+     * Clearing `owner_since` here is display-only: it never gates a dispatch.
+     * `owner_seat` stays set — it records the last seat the card was handed to.
+     * Returns the count of rows the sweep cleared so the caller can gate a
+     * board refresh on `> 0`.
      */
     public async clearStaleWorkingState(
         workspaceId: string,
-        maxAgeMs: number,
+        _maxAgeMs: number,
         opts?: { forceTerminals?: string[] }
     ): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
-        const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
         const forceTerminals = opts?.forceTerminals?.filter(n => !!n) ?? [];
-        // Plan files held by exited terminals, collected inside the transaction and
-        // released AFTER commit so releaseDispatchHolder (which does its own persist)
-        // never runs inside an open transaction.
-        let exitedPlanFiles: string[] = [];
+        if (forceTerminals.length === 0) return 0;
         try {
-            this._db.run('BEGIN');
-            // Age-based arm: null ONLY blocked_at. The stamp (dispatched_at) and the
-            // heartbeat (last_liveness_at) survive silence — the read-time derive
-            // owns the activity light, and the surviving stamp is what the dispatch-
-            // stall nudge and the dispatch-timeout sweep key on. blocked_at is a
-            // transient flag (dead writer — see KanbanPlanRecord.blockedAt) and the
-            // only field this arm still clears.
-            //
-            // `AND blocked_at IS NOT NULL` is load-bearing for the RETURN VALUE,
-            // not for the write. SQLite counts a row as modified when an UPDATE
-            // matches it, even when the assigned value equals the stored one, and
-            // the caller gates a board refresh (and a "cleared N stale working
-            // card(s)" log line) on `> 0`. Without the predicate every silent-past-
-            // timeout card is re-counted on every tick forever, so the sweep would
-            // refresh the board and claim it cleared work on each pass while
-            // clearing nothing. Before the conflation fix the arm nulled the stamp
-            // too, so a row could only be counted once; now that it nulls only
-            // `blocked_at`, the count has to be narrowed to rows that actually had
-            // one.
-            if (this._tableHasColumn('plans', 'dispatched_at')) {
-                this._db.run(
-                    'UPDATE plans SET blocked_at = NULL ' +
-                    'WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND blocked_at IS NOT NULL ' +
-                    '  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?',
-                    [workspaceId, cutoff]
-                );
-            }
-            const machineId = getMachineId();
+            const placeholders = forceTerminals.map(() => '?').join(', ');
             this._db.run(
-                'UPDATE plan_runtime_state SET blocked_at = NULL, updated_at = ? ' +
-                'WHERE workspace_id = ? AND device_id = ? AND dispatched_at IS NOT NULL AND blocked_at IS NOT NULL ' +
-                '  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?',
-                [new Date().toISOString(), workspaceId, machineId, cutoff]
+                `UPDATE plans SET owner_since = NULL, updated_at = ?
+                 WHERE workspace_id = ? AND owner_since IS NOT NULL
+                   AND owner_seat IN (${placeholders})`,
+                [new Date().toISOString(), workspaceId, ...forceTerminals]
             );
-            let modified = this._db.getRowsModified();
-            // Exited-terminal force-clear: dead agents release immediately rather
-            // than waiting out the window. Collect the plan_files held by exited
-            // terminals here, then release each through releaseDispatchHolder after
-            // commit so dispatched_at AND dispatched_terminal null together (no
-            // orphan state). Only rows still carrying dispatched_at are in scope.
-            if (forceTerminals.length > 0) {
-                const placeholders = forceTerminals.map(() => '?').join(', ');
-                const query = this._tableHasColumn('plans', 'dispatched_terminal')
-                    ? `SELECT plan_file FROM plans WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
-                      `AND dispatched_terminal IN (${placeholders})`
-                    : `SELECT p.plan_file FROM plans p JOIN plan_runtime_state r ON p.plan_id = r.plan_id ` +
-                      `WHERE r.workspace_id = ? AND r.device_id = ? AND r.dispatched_at IS NOT NULL ` +
-                      `AND r.dispatched_terminal IN (${placeholders})`;
-                const params = this._tableHasColumn('plans', 'dispatched_terminal')
-                    ? [workspaceId, ...forceTerminals]
-                    : [workspaceId, machineId, ...forceTerminals];
-                const stmt = this._db.prepare(query, params);
-                try {
-                    while (stmt.step()) {
-                        const pf = String(stmt.getAsObject().plan_file || '');
-                        if (pf) { exitedPlanFiles.push(pf); }
-                    }
-                } finally {
-                    stmt.free();
-                }
-                modified += exitedPlanFiles.length;
-            }
-            this._db.run('COMMIT');
-            await this._persist();
-            // Release exited-terminal holders OUTSIDE the transaction. Each call
-            // nulls dispatched_terminal, dispatched_at, last_liveness_at and
-            // blocked_at atomically (releaseDispatchHolder's single UPDATE) and
-            // persists — the operation bf23c37f is about, done without passing
-            // through the orphan state.
-            for (const pf of exitedPlanFiles) {
-                try {
-                    await this.releaseDispatchHolder(pf, workspaceId);
-                } catch (relErr) {
-                    console.error('[KanbanDatabase] clearStaleWorkingState: releaseDispatchHolder failed for', pf, relErr);
-                }
-            }
+            const modified = this._db.getRowsModified();
+            if (modified > 0) { await this._persist(); }
             return modified;
         } catch (e) {
-            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
             console.error('[KanbanDatabase] clearStaleWorkingState failed:', e);
-            return 0;
-        }
-    }
-
-    /**
-     * Persist the fleet's liveness heartbeat for the named terminals (V58). One
-     * UPDATE setting `last_liveness_at = ?` and nulling `blocked_at` for rows whose
-     * `dispatched_terminal` is in the set AND whose `dispatched_at` is still set.
-     * Called once per sweep tick — NOT per output flush — so this is ~1 write per
-     * live card per 10s, well within the sql.js WASM-heap budget. Rows with an
-     * empty `dispatched_terminal` are never updated: they have no liveness
-     * evidence and fall through to the blind timer. Returns the count of rows
-     * stamped.
-     */
-    public async recordLiveness(workspaceId: string, terminalNames: string[], atIso: string): Promise<number> {
-        if (!(await this.ensureReady()) || !this._db) return 0;
-        const names = terminalNames.filter(n => !!n);
-        if (names.length === 0) return 0;
-        try {
-            const placeholders = names.map(() => '?').join(', ');
-            let modified = 0;
-            if (this._tableHasColumn('plans', 'last_liveness_at')) {
-                this._db.run(
-                    `UPDATE plans SET last_liveness_at = ?, blocked_at = NULL ` +
-                    `WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
-                    `AND dispatched_terminal IN (${placeholders})`,
-                    [atIso, workspaceId, ...names]
-                );
-                modified = this._db.getRowsModified();
-            }
-
-            // Update machine-local plan_runtime_state
-            const machineId = getMachineId();
-            this._db.run(
-                `UPDATE plan_runtime_state SET last_liveness_at = ?, blocked_at = NULL, updated_at = ? ` +
-                `WHERE workspace_id = ? AND device_id = ? AND dispatched_at IS NOT NULL ` +
-                `AND dispatched_terminal IN (${placeholders})`,
-                [atIso, atIso, workspaceId, machineId, ...names]
-            );
-            const runtimeModified = this._db.getRowsModified();
-            if (modified === 0) {
-                modified = runtimeModified;
-            }
-
-            if (modified > 0 || runtimeModified > 0) { await this._persist(); }
-            return modified;
-        } catch (e) {
-            console.error('[KanbanDatabase] recordLiveness failed:', e);
             return 0;
         }
     }
@@ -15145,23 +15139,20 @@ FROM plans
                     })(),
                     brainSourcePath: this._resolveAbsolutePlanFile(String(row.brain_source_path || "")),
                     mirrorPath: this._resolveAbsolutePlanFile(String(row.mirror_path || "")),
-                    routedTo: String(row.routed_to || ""),
-                    dispatchedAgent: String(row.dispatched_agent || ""),
-                    dispatchedIde: String(row.dispatched_ide || ""),
-                    // Absent from SELECT lists that predate V57 → undefined → "" (unknown).
-                    dispatchedTerminal: String(row.dispatched_terminal || ""),
+                    // Delivered-by metadata lives on plan_runtime_state — overlaid
+                    // by the runtime merge below. '' here means "no local delivery
+                    // record" (a row this machine never dispatched).
+                    dispatchedAgent: '',
+                    dispatchedIde: '',
+                    // V81: advisory owner stamp on the shared row. '' / null mean
+                    // "no dispatch recorded". Never a dispatch gate.
+                    ownerSeat: String(row.owner_seat || ""),
+                    ownerSince: row.owner_since !== null && row.owner_since !== undefined ? String(row.owner_since) : null,
                     // V76: lives on plan_runtime_state, not plans — overlaid by the
                     // runtime merge below. '' here means "no team dispatch record"
                     // (standalone, or a host that predates V76), the safe default a
                     // genuine standalone seat clears under.
                     dispatchedTeamGroup: '',
-                    dispatchedAt: row.dispatched_at !== null && row.dispatched_at !== undefined ? String(row.dispatched_at) : null,
-                    // Absent from SELECT lists that predate V58 → undefined → null.
-                    lastLivenessAt: row.last_liveness_at !== null && row.last_liveness_at !== undefined ? String(row.last_liveness_at) : null,
-                    // Absent from SELECT lists that predate V59 → undefined → null.
-                    blockedAt: row.blocked_at !== null && row.blocked_at !== undefined ? String(row.blocked_at) : null,
-                    // Absent from SELECT lists that predate V60 → undefined → null (sorts last).
-                    queuePosition: row.queue_position !== null && row.queue_position !== undefined ? Number(row.queue_position) : null,
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),
                     notionPageId: String(row.notion_page_id || ""),
@@ -15181,13 +15172,7 @@ FROM plans
                     // Absent from SELECT lists that predate V64 → undefined → null.
                     mapFingerprint: row.map_fingerprint !== null && row.map_fingerprint !== undefined ? String(row.map_fingerprint) : null,
                     // Absent from SELECT lists that predate V67 → undefined → null (no priority).
-                    priority: row.priority !== null && row.priority !== undefined ? Number(row.priority) : null,
-                    // V77: outcome/workflow/released_at. Absent from SELECT lists
-                    // that predate V77 → undefined → ''/''/null (the safe defaults:
-                    // a pre-V77 row has no recorded outcome and was never released).
-                    outcome: row.outcome !== null && row.outcome !== undefined ? String(row.outcome) : '',
-                    workflow: row.workflow !== null && row.workflow !== undefined ? String(row.workflow) : '',
-                    releasedAt: row.released_at !== null && row.released_at !== undefined ? String(row.released_at) : null
+                    priority: row.priority !== null && row.priority !== undefined ? Number(row.priority) : null
                 });
             }
         } finally {
@@ -15195,8 +15180,8 @@ FROM plans
         }
 
         // Application-level merge: join machine-local runtime state from plan_runtime_state.
-        // If the table exists and rows are present, local runtime facts (dispatched_terminal,
-        // dispatched_at, last_liveness_at, blocked_at) overlay the row for this device_id.
+        // If the table exists and rows are present, local runtime facts (dispatched_agent,
+        // dispatched_ide, dispatched_team_group) overlay the row for this device_id.
         //
         // Row-scoped and CHUNKED. The parameter count is capped at
         // RUNTIME_OVERLAY_CHUNK + 1 per query and never grows with the read, so
@@ -15225,7 +15210,7 @@ FROM plans
                     const chunk = planIds.slice(off, off + RUNTIME_OVERLAY_CHUNK);
                     const placeholders = chunk.map(() => '?').join(', ');
                     const rStmt = this._db.prepare(
-                        `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at ` +
+                        `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_team_group ` +
                         `FROM plan_runtime_state WHERE device_id = ? AND plan_id IN (${placeholders})`,
                         [machineId, ...chunk]
                     );
@@ -15242,9 +15227,6 @@ FROM plans
                     for (const row of rows) {
                         const rt = runtimeMap.get(row.planId);
                         if (rt) {
-                            if (rt.dispatched_terminal !== undefined && rt.dispatched_terminal !== null && rt.dispatched_terminal !== '') {
-                                row.dispatchedTerminal = String(rt.dispatched_terminal);
-                            }
                             if (rt.dispatched_team_group !== undefined && rt.dispatched_team_group !== null && rt.dispatched_team_group !== '') {
                                 row.dispatchedTeamGroup = String(rt.dispatched_team_group);
                             }
@@ -15253,15 +15235,6 @@ FROM plans
                             }
                             if (rt.dispatched_ide !== undefined && rt.dispatched_ide !== null && rt.dispatched_ide !== '') {
                                 row.dispatchedIde = String(rt.dispatched_ide);
-                            }
-                            if (rt.dispatched_at !== undefined) {
-                                row.dispatchedAt = rt.dispatched_at !== null ? String(rt.dispatched_at) : null;
-                            }
-                            if (rt.last_liveness_at !== undefined) {
-                                row.lastLivenessAt = rt.last_liveness_at !== null ? String(rt.last_liveness_at) : null;
-                            }
-                            if (rt.blocked_at !== undefined) {
-                                row.blockedAt = rt.blocked_at !== null ? String(rt.blocked_at) : null;
                             }
                         }
                     }
@@ -15758,7 +15731,7 @@ FROM plans
             present++;
             if (!plan.completedAt) {
                 allComplete = false;
-                if (plan.dispatchedAt) return 'in-flight';
+                if (plan.ownerSince) return 'in-flight';
             }
         }
         if (present === 0) return 'not-started';
@@ -16086,5 +16059,55 @@ FROM plans
             stmt.free();
         }
         return out;
+    }
+
+    // ── Linear managed-artifact provenance ──────────────────────────────────
+    //
+    // Every tracker object Switchboard created is keyed by (kind, remote_key):
+    //   'relation'   → remote_key '<relationId>'
+    //   'membership' → remote_key '<milestoneId>:<issueId>'
+    // The reconcile pass may only remove what this table records; a link or
+    // membership absent here was drawn by a person in Linear and is not ours
+    // to delete.
+
+    public async recordLinearManagedArtifact(kind: string, remoteKey: string, workspaceId: string): Promise<boolean> {
+        if (!kind || !remoteKey || !workspaceId) return false;
+        return this._persistedUpdate(
+            'INSERT OR IGNORE INTO linear_managed_artifacts (kind, remote_key, workspace_id, created_at) VALUES (?, ?, ?, ?)',
+            [kind, remoteKey, workspaceId, new Date().toISOString()]
+        );
+    }
+
+    public async deleteLinearManagedArtifact(kind: string, remoteKey: string, workspaceId: string): Promise<boolean> {
+        if (!kind || !remoteKey || !workspaceId) return false;
+        return this._persistedUpdate(
+            'DELETE FROM linear_managed_artifacts WHERE kind = ? AND remote_key = ? AND workspace_id = ?',
+            [kind, remoteKey, workspaceId]
+        );
+    }
+
+    public async deleteLinearManagedArtifactsByPrefix(kind: string, remoteKeyPrefix: string, workspaceId: string): Promise<boolean> {
+        if (!kind || !remoteKeyPrefix || !workspaceId) return false;
+        return this._persistedUpdate(
+            'DELETE FROM linear_managed_artifacts WHERE kind = ? AND workspace_id = ? AND remote_key LIKE ?',
+            [kind, workspaceId, `${remoteKeyPrefix}%`]
+        );
+    }
+
+    public async getLinearManagedArtifactKeys(kind: string, workspaceId: string): Promise<Set<string>> {
+        const keys = new Set<string>();
+        if (!(await this.ensureReady()) || !this._db) return keys;
+        const stmt = this._db.prepare(
+            'SELECT remote_key FROM linear_managed_artifacts WHERE kind = ? AND workspace_id = ?',
+            [kind, workspaceId]
+        );
+        try {
+            while (stmt.step()) {
+                keys.add(String(stmt.getAsObject().remote_key));
+            }
+        } finally {
+            stmt.free();
+        }
+        return keys;
     }
 }

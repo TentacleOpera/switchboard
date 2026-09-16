@@ -59,16 +59,16 @@ function compareByPrecedence(a, b, column) {
         const sb = b.priorityStarred ? 1 : 0;
         if (sa !== sb) { return sb - sa; }
     }
-    const oa = isStaging ? (a.queuePosition ?? null) : (a.columnOrder ?? null);
-    const ob = isStaging ? (b.queuePosition ?? null) : (b.columnOrder ?? null);
+    // V81: column_order orders EVERY column — queue_position was folded into it.
+    const oa = a.columnOrder ?? null;
+    const ob = b.columnOrder ?? null;
     const oaNull = oa === null;
     const obNull = ob === null;
     if (!oaNull && !obNull) {
         const d = oa - ob;
         if (d !== 0) { return d; }
     } else if (oaNull !== obNull) {
-        // STAGING: NULL = never staged → last. Elsewhere: NULL = just arrived → first.
-        if (isStaging) { return oaNull ? 1 : -1; }
+        // Every column: NULL = just arrived → first.
         return oaNull ? -1 : 1;
     }
     const ms = (t) => { if (!t) { return null; } const v = new Date(t).getTime(); return isNaN(v) ? null : v; };
@@ -118,14 +118,16 @@ check('a missing column_entered_at falls back to lastActivity then createdAt', (
     assert.deepStrictEqual(order(cards, 'CREATED'), ['no-col-ts', 'has-col-ts']);
 });
 
-check('STAGING reads queue_position and ignores column_order', () => {
+check('STAGING reads column_order like every column — queue_position is gone', () => {
+    // V81 folded the STAGING-only queue_position into column_order. A leftover
+    // queuePosition field on a card must not influence the STAGING sort.
     const staging = [
-        { id: 'q2', queuePosition: 2, columnOrder: 1 },
-        { id: 'q1', queuePosition: 1, columnOrder: 9 },
+        { id: 'q2', queuePosition: 1, columnOrder: 9 },
+        { id: 'q1', queuePosition: 2, columnOrder: 1 },
     ];
     assert.deepStrictEqual(order(staging, 'STAGING'), ['q1', 'q2']);
-    // The same two cards outside STAGING sort by column_order instead.
-    assert.deepStrictEqual(order(staging, 'CREATED'), ['q2', 'q1']);
+    // The same two cards outside STAGING sort the same way — one field, one rule.
+    assert.deepStrictEqual(order(staging, 'CREATED'), ['q1', 'q2']);
 });
 
 check('manual-vs-absent is not resolved by timestamp — the comparator stays transitive', () => {
@@ -171,17 +173,17 @@ check('the planner fan-out calls the shared resolver and keeps no lastActivity s
         'the lastActivity ASC sort must be gone — it was a proxy for the in-flight filter, not an ordering');
 });
 
-check('the planner fan-out filters in-flight cards before sorting, and reports what it skipped', () => {
+check('the planner fan-out dispatches every source card — no in-flight filter', () => {
+    // V81: the board never refuses a dispatch. A `!working` filter was a silent
+    // refusal — it dropped owner-stamped cards from a bulk fan-out and left the
+    // webview optimistic move stranded. Duplicate dispatch is safe: the agent
+    // reads the plan and reports the work already done.
     const fnStart = provider.indexOf('private async _distributePlannerDispatch(');
     const body = provider.slice(fnStart, provider.indexOf('\n    private ', fnStart + 50));
-    const filterIdx = body.indexOf('sourceCards.filter(c => !c.working)');
-    const sortIdx = body.search(/compareByPrecedence\(a, b, sortColumn(, \w+)?\)/);
-    assert.notStrictEqual(filterIdx, -1, 'the !working filter must exist');
-    assert.ok(filterIdx < sortIdx, 'the in-flight filter must run BEFORE the sort');
-    assert.ok(/_inFlightSkipFailures\(/.test(body),
-        'skipped in-flight cards must be reported — an unreported skip leaves the webview optimistic move stranded');
-    assert.ok(/_inFlightSkipFailures\(cards: KanbanCard\[\]\)/.test(provider),
-        '_inFlightSkipFailures must exist on KanbanProvider');
+    assert.strictEqual(body.includes('!c.working'), false,
+        'a !working filter is board state refusing to hand out work');
+    assert.ok(!/_inFlightSkipFailures/.test(provider),
+        '_inFlightSkipFailures must be gone — there is nothing to skip');
 });
 
 check('the frontend display comparator applies the same precedence as the resolver', () => {
@@ -195,8 +197,8 @@ check('the frontend display comparator applies the same precedence as the resolv
     assert.notStrictEqual(sortIdx, -1, 'the shared display comparator must exist');
     const body = kanbanHtml.slice(sortIdx, sortIdx + 6000);
     assert.ok(/a\.priorityStarred\s*\?\s*1\s*:\s*0/.test(body), 'display sort must apply starred-first');
-    assert.ok(/a\.queuePosition/.test(body) && /a\.columnOrder/.test(body),
-        'display sort must read queue_position in STAGING and column_order elsewhere');
+    assert.ok(/a\.columnOrder/.test(body) && !/a\.queuePosition/.test(body),
+        'display sort must read column_order in every column — V81 folded queue_position into it');
     assert.ok(/_colTs/.test(body), 'display sort must fall back to column_entered_at DESC');
     assert.ok(/const sortedItems = \[\.\.\.items\]\.sort\(\(a, b\) => compareCardsByPrecedence\(a, b, col\)\);/.test(kanbanHtml),
         "renderBoard must sort each column THROUGH the shared comparator — an unconsumed comparator leaves the render ordering unpinned");
@@ -258,7 +260,7 @@ check('priority is carried on the board push, so the badge and the priority sort
     assert.ok(/priority\?: number \| null;/.test(provider),
         'KanbanCard must declare priority');
     const starredSites = (provider.match(/priorityStarred: (row|rec|plan)\.priorityStarred/g) || []).length;
-    const prioritySites = (provider.match(/priority: (row|rec|plan)\.priority \?\? null/g) || []).length;
+    const prioritySites = (provider.match(/priority: (row|rec|plan)\.priority \?\? (?:null|undefined)/g) || []).length;
     assert.ok(starredSites > 0, 'the board card builders must exist');
     assert.strictEqual(prioritySites, starredSites,
         `every card builder that carries priorityStarred must carry priority too (${prioritySites} of ${starredSites})`);
@@ -317,30 +319,31 @@ check('a card dragged into a column goes to the TOP, arranged column or not', ()
         ['arrived-2', 'arrived', 'hand-1', 'hand-2', 'hand-3']);
 });
 
-check('the star does NOT reach inside a mission — STAGING runs in queue_position order', () => {
+check('the star does NOT reach inside a mission — STAGING runs in column_order order', () => {
     // A mission is not the kanban board. A card added to a mission joins the end
     // of its queue; board-level urgency must not reorder a sequence the mission
     // already committed to. V63 originally applied starred-first here, which let
     // a card staged mid-run jump everything already queued.
     const cards = [
-        { id: 'q1', queuePosition: 1 },
-        { id: 'q2', queuePosition: 2 },
-        { id: 'q3-starred', queuePosition: 3, priorityStarred: 1 },
+        { id: 'q1', columnOrder: 1 },
+        { id: 'q2', columnOrder: 2 },
+        { id: 'q3-starred', columnOrder: 3, priorityStarred: 1 },
     ];
     assert.deepStrictEqual(order(cards, 'STAGING'), ['q1', 'q2', 'q3-starred']);
     // The same star DOES apply on the board.
     assert.deepStrictEqual(order(cards, 'CREATED')[0], 'q3-starred');
 });
 
-check('STAGING keeps the opposite NULL rule — never-staged goes to the END', () => {
-    // queue_position NULL means "never staged", so it belongs at the end of the
-    // queue (V60). The two fields mean opposite things and must not share a rule.
+check('STAGING shares the NULL-first rule — a just-arrived card leads', () => {
+    // V81: column_order NULL means "just arrived" in EVERY column, STAGING
+    // included. A staged card always carries a column_order; a NULL one is a
+    // card that landed without an arrangement and belongs at the top.
     const cards = [
         { id: 'unstaged', columnEnteredAt: '2026-08-20T00:00:00Z' },
-        { id: 'q1', queuePosition: 1, columnEnteredAt: '2026-08-01T00:00:00Z' },
-        { id: 'q2', queuePosition: 2, columnEnteredAt: '2026-08-02T00:00:00Z' },
+        { id: 'q1', columnOrder: 1, columnEnteredAt: '2026-08-01T00:00:00Z' },
+        { id: 'q2', columnOrder: 2, columnEnteredAt: '2026-08-02T00:00:00Z' },
     ];
-    assert.deepStrictEqual(order(cards, 'STAGING'), ['q1', 'q2', 'unstaged']);
+    assert.deepStrictEqual(order(cards, 'STAGING'), ['unstaged', 'q1', 'q2']);
 });
 
 check('a card arriving in a column nobody arranged still sorts by date, at the top', () => {

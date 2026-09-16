@@ -782,7 +782,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // registration is a property of the delivery layer, not a caller chore.
         // The stamp is captured BEFORE the send (below) because fire-and-forget
         // registration lands after the send and stamping at write time would
-        // invert the `plan-file mtime > dispatched_at` completion compare the
+        // invert the `plan-file mtime > owner_since` completion compare the
         // turn-end notifier depends on. The existing strict `payload.dispatch`
         // branch stays sole owner of the row whenever a caller names its plan
         // explicitly — this path is unreachable when hasDispatch is true.
@@ -1496,7 +1496,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         planIds: parsedDispatchIdentity.planIds,
                         planFiles: parsedDispatchIdentity.planFiles,
                         workspaceRoot: payload.workspaceRoot,
-                        dispatchedAt: parsedDispatchedAt
+                        since: parsedDispatchedAt
                     }).catch(() => { /* a lost registration degrades a backstop, never a send */ });
                 }
                 return {
@@ -2472,14 +2472,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * unaffected.
      *
      * `terminalName` falls back to a role+worktree fleet match because extension-host
-     * dispatch does not write `dispatched_terminal`; when nothing resolves the field is
+     * dispatch does not write `owner_seat`; when nothing resolves the field is
      * omitted and the panel shows a toast without pane targeting.
      */
     public broadcastAgentCompleted(record: KanbanPlanRecord, workspaceRoot: string, meta?: { planCount?: number }): void {
         void (async () => {
             const server = this._apiServerForBroadcast ?? this._localApiServer;
             if (!server) { return; }
-            let terminalName = (record.dispatchedTerminal || '').trim();
+            let terminalName = (record.ownerSeat || '').trim();
             let worktreePath: string | undefined;
             try {
                 const db = await this._getKanbanDb(workspaceRoot);
@@ -7028,7 +7028,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             sourceType: sheet.brainSourcePath ? 'brain' : 'local',
             brainSourcePath: typeof sheet.brainSourcePath === 'string' ? sheet.brainSourcePath : '',
             mirrorPath: typeof sheet.mirrorPath === 'string' ? sheet.mirrorPath : '',
-            routedTo: '',
             dispatchedAgent: '',
             dispatchedIde: ''
         };
@@ -7045,7 +7044,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         projectId: existing.projectId ?? null,
                         clickupTaskId: existing.clickupTaskId || '',
                         linearIssueId: existing.linearIssueId || '',
-                        routedTo: existing.routedTo || '',
                         dispatchedAgent: existing.dispatchedAgent || '',
                         dispatchedIde: existing.dispatchedIde || '',
                         worktreeId: existing.worktreeId,
@@ -8827,7 +8825,7 @@ Each plan file must include:
                     const coder = (ownTeam && ownTeam.length > 0)
                         ? await this.resolveTeamRoleTerminal(resolvedWorkspaceRoot, group.targetAgent, 'coder')
                         : (originLead ? await this.resolveTeamRoleTerminal(resolvedWorkspaceRoot, originLead, 'coder') : null);
-                    // Self-target guard: dispatched_terminal (what
+                    // Self-target guard: owner_seat (what
                     // plausibleOriginTerminal returns) is the dispatch TARGET,
                     // not the sender — on a re-dispatch of a card already in
                     // CODE REVIEWED it is the reviewer/coder itself, which would
@@ -8841,7 +8839,7 @@ Each plan file must include:
                     // Cross-team guard (new):
                     // `originLead` is the card's last dispatch TARGET, not
                     // necessarily a member of the reviewer's team. A card that
-                    // passed through another team's lead has dispatchedTerminal
+                    // passed through another team's lead has ownerSeat
                     // set to that lead; without this check the prompt would tell
                     // the reviewer to report to a terminal on another team.
                     // When the two do NOT share a team, resolve the reviewer's
@@ -9970,6 +9968,9 @@ Each plan file must include:
         linearHasToken: boolean;
         linearAuthKind?: 'oauth' | 'apiKey' | 'none';
         linearIsAppActor?: boolean;
+        /** Agent-surface availability — the panel shows THIS, never a per-action
+         *  failure, when no OAuth app actor can exist on this install. */
+        linearAgentSurface?: { available: boolean; reason: string | null };
         notionHasToken: boolean;
     }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
@@ -9992,6 +9993,7 @@ Each plan file must include:
         const linearHasToken = linearHasOAuth || linearHasPersonal;
         const linearAuthKind: 'oauth' | 'apiKey' | 'none' = linearHasOAuth ? 'oauth' : (linearHasPersonal ? 'apiKey' : 'none');
         const linearIsAppActor = linearHasOAuth;
+        const linearAgentSurface = await this._linearAgentSurfaceState(resolvedRoot, linearIsAppActor);
 
         if (!resolvedRoot) {
             return {
@@ -10008,6 +10010,7 @@ Each plan file must include:
                 linearHasToken,
                 linearAuthKind,
                 linearIsAppActor,
+                linearAgentSurface,
                 notionHasToken
             };
         }
@@ -10153,8 +10156,34 @@ Each plan file must include:
             linearHasToken,
             linearAuthKind,
             linearIsAppActor,
+            linearAgentSurface,
             notionHasToken
         };
+    }
+
+    /**
+     * Whether the Linear agent surface (app-actor assignment, mentions, agent
+     * sessions) can run on this install. Unavailable is a state to DISPLAY —
+     * with the reason — not an error each agent action discovers on its own.
+     */
+    private async _linearAgentSurfaceState(
+        resolvedRoot: string | null | undefined,
+        isAppActor: boolean
+    ): Promise<{ available: boolean; reason: string | null }> {
+        try {
+            if (resolvedRoot) {
+                return await this._getLinearService(resolvedRoot).getAgentSurfaceAvailability();
+            }
+            const mod = require('./LinearSyncService');
+            if (!mod.resolveLinearOAuthClientId()) {
+                return { available: false, reason: mod.LINEAR_OAUTH_UNREGISTERED_MESSAGE };
+            }
+            return isAppActor
+                ? { available: true, reason: null }
+                : { available: false, reason: 'Linear agent surface requires the OAuth app actor: no OAuth session is connected (a personal API key does not enable it).' };
+        } catch (err) {
+            return { available: false, reason: err instanceof Error ? err.message : String(err) };
+        }
     }
 
     public async handleApplyClickUpConfig(
@@ -12316,7 +12345,7 @@ Each plan file must include:
      * team. Reads `terminals.groups` through the identical path
      * `resolveTeamRoleTerminal` uses (via `resolveTeamMembersForHead`), so the
      * in-flight predicate in `dispatchNextFromQueue` derives team membership
-     * from a card's `dispatched_terminal` identically to dispatch routing.
+     * from a card's `owner_seat` identically to dispatch routing.
      *
      * Public so the LocalApiServer composition root can wire it as the
      * `resolveTeamMembers` callback for `POST /kanban/queue/next`.
@@ -13525,13 +13554,12 @@ Each plan file must include:
 
         // Ground truth over self-report: always verify queue state against the board.
         // The queue candidate predicate matches dispatchNextFromQueue in LocalApiServer.ts
-        // exactly: column STAGING AND !dispatchedAt AND (!featureId || featureId === '').
+        // exactly: column STAGING AND (!featureId || featureId === '').
         // STAGING only — a handoff that "succeeded" off a full PLAN REVIEWED lane with
         // an empty queue would exit Mission Control having handed the lead nothing it
         // will actually be given, which is the outage this gate exists to refuse.
         const isQueueable = (p: any): boolean =>
             !!p
-            && (!p.dispatchedAt)
             && (!p.featureId || p.featureId === '');
 
         const db = await this._getKanbanDb(root);
@@ -18026,7 +18054,6 @@ Each plan file must include:
                 sourceType: entry.sourceType,
                 brainSourcePath: entry.brainSourcePath || '',
                 mirrorPath: entry.mirrorPath || '',
-                routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: ''
             });
@@ -18074,7 +18101,6 @@ Each plan file must include:
                 sourceType: entry.sourceType,
                 brainSourcePath: entry.brainSourcePath || '',
                 mirrorPath: entry.mirrorPath || '',
-                routedTo: existing?.routedTo || '',
                 dispatchedAgent: existing?.dispatchedAgent || '',
                 dispatchedIde: existing?.dispatchedIde || '',
                 worktreeId: existing?.worktreeId
@@ -18163,7 +18189,6 @@ Each plan file must include:
                 sourceType: entry.sourceType,
                 brainSourcePath: entry.brainSourcePath || '',
                 mirrorPath: entry.mirrorPath || '',
-                routedTo: existing?.routedTo || '',
                 dispatchedAgent: existing?.dispatchedAgent || '',
                 dispatchedIde: existing?.dispatchedIde || '',
                 worktreeId: existing?.worktreeId,
@@ -19056,7 +19081,6 @@ Each plan file must include:
                             sourceType: 'brain',
                             brainSourcePath: '',
                             mirrorPath: '',
-                            routedTo: '',
                             dispatchedAgent: '',
                             dispatchedIde: '',
                             isFeature: 0
@@ -19104,7 +19128,6 @@ Each plan file must include:
                     sourceType: 'brain',
                     brainSourcePath: '',
                     mirrorPath: '',
-                    routedTo: '',
                     dispatchedAgent: '',
                     dispatchedIde: '',
                     isFeature: 0
@@ -23353,7 +23376,7 @@ Each plan file must include:
                 if (coder) {
                     reviewerCoderTerminal = coder;
                 }
-                // Self-target guard: dispatched_terminal (what
+                // Self-target guard: owner_seat (what
                 // plausibleOriginTerminal returns) is the terminal the card was
                 // last dispatched TO — the dispatch TARGET, not the sender. On a
                 // re-dispatch of a card already in CODE REVIEWED, that is the
@@ -23368,7 +23391,7 @@ Each plan file must include:
                 }
                 // Cross-team guard (new): originLead is the last dispatch TARGET, not
                 // necessarily a member of the reviewer's team. A card that passed through
-                // planner-1 for plan improvement has dispatchedTerminal = 'planner-1';
+                // planner-1 for plan improvement has ownerSeat = 'planner-1';
                 // without this check the prompt would tell the reviewer to report to a
                 // terminal on another team. terminalsShareTeam reads all registered groups
                 // (with the same bare-key merge as resolveTeamMembersForHead) and checks
@@ -29290,15 +29313,16 @@ Each plan file must include:
      * hop beside it reports that same seat is holding a card.
      *
      * Derived from the SAME snapshot `teamIsFree` reads, and by the same rule:
-     * a card is held when `dispatched_terminal` names the seat and `completed_at`
-     * is NULL. So the column and the reason line can never disagree.
+     * a card is held when `owner_seat` names the seat, `owner_since` is live,
+     * and `completed_at` is NULL. So the column and the reason line can never
+     * disagree.
      */
     private _buildHopSeatCards(snapshot: HopSnapshot | null | undefined): Record<string, { planId: string; title: string; column: string }> {
         const held: Record<string, { planId: string; title: string; column: string }> = {};
         const board = snapshot && Array.isArray(snapshot.board) ? snapshot.board : [];
         for (const card of board) {
-            if (!card || card.completedAt) continue;
-            const seat = typeof card.dispatchedTerminal === 'string' ? card.dispatchedTerminal.trim() : '';
+            if (!card || card.completedAt || !card.ownerSince) continue;
+            const seat = typeof card.ownerSeat === 'string' ? card.ownerSeat.trim() : '';
             if (!seat || held[seat]) continue;
             held[seat] = {
                 planId: String(card.planId || ''),
@@ -29435,7 +29459,7 @@ Each plan file must include:
 
             if (hop === 'plan') {
                 // Source column: CREATED, excluding subtasks
-                const candidates = board.filter((p: any) => inSource('plan', p) && !p.dispatchedAt);
+                const candidates = board.filter((p: any) => inSource('plan', p) && !p.ownerSince);
                 if (candidates.length === 0) {
                     return { success: false, detail: 'no eligible cards in CREATED' };
                 }
@@ -29479,8 +29503,10 @@ Each plan file must include:
                 // re-enqueue on `_queueNextChain` and deadlock"). `_runQueuePop`
                 // is the one pop implementation and is the only correct call
                 // from inside the chain.
-                // Fallback: candidate in PLAN REVIEWED
-                const candidates = board.filter((p: any) => inSource('code', p) && !p.dispatchedAt);
+                // Fallback: candidate in PLAN REVIEWED. Ownership is advisory —
+                // an owner-stamped card in a source column is still eligible
+                // work; dispatch resets the stamp.
+                const candidates = board.filter((p: any) => inSource('code', p) && !p.completedAt);
                 if (candidates.length === 0) {
                     return { success: false, detail: 'no eligible cards in PLAN REVIEWED or STAGING' };
                 }
@@ -29501,9 +29527,8 @@ Each plan file must include:
 
             if (hop === 'review') {
                 // Source columns: LEAD CODED, CODER CODED, INTERN CODED, CODED.
-                // No `dispatchedAt` filter here, unlike the other two hops: a
-                // *_CODED card ALWAYS carries a dispatchedAt (the coder's), so
-                // filtering on it would empty this hop's candidate set entirely.
+                // No owner-stamp filter — a *_CODED card always carries one
+                // (the coder's), and ownership is advisory under V81 anyway.
                 const candidates = board.filter((p: any) => inSource('review', p));
                 if (candidates.length === 0) {
                     return { success: false, detail: 'no eligible cards in *_CODED' };

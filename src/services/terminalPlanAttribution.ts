@@ -16,9 +16,9 @@ interface TerminalLike {
  * THE shared terminal->plan matcher for the fleet-list enrichment. Two tiers,
  * in strict order — deliberately NOT three:
  *
- *   1. name  — row.dispatchedTerminal === terminal.friendlyName
+ *   1. name  — row.ownerSeat === terminal.friendlyName
  *   2. path  — matchWorktreePath(worktrees, row) === terminal.worktreePath, and
- *              ONLY for rows whose dispatchedTerminal is empty (extension-host
+ *              ONLY for rows whose ownerSeat is empty (extension-host
  *              dispatch does not record a terminal name). A row that names its
  *              terminal is already resolvable by name; letting it also match by
  *              path would paint terminal A's plan onto terminal B sharing that
@@ -34,7 +34,7 @@ interface TerminalLike {
  * worktrees.project, so a shared feature path is the common case and any
  * tie-break would paint a wrong title on a real pane. Ambiguity yields nothing.
  *
- * `rows` MUST be ordered dispatched_at DESC: the name tier takes the first row
+ * `rows` MUST be ordered owner_since DESC: the name tier takes the first row
  * per name, so ordering is what makes a re-dispatch win over a stale row.
  */
 export function attributePlansToTerminals(
@@ -53,11 +53,11 @@ export function attributePlansToTerminals(
     // topic (malformed import) must read as NO attribution, not as a blank strip.
     const titleOf = (row: LiveDispatchAttributionRow): string => (row.topic || '').trim();
 
-    // Tier 1 — name. First row per name wins (rows are dispatched_at DESC).
+    // Tier 1 — name. First row per name wins (rows are owner_since DESC).
     const byName = new Map<string, LiveDispatchAttributionRow>();
     for (const row of rows) {
-        if (!row || !titleOf(row) || !row.dispatchedTerminal) continue;
-        if (!byName.has(row.dispatchedTerminal)) byName.set(row.dispatchedTerminal, row);
+        if (!row || !titleOf(row) || !row.ownerSeat) continue;
+        if (!byName.has(row.ownerSeat)) byName.set(row.ownerSeat, row);
     }
     const unnamed: TerminalLike[] = [];
     for (const t of live) {
@@ -71,7 +71,7 @@ export function attributePlansToTerminals(
     const wts = Array.isArray(worktrees) ? worktrees : [];
     const rowsByPath = new Map<string, LiveDispatchAttributionRow[]>();
     for (const row of rows) {
-        if (!row || !titleOf(row) || row.dispatchedTerminal) continue;
+        if (!row || !titleOf(row) || row.ownerSeat) continue;
         const resolvedPath = matchWorktreePath(wts, {
             featureId: row.featureId,
             project: row.project,

@@ -2298,7 +2298,7 @@ export async function inspectStandingOrders(
  * (`TaskViewerProvider.handleKanbanTrigger`) apply the identical filter, and so
  * it is unit-testable on its own.
  *
- * `dispatched_terminal` is only ever a real name (written by
+ * `owner_seat` is only ever a real name (written by
  * `attributePasteDispatch`). `dispatched_agent` can also be:
  *  - `'unknown'` — `_recordDispatchIdentity`'s no-terminal-name branch;
  *  - an IDE-shaped `"<IDE name> <role>"` string — its `isIdeDispatch` branch;
@@ -2312,7 +2312,7 @@ export function plausibleOriginTerminal(record: any): string {
     const KNOWN_ROLE_WORDS = new Set([
         'planner', 'coder', 'lead', 'reviewer', 'intern', 'tester', 'analyst', 'researcher',
     ]);
-    const terminal = String(record?.dispatchedTerminal || '').trim();
+    const terminal = String(record?.ownerSeat || '').trim();
     if (terminal) { return terminal; }
     const agent = String(record?.dispatchedAgent || '').trim();
     if (!agent || agent === 'unknown') { return ''; }
@@ -2426,7 +2426,7 @@ export async function resolveTeamScopedRoleTerminal(opts: {
  * `resolveTeamScopedRoleTerminal` uses (same key, same legacy bare-key
  * merge, same head-id derivation, same `order`-then-`members` roster
  * preference) so the in-flight predicate in `dispatchNextFromQueue` derives
- * team membership from a card's `dispatched_terminal` identically to
+ * team membership from a card's `owner_seat` identically to
  * dispatch routing.
  *
  * Returns string rosters only — `wireSpawnedTeam` writes `members`/`order`

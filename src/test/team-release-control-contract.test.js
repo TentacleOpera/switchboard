@@ -1,21 +1,107 @@
 'use strict';
 
 /**
- * Contract tests for team release control:
- * - POST /kanban/team/release endpoint
- * - Shared completeCardInternal helper
- * - heldUnposted in ptyListTerminals
- * - heldByTeam module helper
- * - terminals.html/js contract invariants
+ * Contract tests for the no-refusal board (V81, "The Board Never Refuses a
+ * Dispatch"):
+ * - the release endpoints and the in-flight predicates are GONE
+ * - no handler in LocalApiServer returns HTTP 409 for board-state reasons
+ * - the dispatch write is unconditional (no owner_seat claim)
+ * - a `checkpoint` event verb exists and is never read by a gate
+ *
+ * This file replaced the team-release control contract: release ceased to
+ * exist as a concept — there is nothing to release from.
  */
 
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 require(path.join(process.cwd(), 'src', 'test', 'bootstrap', 'sandboxStateHome.js'));
 
-const { LocalApiServer, heldByTeam } = require(path.join(process.cwd(), 'out', 'services', 'LocalApiServer.js'));
+const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js'));
+const Database = require(path.join(process.cwd(), 'node_modules', 'better-sqlite3'));
+
+const SRC = path.join(process.cwd(), 'src');
+const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
+
+const localApiServer = read('services/LocalApiServer.ts');
+const kanbanDatabase = read('services/KanbanDatabase.ts');
+const kanbanProvider = read('services/KanbanProvider.ts');
+const verbSchemas = read('services/verbSchemas.ts');
+
+// The columns V81 drops. A database that has reached V81 does not carry them,
+// so a migration test must re-add them and rewind the stamped version.
+const V81_DOOMED_PLAN_COLS = ['routed_to', 'dispatched_agent', 'dispatched_ide',
+    'dispatched_terminal', 'dispatched_at', 'queue_position', 'released_at',
+    'outcome', 'workflow', 'last_liveness_at', 'blocked_at'];
+const V81_DOOMED_RUNTIME_COLS = ['dispatched_terminal', 'dispatched_at', 'last_liveness_at', 'blocked_at'];
+
+/**
+ * Rewind a database file to a pre-V81 shape: re-add the doomed columns, seed
+ * cards that carry doomed values, and stamp version 80 so V81 re-runs on the
+ * next open.
+ */
+function rewindToV80(dbPath, wsId, { dropRuntime = false } = {}) {
+    const raw = new Database(dbPath);
+    try {
+        for (const c of V81_DOOMED_PLAN_COLS) {
+            try { raw.exec(`ALTER TABLE plans ADD COLUMN ${c} TEXT DEFAULT NULL`); } catch { /* already present */ }
+        }
+        if (dropRuntime) {
+            raw.exec('DROP TABLE IF EXISTS plan_runtime_state');
+        } else {
+            for (const c of V81_DOOMED_RUNTIME_COLS) {
+                try { raw.exec(`ALTER TABLE plan_runtime_state ADD COLUMN ${c} TEXT DEFAULT NULL`); } catch { /* already present */ }
+            }
+        }
+        const now = '2026-01-01T00:00:00.000Z';
+        const ins = raw.prepare(
+            `INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, workspace_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)`
+        );
+        for (const [id, col] of [['held', 'CODER CODED'], ['done', 'COMPLETED'], ['orphan', 'CREATED'], ['clean', 'CREATED']]) {
+            ins.run(id, `${id}-sess`, id, `.switchboard/plans/${id}.md`, col, wsId, now, now);
+        }
+        raw.exec("UPDATE plans SET dispatched_terminal='Coder 1', released_at='2026-02-02', outcome='shipped', workflow='w', queue_position=5 WHERE plan_id='held'");
+        raw.exec("UPDATE plans SET released_at='2026-03-03', outcome='done', completed_at='2026-03-03' WHERE plan_id='done'");
+        raw.exec("UPDATE plans SET outcome='parked' WHERE plan_id='orphan'");
+        if (!dropRuntime) {
+            raw.prepare(
+                `INSERT INTO plan_runtime_state (plan_id, device_id, workspace_id, dispatched_terminal, dispatched_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?)`
+            ).run('held', 'dev-x', wsId, 'Coder 2', '2026-02-02T00:00:00Z', now);
+        }
+        raw.prepare("UPDATE migration_meta SET value='80' WHERE key='kanban_db_migration_version'").run();
+    } finally {
+        raw.close();
+    }
+}
+
+function assertV81Applied(db, { expectedOwnerSeat, expectQueuePositionFolded }) {
+    const cols = db.getDriver().all('PRAGMA table_info(plans)').map(c => c.name);
+    for (const c of V81_DOOMED_PLAN_COLS) {
+        assert.ok(!cols.includes(c), `${c} must be dropped from plans by V81`);
+    }
+    assert.ok(cols.includes('owner_seat') && cols.includes('owner_since'), 'owner_seat/owner_since must exist');
+    assert.ok(cols.includes('column_order'), 'column_order is the single surviving ordering');
+
+    const held = db.getDriver().all("SELECT owner_seat, column_order, completed_at FROM plans WHERE plan_id='held'")[0];
+    assert.strictEqual(String(held.owner_seat), expectedOwnerSeat,
+        'owner_seat must be backfilled from the dispatch record');
+    if (expectQueuePositionFolded) {
+        assert.strictEqual(Number(held.column_order), 5, 'queue_position must fold into column_order');
+    }
+
+    const events = db.getDriver().all("SELECT plan_id FROM plan_events WHERE event_type='state-migrated-v81'");
+    const ids = new Set(events.map(e => String(e.plan_id)));
+    assert.strictEqual(events.length, 3,
+        'one state-migrated-v81 event per affected card (held, done, orphan — not the clean card)');
+    for (const id of ['held', 'done', 'orphan']) {
+        assert.ok(ids.has(id), `state-migrated-v81 must cover '${id}'`);
+    }
+    assert.ok(!ids.has('clean'), 'a card carrying no doomed field is not affected and gets no event');
+}
 
 let failures = 0;
 async function check(name, fn) {
@@ -29,427 +115,203 @@ async function check(name, fn) {
     }
 }
 
-const WS = '/tmp/team-release-control-ws';
+async function main() {
+    console.log('team-release-control (now: no-refusal) contract tests');
 
-function card(planId, kanbanColumn, extra = {}) {
-    return {
-        planId,
-        sessionId: planId,
-        topic: planId,
-        kanbanColumn,
-        // releaseCardInternal clears the dispatch holder by (planFile,
-        // workspaceId); a row missing them reports freed:false, which the
-        // endpoint correctly counts as a failure rather than a release.
-        planFile: `/tmp/${planId}.md`,
-        workspaceId: 'ws1',
-        releasedAt: null,
-        featureId: '',
-        dispatchedAt: null,
-        dispatchedTerminal: '',
-        queuePosition: null,
-        completedAt: null,
-        ...extra,
-    };
-}
+    await check('heldByTeam and resolveTeamInFlight do not exist', () => {
+        assert.strictEqual(/\bheldByTeam\b/.test(localApiServer), false, 'heldByTeam must be deleted');
+        assert.strictEqual(/\bresolveTeamInFlight\b/.test(localApiServer), false, 'resolveTeamInFlight must be deleted');
+    });
 
-function makeServer(opts = {}) {
-    const plans = new Map();
-    const events = [];
-    const dispatched = [];
-    const clears = [];
-
-    const fakeDb = {
-        getWorkspaceId: async () => 'ws1',
-        getDominantWorkspaceId: async () => 'ws1',
-        getBoard: async () => {
-            if (opts.getBoard) return opts.getBoard();
-            return opts.board || Array.from(plans.values());
-        },
-        getPlanByPlanId: async (planId) => plans.get(planId) || null,
-        setCompletedAt: async (planId, timestamp) => {
-            if (opts.failSetCompletedAt && opts.failSetCompletedAt.has(planId)) {
-                return false;
+    await check('release endpoints and releaseCardInternal are deleted', () => {
+        assert.strictEqual(localApiServer.includes('/kanban/card/release'), false, 'card/release route must be absent');
+        assert.strictEqual(localApiServer.includes('/kanban/team/release'), false, 'team/release route must be absent');
+        assert.strictEqual(/\breleaseCardInternal\b/.test(localApiServer), false, 'releaseCardInternal must be deleted');
+        // `releasedAt` (the record field) is gone outright. `released_at`
+        // (the SQL column) survives ONLY inside historical migration bodies —
+        // the V77 ALTER that created it and the V81 backfill that reads it
+        // before dropping. Assert every occurrence sits inside one of those.
+        assert.strictEqual(/\breleasedAt\b/.test(kanbanDatabase), false, 'releasedAt record field must be gone');
+        assert.strictEqual(/\breleasedAt\b/.test(localApiServer), false, 'releasedAt record field must be gone');
+        const v81Start = kanbanDatabase.indexOf('_runMigrationV81');
+        const lines = kanbanDatabase.split('\n');
+        let offset = 0;
+        lines.forEach((line, i) => {
+            const lineStart = offset;
+            offset += line.length + 1;
+            if (!/\breleased_at\b/.test(line)) return;
+            const inV81 = v81Start > 0 && lineStart >= v81Start;
+            // A bare comment line is allowed only when it belongs to a comment
+            // block headed by a migration marker (`// V77:`-style).
+            let inMigrationComment = false;
+            for (let j = i; j >= 0 && /^\s*\/\//.test(lines[j]); j--) {
+                if (/^\s*\/\/\s*V\d{2}\b/.test(lines[j]) || /migrat/i.test(lines[j])) { inMigrationComment = true; break; }
             }
-            const p = plans.get(planId);
-            if (!p) return false;
-            p.completedAt = timestamp;
-            p.updatedAt = timestamp;
-            plans.set(planId, p);
-            return true;
-        },
-        // POST /kanban/team/release routes through releaseCardInternal, which
-        // writes `released_at` (NOT `completed_at`) and then clears the dispatch
-        // holder — the holder clear is the ONLY signal heldByTeam reads, so a
-        // stub missing these two makes every release report "not found" and the
-        // suite reads as a behaviour regression.
-        setReleasedAt: async (planId, timestamp) => {
-            if (opts.failSetReleasedAt && opts.failSetReleasedAt.has(planId)) {
-                return false;
-            }
-            const p = plans.get(planId);
-            if (!p || p.releasedAt) return false;
-            p.releasedAt = timestamp;
-            plans.set(planId, p);
-            return true;
-        },
-        setPlanOutcomeWorkflow: async () => true,
-        releaseDispatchHolder: async (planFile, workspaceId) => {
-            for (const p of plans.values()) {
-                if (p.planFile === planFile && p.workspaceId === workspaceId) {
-                    p.dispatchedTerminal = '';
-                    p.dispatchedAt = null;
-                }
-            }
-            return true;
-        },
-        appendPlanEventByPlanId: async (planId, event) => {
-            events.push({ planId, ...event });
-            return true;
-        },
-        ...(opts.db || {}),
-    };
-
-    const server = new LocalApiServer({
-        clickupMetadataPath: '',
-        linearMetadataPath: '',
-        getClickUpService: () => null,
-        getLinearService: () => null,
-        getNotionService: () => null,
-        getAuthToken: async () => 'test-token',
-        allRoots: [WS],
-        workspaceRoot: WS,
-        getKanbanDatabase: async () => fakeDb,
-        resolveTeamMembers: opts.resolveTeamMembers || (async () => ['Coding', 'Coder-1', 'Coder-2']),
-        resolveTeamPacing: opts.resolveTeamPacing || (async () => 'head'),
-        getRegisteredTerminals: opts.getRegisteredTerminals,
-        terminalVerb: opts.terminalVerb || (async (verb, body, root) => {
-            if (verb === 'ptyListTerminals') {
-                return {
-                    success: true,
-                    terminals: [
-                        { friendlyName: 'Coding', role: 'lead_coder' },
-                        { friendlyName: 'Coder-1', role: 'coder' },
-                        { friendlyName: 'Coder-2', role: 'coder' },
-                    ]
-                };
-            }
-            return { success: true };
-        }),
-        clearTerminalContext: opts.clearTerminalContext || (async (_ws, term) => {
-            clears.push(term);
-            return { cleared: true };
-        }),
-        armQueueWatch: async () => {},
+            const isMigrationContext = /migrat|V\d{2}|ALTER|INSERT INTO plan_events|SELECT|UPDATE|DROP COLUMN|state-migrated/i.test(line);
+            assert.ok(inV81 || isMigrationContext || inMigrationComment, `released_at outside migration code at line ${i + 1}: ${line.trim()}`);
+        });
     });
 
-    server.performKanbanDispatch = async (workspaceRoot, planId) => {
-        dispatched.push(planId);
-        return { status: 200, payload: { success: true, planId, dispatched: true } };
-    };
-
-    return { server, plans, events, dispatched, clears, fakeDb };
-}
-
-async function postRelease(server, body, authToken = 'test-token') {
-    // Guard 4 (cross-site) admits a non-browser caller only when it identifies
-    // itself with the client marker; without it every state-changing POST is
-    // refused 403 before the handler runs, and the whole suite reads as a
-    // behaviour regression rather than a stub that predates the guard.
-    const headers = { 'content-type': 'application/json', 'x-switchboard-client': 'contract-test' };
-    if (authToken !== undefined) {
-        headers['authorization'] = `Bearer ${authToken}`;
-    }
-    const req = {
-        method: 'POST',
-        url: '/kanban/team/release',
-        headers,
-        on: (event, cb) => {
-            if (event === 'data') {
-                cb(Buffer.from(JSON.stringify(body)));
-            } else if (event === 'end') {
-                cb();
-            }
-        },
-        socket: { destroy: () => {}, remoteAddress: '127.0.0.1' },
-    };
-    let status = 0;
-    let responseBody = null;
-    const res = {
-        writeHead: (code) => { status = code; },
-        // _wrapForCompression reads headers set before writeHead back off the
-        // response via res.getHeaders(). A stub without it throws before any
-        // handler runs, which reads as "every assertion in this suite failed"
-        // rather than "the harness is missing a method".
-        setHeader: () => {},
-        getHeader: () => undefined,
-        getHeaders: () => ({}),
-        removeHeader: () => {},
-        end: (data) => { responseBody = data ? JSON.parse(data) : null; },
-    };
-    await server._handleRequest(req, res);
-    return { status, body: responseBody };
-}
-
-async function postTaskComplete(server, body, authToken = 'test-token') {
-    // Guard 4 (cross-site) admits a non-browser caller only when it identifies
-    // itself with the client marker; without it every state-changing POST is
-    // refused 403 before the handler runs, and the whole suite reads as a
-    // behaviour regression rather than a stub that predates the guard.
-    const headers = { 'content-type': 'application/json', 'x-switchboard-client': 'contract-test' };
-    if (authToken !== undefined) {
-        headers['authorization'] = `Bearer ${authToken}`;
-    }
-    const req = {
-        method: 'POST',
-        url: '/kanban/task/complete',
-        headers,
-        on: (event, cb) => {
-            if (event === 'data') {
-                cb(Buffer.from(JSON.stringify(body)));
-            } else if (event === 'end') {
-                cb();
-            }
-        },
-        socket: { destroy: () => {}, remoteAddress: '127.0.0.1' },
-    };
-    let status = 0;
-    let responseBody = null;
-    const res = {
-        writeHead: (code) => { status = code; },
-        // _wrapForCompression reads headers set before writeHead back off the
-        // response via res.getHeaders(). A stub without it throws before any
-        // handler runs, which reads as "every assertion in this suite failed"
-        // rather than "the harness is missing a method".
-        setHeader: () => {},
-        getHeader: () => undefined,
-        getHeaders: () => ({}),
-        removeHeader: () => {},
-        end: (data) => { responseBody = data ? JSON.parse(data) : null; },
-    };
-    await server._handleRequest(req, res);
-    return { status, body: responseBody };
-}
-
-async function postTerminalVerb(server, verb, body, authToken = 'test-token') {
-    // Guard 4 (cross-site) admits a non-browser caller only when it identifies
-    // itself with the client marker; without it every state-changing POST is
-    // refused 403 before the handler runs, and the whole suite reads as a
-    // behaviour regression rather than a stub that predates the guard.
-    const headers = { 'content-type': 'application/json', 'x-switchboard-client': 'contract-test' };
-    if (authToken !== undefined) {
-        headers['authorization'] = `Bearer ${authToken}`;
-    }
-    const req = {
-        method: 'POST',
-        url: `/terminals/verb/${verb}`,
-        headers,
-        on: (event, cb) => {
-            if (event === 'data') {
-                cb(Buffer.from(JSON.stringify(body)));
-            } else if (event === 'end') {
-                cb();
-            }
-        },
-        socket: { destroy: () => {}, remoteAddress: '127.0.0.1' },
-    };
-    let status = 0;
-    let responseBody = null;
-    const res = {
-        writeHead: (code) => { status = code; },
-        // _wrapForCompression reads headers set before writeHead back off the
-        // response via res.getHeaders(). A stub without it throws before any
-        // handler runs, which reads as "every assertion in this suite failed"
-        // rather than "the harness is missing a method".
-        setHeader: () => {},
-        getHeader: () => undefined,
-        getHeaders: () => ({}),
-        removeHeader: () => {},
-        end: (data) => { responseBody = data ? JSON.parse(data) : null; },
-    };
-    await server._handleRequest(req, res);
-    return { status, body: responseBody };
-}
-
-async function run() {
-    console.log('\nteam-release-control contract tests\n');
-
-    // ── 1. Release set equals in-flight refusal set ──────────────────────────
-    await check('release set equals in-flight refusal set and unblocks queue/next', async () => {
-        const { server, plans, dispatched } = makeServer();
-        const card1 = card('held-card-1', 'CODER CODED', { dispatchedTerminal: 'Coder-1', routedTo: 'coder' });
-        const card2 = card('held-card-2', 'CODER CODED', { dispatchedTerminal: 'Coder-2', routedTo: 'coder' });
-        const staged = card('next-card', 'STAGING', { queuePosition: 1 });
-        plans.set('held-card-1', card1);
-        plans.set('held-card-2', card2);
-        plans.set('next-card', staged);
-
-        // First queue/next should 409 because team is in flight
-        const pre = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(pre.status, 409, 'queue/next refuses in-flight team');
-
-        // Operator release
-        const rel = await postRelease(server, { from: 'Coding' });
-        assert.strictEqual(rel.status, 200);
-        assert.strictEqual(rel.body.success, true);
-        assert.deepStrictEqual(rel.body.released.sort(), ['held-card-1', 'held-card-2'].sort());
-        assert.strictEqual(plans.get('held-card-1').completedAt !== null, true);
-        assert.strictEqual(plans.get('held-card-2').completedAt !== null, true);
-
-        // Second queue/next should succeed and pop next-card
-        const post = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(post.status, 200, 'queue/next succeeds after release');
-        assert.deepStrictEqual(dispatched, ['next-card']);
+    await check('no handler returns HTTP 409', () => {
+        // 409 is reserved for write-validation conflicts (version races,
+        // ambiguous close sets, shutdown flush), which are allowed; assert none
+        // of them sits inside the dispatch or queue-pop code paths.
+        const releaseArm = /pathname\s*===?\s*'\/kanban\/(?:card|team)\/release'/.test(localApiServer);
+        assert.strictEqual(releaseArm, false);
+        for (const fn of ['performKanbanDispatch', '_runQueuePop', '_runQueueDone']) {
+            const start = localApiServer.indexOf(fn);
+            assert.notStrictEqual(start, -1, `${fn} must exist`);
+            const next = localApiServer.indexOf('\n    private ', start + 1);
+            const body = localApiServer.slice(start, next === -1 ? undefined : next);
+            assert.strictEqual(/writeHead\(409/.test(body), false, `${fn} must not write 409`);
+        }
     });
 
-    // ── 2. Route ignores caller-supplied planIds ─────────────────────────────
-    await check('POST /kanban/team/release ignores caller-supplied planIds', async () => {
-        const { server, plans } = makeServer();
-        plans.set('card-a', card('card-a', 'CODER CODED', { dispatchedTerminal: 'Coder-1', routedTo: 'coder' }));
-        plans.set('unrelated-card', card('unrelated-card', 'CODER CODED', { dispatchedTerminal: 'OtherTeamCoder', routedTo: 'coder' }));
-
-        const res = await postRelease(server, { from: 'Coding', planId: 'unrelated-card', planIds: ['unrelated-card'] });
-        assert.strictEqual(res.status, 200);
-        assert.deepStrictEqual(res.body.released, ['card-a']);
-        assert.strictEqual(plans.get('unrelated-card').completedAt, null, 'unrelated card was NOT completed');
+    await check('the dispatch write carries no owner_seat claim', () => {
+        const fnStart = kanbanDatabase.indexOf('public async updateDispatchInfoByPlanFile(');
+        assert.notStrictEqual(fnStart, -1, 'updateDispatchInfoByPlanFile must exist');
+        const fnEnd = kanbanDatabase.indexOf('\n    /**', fnStart);
+        const body = kanbanDatabase.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+        assert.strictEqual(/WHERE\s+[^;]*owner_seat\s+IS\s+NULL/i.test(body), false,
+            'a conditional claim is a refusal wearing a different hat');
+        assert.ok(/completed_at\s*=\s*NULL/i.test(body), 'dispatch must reset completed_at unconditionally');
+        assert.ok(/owner_seat/.test(body) && /owner_since/.test(body), 'dispatch must stamp owner_seat + owner_since');
     });
 
-    // ── 3. Partial failure leaves other releases intact ──────────────────────
-    await check('partial failure in setCompletedAt reports in failed and completes rest', async () => {
-        const failSetCompletedAt = new Set(['bad-card']);
-        const { server, plans } = makeServer({ failSetCompletedAt });
-        plans.set('good-card', card('good-card', 'CODER CODED', { dispatchedTerminal: 'Coder-1', routedTo: 'coder' }));
-        plans.set('bad-card', card('bad-card', 'CODER CODED', { dispatchedTerminal: 'Coder-2', routedTo: 'coder' }));
-
-        const res = await postRelease(server, { from: 'Coding' });
-        assert.strictEqual(res.status, 200);
-        assert.deepStrictEqual(res.body.released, ['good-card']);
-        assert.strictEqual(res.body.failed.length, 1);
-        assert.strictEqual(res.body.failed[0].planId, 'bad-card');
-        assert.strictEqual(plans.get('good-card').completedAt !== null, true);
-        assert.strictEqual(plans.get('bad-card').completedAt, null);
+    await check('checkpoint is a plan_events event type, never a column', () => {
+        const freshPlansDdl = (kanbanDatabase.match(/CREATE TABLE IF NOT EXISTS plans \([\s\S]*?\)/) || [''])[0];
+        assert.strictEqual(/\bcheckpoint\b/.test(freshPlansDdl), false, 'checkpoint must not be a plans column');
+        assert.ok(/'checkpoint'/.test(verbSchemas) || /\bcheckpoint:\s*\{/.test(verbSchemas), 'checkpoint verb schema must exist');
+        assert.ok(/case 'checkpoint'/.test(kanbanProvider), 'checkpoint provider arm must exist');
+        assert.ok(/appendCheckpointEvent/.test(kanbanDatabase), 'checkpoint write must exist');
     });
 
-    // ── 4. Workflow marker: 'operator-release' vs 'task-complete' ───────────
-    await check('plan_events records workflow: operator-release vs task-complete', async () => {
-        const { server, plans, events } = makeServer();
-        plans.set('op-card', card('op-card', 'CODER CODED', { dispatchedTerminal: 'Coder-1', routedTo: 'coder' }));
-        // lead-card is NOT held by a team member — only task/complete touches it,
-        // so its event records workflow 'task-complete', not 'operator-release'.
-        plans.set('lead-card', card('lead-card', 'CODER CODED', { dispatchedTerminal: 'Unaffiliated', routedTo: 'coder' }));
+    // ── The migration itself (V77/V80 → V81) ─────────────────────────────
+    // The drops are only real for a database that SHIPPED with the columns. A
+    // fresh DB never had them, so this rewinds a real file to a pre-V81 shape
+    // and proves V81 backfills owner_seat, preserves the doomed values as
+    // `state-migrated-v81` events (one per affected card, count asserted), and
+    // then drops the columns.
 
-        await postRelease(server, { from: 'Coding' });
-        await postTaskComplete(server, { from: 'Coding', planId: 'lead-card' });
+    await check('V81 migrates a pre-V81 board: owner_seat backfilled, one event per affected card, columns dropped', async () => {
+        const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-v81-mig-'));
+        try {
+            await fs.promises.mkdir(path.join(root, '.switchboard'), { recursive: true });
+            const db = KanbanDatabase.forWorkspace(root);
+            await db.createIfMissing();
+            const wsId = (await db.getWorkspaceId()) || '';
+            const boardPath = db.dbPath;
+            db.dispose();
 
-        const opEv = events.find(e => e.planId === 'op-card');
-        const leadEv = events.find(e => e.planId === 'lead-card');
+            rewindToV80(boardPath, wsId, { dropRuntime: false });
 
-        assert.ok(opEv, 'operator release event exists');
-        assert.strictEqual(opEv.workflow, 'operator-release');
-        assert.strictEqual(opEv.eventType, 'completed');
-
-        assert.ok(leadEv, 'task complete event exists');
-        assert.strictEqual(leadEv.workflow, 'task-complete');
-        assert.strictEqual(leadEv.eventType, 'completed');
+            const migrated = KanbanDatabase.forWorkspace(root);
+            assert.strictEqual(await migrated.ensureReady(), true, 'the rewound board must open');
+            // The runtime dispatched_terminal wins over the plans copy (the
+            // runtime row is the live record).
+            assertV81Applied(migrated, { expectedOwnerSeat: 'Coder 2', expectQueuePositionFolded: true });
+            await KanbanDatabase.invalidateWorkspace(root);
+        } finally {
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
     });
 
-    // ── 5. Shared completeCardInternal called by both routes ─────────────────
-    await check('shared completeCardInternal helper is called by task/complete and team/release', async () => {
-        const { server, plans } = makeServer();
-        plans.set('card-1', card('card-1', 'CODER CODED', { dispatchedTerminal: 'Coder-1', routedTo: 'coder' }));
-        plans.set('card-2', card('card-2', 'CODER CODED', { dispatchedTerminal: 'Coder-2', routedTo: 'coder' }));
+    await check('V81 migrates from plans directly when there is no runtime dispatch column (pre-V74 shape)', async () => {
+        const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-v81-mig-pre74-'));
+        try {
+            await fs.promises.mkdir(path.join(root, '.switchboard'), { recursive: true });
+            const db = KanbanDatabase.forWorkspace(root);
+            await db.createIfMissing();
+            const wsId = (await db.getWorkspaceId()) || '';
+            const boardPath = db.dbPath;
+            db.dispose();
 
-        const origComplete = server.completeCardInternal.bind(server);
-        const calls = [];
-        server.completeCardInternal = async (db, planId, from, opts) => {
-            calls.push({ planId, from, workflow: opts.workflow });
-            return await origComplete(db, planId, from, opts);
-        };
+            rewindToV80(boardPath, wsId, { dropRuntime: true });
 
-        await postTaskComplete(server, { from: 'Coding', planId: 'card-1' });
-        await postRelease(server, { from: 'Coding' });
-
-        assert.strictEqual(calls.length, 2, 'both routes invoke completeCardInternal');
-        assert.strictEqual(calls[0].planId, 'card-1');
-        assert.strictEqual(calls[0].workflow, 'task-complete');
-        assert.strictEqual(calls[1].planId, 'card-2');
-        assert.strictEqual(calls[1].workflow, 'operator-release');
+            const migrated = KanbanDatabase.forWorkspace(root);
+            assert.strictEqual(await migrated.ensureReady(), true, 'the rewound board must open');
+            assertV81Applied(migrated, { expectedOwnerSeat: 'Coder 1', expectQueuePositionFolded: true });
+            await KanbanDatabase.invalidateWorkspace(root);
+        } finally {
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
     });
 
-    // ── 6. clearTerminalContext cleared for coder seats, lead skipped ───────
-    await check('operator release clears coding seat context via clearTerminalContext', async () => {
-        const { server, plans, clears } = makeServer();
-        plans.set('coder-card', card('coder-card', 'CODER CODED', { dispatchedTerminal: 'Coder-1', routedTo: 'coder' }));
+    await check('kanban-archive.db migrates to V81 and stays readable', async () => {
+        const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-v81-archive-'));
+        try {
+            await fs.promises.mkdir(path.join(root, '.switchboard'), { recursive: true });
+            // A board must exist so the archive path resolves consistently.
+            const board = KanbanDatabase.forWorkspace(root);
+            await board.createIfMissing();
+            const wsId = (await board.getWorkspaceId()) || '';
+            board.dispose();
 
-        await postRelease(server, { from: 'Coding' });
-        assert.deepStrictEqual(clears, ['Coder-1'], 'Coder-1 context cleared, Coding head skipped');
+            const cold = KanbanDatabase.getArchiveInstance(root);
+            await cold.createIfMissing();
+            const archivePath = cold.dbPath;
+            cold.dispose();
+
+            rewindToV80(archivePath, wsId, { dropRuntime: false });
+
+            const cold2 = KanbanDatabase.getArchiveInstance(root);
+            assert.strictEqual(await cold2.ensureReady(), true, 'the rewound archive must open');
+            assertV81Applied(cold2, { expectedOwnerSeat: 'Coder 2', expectQueuePositionFolded: true });
+            // Stays readable: a plan read resolves the row after the drops.
+            const rec = await cold2.getPlanByPlanId('held');
+            assert.ok(rec, 'the archived row is still readable after V81');
+            assert.strictEqual(rec.ownerSeat, 'Coder 2', 'the advisory owner survives on the archive');
+            cold2.dispose();
+        } finally {
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
     });
 
-    // ── 7. heldUnposted in ptyListTerminals ──────────────────────────────────
-    await check('ptyListTerminals returns heldUnposted per-terminal map', async () => {
-        const { server, plans } = makeServer();
-        plans.set('c1', card('c1', 'CODER CODED', { dispatchedTerminal: 'Coder-1' }));
-        plans.set('c2', card('c2', 'CODER CODED', { dispatchedTerminal: 'Coder-1' }));
-        plans.set('c3', card('c3', 'CODER CODED', { dispatchedTerminal: 'Coder-2' }));
-        plans.set('c4', card('c4', 'CODER CODED', { dispatchedTerminal: 'Coder-2', completedAt: '2026-08-29T00:00:00Z' }));
+    // ── The dispatch write resets state and keeps history ────────────────
 
-        const res = await postTerminalVerb(server, 'ptyListTerminals', {});
-        assert.strictEqual(res.status, 200);
-        assert.ok(res.body.heldUnposted, 'heldUnposted map present');
-        assert.strictEqual(res.body.heldUnposted['Coder-1'], 2);
-        assert.strictEqual(res.body.heldUnposted['Coder-2'], 1);
-        assert.strictEqual(res.body.heldUnposted['Coding'], undefined);
-    });
+    await check('re-dispatching a completed card resets completed_at and appends history', async () => {
+        const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-v81-reset-'));
+        try {
+            await fs.promises.mkdir(path.join(root, '.switchboard'), { recursive: true });
+            const db = KanbanDatabase.forWorkspace(root);
+            await db.createIfMissing();
+            const wsId = (await db.getWorkspaceId()) || '';
+            const planFile = '.switchboard/plans/re-dispatch.md';
+            await db.upsertPlans([{
+                planId: 're-dispatch', sessionId: 're-dispatch-sess', topic: 're-dispatch',
+                planFile, kanbanColumn: 'CODER CODED', status: 'active', complexity: 'Unknown',
+                tags: '', repoScope: '', project: '', workspaceId: wsId,
+                createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+                lastAction: 'created', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
+                completedAt: '2026-01-02T00:00:00.000Z',
+            }]);
 
-    // ── 8. heldByTeam module-level helper takes teamSet ─────────────────────
-    await check('heldByTeam helper correctly evaluates card and teamSet parameter', async () => {
-        const teamSet = new Set(['Coding', 'Coder-1']);
-        const uncompletedHeld = { completedAt: null, dispatchedTerminal: 'Coder-1' };
-        const completedHeld = { completedAt: '2026-08-29', dispatchedTerminal: 'Coder-1' };
-        const otherHeld = { completedAt: null, dispatchedTerminal: 'Other' };
-        const emptyHeld = { completedAt: null, dispatchedTerminal: '' };
+            const ok = await db.updateDispatchInfoByPlanFile(planFile, wsId, {
+                ownerSeat: 'Coder 1', dispatchedAgent: 'agent-x', dispatchedIde: 'ide-y',
+            });
+            assert.strictEqual(ok, true, 'the dispatch write must succeed');
 
-        assert.strictEqual(heldByTeam(uncompletedHeld, teamSet), true);
-        assert.strictEqual(heldByTeam(completedHeld, teamSet), false);
-        assert.strictEqual(heldByTeam(otherHeld, teamSet), false);
-        assert.strictEqual(heldByTeam(emptyHeld, teamSet), false);
-        assert.strictEqual(heldByTeam(null, teamSet), false);
-    });
-
-    // ── 9. terminals.html and terminals.js source contract checks ───────────
-    await check('terminals.html and terminals.js contract assertions', async () => {
-        // The panel's bulk CSS lives in a linked src/webview/terminals.css (extracted for
-        // cacheability, plan: the-terminals-panel-costs-a-megabyte-and-a-half). The two files
-        // are one authored surface, so style assertions read both: a rule that MOVED still
-        // passes, and a rule that was supposed to DIE still fails if it survived in the CSS.
-        const html = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.html'), 'utf8')
-            + '\n' + fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.css'), 'utf8');
-        const js = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.js'), 'utf8');
-
-        // HTML button is no longer ACKNOWLEDGE COMPLETIONS
-        assert.ok(!html.includes('ACKNOWLEDGE COMPLETIONS'), 'ACKNOWLEDGE COMPLETIONS removed from terminals.html');
-        assert.ok(html.includes('id="btn-team-ack"'), 'btn-team-ack present in terminals.html');
-
-        // terminals.js visibility and label: RELEASE ${heldCount} HELD CARD...
-        assert.ok(js.includes('RELEASE ${heldCount} HELD CARD'), 'dynamic count label in terminals.js');
-        assert.ok(js.includes('btnTeamAck.hidden = !teamScopeId || heldCount === 0'), 'hidden when count is 0 in terminals.js');
-
-        // terminals.js click listener calls releaseTeamHeldCards
-        assert.ok(js.includes("btnTeamAck.addEventListener('click', () => releaseTeamHeldCards())"), 'click listener wired to releaseTeamHeldCards');
-        assert.ok(js.includes('/kanban/team/release'), 'POSTs to /kanban/team/release');
-
-        // clearTeamBadges still exists for bulk callers
-        assert.ok(js.includes('function clearTeamBadges()'), 'clearTeamBadges preserved');
+            const row = db.getDriver().all(
+                "SELECT owner_seat, completed_at FROM plans WHERE plan_id='re-dispatch'"
+            )[0];
+            assert.strictEqual(String(row.owner_seat), 'Coder 1', 'the dispatch stamps the advisory owner');
+            assert.strictEqual(row.completed_at, null,
+                'a new dispatch must reset completed_at so a prior completion cannot survive');
+            const events = db.getDriver().all(
+                "SELECT event_type FROM plan_events WHERE plan_id='re-dispatch' AND event_type='dispatched'"
+            );
+            assert.ok(events.length >= 1, 'the dispatch appends a dispatched event — history is never deleted');
+            await KanbanDatabase.invalidateWorkspace(root);
+        } finally {
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
     });
 
     if (failures > 0) {
-        console.error(`\n❌ ${failures} test(s) failed\n`);
+        console.log(`\n${failures} check(s) failed`);
         process.exit(1);
-    } else {
-        console.log('\nAll team-release-control contract tests passed!\n');
     }
+    console.log('\nAll checks passed');
 }
 
-run().catch(err => {
-    console.error(err);
-    process.exit(1);
-});
+main().catch(err => { console.error(err); process.exit(1); });

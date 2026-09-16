@@ -1315,14 +1315,16 @@ test('three fixed team slots in the rail and showStripToast kept alive', () => {
 });
 
 test('dispatched state reaches the rail and is rendered as a shape indicator', () => {
-    // 1. resolveTeamInFlight exported from LocalApiServer.ts
+    // 1. resolveTeamInFlight is DELETED. V81 removed the in-flight concept: the
+    //    board never refuses a dispatch, so there is no "is this team busy" gate
+    //    to export. Asserting its absence keeps it from being reintroduced.
     const localApiServerTs = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');
-    assert.ok(localApiServerTs.includes('export async function resolveTeamInFlight('),
-        'resolveTeamInFlight must be exported from LocalApiServer.ts');
+    assert.ok(!localApiServerTs.includes('resolveTeamInFlight'),
+        'resolveTeamInFlight must NOT exist — the in-flight gate was deleted in V81');
 
-    // 2. GET /terminals/teams/<groupId>/queue includes inFlight
-    assert.ok(localApiServerTs.includes('const check = await resolveTeamInFlight(db, roster);'),
-        'GET /terminals/teams/<groupId>/queue must check resolveTeamInFlight');
+    // 2. The queue read must not consult an in-flight check either.
+    assert.ok(!localApiServerTs.includes('const check = await resolveTeamInFlight(db, roster);'),
+        'GET /terminals/teams/<groupId>/queue must not check team in-flight state');
     assert.ok(localApiServerTs.includes('res.end(JSON.stringify({ ...result, inFlight }));'),
         'GET /terminals/teams/<groupId>/queue must include inFlight in response');
 

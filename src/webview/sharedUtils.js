@@ -670,3 +670,287 @@ function initOverflowMenus() {
         btn.addEventListener('animationend', () => btn.classList.remove('sb-click-flash'), { once: true });
     }, true);
 })();
+
+// ── Agent-control model providers ────────────────────────────────────────
+// ONE definition of the provider table, read by BOTH agent-control surfaces
+// (dock.js and command.js). They each render their own copy of the config row,
+// so a table defined twice is a table that drifts — and nothing would catch a
+// model list that gained an entry on the dock and not on the phone.
+//
+// `endpoint` is the URL the board POSTs to verbatim: a full chat-completions
+// path, because _callModelForAction appends nothing. Providers whose URL is
+// fixed are not editable; local/custom supply their own.
+(function () {
+    'use strict';
+
+    /** Sentinel <option> value meaning "let me type a model name". */
+    const CUSTOM_MODEL = '__custom__';
+
+    const PROVIDERS = [
+        {
+            id: 'google',
+            label: 'Google (free tier)',
+            // Google's OpenAI-COMPATIBILITY path. The native Gemini endpoint
+            // (…/models/<m>:generateContent) authenticates with x-goog-api-key,
+            // takes a `contents` body and returns candidates[].content.parts[] —
+            // three mismatches with what the board sends and reads.
+            endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+            endpointEditable: false,
+            needsKey: true,
+            // BARE ids — Google's own API, no vendor prefix and no ':free'
+            // suffix. The OpenRouter block below lists the SAME model families
+            // under 'google/…:free', and the two forms are not interchangeable:
+            // Google rejects a prefixed id, and OpenRouter bills the unsuffixed
+            // one. Do not copy an id between these two lists.
+            models: [
+                { id: 'gemma-4-31b-it', label: 'Gemma 4 31B' },
+                { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite' },
+            ],
+        },
+        {
+            id: 'openrouter',
+            label: 'OpenRouter (free tier)',
+            endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+            endpointEditable: false,
+            needsKey: true,
+            // The `:free` SUFFIX is load-bearing: `google/gemma-4-31b-it` and
+            // `google/gemma-4-31b-it:free` are both real models on OpenRouter and
+            // only the suffixed one is free. Dropping it bills the account
+            // silently — the call succeeds either way, which is exactly the kind
+            // of wrong-but-plausible value that never announces itself.
+            // Verified against GET https://openrouter.ai/api/v1/models
+            // (pricing.prompt === '0') on 2026-09-16.
+            models: [
+                { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (free)' },
+                { id: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B A4B (free)' },
+                { id: 'nvidia/nemotron-3.5-lightning:free', label: 'Nemotron 3.5 Lightning (free)' },
+                { id: 'thinkingmachines/inkling-small:free', label: 'Inkling Small (free)' },
+            ],
+        },
+        {
+            id: 'local',
+            label: 'Local server',
+            endpoint: '',
+            endpointEditable: true,
+            // No key field and no key SENT: a local server that ignores an
+            // Authorization header is the lucky case; one that rejects it is a
+            // failure nobody would connect to a key they never typed.
+            needsKey: false,
+            // null (not []) means "no model control at all" — the local server
+            // decides. An empty model is legal for this provider only.
+            models: null,
+        },
+        {
+            id: 'custom',
+            label: 'Custom endpoint',
+            endpoint: '',
+            endpointEditable: true,
+            needsKey: true,
+            // [] means "no preset list, free-text only".
+            models: [],
+        },
+    ];
+
+    const byId = id => PROVIDERS.find(p => p.id === id) || null;
+
+    /**
+     * Map a stored endpoint back to its provider, so a config written before
+     * the provider dropdown existed renders as the provider it actually is
+     * rather than as an empty form. Returns a TAGGED result — `matched` says
+     * whether the endpoint was recognised, so "we know this is Google" is
+     * never indistinguishable from "we defaulted to Google".
+     */
+    function inferFromEndpoint(endpoint) {
+        const url = String(endpoint || '').trim();
+        if (!url) { return { providerId: null, matched: false, reason: 'no endpoint stored' }; }
+        const hit = PROVIDERS.find(p => p.endpoint && p.endpoint === url);
+        if (hit) { return { providerId: hit.id, matched: true, reason: 'exact endpoint match' }; }
+        // A localhost/LAN URL is a local server; anything else is custom. Both
+        // are endpoint-editable, so a wrong guess here is visible and fixable
+        // in the field itself rather than hidden behind a fixed URL.
+        const isLoopback = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|192\.168\.|10\.)/i.test(url);
+        return {
+            providerId: isLoopback ? 'local' : 'custom',
+            matched: false,
+            reason: isLoopback ? 'loopback/LAN URL, assumed local server' : 'unrecognised URL, treated as custom',
+        };
+    }
+
+    window.SwitchboardAgentProviders = {
+        list: () => PROVIDERS.slice(),
+        byId,
+        inferFromEndpoint,
+        CUSTOM_MODEL,
+    };
+})();
+
+// ── Agent-control provider row controller ────────────────────────────────
+// The config row's BEHAVIOUR, shared by dock.js and command.js for the same
+// reason the table above is: two copies of "which field is visible for which
+// provider" is two chances to disagree, on the surface nobody tests from.
+(function () {
+    'use strict';
+    const P = window.SwitchboardAgentProviders;
+    if (!P) { return; }
+
+    /**
+     * @param els {{provider, endpoint, endpointLabel, modelSelect, modelInput,
+     *              modelLabel, key, keyLabel}} — any may be null.
+     */
+    function create(els) {
+        const show = (el, on) => { if (el) { el.style.display = on ? '' : 'none'; } };
+        // Every provider's saved row, from GET /agent/control/config. Switching
+        // the dropdown reads from here, so a fully-configured operator can move
+        // between providers without retyping anything.
+        let savedRows = {};
+
+        function currentProvider() {
+            return P.byId(els.provider && els.provider.value) || null;
+        }
+
+        function fillProviders() {
+            if (!els.provider || els.provider.options.length) { return; }
+            for (const p of P.list()) {
+                const o = document.createElement('option');
+                o.value = p.id;
+                o.textContent = p.label;
+                els.provider.appendChild(o);
+            }
+        }
+
+        function fillModels(providerId, selected) {
+            if (!els.modelSelect) { return; }
+            const prov = P.byId(providerId);
+            els.modelSelect.innerHTML = '';
+            if (!prov || !Array.isArray(prov.models) || !prov.models.length) { return; }
+            for (const m of prov.models) {
+                const o = document.createElement('option');
+                o.value = m.id;
+                o.textContent = m.label;
+                els.modelSelect.appendChild(o);
+            }
+            const custom = document.createElement('option');
+            custom.value = P.CUSTOM_MODEL;
+            custom.textContent = 'Custom model name…';
+            els.modelSelect.appendChild(custom);
+            // A stored model outside the preset list is not an error and must not
+            // be silently swapped for a preset — it selects the custom arm and
+            // keeps its own value in the text field.
+            if (selected && prov.models.some(m => m.id === selected)) {
+                els.modelSelect.value = selected;
+            } else if (selected) {
+                els.modelSelect.value = P.CUSTOM_MODEL;
+            }
+        }
+
+        /** Apply the visibility rules for the selected provider. */
+        function render() {
+            const prov = currentProvider();
+            if (!prov) { return; }
+            const hasList = Array.isArray(prov.models) && prov.models.length > 0;
+            const noModelAtAll = prov.models === null;
+            const customPicked = !hasList || (els.modelSelect && els.modelSelect.value === P.CUSTOM_MODEL);
+
+            show(els.endpoint, prov.endpointEditable);
+            show(els.endpointLabel, prov.endpointEditable);
+            if (els.endpointLabel) {
+                els.endpointLabel.textContent = prov.id === 'local' ? 'Server URL' : 'Endpoint URL';
+            }
+            if (els.endpoint) {
+                els.endpoint.placeholder = prov.id === 'local'
+                    ? 'http://localhost:…/v1/chat/completions'
+                    : 'https://…/v1/chat/completions';
+            }
+
+            show(els.modelSelect, hasList);
+            show(els.modelInput, !noModelAtAll && customPicked);
+            show(els.modelLabel, !noModelAtAll);
+
+            show(els.key, prov.needsKey);
+            show(els.keyLabel, prov.needsKey);
+        }
+
+        /**
+         * Put provider `id`'s SAVED values into the fields. Called on every
+         * provider change: each provider owns its own endpoint, model and key,
+         * so switching recalls that row rather than clearing or reusing fields.
+         */
+        function loadProviderRecord(id) {
+            const prov = P.byId(id);
+            const saved = savedRows[id] || {};
+            if (els.endpoint && document.activeElement !== els.endpoint) {
+                els.endpoint.value = prov && prov.endpointEditable ? (saved.endpoint || '') : '';
+            }
+            fillModels(id, saved.model || '');
+            if (els.modelInput && document.activeElement !== els.modelInput) {
+                els.modelInput.value = saved.model || '';
+            }
+            if (els.key) {
+                els.key.value = '';
+                els.key.placeholder = saved.keySet
+                    ? 'API key is set for this provider (write-only — type to replace)'
+                    : 'API key (unset for this provider)';
+            }
+        }
+
+        /** Seed the row from GET /agent/control/config. */
+        function applyConfig(cfg) {
+            fillProviders();
+            let providerId = cfg.provider || '';
+            // providerSource 'unset' means nobody chose one — infer from the
+            // stored endpoint so a config written before this row existed opens
+            // as what it IS, not as whichever provider sorts first.
+            if (!providerId || cfg.providerSource === 'unset') {
+                const guess = P.inferFromEndpoint(cfg.endpoint);
+                providerId = guess.providerId || 'google';
+            }
+            savedRows = (cfg && cfg.providers) || {};
+            if (els.provider) { els.provider.value = providerId; }
+            loadProviderRecord(providerId);
+            render();
+        }
+
+        /** The {provider, endpoint, model} half of the POST body. */
+        function payload() {
+            const prov = currentProvider();
+            if (!prov) { return {}; }
+            const out = { provider: prov.id };
+            out.endpoint = prov.endpointEditable
+                ? (els.endpoint ? els.endpoint.value.trim() : '')
+                : prov.endpoint;
+            if (prov.models === null) {
+                out.model = '';                       // local server names its own
+            } else if (Array.isArray(prov.models) && prov.models.length
+                       && els.modelSelect && els.modelSelect.value !== P.CUSTOM_MODEL) {
+                out.model = els.modelSelect.value;
+            } else {
+                out.model = els.modelInput ? els.modelInput.value.trim() : '';
+            }
+            return out;
+        }
+
+        /** True when this provider takes no key — the caller skips the key field. */
+        function needsKey() {
+            const prov = currentProvider();
+            return !!(prov && prov.needsKey);
+        }
+
+        if (els.provider) {
+            els.provider.addEventListener('change', () => {
+                // Switching provider RECALLS that provider's saved config — its
+                // own model, its own URL, its own key. Nothing is cleared and
+                // nothing is carried across: each provider owns its own record,
+                // so a fully-configured set can be switched between freely
+                // without retyping anything.
+                loadProviderRecord(els.provider.value);
+                render();
+            });
+        }
+        if (els.modelSelect) { els.modelSelect.addEventListener('change', render); }
+
+        fillProviders();
+        return { applyConfig, payload, render, needsKey };
+    }
+
+    window.SwitchboardAgentProviderRow = { create };
+})();

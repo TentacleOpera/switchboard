@@ -191,6 +191,10 @@ function makeProvider({ groups = [], agentNames = {} } = {}) {
     };
     const provider = Object.create(KanbanProvider.prototype);
     provider._getKanbanDb = () => db;
+    // `Object.create` bypasses class field initializers, so the production
+    // default `_lastCards = []` never runs. `_advanceCards` reads it for the
+    // per-card direction classification; restore the production default.
+    provider._lastCards = [];
     provider._getAgentNames = async () => agentNames;
     provider._context = {
         globalState: { get: () => undefined, update: async () => {} },
@@ -277,13 +281,14 @@ function testCapAndRemainder() {
     const starred = makeOrderablePlans(12, i => ({ columnOrder: i, priorityStarred: i === 12 ? 1 : 0 }));
     assert.strictEqual(provider.selectTeamBatchPlans(starred).sent[0].planId, 'plan12', 'A starred card leads the sent set');
 
-    // STAGING reads queue_position instead, and column_order is ignored there.
-    const staged = makeOrderablePlans(12, i => ({ column: 'STAGING', queuePosition: 13 - i, columnOrder: i }));
+    // V81: STAGING uses column_order like every other column — queue_position
+    // was folded into it, so there is one ordering, not two.
+    const staged = makeOrderablePlans(12, i => ({ column: 'STAGING', columnOrder: 13 - i }));
     const stagedPick = provider.selectTeamBatchPlans(staged);
     assert.deepStrictEqual(
         stagedPick.sent.map(p => p.planId),
         ['plan12', 'plan11', 'plan10', 'plan9', 'plan8'],
-        'STAGING must send the head of the staged queue'
+        'STAGING must send the head of the staged queue by column_order'
     );
 
     // A set at or under the cap is sent whole.

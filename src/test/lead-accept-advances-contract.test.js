@@ -62,9 +62,9 @@ function card(planId, extra = {}) {
         topic: planId,
         kanbanColumn: 'CODER CODED',
         featureId: 'feat-1',
-        dispatchedAt: null,
-        dispatchedTerminal: '',
-        queuePosition: null,
+        ownerSeat: '',
+        ownerSince: null,
+        columnOrder: null,
         completedAt: null,
         isFeature: false,
         ...extra,
@@ -79,9 +79,10 @@ function round(opts) {
         teamId: opts.teamId || 'team_Coding',
         workspaceId: 'ws1',
         ordinal: opts.ordinal,
-        totalRegistered: opts.subtaskSeats ? Object.keys(opts.subtaskSeats).length : 0,
+        totalRegistered: opts.subtaskPlanIds ? opts.subtaskPlanIds.length : 0,
         state: opts.state || 'registered',
-        subtaskSeats: opts.subtaskSeats || {},
+        // V81: `subtask_seats` was reduced to the plan-id list a round dispatched.
+        subtaskPlanIds: opts.subtaskPlanIds || [],
         registeredAt: '2026-09-14T00:00:00Z',
         dispatchedAt: opts.dispatchedAt || null,
         closedAt: opts.closedAt || null,
@@ -153,11 +154,12 @@ function makeServer(opts = {}) {
             r.closedAt = closedAt;
             return true;
         },
-        updateCodingRoundAfterDispatch: async (roundId, subtaskSeatsJson, state, dispatchedAt) => {
+        updateCodingRoundAfterDispatch: async (roundId, dispatchedAt) => {
             const r = rounds.get(roundId);
             if (!r) return false;
-            r.subtaskSeats = JSON.parse(subtaskSeatsJson);
-            r.state = state;
+            // V81: the round row carries only the ordered plan-id list and its
+            // state; the per-subtask delivery ledger is gone.
+            r.state = 'dispatched';
             if (dispatchedAt) r.dispatchedAt = dispatchedAt;
             roundDispatchCount++;
             return true;
@@ -233,17 +235,17 @@ async function postAccept(server, body, authToken) {
 function seedTwoRoundFeature(ctx) {
     const { plans, rounds } = ctx;
     plans.set('feat-1', card('feat-1', { isFeature: true, featureId: 'feat-1', kanbanColumn: 'CREATED' }));
-    plans.set('subA', card('subA', { dispatchedTerminal: 'Coder-1' }));
-    plans.set('subB', card('subB', { dispatchedTerminal: 'Coder-2' }));
-    plans.set('subC', card('subC', { dispatchedTerminal: '' }));
+    plans.set('subA', card('subA', { ownerSeat: 'Coder-1' }));
+    plans.set('subB', card('subB', { ownerSeat: 'Coder-2' }));
+    plans.set('subC', card('subC', { ownerSeat: '' }));
     rounds.set('r1', round({
         roundId: 'r1', ordinal: 1, state: 'dispatched',
-        subtaskSeats: { subA: { seat: 'Coder-1', delivered: true, delivered_at: '2026-09-14T00:00:01Z' }, subB: { seat: 'Coder-2', delivered: true, delivered_at: '2026-09-14T00:00:02Z' } },
+        subtaskPlanIds: ['subA', 'subB'],
         dispatchedAt: '2026-09-14T00:00:01Z',
     }));
     rounds.set('r2', round({
         roundId: 'r2', ordinal: 2, state: 'registered',
-        subtaskSeats: { subC: { seat: '', delivered: false, delivered_at: null } },
+        subtaskPlanIds: ['subC'],
     }));
 }
 
@@ -294,7 +296,6 @@ async function run() {
         ctx.rounds.get('r1').closedAt = '2026-09-14T00:20:00Z';
         ctx.rounds.get('r2').state = 'dispatched';
         ctx.rounds.get('r2').dispatchedAt = '2026-09-14T00:20:01Z';
-        ctx.rounds.get('r2').subtaskSeats.subC = { seat: 'Coder-1', delivered: true, delivered_at: '2026-09-14T00:20:02Z' };
         ctx.plans.get('subA').completedAt = '2026-09-14T00:10:00Z';
         ctx.plans.get('subB').completedAt = '2026-09-14T00:15:00Z';
 
@@ -325,7 +326,6 @@ async function run() {
         seedTwoRoundFeature(ctx);
         ctx.rounds.get('r1').state = 'closed';
         ctx.rounds.get('r2').state = 'dispatched';
-        ctx.rounds.get('r2').subtaskSeats.subC = { seat: 'Coder-1', delivered: true, delivered_at: '2026-09-14T00:20:02Z' };
         ctx.plans.get('subA').completedAt = '2026-09-14T00:10:00Z';
         ctx.plans.get('subB').completedAt = '2026-09-14T00:15:00Z';
 
@@ -391,7 +391,7 @@ async function run() {
     await check('a lead whose team has no registered rounds gets today\u2019s behaviour exactly', async () => {
         const ctx = makeServer();
         // No rounds registered.
-        ctx.plans.set('plan-x', card('plan-x', { dispatchedTerminal: 'Coder-1' }));
+        ctx.plans.set('plan-x', card('plan-x', { ownerSeat: 'Coder-1' }));
 
         const r = await postAccept(ctx.server, { from: 'Coding', planId: 'plan-x', workspaceRoot: WS }, 'test-token');
         assert.strictEqual(r.status, 200);

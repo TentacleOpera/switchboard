@@ -598,7 +598,10 @@ test('all at-rest clear paths route through clearSeatAtRest, not inline clearTer
     const lapi = read('src/services/LocalApiServer.ts');
     // Each of the five at-rest paths must call clearSeatAtRest, not inline
     // clearTerminalContext. The reason tag identifies which caller asked.
-    for (const reason of ['completeCardInternal', 'releaseCardInternal', 'round-complete', 'feature-complete', 'queue-done']) {
+    // 'releaseCardInternal' is gone: V81 deleted the release valve along with the
+    // in-flight gate it existed to work around. The remaining four at-rest paths
+    // still route through clearSeatAtRest.
+    for (const reason of ['completeCardInternal', 'round-complete', 'feature-complete', 'queue-done']) {
         assert.ok(
             new RegExp(`clearSeatAtRest\\(workspaceRoot, [^,]+, [^,]+, '${reason}'`).test(lapi),
             `the '${reason}' path must call clearSeatAtRest with its reason tag`

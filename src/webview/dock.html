@@ -476,15 +476,20 @@
             <select id="agent-control-card-select" aria-label="Card"></select>
             <select id="agent-control-column-select" aria-label="Target column"></select>
         </div>
-        <!-- The surface's own config: endpoint, model and key are set HERE,
+        <!-- The surface's own config: provider, model and key are set HERE,
              not via a repurposed startup command or an env var. The key field
-             is write-only — it renders set/unset and never echoes the value. -->
+             is write-only — it renders set/unset and never echoes the value.
+             Which of these fields applies to which provider is decided by the
+             shared controller in sharedUtils.js, not here and not in dock.js. -->
         <div class="agent-control-config">
-            <label for="agent-control-endpoint">Model endpoint</label>
-            <input type="text" id="agent-control-endpoint" placeholder="https://… (unset)" />
-            <label for="agent-control-model">Model</label>
-            <input type="text" id="agent-control-model" placeholder="model name (unset)" />
-            <label for="agent-control-key">API key</label>
+            <label for="agent-control-provider">Provider</label>
+            <select id="agent-control-provider"></select>
+            <label for="agent-control-endpoint" id="agent-control-endpoint-label">Server URL</label>
+            <input type="text" id="agent-control-endpoint" placeholder="http://… (unset)" />
+            <label for="agent-control-model-select" id="agent-control-model-label">Model</label>
+            <select id="agent-control-model-select"></select>
+            <input type="text" id="agent-control-model" placeholder="model name" />
+            <label for="agent-control-key" id="agent-control-key-label">API key</label>
             <input type="password" id="agent-control-key" placeholder="(unset)" autocomplete="off" />
             <button type="button" class="agent-control-config-save" id="agent-control-config-save">Save config</button>
             <div class="agent-control-config-status" id="agent-control-config-status"></div>

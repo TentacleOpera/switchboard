@@ -362,22 +362,27 @@ export async function mergeDatabase(
                 const remappedWtId = plan.worktree_id ? (worktreeIdRemap.get(Number(plan.worktree_id)) ?? null) : null;
 
                 targetDriver.run(
-                    'INSERT OR REPLACE INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, project, worktree_id, worktree_status, is_feature, feature_id, workspace_name, project_id, notion_page_id, dispatched_at, dispatched_terminal, last_liveness_at, blocked_at, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    // V81 shape: routed_to/dispatched_*/queue_position are gone;
+                    // owner_seat/owner_since carry the advisory owner stamp. A
+                    // pre-V81 source still has the old columns — the fallbacks
+                    // map them forward.
+                    'INSERT OR REPLACE INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, clickup_task_id, linear_issue_id, project, worktree_id, worktree_status, is_feature, feature_id, workspace_name, project_id, notion_page_id, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority, owner_seat, owner_since) ' +
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     [
                         plan.plan_id, plan.session_id, plan.topic, plan.plan_file, plan.kanban_column,
                         plan.status || 'active', plan.complexity || 'Unknown', plan.tags || '',
                         plan.dependencies || '', plan.repo_scope || '', targetWorkspaceId,
                         plan.created_at || new Date().toISOString(), plan.updated_at || new Date().toISOString(),
                         plan.last_action, plan.source_type || 'local', plan.brain_source_path || '',
-                        plan.mirror_path || '', plan.routed_to || '', plan.dispatched_agent || '',
-                        plan.dispatched_ide || '', plan.clickup_task_id || '', plan.linear_issue_id || '',
+                        plan.mirror_path || '', plan.clickup_task_id || '', plan.linear_issue_id || '',
                         plan.project || '', remappedWtId, plan.worktree_status || 'none',
                         plan.is_feature ?? 0, plan.feature_id || '', plan.workspace_name || '',
-                        remappedProjId, plan.notion_page_id || '', plan.dispatched_at,
-                        plan.dispatched_terminal || '', plan.last_liveness_at, plan.blocked_at,
-                        plan.queue_position, plan.column_entered_at, plan.completed_at,
-                        plan.priority_starred ?? 0, plan.column_order, plan.map_fingerprint, plan.priority
+                        remappedProjId, plan.notion_page_id || '',
+                        plan.column_entered_at, plan.completed_at,
+                        plan.priority_starred ?? 0, plan.column_order ?? plan.queue_position ?? null,
+                        plan.map_fingerprint, plan.priority,
+                        plan.owner_seat ?? plan.dispatched_terminal ?? '',
+                        plan.owner_since ?? plan.dispatched_at ?? null
                     ]
                 );
             }

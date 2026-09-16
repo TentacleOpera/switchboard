@@ -46,7 +46,7 @@ suite('KanbanDatabase - Feature Status Update', () => {
             repoScope: '',
             brainSourcePath: '',
             mirrorPath: '',
-            routedTo: '',
+            ownerSeat: '',
             dispatchedAgent: '',
             dispatchedIde: ''
         }]);
@@ -95,7 +95,7 @@ suite('KanbanDatabase - Feature Status Update', () => {
             repoScope: '',
             brainSourcePath: '',
             mirrorPath: '',
-            routedTo: '',
+            ownerSeat: '',
             dispatchedAgent: '',
             dispatchedIde: '',
             isFeature: 1
@@ -131,7 +131,7 @@ suite('KanbanDatabase - Feature Status Update', () => {
             repoScope: '',
             brainSourcePath: '',
             mirrorPath: '',
-            routedTo: '',
+            ownerSeat: '',
             dispatchedAgent: '',
             dispatchedIde: '',
             isFeature: 0
@@ -169,7 +169,7 @@ suite('KanbanDatabase - Feature Status Update', () => {
             repoScope: '',
             brainSourcePath: '',
             mirrorPath: '',
-            routedTo: '',
+            ownerSeat: '',
             dispatchedAgent: '',
             dispatchedIde: '',
             isFeature: 0

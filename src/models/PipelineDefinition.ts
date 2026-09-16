@@ -22,6 +22,12 @@ export interface LinearAutomationRule {
     targetColumn?: string;
     targetTeam?: string;
     finalColumn?: string;
+    /** For a team destination: the local board columns that mean "the work is
+     *  done" for write-back. Persisted on the rule so the meaning of
+     *  completion is configuration, not a pair of column ids baked into the
+     *  service. Defaults to ['DONE', 'COMPLETED'] at normalization for rules
+     *  written before the field existed. */
+    completionColumns?: string[];
     writeBackOnComplete: boolean;
     [key: string]: unknown;
 }
@@ -120,6 +126,7 @@ export function normalizeLinearAutomationRules(raw: unknown): LinearAutomationRu
         const rawTargetColumn = _normalizeString(source.targetColumn);
         const rawTargetTeam = _normalizeString(source.targetTeam);
         const finalColumn = _normalizeString(source.finalColumn);
+        const completionColumns = _normalizeStringArray(source.completionColumns);
 
         if (!name || !triggerLabel || triggerStates.length === 0) {
             continue;
@@ -192,11 +199,12 @@ export function normalizeLinearAutomationRules(raw: unknown): LinearAutomationRu
             targetTeam: _tt,
             destination: _d,
             finalColumn: _fc,
+            completionColumns: _cc,
             writeBackOnComplete: _wb,
             ...unknownKeys
         } = source;
 
-        normalized.push({
+        const normalizedRule: LinearAutomationRule = {
             ...unknownKeys,
             name,
             enabled: source.enabled !== false,
@@ -207,7 +215,19 @@ export function normalizeLinearAutomationRules(raw: unknown): LinearAutomationRu
             targetTeam: resolvedTargetTeam,
             finalColumn: finalColumn || undefined,
             writeBackOnComplete: source.writeBackOnComplete === true
-        });
+        };
+        // Team destinations keep the historical DONE/COMPLETED meaning of
+        // "complete" unless the rule says otherwise — the default is written
+        // onto the rule here so the decision is stored, visible, and editable
+        // configuration rather than a service-side constant. Column/memo rules
+        // omit the key entirely.
+        if (completionColumns.length > 0) {
+            normalizedRule.completionColumns = completionColumns;
+        } else if (destination.kind === 'team') {
+            normalizedRule.completionColumns = ['DONE', 'COMPLETED'];
+        }
+
+        normalized.push(normalizedRule);
     }
 
     return normalized;

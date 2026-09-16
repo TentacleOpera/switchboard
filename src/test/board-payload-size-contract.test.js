@@ -104,7 +104,7 @@ test('the card builder emits undefined (not null/empty) for empty-prone fields',
     // Empty-prone fields the plan names. Each must emit `?? undefined` or
     // `|| undefined`, never `?? null` or `|| ''`. Reverting any one re-adds
     // the empty-slot tax on the wire.
-    for (const field of ['dispatchedTerminal', 'dispatchedAt', 'queuePosition', 'columnEnteredAt', 'priority', 'columnOrder']) {
+    for (const field of ['ownerSeat', 'ownerSince', 'columnEnteredAt', 'priority', 'columnOrder']) {
         const emitsUndefined = new RegExp(`${field}:\\s*row\\.${field}\\s*(\\?\\?|\\|\\|)\\s*undefined`).test(body);
         assert.ok(emitsUndefined,
             `${field} must emit undefined when empty (not null/'') — re-adding ?? null re-adds the empty-slot tax`);
@@ -142,8 +142,8 @@ test('a working-set read exists and excludes dormant cards older than the hot wi
     assert.ok(/updated_at < \?/.test(dormHelper), 'the exclusion must key on updated_at vs the hot-window cutoff');
     assert.ok(/_inFlightSql/.test(dormHelper), 'in-flight cards must be pinned (never excluded) — mirroring selectColdEligiblePlanIds');
     const inFlightHelper = src.slice(src.indexOf('private static _inFlightSql'), src.indexOf('private static _dormantEligibleSql'));
-    assert.ok(/plan_runtime_state/.test(inFlightHelper) && /dispatched_at IS NOT NULL/.test(inFlightHelper),
-        'dispatched_at must be read from plan_runtime_state — V74 moved it off plans, and plans.dispatched_at throws at prepare time');
+    assert.ok(/owner_since IS NOT NULL/.test(inFlightHelper),
+        'the in-flight predicate must read the advisory owner_since stamp — V81 dropped dispatched_at, and plans.dispatched_at throws at prepare time');
 });
 
 test('the working-set window moves a feature and its subtasks as one unit', () => {
@@ -337,22 +337,20 @@ function isoDaysAgo(days) {
         }
     });
 
-    await asyncTest('an in-flight dormant card is NOT excluded (active worktree / dispatched pins it)', async () => {
+    await asyncTest('an in-flight dormant card is NOT excluded (owner_since / active worktree pins it)', async () => {
         const { root, db } = await makeWorkspace('inflight');
         try {
             const wsId = await db.getWorkspaceId();
-            // V74 moved dispatched_at out of plans into plan_runtime_state. Insert
-            // the plan row first (no dispatched_at column on plans post-V74), then
-            // insert the runtime row with dispatched_at to pin the card in-flight.
+            // V81: the in-flight predicate reads the advisory `owner_since`
+            // stamp on plans; the old plan_runtime_state.dispatched_at is gone.
             insertPlan(db, wsId, 'inflight-1', { column: 'PLAN REVIEWED', updatedAt: isoDaysAgo(60) });
             db.getDriver().run(
-                `INSERT INTO plan_runtime_state (plan_id, device_id, workspace_id, dispatched_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?)`,
-                ['inflight-1', 'test-device', wsId, new Date().toISOString(), new Date().toISOString()]
+                `UPDATE plans SET owner_seat = ?, owner_since = ? WHERE plan_id = ?`,
+                ['Coder 1', new Date().toISOString(), 'inflight-1']
             );
             const working = await db.getBoardWorkingSet(wsId);
             assert.ok(working.map(r => r.planId).includes('inflight-1'),
-                'an in-flight card (dispatched_at IS NOT NULL on plan_runtime_state) must NOT be excluded even in a dormant column past the window');
+                'an in-flight card (owner_since set) must NOT be excluded even in a dormant column past the window');
         } finally {
             await KanbanDatabase.invalidateWorkspace(root);
             fs.rmSync(root, { recursive: true, force: true });

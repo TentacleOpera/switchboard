@@ -180,6 +180,17 @@ const DESIGN_VERB_SCHEMAS: Record<string, VerbSchema> = {
 // external endpoints (/kanban/move, /kanban/dispatch route through them).
 
 const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    // V81: append a `checkpoint` event to a card — the one forward-looking
+    // record a dispatcher reads when resuming a long-running feature or
+    // mission. `planId`/`text` required; the arm additionally enforces the
+    // content rules (non-empty, no HTML comment markers, 600-char cap).
+    checkpoint: {
+        fields: {
+            planId: { type: 'string', required: true },
+            text: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
     setPushScope: {
         fields: {
             project: { type: 'string' },
@@ -320,7 +331,7 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             planIds: { type: 'array' },
             planFiles: { type: 'array' },
             workspaceRoot: { type: 'string' },
-            dispatchedAt: { type: 'string' },
+            since: { type: 'string' },
         },
     },
     watchFeature: {

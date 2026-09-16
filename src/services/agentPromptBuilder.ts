@@ -89,11 +89,17 @@ export interface BatchPromptPlan {
     priorityStarred?: number | null;
     /** V67: native card priority, 1-4 or null. Read only under mode 'priority'. */
     priority?: number | null;
-    queuePosition?: number | null;
     columnOrder?: number | null;
     columnEnteredAt?: string | null;
     createdAt?: string;
     lastActivity?: string;
+    /**
+     * Latest `checkpoint` event text for this card, when one exists. A previous
+     * run's report of where to resume — advisory prompt content only, never a
+     * dispatch gate and never fabricated. Populated by
+     * `KanbanProvider.buildDispatchPlans`.
+     */
+    checkpoint?: string;
 }
 
 /**
@@ -153,7 +159,7 @@ export function applyBatchCap<T extends BatchPromptPlan>(
     // The sort is NOT conditional on exceeding the cap. `selectTeamBatchPlans` — the
     // only production caller — ordered every set it was handed, and its result becomes
     // the prompt's PLANS TO PROCESS list. Short-circuiting an under-cap set back to
-    // caller order would silently drop queue_position precedence for batches of five
+    // caller order would silently drop column_order precedence for batches of five
     // or fewer, which is every preview and most real dispatches.
     const sortColumn = plans[0]?.column || '';
     const ordered = [...plans].sort((a, b) => compareByPrecedence(a, b, sortColumn, mode));
@@ -675,13 +681,17 @@ export function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDisp
     const planList = normalizedPlans.map(plan => {
         const planPath = plan.relativePath || plan.absolutePath;
         const planIdLine = plan.planId ? `\nPLAN_ID=${plan.planId}` : '';
+        // A checkpoint is a previous run's report of where it stopped — resume
+        // guidance the new run may disagree with, never an instruction and
+        // never emitted when no checkpoint exists.
+        const resumeLine = plan.checkpoint ? `\nResume from (previous run's report): ${plan.checkpoint}` : '';
         if (plan.isSubtask && plan.featureTopic) {
-            return `  - [SUBTASK] ${plan.topic} Plan File: ${planPath}${planIdLine}`;
+            return `  - [SUBTASK] ${plan.topic} Plan File: ${planPath}${planIdLine}${resumeLine}`;
         }
         if (plan.featureTopic && !plan.isSubtask) {
-            return `- [FEATURE: ${plan.featureTopic}] Plan File: ${planPath}${planIdLine}`;
+            return `- [FEATURE: ${plan.featureTopic}] Plan File: ${planPath}${planIdLine}${resumeLine}`;
         }
-        return `- [${plan.topic}] Plan File: ${planPath}${planIdLine}`;
+        return `- [${plan.topic}] Plan File: ${planPath}${planIdLine}${resumeLine}`;
     }).join('\n');
     const relativeClause = anyRelative
         ? '\nPlan File paths are relative to your repo root.'

@@ -22,7 +22,6 @@ const {
     TRANSFER_BUNDLE_SCHEMA,
 } = require(path.join(OUT, 'TransferBundleService.js'));
 
-const WORKSPACE_ID = 'ws-transfer-bundle-test';
 const PLANS = ['alpha', 'beta'];
 const FEATURE = 'feature-one';
 
@@ -35,7 +34,11 @@ async function seedWorkspace(prefix) {
     }
     const db = KanbanDatabase.forWorkspace(ws);
     await db.createIfMissing();
-    await db.setWorkspaceId(WORKSPACE_ID);
+    // The canonical id is derived from the workspace root (the committed file
+    // wins over the config row), so each seeded workspace has its own board and
+    // its own workspace_id. Source and dest deliberately differ — that is what
+    // proves the bundle carries no machine identity.
+    const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
     const now = new Date().toISOString();
     const rec = (name, extra) => Object.assign({
         planId: `${prefix}${name}`,
@@ -48,7 +51,7 @@ async function seedWorkspace(prefix) {
         tags: '',
         repoScope: '',
         project: '',
-        workspaceId: WORKSPACE_ID,
+        workspaceId: wsId,
         createdAt: now,
         updatedAt: now,
         lastAction: 'created',
@@ -61,7 +64,7 @@ async function seedWorkspace(prefix) {
         rec(PLANS[0]),
         rec(PLANS[1]),
     ]);
-    return { ws, db, planId: (name) => `${prefix}${name}` };
+    return { ws, db, wsId, planId: (name) => `${prefix}${name}` };
 }
 
 function service(db, ws) {
@@ -78,13 +81,13 @@ async function run() {
 
     try {
         // ── Source board state: non-default columns, projects, complexity, links.
-        await source.db.movePlanByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, WORKSPACE_ID, 'PLAN REVIEWED');
-        await source.db.movePlanByPlanFile(`.switchboard/plans/${PLANS[1]}.md`, WORKSPACE_ID, 'CODE REVIEWED');
-        await source.db.updateComplexityByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, WORKSPACE_ID, '5');
-        await source.db.updateTagsByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, WORKSPACE_ID, 'feature, backend');
-        await source.db.updateRepoScopeByPlanFile(`.switchboard/plans/${PLANS[1]}.md`, WORKSPACE_ID, 'switchboard');
+        await source.db.movePlanByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, source.wsId, 'PLAN REVIEWED');
+        await source.db.movePlanByPlanFile(`.switchboard/plans/${PLANS[1]}.md`, source.wsId, 'CODE REVIEWED');
+        await source.db.updateComplexityByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, source.wsId, '5');
+        await source.db.updateTagsByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, source.wsId, 'feature, backend');
+        await source.db.updateRepoScopeByPlanFile(`.switchboard/plans/${PLANS[1]}.md`, source.wsId, 'switchboard');
         await source.db.updateFeatureStatus(source.planId(PLANS[0]), 0, source.planId(FEATURE));
-        await source.db.setPriorityStarred(source.planId(PLANS[1]), WORKSPACE_ID, true);
+        await source.db.setPriorityStarred(source.planId(PLANS[1]), source.wsId, true);
 
         // Portable + machine-local settings, both stores' worth.
         await source.db.setConfig('theme.name', 'obsidian');
@@ -158,9 +161,9 @@ async function run() {
         assert.strictEqual(imported.cardsUpdated, 3, 'every card resolves by planFile on the destination');
         assert.deepStrictEqual(imported.partialFailures, [], 'no partial failures on a clean round trip');
 
-        const destAlpha = await dest.db.getPlanByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, WORKSPACE_ID);
-        const destBeta = await dest.db.getPlanByPlanFile(`.switchboard/plans/${PLANS[1]}.md`, WORKSPACE_ID);
-        const destFeature = await dest.db.getPlanByPlanFile(`.switchboard/plans/${FEATURE}.md`, WORKSPACE_ID);
+        const destAlpha = await dest.db.getPlanByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, dest.wsId);
+        const destBeta = await dest.db.getPlanByPlanFile(`.switchboard/plans/${PLANS[1]}.md`, dest.wsId);
+        const destFeature = await dest.db.getPlanByPlanFile(`.switchboard/plans/${FEATURE}.md`, dest.wsId);
         assert.strictEqual(destAlpha.kanbanColumn, 'PLAN REVIEWED');
         assert.strictEqual(destBeta.kanbanColumn, 'CODE REVIEWED');
         assert.strictEqual(destAlpha.complexity, '5');
@@ -178,7 +181,7 @@ async function run() {
         const again = await service(dest.db, dest.ws).importBundle(bundlePath);
         assert.strictEqual(again.success, true);
         assert.strictEqual(again.cardsUpdated, 3);
-        const destAlpha2 = await dest.db.getPlanByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, WORKSPACE_ID);
+        const destAlpha2 = await dest.db.getPlanByPlanFile(`.switchboard/plans/${PLANS[0]}.md`, dest.wsId);
         assert.strictEqual(destAlpha2.kanbanColumn, destAlpha.kanbanColumn);
         assert.strictEqual(destAlpha2.complexity, destAlpha.complexity);
         assert.strictEqual(destAlpha2.featureId, destAlpha.featureId);
@@ -195,17 +198,17 @@ async function run() {
             isFeature: false, featureFile: null, tags: '', repoScope: '', priority: false,
         });
         await fs.promises.writeFile(ghostPath, JSON.stringify(ghost, null, 2), 'utf8');
-        const before = (await dest.db.getBoard(WORKSPACE_ID)).length;
+        const before = (await dest.db.getBoard(dest.wsId)).length;
         const ghostResult = await service(dest.db, dest.ws).importBundle(ghostPath);
         assert.strictEqual(ghostResult.success, true);
         assert.strictEqual(ghostResult.cardsSkipped.length, 1, 'the unmatched card is collected');
         assert.strictEqual(ghostResult.cardsSkipped[0].planFile, '.switchboard/plans/never-committed.md');
         assert.match(ghostResult.cardsSkipped[0].reason, /not in this checkout/,
             'a card with no file on disk is reported as missing from the checkout');
-        assert.strictEqual((await dest.db.getBoard(WORKSPACE_ID)).length, before,
+        assert.strictEqual((await dest.db.getBoard(dest.wsId)).length, before,
             'import is update-only — a card with no file behind it is NEVER created');
         assert.strictEqual(
-            await dest.db.getPlanByPlanFile('.switchboard/plans/never-committed.md', WORKSPACE_ID), null);
+            await dest.db.getPlanByPlanFile('.switchboard/plans/never-committed.md', dest.wsId), null);
         // A file that IS on disk but has no row yet is a DIFFERENT failure: the
         // plan watcher had not ingested it. Reporting that as "not in this
         // checkout" sends the user hunting a git problem they do not have.
@@ -217,7 +220,6 @@ async function run() {
             }
             const emptyDb = KanbanDatabase.forWorkspace(notIngestedWs);
             await emptyDb.createIfMissing();
-            await emptyDb.setWorkspaceId(WORKSPACE_ID);
             const early = await service(emptyDb, notIngestedWs).importBundle(bundlePath);
             assert.strictEqual(early.success, true);
             assert.strictEqual(early.cardsUpdated, 0,
@@ -332,8 +334,10 @@ async function run() {
             'a deferred import chosen in the parent must cross the --detach fork');
         // Resolution must not construct a KanbanDatabase: forWorkspace caches the
         // path at construction, so a pre-menu instance would ignore a db-pointer
-        // written by option 2 for the rest of the process.
-        assert.ok(/readDbPointer\(workspaceRoot\)/.test(cliSrc),
+        // written by option 2 for the rest of the process. The static resolver
+        // (`resolveBoardDbPath`, the same one the running board uses) is the
+        // non-constructing path.
+        assert.ok(/function boardExists\([\s\S]*?resolveBoardDbPath\(workspaceRoot\)/.test(cliSrc),
             'the board-existence check must resolve the path statically, not via forWorkspace');
         assert.ok(!cliSrc.slice(0, cliSrc.indexOf('function boardExists')).includes('KanbanDatabase.forWorkspace('),
             'nothing before boardExists may construct a KanbanDatabase');

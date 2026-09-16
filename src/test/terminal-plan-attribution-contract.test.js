@@ -53,8 +53,8 @@ function makeRow(opts) {
     return {
         planId: opts.planId || 'plan-1',
         topic: opts.topic || 'Test plan',
-        dispatchedTerminal: opts.dispatchedTerminal || '',
-        dispatchedAt: opts.dispatchedAt || '2026-08-11T00:00:00Z',
+        ownerSeat: opts.ownerSeat || '',
+        ownerSince: opts.ownerSince || '2026-08-11T00:00:00Z',
         featureId: opts.featureId || null,
         project: opts.project || null
     };
@@ -82,7 +82,7 @@ console.log('\n--- attributePlansToTerminals: name tier ---');
 
 test('name tier wins over path tier for the same terminal', () => {
     const rows = [
-        makeRow({ planId: 'plan-named', topic: 'Named', dispatchedTerminal: 'coder-1' }),
+        makeRow({ planId: 'plan-named', topic: 'Named', ownerSeat: 'coder-1' }),
         makeRow({ planId: 'plan-path', topic: 'Path', featureId: 'feature-9', project: 'Acme' }),
     ];
     const terminals = [makeTerm({ friendlyName: 'coder-1', worktreePath: '/tmp/sb-fixture/feature-worktree' })];
@@ -97,7 +97,7 @@ test('a row naming terminal A is not path-matched onto terminal B in the same wo
     // one already name-matched ⇒ the other resolves" test below while asserting the
     // opposite. The property under test is that a NAMED row stays name-tier only.
     const rows = [
-        makeRow({ planId: 'plan-A', topic: 'A', dispatchedTerminal: 'coder-A', featureId: 'feature-9', project: 'Acme' }),
+        makeRow({ planId: 'plan-A', topic: 'A', ownerSeat: 'coder-A', featureId: 'feature-9', project: 'Acme' }),
     ];
     const terminals = [
         makeTerm({ friendlyName: 'coder-A', worktreePath: '/tmp/sb-fixture/feature-worktree' }),
@@ -147,7 +147,7 @@ test('ambiguity: one candidate row, two seats at the same path ⇒ no entry', ()
 
 test('one candidate row, two seats where one is already name-matched ⇒ the other seat resolves', () => {
     const rows = [
-        makeRow({ planId: 'plan-named', topic: 'Named', dispatchedTerminal: 'coder-1' }),
+        makeRow({ planId: 'plan-named', topic: 'Named', ownerSeat: 'coder-1' }),
         makeRow({ planId: 'plan-path', topic: 'Path', featureId: 'feature-9', project: 'Acme' }),
     ];
     const terminals = [
@@ -162,21 +162,21 @@ test('one candidate row, two seats where one is already name-matched ⇒ the oth
 console.log('\n--- attributePlansToTerminals: edge cases ---');
 
 test('empty topic yields no entry', () => {
-    const rows = [makeRow({ planId: 'plan-empty', topic: '   ', dispatchedTerminal: 'coder-1' })];
+    const rows = [makeRow({ planId: 'plan-empty', topic: '   ', ownerSeat: 'coder-1' })];
     const terminals = [makeTerm({ friendlyName: 'coder-1' })];
     const result = attributePlansToTerminals(rows, [], terminals);
     assert.ok(!result.has('coder-1'));
 });
 
 test('exited terminal yields no entry', () => {
-    const rows = [makeRow({ planId: 'plan-1', topic: 'One', dispatchedTerminal: 'coder-1' })];
+    const rows = [makeRow({ planId: 'plan-1', topic: 'One', ownerSeat: 'coder-1' })];
     const terminals = [makeTerm({ friendlyName: 'coder-1', status: 'exited' })];
     const result = attributePlansToTerminals(rows, [], terminals);
     assert.ok(!result.has('coder-1'));
 });
 
 test('terminal with no status field is treated as live', () => {
-    const rows = [makeRow({ planId: 'plan-1', topic: 'One', dispatchedTerminal: 'coder-1' })];
+    const rows = [makeRow({ planId: 'plan-1', topic: 'One', ownerSeat: 'coder-1' })];
     const terminals = [{ friendlyName: 'coder-1' }];
     const result = attributePlansToTerminals(rows, [], terminals);
     assert.strictEqual(result.get('coder-1')?.planId, 'plan-1');
@@ -184,7 +184,7 @@ test('terminal with no status field is treated as live', () => {
 
 test('worktrees empty or undefined does not throw and yields name-tier results only', () => {
     const rows = [
-        makeRow({ planId: 'plan-name', topic: 'Name', dispatchedTerminal: 'coder-1' }),
+        makeRow({ planId: 'plan-name', topic: 'Name', ownerSeat: 'coder-1' }),
         makeRow({ planId: 'plan-path', topic: 'Path', featureId: 'feature-9', project: 'Acme' }),
     ];
     const terminals = [makeTerm({ friendlyName: 'coder-1', worktreePath: '/tmp/sb-fixture/feature-worktree' })];
@@ -195,7 +195,7 @@ test('worktrees empty or undefined does not throw and yields name-tier results o
 });
 
 test('a feature row shape (is_feature upstream, not in module) is attributable by name', () => {
-    const rows = [makeRow({ planId: 'plan-feat', topic: 'Feature', dispatchedTerminal: 'coder-1' })];
+    const rows = [makeRow({ planId: 'plan-feat', topic: 'Feature', ownerSeat: 'coder-1' })];
     const terminals = [makeTerm({ friendlyName: 'coder-1' })];
     const result = attributePlansToTerminals(rows, [], terminals);
     assert.strictEqual(result.get('coder-1')?.planId, 'plan-feat');
@@ -380,21 +380,21 @@ test('the feature nudge sweep treats an empty liveness snapshot as no evidence',
     );
     assert.ok(dispatchStallSweep.length > 0, '_runDispatchStallSweep must be a readable method');
     assert.ok(dispatchStallSweep.includes('dispatchStallMs'), 'the dispatch-stall sweep must key on the dispatchStallMs threshold');
-    assert.ok(dispatchStallSweep.includes('p.dispatchedAt') && dispatchStallSweep.includes('!p.completedAt'),
-        'the dispatch-stall predicate must be dispatched_at set AND completed_at NULL');
-    assert.ok(dispatchStallSweep.includes('nowMs - dispatchedAtMs') && dispatchStallSweep.includes('dispatchStallMs'),
-        'the dispatch-stall predicate must compare elapsed-since-dispatched_at against the threshold');
+    assert.ok(dispatchStallSweep.includes('p.ownerSince') && dispatchStallSweep.includes('!p.completedAt'),
+        'the dispatch-stall predicate must be owner_since set AND completed_at NULL');
+    assert.ok(dispatchStallSweep.includes('nowMs - ownerSinceMs') && dispatchStallSweep.includes('dispatchStallMs'),
+        'the dispatch-stall predicate must compare elapsed-since-owner_since against the threshold');
     assert.ok(dispatchStallSweep.includes('lastObservedMtime') && dispatchStallSweep.includes('lastObservedSeatOutputAt'),
         'the dispatch-stall nudge must re-arm on plan-file mtime or seat output, NOT on dispatched_at');
     assert.ok(!/nudgeCount\s*[><=]/.test(dispatchStallSweep) || dispatchStallSweep.includes('_dispatchStallState'),
         'the dispatch-stall nudge must not carry a watch-registry nudgeCount — state is in-memory per-card');
-    // The predicate is dispatched_at + completed_at ONLY. `dispatched_terminal`
+    // The predicate is owner_since + completed_at ONLY. `owner_seat`
     // is written as '' by updateDispatchInfoByPlanFile / attributePasteDispatch
     // whenever the caller omits a name, and by every pre-V57 row, so gating on
     // it makes "no seat attributed" look exactly like "not dispatched" and drops
     // the very cards this backstop exists for.
-    assert.ok(!/p\.dispatchedTerminal/.test(dispatchStallSweep),
-        'the dispatch-stall predicate must NOT gate on dispatchedTerminal — an unattributed dispatched card still nudges, via the operator path');
+    assert.ok(!/p\.ownerSeat/.test(dispatchStallSweep),
+        'the dispatch-stall predicate must NOT gate on ownerSeat — an unattributed dispatched card still nudges, via the operator path');
     // getBoard() returns planFile ABSOLUTE (_resolveAbsolutePlanFile), so
     // path.join(folder, planFile) concatenates into a path that never exists and
     // every stat throws — silently deleting the plan-file-mtime half of the
@@ -418,7 +418,7 @@ test('the feature nudge sweep treats an empty liveness snapshot as no evidence',
     assert.ok(sweep.includes('nowMs - watch.lastNudgedAt < nudgeSilenceMs'), 'the nudge must be paced by lastNudgedAt');
     assert.ok(sweep.includes('recipientSeat: watch.headTerminal'), 'the head IS the recipient — parent resolution must be skipped');
     // Evidence, not a poke (the PRD "done" definition for this payload).
-    assert.ok(sweep.includes('s.dispatchedTerminal') && sweep.includes('s.kanbanColumn') && sweep.includes('s.planFile'),
+    assert.ok(sweep.includes('s.ownerSeat') && sweep.includes('s.kanbanColumn') && sweep.includes('s.planFile'),
         'the nudge payload must name the seat, its column and its plan file — evidence, not a bare poke');
 });
 
@@ -472,7 +472,7 @@ test('composeCompletedTurnEndBody renders all clauses when present', () => {
         topic: 'Implement Finished Seat Notice',
         kanbanColumn: 'In Progress',
         featureId: 'feat-123',
-        dispatchedAt: '2026-08-17T00:00:00.000Z'
+        ownerSince: '2026-08-17T00:00:00.000Z'
     };
     const nowMs = Date.parse('2026-08-17T00:00:45.000Z');
     const result = composeCompletedTurnEndBody(record, 'coder-1', '.switchboard/plans/test.md', nowMs);
@@ -517,7 +517,7 @@ test('a standalone plan is never told to dispatch a next subtask', () => {
     assert.ok(/git diff/.test(TURN_END_VERIFY_INSTRUCTION_STANDALONE),
         'the standalone instruction must keep the verify clause');
 
-    const base = { topic: '', kanbanColumn: '', dispatchedAt: null };
+    const base = { topic: '', kanbanColumn: '', ownerSince: null };
     const standalone = composeCompletedTurnEndBody({ ...base, featureId: null }, 's', 'p.md', Date.now());
     const subtask = composeCompletedTurnEndBody({ ...base, featureId: 'feat-1' }, 's', 'p.md', Date.now());
     assert.ok(!/dispatch it/.test(standalone), 'a featureId-less record must take the standalone form');
@@ -542,7 +542,7 @@ test('composeCompletedTurnEndBody drops missing clauses gracefully', () => {
         topic: '',
         kanbanColumn: '',
         featureId: null,
-        dispatchedAt: null
+        ownerSince: null
     };
     const result = composeCompletedTurnEndBody(record, 'coder-2', 'plan.md', Date.now());
     const lines = result.split('\n');
@@ -562,7 +562,7 @@ test('composeCompletedTurnEndBody formats minutes when worked >= 120s', () => {
         topic: 'Long task',
         kanbanColumn: 'Coded',
         featureId: '',
-        dispatchedAt: new Date(1000000000000).toISOString()
+        ownerSince: new Date(1000000000000).toISOString()
     };
     const nowMs = 1000000000000 + 14 * 60 * 1000;
     const result = composeCompletedTurnEndBody(record, 'lead-1', 'long.md', nowMs);
@@ -570,7 +570,7 @@ test('composeCompletedTurnEndBody formats minutes when worked >= 120s', () => {
     assert.ok(!result.includes('feature '));
 });
 
-test('composeCompletedTurnEndBody drops the worked clause for an UNPARSEABLE dispatchedAt', () => {
+test('composeCompletedTurnEndBody drops the worked clause for an UNPARSEABLE owner_since', () => {
     // Not the same branch as a null stamp: a non-empty garbage stamp passes the
     // truthiness gate and reaches Date.parse, which returns NaN. Without the
     // Number.isFinite guard the header ships `worked NaNs` — a number the lead
@@ -579,7 +579,7 @@ test('composeCompletedTurnEndBody drops the worked clause for an UNPARSEABLE dis
         topic: 'Corrupt stamp',
         kanbanColumn: 'CODED',
         featureId: 'f9',
-        dispatchedAt: 'not-a-timestamp'
+        ownerSince: 'not-a-timestamp'
     };
     const result = composeCompletedTurnEndBody(record, 'coder-9', 'plan.md', Date.now());
     assert.strictEqual(result.split('\n').length, 2);
@@ -594,7 +594,7 @@ test('composeCompletedTurnEndBody flattens and truncates topic to 80 chars with 
         topic: longTopic,
         kanbanColumn: 'In Progress',
         featureId: 'f1',
-        dispatchedAt: null
+        ownerSince: null
     };
     const result = composeCompletedTurnEndBody(record, 'c1', 'plan.md', Date.now());
     const lines = result.split('\n');

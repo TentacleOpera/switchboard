@@ -132,7 +132,6 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
             sourceType,
             brainSourcePath: '',
             mirrorPath: '',
-            routedTo: '',
             dispatchedAgent: '',
             dispatchedIde: '',
             clickupTaskId: hasMixedAutomationMetadata ? '' : clickupTaskId,

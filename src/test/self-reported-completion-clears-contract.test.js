@@ -4,8 +4,12 @@
  * Contract: a seat is clean before it is handed the next subtask, WHOEVER
  * posted the completion.
  *
- * The bug this pins closed: `completeCardInternal` and `releaseCardInternal`
- * both carried a four-line guard
+ * V81 note: the release path is GONE (`releaseCardInternal` and `released_at`
+ * were deleted — there is nothing to release from). Only the completion path
+ * remains, and the seat it clears is the advisory `owner_seat` stamp.
+ *
+ * The bug this pins closed: `completeCardInternal` (and, before V81, the
+ * deleted `releaseCardInternal`) carried a four-line guard
  *
  *     // Never clear the lead in `from`, planner, or reviewer
  *     if (acceptedCodingSeat === from) { acceptedCodingSeat = undefined; }
@@ -25,7 +29,7 @@
  *
  * The `CODING_ROLES` gate inside `_resolveAcceptedCodingSeat` is the entire
  * protection the deleted comment described: it resolves from HOST evidence
- * (the card's `dispatchedTerminal` + `routedTo`, then the live fleet role) and
+ * (the card's `owner_seat` stamp, then the live fleet role) and
  * never from `from` or the request body, so a lead/planner/reviewer can never
  * come back as the seat to clear.
  */
@@ -54,7 +58,7 @@ const WS = '/tmp/self-reported-completion-clears-ws';
 
 // The live fleet: one lead, one coder, one intern, one planner, one reviewer.
 // `_resolveAcceptedCodingSeat`'s fallback reads these roles when the card row
-// carries no `routedTo`.
+// carries no `owner_seat` stamp.
 const FLEET = [
     { friendlyName: 'Coding', role: 'lead_coder' },
     { friendlyName: 'Coder 1', role: 'coder' },
@@ -72,12 +76,9 @@ function card(planId, extra = {}) {
         planFile: `/tmp/${planId}.md`,
         workspaceId: 'ws1',
         featureId: '',
-        dispatchedAt: '2026-09-13T00:00:00Z',
-        dispatchedTerminal: '',
-        routedTo: '',
-        queuePosition: null,
+        ownerSeat: '',
+        ownerSince: '2026-09-13T00:00:00Z',
         completedAt: null,
-        releasedAt: null,
         ...extra,
     };
 }
@@ -98,19 +99,7 @@ function makeServer(opts = {}) {
             p.completedAt = ts;
             return true;
         },
-        setReleasedAt: async (planId, ts) => {
-            const p = plans.get(planId);
-            if (!p) return false;
-            p.releasedAt = ts;
-            return true;
-        },
         setPlanOutcomeWorkflow: async () => true,
-        releaseDispatchHolder: async (planFile) => {
-            for (const p of plans.values()) {
-                if (p.planFile === planFile) { p.dispatchedTerminal = ''; p.dispatchedAt = null; }
-            }
-            return true;
-        },
         appendPlanEventByPlanId: async (planId, event) => { events.push({ planId, ...event }); return true; },
         ...(opts.db || {}),
     };
@@ -143,7 +132,7 @@ async function run() {
 
     await check('complete: a coder posting its OWN completion is cleared', async () => {
         const { server, plans, clears, fakeDb } = makeServer();
-        plans.set('p1', card('p1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        plans.set('p1', card('p1', { ownerSeat: 'Coder 1' }));
 
         const r = await server.completeCardInternal(fakeDb, 'p1', 'Coder 1', { workspaceRoot: WS });
         assert.strictEqual(r.success, true);
@@ -154,9 +143,9 @@ async function run() {
 
     await check('complete: an intern posting its OWN completion is cleared (the measured case)', async () => {
         const { server, plans, clears, fakeDb } = makeServer();
-        // No routedTo on the row — resolution falls through to the live fleet
-        // role lookup, which is the path the incident took.
-        plans.set('p2', card('p2', { dispatchedTerminal: 'Coding-intern' }));
+        // The row carries the seat stamp; resolution confirms its role through
+        // the live fleet lookup, which is the path the incident took.
+        plans.set('p2', card('p2', { ownerSeat: 'Coding-intern' }));
 
         const r = await server.completeCardInternal(fakeDb, 'p2', 'Coding-intern', { workspaceRoot: WS });
         assert.strictEqual(r.cleared, true, 'the self-reporting intern must be cleared');
@@ -165,7 +154,7 @@ async function run() {
 
     await check('complete: a lead posting for a coder clears the coder and never itself', async () => {
         const { server, plans, clears, fakeDb } = makeServer();
-        plans.set('p3', card('p3', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        plans.set('p3', card('p3', { ownerSeat: 'Coder 1' }));
 
         const r = await server.completeCardInternal(fakeDb, 'p3', 'Coding', { workspaceRoot: WS });
         assert.strictEqual(r.cleared, true);
@@ -176,7 +165,7 @@ async function run() {
     await check('complete: a planner or reviewer in `from` is never cleared — the coder it posted about is', async () => {
         for (const poster of ['Planner 1', 'Reviewer 1']) {
             const { server, plans, clears, fakeDb } = makeServer();
-            plans.set('p4', card('p4', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+            plans.set('p4', card('p4', { ownerSeat: 'Coder 1' }));
 
             const r = await server.completeCardInternal(fakeDb, 'p4', poster, { workspaceRoot: WS });
             assert.strictEqual(r.cleared, true, `${poster}: the coder must still be cleared`);
@@ -188,7 +177,7 @@ async function run() {
         const { server, plans, clears, fakeDb } = makeServer();
         // lead_coder is not in CODING_ROLES — the gate, not the name guard, is
         // what protects a lead posting about its own LEAD CODED card.
-        plans.set('p5', card('p5', { kanbanColumn: 'LEAD CODED', dispatchedTerminal: 'Coding', routedTo: 'lead' }));
+        plans.set('p5', card('p5', { kanbanColumn: 'LEAD CODED', ownerSeat: 'Coding' }));
 
         const r = await server.completeCardInternal(fakeDb, 'p5', 'Coding', { workspaceRoot: WS });
         assert.strictEqual(r.cleared, false);
@@ -196,50 +185,16 @@ async function run() {
         assert.deepStrictEqual(clears, [], 'no lead is ever cleared');
     });
 
-    // ── 2. The release path × both posters ───────────────────────────────
-    // The duplication between the two paths is the risk, and release is what
-    // actually ran in the incident: the card came back `released`, and hit the
-    // same guard, so the release cleared the card and not the seat.
+    // ── 2. The release path is gone ──────────────────────────────────────
+    // V81 deleted `releaseCardInternal` and `released_at`: release existed only
+    // to express "freed but not finished", a state that was only meaningful
+    // because something refused. Completion is the one at-rest clear.
 
-    await check('release: a coder posting its OWN release is cleared', async () => {
-        const { server, plans, clears, fakeDb } = makeServer();
-        plans.set('r1', card('r1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
-
-        const r = await server.releaseCardInternal(fakeDb, 'r1', 'Coder 1', { workspaceRoot: WS });
-        assert.strictEqual(r.success, true);
-        assert.strictEqual(r.cleared, true, 'the self-reporting coder must be cleared on release too');
-        assert.strictEqual(r.acceptedCodingSeat, 'Coder 1');
-        assert.deepStrictEqual(clears, ['Coder 1']);
-    });
-
-    await check('release: an intern posting its OWN release is cleared', async () => {
-        const { server, plans, clears, fakeDb } = makeServer();
-        plans.set('r2', card('r2', { dispatchedTerminal: 'Coding-intern' }));
-
-        const r = await server.releaseCardInternal(fakeDb, 'r2', 'Coding-intern', { workspaceRoot: WS });
-        assert.strictEqual(r.cleared, true);
-        assert.deepStrictEqual(clears, ['Coding-intern']);
-    });
-
-    await check('release: a lead releasing a coder clears the coder and never itself', async () => {
-        const { server, plans, clears, fakeDb } = makeServer();
-        plans.set('r3', card('r3', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
-
-        const r = await server.releaseCardInternal(fakeDb, 'r3', 'Coding', { workspaceRoot: WS });
-        assert.strictEqual(r.cleared, true);
-        assert.deepStrictEqual(clears, ['Coder 1']);
-        assert.ok(!clears.includes('Coding'));
-    });
-
-    await check('release: a planner or reviewer in `from` is never cleared — the coder it released is', async () => {
-        for (const poster of ['Planner 1', 'Reviewer 1']) {
-            const { server, plans, clears, fakeDb } = makeServer();
-            plans.set('r4', card('r4', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
-
-            const r = await server.releaseCardInternal(fakeDb, 'r4', poster, { workspaceRoot: WS });
-            assert.strictEqual(r.cleared, true, `${poster}: the coder must still be cleared`);
-            assert.deepStrictEqual(clears, ['Coder 1'], `${poster}: only the coder is cleared`);
-        }
+    await check('releaseCardInternal and the release routes are deleted', () => {
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        assert.strictEqual(/\breleaseCardInternal\b/.test(src), false, 'releaseCardInternal must be deleted');
+        assert.strictEqual(src.includes('/kanban/card/release'), false, 'card/release route must be absent');
+        assert.strictEqual(src.includes('/kanban/team/release'), false, 'team/release route must be absent');
     });
 
     // ── 3. The receipt answers "was this seat cleared, and why not?" ──────
@@ -249,8 +204,8 @@ async function run() {
 
     await check('the receipt names the cleared seat, or says why none was', async () => {
         const { server, plans, fakeDb } = makeServer();
-        plans.set('c1', card('c1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
-        plans.set('c2', card('c2', { dispatchedTerminal: '', routedTo: '' }));
+        plans.set('c1', card('c1', { ownerSeat: 'Coder 1' }));
+        plans.set('c2', card('c2', { ownerSeat: '' }));
 
         const cleared = await server.completeCardInternal(fakeDb, 'c1', 'Coder 1', { workspaceRoot: WS });
         assert.strictEqual(cleared.cleared, true);
@@ -264,7 +219,7 @@ async function run() {
 
     await check('a duplicate self-report does not clear twice', async () => {
         const { server, plans, clears, fakeDb } = makeServer();
-        plans.set('d1', card('d1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        plans.set('d1', card('d1', { ownerSeat: 'Coder 1' }));
 
         await server.completeCardInternal(fakeDb, 'd1', 'Coder 1', { workspaceRoot: WS });
         await server.completeCardInternal(fakeDb, 'd1', 'Coder 1', { workspaceRoot: WS });
@@ -273,17 +228,17 @@ async function run() {
 
     // ── 3b. Attribution fallback + multi-seat clear (lead-acceptance plan) ─
 
-    await check('attribution fallback: empty dispatchedTerminal resolves via getLiveDispatchAttribution', async () => {
-        // No-op #2: when the plan row has no dispatchedTerminal, the seat is
+    await check('attribution fallback: empty owner_seat resolves via getLiveDispatchAttribution', async () => {
+        // No-op #2: when the plan row has no owner_seat, the seat is
         // found via live dispatch attribution instead of being silently lost.
         const { server, plans, clears, fakeDb } = makeServer({
             db: {
                 getLiveDispatchAttribution: async () => [
-                    { planId: 'a1', topic: 'a1', dispatchedTerminal: 'Coder 1', dispatchedAt: '2026-09-14T00:00:00Z', featureId: '', project: '' },
+                    { planId: 'a1', topic: 'a1', ownerSeat: 'Coder 1', ownerSince: '2026-09-14T00:00:00Z', featureId: '', project: '' },
                 ],
             },
         });
-        plans.set('a1', card('a1', { dispatchedTerminal: '', routedTo: '' }));
+        plans.set('a1', card('a1', { ownerSeat: '' }));
         const r = await server.completeCardInternal(fakeDb, 'a1', 'Coding', { workspaceRoot: WS });
         assert.strictEqual(r.success, true);
         assert.strictEqual(r.cleared, true, 'attribution fallback must find and clear the seat');
@@ -307,12 +262,12 @@ async function run() {
         const { server, plans, clears, fakeDb } = makeServer({
             db: {
                 getLiveDispatchAttribution: async () => [
-                    { planId: 'm1', topic: 'm1', dispatchedTerminal: 'Coder 1', dispatchedAt: '2026-09-14T01:00:00Z', featureId: '', project: '' },
-                    { planId: 'm1', topic: 'm1', dispatchedTerminal: 'Coding-intern', dispatchedAt: '2026-09-14T02:00:00Z', featureId: '', project: '' },
+                    { planId: 'm1', topic: 'm1', ownerSeat: 'Coder 1', ownerSince: '2026-09-14T01:00:00Z', featureId: '', project: '' },
+                    { planId: 'm1', topic: 'm1', ownerSeat: 'Coding-intern', ownerSince: '2026-09-14T02:00:00Z', featureId: '', project: '' },
                 ],
             },
         });
-        plans.set('m1', card('m1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        plans.set('m1', card('m1', { ownerSeat: 'Coder 1' }));
         const r = await server.completeCardInternal(fakeDb, 'm1', 'Coding', { workspaceRoot: WS });
         assert.strictEqual(r.success, true);
         assert.strictEqual(r.cleared, true);
@@ -333,11 +288,11 @@ async function run() {
         const { server, plans, clears, fakeDb } = makeServer({
             db: {
                 getLiveDispatchAttribution: async () => [
-                    { planId: 'e1', topic: 'e1', dispatchedTerminal: 'Coder 1', dispatchedAt: '2026-09-14T00:00:00Z', featureId: '', project: '' },
+                    { planId: 'e1', topic: 'e1', ownerSeat: 'Coder 1', ownerSince: '2026-09-14T00:00:00Z', featureId: '', project: '' },
                 ],
             },
         });
-        plans.set('e1', card('e1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        plans.set('e1', card('e1', { ownerSeat: 'Coder 1' }));
         const r = await server.completeCardInternal(fakeDb, 'e1', 'Coder 1', { workspaceRoot: WS });
         assert.strictEqual(r.success, true);
         assert.strictEqual(r.cleared, true, 'the self-reporting coder is cleared (name guard stays deleted)');
@@ -352,12 +307,12 @@ async function run() {
         const { server, plans, clears, fakeDb } = makeServer({
             db: {
                 getLiveDispatchAttribution: async () => [
-                    { planId: 'm1', topic: 'm1', dispatchedTerminal: 'Coder 1', dispatchedAt: '2026-09-14T01:00:00Z', featureId: '', project: '' },
+                    { planId: 'm1', topic: 'm1', ownerSeat: 'Coder 1', ownerSince: '2026-09-14T01:00:00Z', featureId: '', project: '' },
                 ],
-                getActiveDispatchedByTerminal: async () => ({ planId: 'other-plan', dispatchedTerminal: 'Coder 1' }),
+                getActiveDispatchedByTerminal: async () => ({ planId: 'other-plan', ownerSeat: 'Coder 1' }),
             },
         });
-        plans.set('m1', card('m1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        plans.set('m1', card('m1', { ownerSeat: 'Coder 1' }));
         const r = await server.completeCardInternal(fakeDb, 'm1', 'Coding', { workspaceRoot: WS });
         assert.strictEqual(r.success, true);
         assert.strictEqual(r.cleared, false, 'a seat that moved on is not cleared');
@@ -371,7 +326,7 @@ async function run() {
         const { server, plans, clears, fakeDb } = makeServer({
             clearTerminalContext: async () => ({ cleared: false, reason: 'terminal not found' }),
         });
-        plans.set('f1', card('f1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        plans.set('f1', card('f1', { ownerSeat: 'Coder 1' }));
         const r = await server.completeCardInternal(fakeDb, 'f1', 'Coding', { workspaceRoot: WS });
         assert.strictEqual(r.success, true);
         assert.strictEqual(r.cleared, false, 'the failed clear is reported as cleared:false');
@@ -391,15 +346,14 @@ async function run() {
             + 'its code compared by NAME, so it fired on exactly the self-report the clear is owed to');
     });
 
-    // ── 5. One resolution helper, both paths ─────────────────────────────
-    // The 17-line CODING_ROLES resolution block was duplicated verbatim
-    // between the two functions. That duplication — not the guard — is the
-    // drift seam: two paths free to resolve a coding seat differently.
+    // ── 5. One resolution helper ─────────────────────────────────────────
+    // The 17-line CODING_ROLES resolution block used to be duplicated verbatim
+    // between the completion and release paths. Release is gone; the helper
+    // remains the one place a coding seat is resolved for an at-rest clear.
 
-    await check('both at-rest paths resolve the coding seat through ONE shared helper', async () => {
+    await check('completeCardInternal resolves the coding seat through the shared helper', async () => {
         const { server, plans, fakeDb } = makeServer();
-        plans.set('h1', card('h1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
-        plans.set('h2', card('h2', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        plans.set('h1', card('h1', { ownerSeat: 'Coder 1' }));
 
         const seen = [];
         const original = server._resolveAcceptedCodingSeat.bind(server);
@@ -409,11 +363,10 @@ async function run() {
         };
 
         await server.completeCardInternal(fakeDb, 'h1', 'Coder 1', { workspaceRoot: WS });
-        await server.releaseCardInternal(fakeDb, 'h2', 'Coder 1', { workspaceRoot: WS });
 
-        assert.deepStrictEqual(seen, ['h1', 'h2'],
-            'completeCardInternal and releaseCardInternal must BOTH go through _resolveAcceptedCodingSeat — '
-            + 'a second inline copy is the drift seam this extraction closes');
+        assert.deepStrictEqual(seen, ['h1'],
+            'completeCardInternal must go through _resolveAcceptedCodingSeat — '
+            + 'an inline copy is the drift seam this extraction closes');
     });
 
     await check('the helper reads host evidence only — never `from`, never the request body', () => {
@@ -423,7 +376,7 @@ async function run() {
         const end = src.indexOf('\n    }', start);
         const body = src.slice(start, end);
         assert.ok(/CODING_ROLES/.test(body), 'the CODING_ROLES gate lives in the helper');
-        assert.ok(/existing\.dispatchedTerminal/.test(body), 'the seat comes from the card row, host evidence');
+        assert.ok(/existing\.ownerSeat/.test(body), 'the seat comes from the card row, host evidence');
         assert.ok(/ptyListTerminals/.test(body), 'the live-fleet role fallback lives in the helper');
         assert.ok(!/\bfrom\b/.test(body.replace(/from host evidence/gi, '')),
             'the helper must never read `from` — that is what made the deleted guard a bug');

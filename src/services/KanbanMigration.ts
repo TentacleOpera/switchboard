@@ -41,7 +41,6 @@ export class KanbanMigration {
             repoScope: row.repoScope || '',
             brainSourcePath: (row as any).brainSourcePath || '',
             mirrorPath: (row as any).mirrorPath || '',
-            routedTo: '',
             dispatchedAgent: '',
             dispatchedIde: ''
         }));

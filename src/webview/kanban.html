@@ -3855,29 +3855,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const cardTs = parseInt(cardEl.dataset.ts || '0', 10);
                 // V60: when the target is the STAGING queue, insert by
-                // queue_position ascending with NULL last — the SAME
+                // column_order ascending — the SAME
                 // comparator the initial render uses, so a staged card does
                 // not jump to the top on the next board move and the queue
                 // stays visibly ordered mid-session. Falls back to the
                 // legacy ts-descending insert for every other target.
                 const queueInsert = (domTargetColumn === 'STAGING');
-                const cardQp = queueInsert ? parseInt(cardEl.dataset.queuePosition || '', 10) : NaN;
+                const cardQp = queueInsert ? parseInt(cardEl.dataset.columnOrder || '', 10) : NaN;
                 const cardQpNull = queueInsert && isNaN(cardQp);
                 const existingCards = Array.from(targetBody.querySelectorAll('.kanban-card'));
                 let inserted = false;
                 for (const child of existingCards) {
                     if (child === cardEl) continue;
                     if (queueInsert) {
-                        const childQp = parseInt(child.dataset.queuePosition || '', 10);
+                        const childQp = parseInt(child.dataset.columnOrder || '', 10);
                         const childQpNull = isNaN(childQp);
-                        // NULL sorts last: a non-null card goes before any null
-                        // child; a null card goes after every non-null child.
-                        if (!cardQpNull && childQpNull) {
+                        // V81: NULL sorts FIRST (a card that just arrived),
+                        // matching compareCardsByPrecedence. A null card goes
+                        // before any positioned child; a positioned card goes
+                        // after every null child.
+                        if (cardQpNull && !childQpNull) {
                             targetBody.insertBefore(cardEl, child);
                             inserted = true;
                             break;
                         }
-                        if (cardQpNull && !childQpNull) continue;
+                        if (!cardQpNull && childQpNull) continue;
                         if (!cardQpNull && !childQpNull && cardQp < childQp) {
                             targetBody.insertBefore(cardEl, child);
                             inserted = true;
@@ -5162,7 +5164,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // 1. Starred first — on the BOARD only. A mission is not the
             //    board and kanban priority does not reach inside one: a
             //    card added to a mission joins the end of its queue and
-            //    runs in queue_position order, starred or not. Matches
+            //    runs in column_order order, starred or not. Matches
             //    compareByPrecedence, which skips this step for STAGING.
             if (!queueOrdered) {
                 const sa = a.priorityStarred ? 1 : 0;
@@ -5214,33 +5216,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 return createdB - createdA;
             }
 
-            // Manual order: queue_position (STAGING) or column_order
-            // (elsewhere), ASC. A card that HAS a position outranks one
-            // that does not; cards that both lack one fall through to
+            // Manual order: column_order everywhere (V81 folded the
+            // STAGING-only queue_position into it), ASC. NULL column_order
+            // means "just arrived / not part of this column's arrangement",
+            // so it sorts FIRST — the top, where the board has always put a
+            // card that just landed. Cards that both lack one fall through to
             // column_entered_at. This matches compareByPrecedence exactly
             // (see its header for why manual-vs-NULL cannot be resolved
             // by timestamp without an intransitive comparator).
-            if (queueOrdered) {
-                const ap = a.queuePosition, bp = b.queuePosition;
-                const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
-                if (an && !bn) return 1;   // NULL sorts last in STAGING (V60 precedent)
-                if (!an && bn) return -1;
-                if (!an && !bn) {
-                    const d = ap - bp;
-                    if (d !== 0) return d;
-                }
-            } else {
+            {
                 const ap = a.columnOrder, bp = b.columnOrder;
                 const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
                 if (!an && !bn) {
                     const d = ap - bp;
                     if (d !== 0) return d;
                 } else if (an !== bn) {
-                    // NULL column_order means "just arrived / not part of
-                    // this column's arrangement", so it sorts FIRST — the
-                    // top, where the board has always put a card that just
-                    // landed. Opposite of STAGING above, where a NULL
-                    // queue_position means "never staged" and goes last.
                     return an ? -1 : 1;
                 }
                 // both null → fall through to column_entered_at
@@ -5277,7 +5267,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // innerHTML rebuild — appendChild on an existing node moves it, so no
         // card is destroyed/recreated (no flicker, no lost selection state).
         // STAGING is skipped: starred-first does not apply there (missions and
-        // queue_position govern), and the column interleaves mission cards the
+        // column_order govern), and the column interleaves mission cards the
         // comparator does not know about.
         function repositionCardInColumn(planId) {
             const card = currentCards.find(c => (c.planId || c.sessionId) === planId);
@@ -5628,16 +5618,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const items = buckets[col];
                 if (!container || !countEl) return;
                 // V60: the STAGING column renders the session queue, ordered
-                // by queue_position ascending with NULL last. The tie-break is
-                // the board's existing ts descending order so duplicate
-                // positions (a partial rewrite, or two windows staging at
+                // by column_order ascending (V81 folded queue_position into it).
+                // The tie-break is the board's existing ts descending order so
+                // duplicate positions (a partial rewrite, or two windows staging at
                 // once) sort deterministically rather
                 // than randomly — see the plan's Race Conditions note. Every
                 // other column keeps the ts-descending render it always had.
                 // V63: the shared precedence applies to EVERY column — starred
-                // first, then manual order (queue_position in STAGING,
-                // column_order elsewhere) ASC with NULL yielding to the
-                // fallback, then column_entered_at DESC, then createdAt DESC.
+                // first (outside STAGING), then column_order ASC with NULL
+                // first, then column_entered_at DESC, then createdAt DESC.
                 // This matches the consumer resolver (compareByPrecedence) so
                 // the screen and the system agree on which card is next.
                 // The comparator is extracted as compareCardsByPrecedence so
@@ -5893,7 +5882,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // STAGING is an ordered session queue (V60): cards enter via a
             // drag-into-STAGING drop (which posts stageForQueue), the Analyze
             // button (planner + dispatch-analysis skill), or remote intake; each
-            // entry gets a queue_position. A same-column drag inside STAGING
+            // entry gets a column_order. A same-column drag inside STAGING
             // reorders the queue.
             const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
                 ? `<button class="card-btn icon-btn send-to-backlog-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">
@@ -5936,7 +5925,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const reviewTooltip = card.isFeature ? 'Review feature' : 'Review plan';
             const t = card.lastActivity ? new Date(card.lastActivity).getTime() : 0;
             const tsVal = isNaN(t) ? 0 : t;
-            const qpVal = (card.queuePosition === null || card.queuePosition === undefined) ? '' : String(card.queuePosition);
+            const qpVal = (card.columnOrder === null || card.columnOrder === undefined) ? '' : String(card.columnOrder);
             // V63: priority star — one click toggles, no confirm gate (project rule).
             // Filled star when starred, outline when not. stopPropagation prevents
             // the click from triggering card selection or drag initiation.
@@ -5954,7 +5943,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <span style="display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:700; width:15px; height:15px; border-radius:50%; ${priorityNum ? `background:${priorityColor}22; border:1px solid ${priorityColor};` : 'border:1px dashed var(--vscode-descriptionForeground, #888); color:var(--vscode-descriptionForeground, #888);'}">${priorityNum ? `P${priorityNum}` : 'P'}</span>
             </button>`;
             return `
-                <div class="kanban-card${completedClass}${featureClass}${workingClass}${droppedClass}" draggable="true"${stateTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}" data-queue-position="${escapeAttr(qpVal)}">
+                <div class="kanban-card${completedClass}${featureClass}${workingClass}${droppedClass}" draggable="true"${stateTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}" data-column-order="${escapeAttr(qpVal)}">
                     <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
@@ -6798,7 +6787,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // V60: STAGING is a queue, not a plain column. A drop into STAGING
             // has two cases:
             //  1. Cross-column staging (any card from another column) — post
-            //     stageForQueue so cards get queue_position, subtask refusal,
+            //     stageForQueue so cards get column_order, subtask refusal,
             //     and stall-watch arming.
             //  2. Pure same-column reorder (EVERY dragged card is already in
             //     STAGING) — compute the insertion index from the drop position
@@ -6813,7 +6802,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // already-staged card's position untouched, which is lossless.
             if (effectiveTargetColumn === 'STAGING') {
                 // Cross-column drop INTO STAGING — route through stageForQueue
-                // so cards get queue_position, subtask refusal, and stall-watch
+                // so cards get column_order, subtask refusal, and stall-watch
                 // arming. Gate on STAGEABLE_COLUMNS (the mirror of the backend's
                 // _resolveStageablePlanIds set): a card from a coded/reviewed/
                 // completed column is refused by the backend, and a total refusal
@@ -6913,8 +6902,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // target is not STAGING, which has its own reorderQueue handler
             // above) computes the insertion index from the pointer Y and posts
             // reorderColumn to persist column_order. This mirrors the STAGING
-            // same-column reorder branch exactly, just writing column_order
-            // instead of queue_position. Mixed drags (some cards from other
+            // same-column reorder branch exactly — both write column_order
+            // under V81. Mixed drags (some cards from other
             // columns) fall through to the forward/backward move path below —
             // they are NOT same-column reorders.
             if (effectiveTargetColumn !== 'STAGING') {
@@ -6949,7 +6938,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // arrangement", invisibly, because the frozen order is the order
                     // already on screen. A user who never wanted manual ordering should
                     // not acquire it by fumbling a drag. (STAGING's branch needs no such
-                    // guard: every staged card already carries a queue_position, so the
+                    // guard: every staged card already carries a column_order, so the
                     // same redundant write puts the same numbers back.)
                     const unchanged = orderedIds.length === renderedIds.length
                         && orderedIds.every((id, i) => id === renderedIds[i]);

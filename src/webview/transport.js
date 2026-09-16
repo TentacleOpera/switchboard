@@ -235,6 +235,7 @@
             }
             isReconnecting = true;
             reconnectDelay = 500;
+            disarmReachabilityProbe();
         };
 
         ws.onmessage = function (event) {
@@ -298,6 +299,47 @@
         };
     }
 
+    // ─── Reachability probe ──────────────────────────────────────────────
+    // A flapping network path closes the socket repeatedly, and every failed
+    // retry DOUBLES the delay (500 ms → 30 s). After a few flips the client is
+    // sitting in a 30-second backoff long after the path came back.
+    //
+    // Observed 2026-09-16: a phone on mobile data re-picked between its IPv4 and
+    // IPv6 route to the board ~24 times in 30 minutes (tailscaled "now using"),
+    // the server reaped each silent socket ("no pong"), and reconnecting "took
+    // forever". The page was VISIBLE and FOCUSED throughout, so none of the
+    // reconnectIfDown triggers below fired, and `online` never fires either —
+    // the OS keeps its connection; only the route inside it moved.
+    //
+    // So probe instead of guessing: the board answering a cheap request is direct
+    // evidence the path is up, and is the signal to stop waiting out the backoff.
+    const REACHABILITY_PROBE_MS = 2000;
+    const PROBE_WHEN_DELAY_EXCEEDS_MS = 2000;
+    let probeTimer = null;
+
+    function disarmReachabilityProbe() {
+        if (probeTimer) { clearInterval(probeTimer); probeTimer = null; }
+    }
+
+    function armReachabilityProbe() {
+        if (probeTimer) { return; }
+        probeTimer = setInterval(function () {
+            // No retry pending means we are connected or closing deliberately.
+            if (!reconnectTimer) { disarmReachabilityProbe(); return; }
+            fetch('/health', { credentials: 'same-origin', cache: 'no-store' })
+                .then(function (r) {
+                    if (!r || !r.ok || !reconnectTimer) { return; }
+                    wsLog('reachability probe succeeded — reconnecting without waiting out the backoff');
+                    disarmReachabilityProbe();
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                    reconnectDelay = 500;
+                    connectWs();
+                })
+                .catch(function () { /* still unreachable — keep waiting */ });
+        }, REACHABILITY_PROBE_MS);
+    }
+
     function scheduleReconnect() {
         if (reconnectTimer) { return; }
         wsLog('reconnect scheduled in', reconnectDelay, 'ms');
@@ -306,6 +348,9 @@
             reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
             connectWs();
         }, reconnectDelay);
+        // Only once the wait is long enough to be worth short-circuiting. A
+        // 500 ms first retry needs no probe.
+        if (reconnectDelay > PROBE_WHEN_DELAY_EXCEEDS_MS) { armReachabilityProbe(); }
     }
 
     // A socket that closed while the window was hidden waits out a backoff that may
@@ -333,6 +378,10 @@
         reconnectIfDown(ev && ev.persisted ? 'pageshow (from bfcache)' : 'pageshow');
     });
     window.addEventListener('focus', function () { reconnectIfDown('window focus'); });
+    // Covers the genuine offline→online transition (airplane mode, Wi-Fi drop).
+    // The probe above covers the case this does NOT fire for: a route change
+    // inside a connection the OS still considers up.
+    window.addEventListener('online', function () { reconnectIfDown('network online'); });
 
     connectWs();
 

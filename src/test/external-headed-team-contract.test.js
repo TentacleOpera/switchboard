@@ -188,7 +188,7 @@ function makeMockDb(initialState = {}) {
         assert.strictEqual(resolvedCoder, 'ExternalLead-coder-1', 'Should resolve team-scoped coder');
     });
 
-    await test('6. dispatchNextFromQueue handles from = external agent name and in-flight refusal', async () => {
+    await test('6. dispatchNextFromQueue handles from = external agent name and never refuses', async () => {
         const WS = '/tmp/ext-team-ws';
         let planInDb = {
             planId: 'plan-123',
@@ -196,9 +196,9 @@ function makeMockDb(initialState = {}) {
             topic: 'Build Feature',
             kanbanColumn: 'STAGING',
             featureId: '',
-            dispatchedAt: null,
-            dispatchedTerminal: '',
-            queuePosition: 1,
+            ownerSeat: '',
+            ownerSince: null,
+            columnOrder: 1,
             complexity: 5,
         };
 
@@ -243,8 +243,8 @@ function makeMockDb(initialState = {}) {
                 if (verb === 'triggerAction') {
                     lastTriggerAction = payload;
                     planInDb.kanbanColumn = payload.targetColumn;
-                    planInDb.dispatchedAt = new Date().toISOString();
-                    planInDb.dispatchedTerminal = payload.targetTerminalOverride || 'worker-coder-1';
+                    planInDb.ownerSince = new Date().toISOString();
+                    planInDb.ownerSeat = payload.targetTerminalOverride || 'worker-coder-1';
                     return { success: true };
                 }
                 return { success: true };
@@ -266,17 +266,18 @@ function makeMockDb(initialState = {}) {
             lastTriggerAction.targetTerminalOverride, 'ExternalLead',
             'targetTerminalOverride must NOT be the external head — it is not a terminal');
         assert.strictEqual(
-            planInDb.dispatchedTerminal, 'worker-coder-1',
+            planInDb.ownerSeat, 'worker-coder-1',
             'The card must land on a worker of the external head\'s own team');
 
-        // In-flight check: second call while card is in CODER CODED
+        // Second call while the card sits in CODER CODED: STAGING is now empty,
+        // so the pop reports "queue empty" — ownership never refuses (V81).
         const secondRes = await server.dispatchNextFromQueue({
             workspaceRoot: WS,
             from: 'ExternalLead',
         });
 
-        assert.strictEqual(secondRes.status, 409, 'Second call should return 409 In-flight refusal');
-        assert.ok(secondRes.payload.error.includes('in flight'), 'Error should state team in flight');
+        assert.strictEqual(secondRes.status, 200, 'the pop never refuses — a drained STAGING is a 200');
+        assert.strictEqual(secondRes.payload.dispatched, null, 'nothing is staged to hand out');
     });
 
     await test('6b. A TERMINAL head keeps targetTerminalOverride even when the live-terminal list is stale', async () => {
@@ -289,8 +290,8 @@ function makeMockDb(initialState = {}) {
         const WS = '/tmp/ext-team-ws-2';
         const planInDb = {
             planId: 'plan-777', sessionId: 'plan-777', topic: 'Terminal lead card',
-            kanbanColumn: 'STAGING', featureId: '', dispatchedAt: null,
-            dispatchedTerminal: '', queuePosition: 1, complexity: 5,
+            kanbanColumn: 'STAGING', featureId: '', ownerSeat: '',
+            ownerSince: null, columnOrder: 1, complexity: 5,
         };
         let lastTriggerAction = null;
         const server = new LocalApiServer({
@@ -314,8 +315,8 @@ function makeMockDb(initialState = {}) {
                 if (verb === 'triggerAction') {
                     lastTriggerAction = payload;
                     planInDb.kanbanColumn = payload.targetColumn;
-                    planInDb.dispatchedAt = new Date().toISOString();
-                    planInDb.dispatchedTerminal = payload.targetTerminalOverride || 'TerminalLead-coder-1';
+                    planInDb.ownerSince = new Date().toISOString();
+                    planInDb.ownerSeat = payload.targetTerminalOverride || 'TerminalLead-coder-1';
                 }
                 return { success: true };
             },
@@ -328,17 +329,16 @@ function makeMockDb(initialState = {}) {
             'A terminal head must still receive its own card (the lead asked, the lead receives)');
     });
 
-    await test('6c. External head with no seat for the routed role is refused, not routed workspace-wide', async () => {
-        // Without the override, performKanbanDispatch resolves the routed role on the
-        // origin's team and, on a miss, falls back to WORKSPACE-WIDE routing — handing
-        // this team's card to another team's terminal. The in-flight predicate keys on
-        // team membership, so such a card is invisible to it and the one-in-one-out
-        // pacing silently stops applying. A miss must refuse and leave the card staged.
+    await test('6c. External head with no seat for the routed role falls back workspace-wide, tagged', async () => {
+        // V81: a role miss is no longer a refusal — the board never refuses a
+        // dispatch. Team-scoped resolution falls back to workspace-wide, and the
+        // miss is TAGGED in `teamRouting` so "no seat on this team" is
+        // distinguishable from "resolved" (AGENTS.md: tag it, do not fail quietly).
         const WS = '/tmp/ext-team-ws-3';
         const planInDb = {
             planId: 'plan-888', sessionId: 'plan-888', topic: 'Needs a lead',
-            kanbanColumn: 'STAGING', featureId: '', dispatchedAt: null,
-            dispatchedTerminal: '', queuePosition: 1, complexity: 9,
+            kanbanColumn: 'STAGING', featureId: '', ownerSeat: '',
+            ownerSince: null, columnOrder: 1, complexity: 9,
         };
         let triggered = false;
         const server = new LocalApiServer({
@@ -358,13 +358,24 @@ function makeMockDb(initialState = {}) {
             resolveKanbanDispatch: async () => ({ role: 'lead', cliTriggersEnabled: true, dragDropMode: 'terminal', source: null }),
             // No `lead` seat on this team.
             resolveTeamRoleTerminal: async (_ws, _origin, role) => (role === 'lead' ? null : 'ExternalLead-coder-1'),
-            kanbanVerb: async (verb) => { if (verb === 'triggerAction') { triggered = true; } return { success: true }; },
+            kanbanVerb: async (verb, payload) => {
+                if (verb === 'triggerAction') {
+                    triggered = true;
+                    planInDb.kanbanColumn = payload.targetColumn;
+                    planInDb.ownerSince = new Date().toISOString();
+                    planInDb.ownerSeat = payload.targetTerminalOverride || 'workspace-lead';
+                }
+                return { success: true };
+            },
         });
 
         const res = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'ExternalLead' });
-        assert.strictEqual(res.status, 409, 'A role miss on an external team must refuse');
-        assert.strictEqual(triggered, false, 'No dispatch may fire — the card stays staged');
-        assert.strictEqual(planInDb.kanbanColumn, 'STAGING', 'Card must stay in the queue');
+        assert.strictEqual(res.status, 200, 'a role miss is a tagged fallback, not a refusal');
+        assert.strictEqual(triggered, true, 'the card is dispatched');
+        assert.strictEqual(planInDb.kanbanColumn, 'LEAD CODED', 'the card moves to the routed column');
+        const routing = String(res.payload.teamRouting || res.payload.dispatched?.teamRouting || '');
+        assert.ok(/fell back to workspace-wide/.test(routing),
+            `the workspace-wide fallback must be tagged in teamRouting (got: ${routing})`);
     });
 
     await test('7. No dispatch path can target the external head', async () => {

@@ -152,16 +152,17 @@ function run() {
             !/'DISPATCH'/.test(fnBody),
             "appendQueuePositions must not bind 'DISPATCH' — cards written there are invisible to the pop"
         );
-        // The MAX(queue_position) read must be scoped to STAGING, or positions are
-        // appended from another column's high-water mark.
+        // The MAX(column_order) read must be scoped to STAGING, or positions are
+        // appended from another column's high-water mark. (V81 folded
+        // queue_position into column_order.)
         assert.ok(
-            /MAX\(queue_position\)[\s\S]*?kanban_column\s*=\s*\?[\s\S]*?\[\s*workspaceId\s*,\s*'STAGING'\s*\]/.test(fnBody),
-            "the MAX(queue_position) query must bind 'STAGING' — reading another column returns the wrong high-water mark"
+            /MAX\(column_order\)[\s\S]*?kanban_column\s*=\s*\?[\s\S]*?\[\s*workspaceId\s*,\s*'STAGING'\s*\]/.test(fnBody),
+            "the MAX(column_order) query must bind 'STAGING' — reading another column returns the wrong high-water mark"
         );
         // The UPDATE must set the column to STAGING, or a staged card keeps its old
         // column and the pop never sees it.
         assert.ok(
-            /UPDATE plans SET queue_position = \?, kanban_column = \?[\s\S]*?\[\s*next\s*,\s*'STAGING'/.test(fnBody),
+            /UPDATE plans SET column_order = \?, kanban_column = \?[\s\S]*?\[\s*next\s*,\s*'STAGING'/.test(fnBody),
             "the UPDATE must write kanban_column = 'STAGING' — a card that keeps its old column is never popped"
         );
     });

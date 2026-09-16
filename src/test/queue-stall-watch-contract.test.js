@@ -3,13 +3,17 @@
 /**
  * Queue Stall Watch Contract — a completed card is not in flight.
  *
+ * V81 note: the in-flight predicate is now the advisory `owner_since` stamp on
+ * a card whose `owner_seat` is on the watch's team, plus `!completedAt`. The
+ * old `dispatched_at`/`dispatched_terminal` columns are gone.
+ *
  * Covers:
  * 1. Head pacing: a team whose only held card carries completed_at is NOT in
  *    flight — the sweep nudges, and a second tick does not reset its nudge
  *    state (the in-flight branch's reset is the defect's signature).
- * 2. Head pacing: a team with an outstanding dispatch (dispatched_at set,
- *    completed_at NULL) IS in flight and the sweep stays silent.
- * 2b. Head pacing: a holder with dispatched_at cleared is NOT in flight — a
+ * 2. Head pacing: an outstanding dispatch (owner_since set, completed_at NULL)
+ *    IS in flight and the sweep stays silent.
+ * 2b. Head pacing: a holder with owner_since cleared is NOT in flight — a
  *    released latch is not an outstanding dispatch.
  * 3. Seat pacing: a completed card with a dead holder does NOT resolve as the
  *    pacer, and the escalation recorder is not called.
@@ -53,9 +57,8 @@ function card(planId, kanbanColumn, extra = {}) {
         planFile: `.switchboard/plans/${planId}.md`,
         kanbanColumn,
         featureId: '',
-        dispatchedAt: null,
-        dispatchedTerminal: '',
-        queuePosition: null,
+        ownerSeat: '',
+        ownerSince: null,
         completedAt: null,
         workspaceId: 'ws1',
         ...extra,
@@ -128,10 +131,10 @@ async function run() {
 
     await check('head pacing: team with completed card is NOT in flight and nudges across ticks', async () => {
         const board = [
-            card('staged-1', 'STAGING', { queuePosition: 1 }),
+            card('staged-1', 'STAGING', { columnOrder: 1 }),
             card('sub-1', 'LEAD CODED', {
-                dispatchedTerminal: 'Coding',
-                dispatchedAt: '2026-08-26T10:00:00Z',
+                ownerSeat: 'Coding',
+                ownerSince: '2026-08-26T10:00:00Z',
                 completedAt: '2026-08-26T10:05:00Z',
             }),
         ];
@@ -197,12 +200,12 @@ async function run() {
 
     // ── 2. Head pacing: outstanding dispatch IS in flight ──────────────────
 
-    await check('head pacing: outstanding dispatch (dispatched_at set, no completed_at) suppresses nudge', async () => {
+    await check('head pacing: outstanding dispatch (owner_since set, no completed_at) suppresses nudge', async () => {
         const board = [
-            card('staged-1', 'STAGING', { queuePosition: 1 }),
+            card('staged-1', 'STAGING', { columnOrder: 1 }),
             card('sub-1', 'CODER CODED', {
-                dispatchedTerminal: 'Coder-1',
-                dispatchedAt: '2026-08-26T10:00:00Z',
+                ownerSeat: 'Coder-1',
+                ownerSince: '2026-08-26T10:00:00Z',
                 completedAt: null,
             }),
         ];
@@ -245,21 +248,21 @@ async function run() {
 
     // ── 2b. Head pacing: a released latch is not an outstanding dispatch ────
     //
-    // The `dispatched_at` half of the predicate, pinned on its own. A holder
-    // alone is NOT a dispatch: `clearWorkingState` nulls `dispatched_at` at
-    // turn end but deliberately leaves `dispatched_terminal` set, so a card
+    // The `owner_since` half of the predicate, pinned on its own. A holder
+    // alone is NOT a dispatch: `clearWorkingState` nulls `owner_since` at
+    // turn end but deliberately leaves `owner_seat` set, so a card
     // whose coder finished a turn without a completion post keeps its holder
     // forever. Keying in-flight on the holder alone reads that card as live
     // work and muzzles the watch — the same silence as the column read, under
     // a different clause. Suppression here is the team-liveness gate's job
     // (a coder still producing output), not the in-flight gate's.
 
-    await check('head pacing: holder set with dispatched_at cleared is NOT in flight', async () => {
+    await check('head pacing: holder set with owner_since cleared is NOT in flight', async () => {
         const board = [
-            card('staged-1', 'STAGING', { queuePosition: 1 }),
+            card('staged-1', 'STAGING', { columnOrder: 1 }),
             card('sub-1', 'CODER CODED', {
-                dispatchedTerminal: 'Coder-1',
-                dispatchedAt: null,
+                ownerSeat: 'Coder-1',
+                ownerSince: null,
                 completedAt: null,
             }),
         ];
@@ -306,10 +309,10 @@ async function run() {
 
     await check('seat pacing: completed card with dead holder does not resolve as pacer and does not escalate', async () => {
         const board = [
-            card('staged-1', 'STAGING', { queuePosition: 1 }),
+            card('staged-1', 'STAGING', { columnOrder: 1 }),
             card('sub-1', 'CODER CODED', {
-                dispatchedTerminal: 'Coder-1',
-                dispatchedAt: '2026-08-26T10:00:00Z',
+                ownerSeat: 'Coder-1',
+                ownerSince: '2026-08-26T10:00:00Z',
                 completedAt: '2026-08-26T10:05:00Z',
             }),
         ];
@@ -353,18 +356,16 @@ async function run() {
 
     await check('ladder: reportQueueDone(outcome: failed) on completed card does not re-stage', async () => {
         const heldPlan = card('sub-1', 'CODER CODED', {
-            dispatchedTerminal: 'Coder-1',
-            dispatchedAt: '2026-08-26T10:00:00Z',
+            ownerSeat: 'Coder-1',
+            ownerSince: '2026-08-26T10:00:00Z',
             completedAt: '2026-08-26T10:05:00Z',
-            routedTo: 'coder',
         });
         const board = [
             heldPlan,
-            card('staged-1', 'STAGING', { queuePosition: 1 }),
+            card('staged-1', 'STAGING', { columnOrder: 1 }),
         ];
 
         const movedColumns = [];
-        const releasedHolders = [];
 
         const server = new LocalApiServer({
             clickupMetadataPath: '',
@@ -384,10 +385,6 @@ async function run() {
                 clearWorkingState: async () => true,
                 updateColumnByPlanFile: async (file, wsId, col) => {
                     movedColumns.push({ file, col });
-                    return true;
-                },
-                releaseDispatchHolder: async (file, wsId) => {
-                    releasedHolders.push(file);
                     return true;
                 },
                 getConfigJson: async () => [],
@@ -410,7 +407,6 @@ async function run() {
 
         assert.strictEqual(res.status, 200);
         assert.deepStrictEqual(movedColumns, [], 'failed report on completed card must NOT move column back to STAGING');
-        assert.deepStrictEqual(releasedHolders, [], 'failed report on completed card must NOT release dispatch holder for restaging');
     });
 
     // ── 5. Source pins ───────────────────────────────────────────────────

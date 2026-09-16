@@ -582,6 +582,19 @@ jobs:
       - name: Remote command vocabulary contract (two verbs, review gate fails closed)
         run: npm run test:contract:remote-command-vocabulary
 
+      # Provider-capability parity contract — every RemoteProvider implementation is
+      # enumerated (discovered from source, not hardcoded), every field of
+      # RemoteProviderCapabilities is enumerated (re-parsed from the interface), and
+      # any asymmetry must carry a typed exemption: platform-limitation needs no plan
+      # reference and should never be removed; not-yet-built must name the plan that
+      # removes it, and deleting the exemption is how a landing plan proves itself.
+      # The stub-detection half is the one that would have caught the original drift:
+      # ClickUp declared pull:true over a fetchCommentDeltas that returns the input
+      # cursor unchanged — a boolean-compare test rates that green; this one calls it.
+      # Needs out/ built, so it must stay AFTER "Compile test outputs".
+      - name: Provider capability parity contract (typed exemptions, stub detection)
+        run: npm run test:contract:provider-capability-parity
+
       # Tailnet bind policy. Every failure mode here is silent and reach-shaped:
       # binding 0.0.0.0 instead of the specific Tailscale address exposes the
       # board to every network the machine is on; moving the bind instead of

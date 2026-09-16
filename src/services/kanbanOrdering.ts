@@ -12,13 +12,13 @@
  *   1. starred first  (priority_starred: 1 before 0) — OUTSIDE STAGING ONLY.
  *                      A mission is not the kanban board; board priority does
  *                      not apply inside one. A card added to a mission joins
- *                      the end of its queue and runs in queue_position order,
+ *                      the end of its queue and runs in column_order order,
  *                      starred or not.
- *   2. manual order   (queue_position in STAGING, column_order elsewhere)
+ *   2. manual order   (column_order, everywhere — V81 folded the STAGING-only
+ *                      queue_position into it)
  *                      ASC. Cards that both lack one fall through to step 3.
- *                      Where only one has one, NULL goes LAST in STAGING
- *                      (NULL = never staged) and FIRST everywhere else
- *                      (NULL = just arrived) — see the note below.
+ *                      Where only one has one, NULL goes FIRST (NULL = just
+ *                      arrived) — see the note below.
  *   3. column_entered_at DESC  (most recently moved to column first)
  *   4. createdAt DESC          (final stable tiebreaker)
  *
@@ -32,22 +32,24 @@
  * That rules out sorting NULL against a number BY DATE. It says nothing about
  * which side NULL falls on when the two are compared directly, and NULLs-first
  * is exactly as transitive as NULLs-last. The choice is therefore about meaning,
- * not soundness, and the two fields mean opposite things: a NULL queue_position
- * is a card that was never staged (end of the queue), a NULL column_order is a
- * card that just arrived (top of the column). Carrying V60's NULLs-last rule
- * across to column_order sent freshly dragged cards to the bottom, which is
- * neither what the board did before V63 nor what anyone asked for.
+ * not soundness: a NULL column_order is a card that just arrived (top of the
+ * column). Carrying V60's NULLs-last rule across to column_order sent freshly
+ * dragged cards to the bottom, which is neither what the board did before V63
+ * nor what anyone asked for.
  *
  * A cross-column move therefore just clears the position and writes nothing —
  * moving a card between columns is a stage change, not a statement about
  * priority. The card is then NULL, and NULL is the top. An arrangement orders
  * the cards that were arranged; it does not outrank a new arrival.
  *
- * STAGING keeps queue_position exclusively — column_order is never read there.
- * Non-STAGING columns read column_order; queue_position is ignored there.
+ * V81: `queue_position` is gone — the STAGING queue order IS `column_order`.
+ * A staged card always carries one; a NULL inside STAGING is a card that just
+ * arrived and sorts first, same as every other column.
  *
- * In-progress exclusion (!dispatchedAt) is a FILTER, not a sort — callers must
- * apply it BEFORE calling this comparator. Age was never a substitute for it.
+ * Eligibility (completion, feature membership, dependency blocking) is a
+ * FILTER, not a sort — callers must apply it BEFORE calling this comparator.
+ * Ownership is never part of either: V81 made owner_seat/owner_since advisory
+ * display metadata that no eligibility rule may read.
  */
 
 export type SortMode = 'manual' | 'priority' | 'date' | 'complexity';
@@ -56,7 +58,6 @@ export interface OrderableCard {
     priorityStarred?: number | null;
     priority?: number | null;
     complexity?: string;
-    queuePosition?: number | null;
     columnOrder?: number | null;
     columnEnteredAt?: string | null;
     createdAt?: string;
@@ -67,8 +68,8 @@ export interface OrderableCard {
  * Compare two cards by the shared precedence. Returns negative if `a` sorts
  * before `b`, positive if after, 0 if equal (stable sort preserves input order).
  *
- * @param column The column the cards are in. 'STAGING' uses queue_position;
- *               every other column uses column_order.
+ * @param column The column the cards are in. Every column uses column_order
+ *               (V81 folded STAGING's queue_position into it).
  * @param mode   The global board sort mode ('manual' | 'priority' | 'date' | 'complexity').
  *               Default: 'manual'.
  */
@@ -82,7 +83,7 @@ export function compareByPrecedence(
 
     // 1. Starred first — on the BOARD only. A mission is not the board, and
     //    kanban priority does not reach inside one: a card added to a mission
-    //    joins the end of its queue and runs in queue_position order, starred
+    //    joins the end of its queue and runs in column_order order, starred
     //    or not. Letting the star jump a mission's queue would let board-level
     //    urgency reorder a sequence the mission already committed to.
     if (!isStaging) {
@@ -137,28 +138,31 @@ export function compareByPrecedence(
         return createdB - createdA; // DESC
     }
 
-    // Manual order (default, or fallback for priority mode):
-    // queue_position (STAGING) or column_order (elsewhere).
-    // ASC; a card that has one outranks a card that does not (see the NULL
-    // note in the header — the alternative is an intransitive comparator).
-    const oa = isStaging ? (a.queuePosition ?? null) : (a.columnOrder ?? null);
-    const ob = isStaging ? (b.queuePosition ?? null) : (b.columnOrder ?? null);
+    // Manual order (default, or fallback for priority mode): column_order ASC.
+    // A card that has one outranks a card that does not (see the NULL note in
+    // the header — the alternative is an intransitive comparator).
+    const oa = a.columnOrder ?? null;
+    const ob = b.columnOrder ?? null;
     const oaNull = oa === null;
     const obNull = ob === null;
     if (!oaNull && !obNull) {
         const d = (oa as number) - (ob as number);
         if (d !== 0) return d;
     } else if (oaNull !== obNull) {
-        // Exactly one side carries a position. Which way NULL goes depends on
-        // what NULL MEANS in that field, and it means opposite things:
-        //   STAGING     — queue_position NULL is "never staged", so it belongs
-        //                 at the END of the queue (the V60 rule, unchanged).
-        //   every other — column_order NULL is "just arrived / not part of this
-        //   column        column's arrangement", so it belongs at the TOP, which
-        //                 is where the board has always put a card that just
-        //                 landed. An arrangement orders the cards that were
-        //                 arranged; it does not outrank a new arrival.
-        if (isStaging) return oaNull ? 1 : -1;
+        // Exactly one side carries a position.
+        //
+        // Outside STAGING: NULL column_order is "just arrived / not part of this
+        // column's arrangement", so it belongs at the TOP — where the board has
+        // always put a card that just landed. An arrangement orders the cards
+        // that were arranged; it does not outrank a new arrival.
+        //
+        // Inside STAGING: NULL goes LAST. STAGING is a mission's member list and
+        // this comparator also drives the pop order, so a card that arrives
+        // without a position must join the END of the sequence the mission
+        // already committed to — never jump to the front of it. V81 folded
+        // queue_position into column_order and briefly dropped this distinction,
+        // which made a card dragged into STAGING the next thing dispatched.
+        if (isStaging) { return oaNull ? 1 : -1; }
         return oaNull ? -1 : 1;
     }
     // Both null (or equal manual order) → fall through to column_entered_at.

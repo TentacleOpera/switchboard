@@ -166,25 +166,25 @@ export async function exportProject(options: ProjectExportOptions): Promise<Proj
             const remappedWtId = plan.worktree_id ? (worktreeIdRemap.get(Number(plan.worktree_id)) ?? null) : null;
 
             exportDriver.run(
-                // A bundle carries SHARED board state only. `dispatched_at`, `dispatched_terminal`,
-                // `last_liveness_at` and `blocked_at` are machine-local runtime state — the V74
-                // tier split moved them out of `plans` into `plan_runtime_state`, so naming them
-                // here fails outright against a current schema, and carrying them would import
-                // one machine's live dispatch onto another as though it were board state.
-                'INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                // A bundle carries SHARED board state only — the V81 shape, with the
+                // advisory `owner_seat`/`owner_since` stamp. `dispatched_agent`/
+                // `dispatched_ide`/`dispatched_team_group` are machine-local
+                // (`plan_runtime_state`), so carrying them would import one machine's
+                // live dispatch onto another as though it were board state.
+                'INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, clickup_task_id, linear_issue_id, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority, owner_seat, owner_since) ' +
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     plan.plan_id, plan.session_id, plan.topic, plan.plan_file, plan.kanban_column,
                     plan.status, plan.complexity, plan.tags, plan.dependencies, plan.repo_scope,
                     plan.workspace_id, plan.created_at, plan.updated_at, plan.last_action,
-                    plan.source_type, plan.brain_source_path, plan.mirror_path, plan.routed_to,
-                    plan.dispatched_agent, plan.dispatched_ide, plan.clickup_task_id,
-                    plan.linear_issue_id, plan.needs_path_fix ?? 0, plan.needs_relative_conversion ?? 0,
+                    plan.source_type, plan.brain_source_path, plan.mirror_path,
+                    plan.clickup_task_id, plan.linear_issue_id,
                     plan.project, remappedWtId, plan.worktree_status,
                     plan.workspace_name, remappedProjId,
                     plan.notion_page_id, plan.is_feature, plan.feature_id,
-                    plan.queue_position, plan.column_entered_at, plan.completed_at,
-                    plan.priority_starred, plan.column_order, plan.map_fingerprint, plan.priority
+                    plan.column_entered_at, plan.completed_at,
+                    plan.priority_starred, plan.column_order, plan.map_fingerprint, plan.priority,
+                    plan.owner_seat, plan.owner_since
                 ]
             );
         }
@@ -465,23 +465,33 @@ export async function importProject(options: ProjectImportOptions): Promise<Proj
 
             targetDriver.run(
                 // Shared tier only — see the matching note in exportProject. An OLD bundle may
-                // still carry the four runtime columns; they are deliberately dropped on import
-                // rather than restored, because another machine's dispatch and liveness are not
-                // facts about this one.
-                'INSERT OR REPLACE INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                // still carry routed_to/dispatched_*/queue_position; they are deliberately
+                // dropped on import (another machine's dispatch is not a fact about this
+                // one), with queue_position folded into column_order and the old
+                // dispatched_terminal/dispatched_at pair mapped onto owner_seat/owner_since.
+                'INSERT OR REPLACE INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, clickup_task_id, linear_issue_id, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority, owner_seat, owner_since) ' +
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     plan.plan_id, plan.session_id, plan.topic, plan.plan_file, plan.kanban_column,
                     plan.status, plan.complexity, plan.tags, plan.dependencies, plan.repo_scope,
                     effectiveTargetWorkspaceId, plan.created_at, plan.updated_at, plan.last_action,
-                    plan.source_type, plan.brain_source_path, plan.mirror_path, plan.routed_to,
-                    plan.dispatched_agent, plan.dispatched_ide, plan.clickup_task_id,
-                    plan.linear_issue_id, plan.needs_path_fix ?? 0, plan.needs_relative_conversion ?? 0,
+                    plan.source_type, plan.brain_source_path, plan.mirror_path,
+                    plan.clickup_task_id, plan.linear_issue_id,
                     plan.project, remappedWtId, plan.worktree_status,
                     plan.workspace_name, remappedProjId,
                     plan.notion_page_id, plan.is_feature, plan.feature_id,
-                    plan.queue_position, plan.column_entered_at, plan.completed_at,
-                    plan.priority_starred, plan.column_order, plan.map_fingerprint, plan.priority
+                    plan.column_entered_at, plan.completed_at,
+                    plan.priority_starred, plan.column_order ?? plan.queue_position ?? null,
+                    plan.map_fingerprint, plan.priority,
+                    // Live ownership is NOT board state and is not carried.
+                    // `owner_since` drives `_inFlightSql` (owner_since IS NOT NULL)
+                    // with no age window, so exporting it while a seat is mid-work
+                    // pins those cards in the receiving board's working set
+                    // indefinitely — phantom in-flight cards and a lit activity
+                    // light on a machine where nothing is running. Same reasoning
+                    // the comment above gives for the machine-local dispatch trio.
+                    '',
+                    null
                 ]
             );
         }

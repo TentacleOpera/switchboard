@@ -701,7 +701,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // is a property of the delivery layer, not a caller chore. The stamp is
         // captured BEFORE the send because fire-and-forget registration lands
         // after the send and stamping at write time would invert the
-        // `plan-file mtime > dispatched_at` completion compare. The parser's
+        // `plan-file mtime > owner_since` completion compare. The parser's
         // `PLANS TO PROCESS:` requirement gates non-dispatch traffic (reports,
         // chatter, turn-end notices) — no second caller-shape test needed.
         const hasDispatch = dispatch !== undefined && dispatch !== null;
@@ -793,7 +793,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 planIds: parsedDispatchIdentity.planIds,
                 planFiles: parsedDispatchIdentity.planFiles,
                 workspaceRoot,
-                dispatchedAt: parsedDispatchedAt
+                since: parsedDispatchedAt
             }).catch(() => { /* a lost registration degrades a backstop, never a send */ });
         }
         return receipt;
@@ -1277,13 +1277,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const broadcastAgentCompletedForRecord = (record: any, meta?: { planCount?: number }) => {
         void (async () => {
             if (!server) { return; }
-            let terminalName = (record.dispatchedTerminal || '').trim();
+            let terminalName = (record.ownerSeat || '').trim();
             let worktreePath: string | undefined;
             try {
                 const activeWorktrees = await db.getWorktrees();
                 worktreePath = matchWorktreePath(activeWorktrees, record);
             } catch { /* worktree lookup is best-effort — the toast still names plan+role */ }
-            // Fallback for rows dispatched before the dispatched_terminal column existed
+            // Fallback for rows dispatched before the owner_seat column existed
             // (and for extension-host dispatches, which don't record it). Mirrors the
             // dispatch selection rule above: exact role+worktree, then ANY role already
             // living in that worktree, then a role match anywhere. Still unresolved →
@@ -1769,6 +1769,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     ingestionEngine.setFeatureFileRegenerator(
         (ws, fid) => kanbanProvider.regenerateFeatureFile(ws, fid)
     );
+    // Purge sweep -> client resync. Without this the sweep deletes rows and every
+    // open board keeps rendering the purged cards until a manual refresh.
+    ingestionEngine.setOnBoardMutated(() => schedulePushFullState());
     taskViewerProvider.setKanbanProvider(kanbanProvider);
     kanbanProvider.setTaskViewerProvider(taskViewerProvider);
 
@@ -3478,7 +3481,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // shared precedence comparator reads EXCEPT the column, which they
                         // spell `kanbanColumn`. Without the alias `selectTeamBatchPlans`
                         // resolves sortColumn to '' — so a STAGING batch would order by
-                        // column_order (always NULL in STAGING) instead of queue_position,
+                        // column_order against records that may spell it differently,
                         // and the two hosts would partition one selection into different
                         // sent/skipped sets. Shallow copies: every downstream read
                         // (planFile, workspaceId, sessionId, planId, kanbanColumn, topic)
@@ -3551,10 +3554,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             if (!rec.planFile) { continue; }
                             try {
                                 await db.updateDispatchInfoByPlanFile(rec.planFile, rec.workspaceId || workspaceId, {
-                                    routedTo: targetColumn || rec.kanbanColumn || '',
+                                    ownerSeat: tmuxPaneRecord.friendlyName,
                                     dispatchedAgent: targetRole,
                                     dispatchedIde: TMUX_IDE_NAME,
-                                    dispatchedTerminal: tmuxPaneRecord.friendlyName,
                                 });
                                 if (rec.planId) {
                                     await db.clearCompletedAt?.(rec.planId);
@@ -3641,10 +3643,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         if (!rec.planFile) { continue; }
                         try {
                             await db.updateDispatchInfoByPlanFile(rec.planFile, rec.workspaceId || workspaceId, {
-                                routedTo: targetColumn || rec.kanbanColumn || '',
+                                ownerSeat: terminal.friendlyName,
                                 dispatchedAgent: targetRole,
                                 dispatchedIde: PTY_IDE_NAME,
-                                dispatchedTerminal: terminal.friendlyName,
                             });
                             if (rec.planId) {
                                 await db.clearCompletedAt?.(rec.planId);
@@ -5355,6 +5356,9 @@ Each plan file must include:
         onTeamReleased: async (wsRoot: string, teamMemberNames: string[]) => {
             await taskViewerProvider?.clearAdvanceWhenReadyJobs(wsRoot, teamMemberNames);
         },
+        // DELETE /kanban/plans does not route through the kanbanVerb `default:` arm,
+        // so it has no push of its own. Same resync the move path gets.
+        onBoardMutated: () => schedulePushFullState(),
         getFullState,
         consumeOneTimeToken,
         mintEnrolmentToken,

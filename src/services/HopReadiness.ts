@@ -1,5 +1,3 @@
-import { heldByTeam } from './LocalApiServer';
-
 export type HopName = 'plan' | 'code' | 'review';
 export type HopId = HopName | 1 | 2 | 3;
 
@@ -15,9 +13,9 @@ export interface HopBoardCard {
     planId?: string;
     topic?: string;
     kanbanColumn?: string;
-    dispatchedTerminal?: string;
+    ownerSeat?: string;
     dispatchedAgent?: string;
-    dispatchedAt?: string | number | null;
+    ownerSince?: string | number | null;
     completedAt?: string | number | null;
     featureId?: string | null;
     [key: string]: any;
@@ -65,8 +63,9 @@ export function normalizeHop(hop: HopId): HopName {
  * 1. Missing inputs (empty fleet or missing board) return `{ unknown: string }`.
  *    Empty fleet fails closed: an empty fleet means unknown -> do not dispatch.
  * 2. If the destination team has no live seat in the fleet, return `{ unknown: string }`.
- * 3. Checks card assignment on the board via `heldByTeam` for all seats matching
- *    the hop's readiness roles. If any seat holds an uncompleted card, return `{ free: false, reason: string }`.
+ * 3. Checks card assignment on the board via the advisory owner stamp
+ *    (`ownerSeat` + `ownerSince`) for all seats matching the hop's readiness
+ *    roles. If any seat holds an uncompleted card, return `{ free: false, reason: string }`.
  * 4. Otherwise return `{ free: true, reason: string }`.
  */
 export function teamIsFree(hop: HopId, snapshot?: HopSnapshot | null): HopReadinessResult {
@@ -101,10 +100,18 @@ export function teamIsFree(hop: HopId, snapshot?: HopSnapshot | null): HopReadin
     );
     const readinessTerminalNames = new Set<string>(readinessSeats.map(s => s.friendlyName));
 
-    // Check if any card is held by any readiness terminal
+    // Check if any card is held by any readiness terminal. The advisory owner
+    // stamp is the signal: ownerSeat names a seat, ownerSince says the stamp is
+    // live, completedAt means the work is done. Advisory only — a dispatch is
+    // never refused; this just paces the hop scheduler.
     for (const card of snapshot.board) {
-        if (heldByTeam(card, readinessTerminalNames)) {
-            const holder = card.dispatchedTerminal;
+        const holder = typeof card.ownerSeat === 'string' ? card.ownerSeat.trim() : '';
+        // NOT gated on `ownerSince`: `_columnMoveDispatchClearSql` nulls it on EVERY
+        // column move, so a seat still mid-turn on a just-advanced card would read as
+        // free and take a second card into the same worktree. Holder + no completion
+        // is the predicate `heldByTeam` used. This paces the hop scheduler away from
+        // a BUSY SEAT (a concurrent-write hazard); it never refuses a dispatch.
+        if (holder && !card.completedAt && readinessTerminalNames.has(holder)) {
             const cardId = card.planId || card.topic || 'unknown';
             return {
                 free: false,

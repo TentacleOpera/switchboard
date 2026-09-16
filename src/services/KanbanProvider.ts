@@ -61,6 +61,7 @@ import type { RemoteProvider } from './remote/RemoteProvider';
 import { LinearRemoteProvider } from './remote/LinearRemoteProvider';
 import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
 import { ClickUpRemoteProvider } from './remote/ClickUpRemoteProvider';
+import { StoreRemoteProvider } from './StoreRemoteProvider';
 import { loadNotionRemoteSetup } from './remote/notionRemoteConfig';
 import { getProjectDesignSystemPath, migrateLegacyDesignSystemIfNeeded, setProjectDesignSystemPath, removeProjectDesignSystemPath } from './designSystemUtils';
 import { LastWriteWinsResolver } from './remote/ContentConflictResolver';
@@ -144,15 +145,14 @@ export interface KanbanCard {
     featureId?: string;
     subtaskCount?: number;
     working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
-    // The seat and the moment of dispatch. `working` is DERIVED from dispatchedAt, so
-    // neither field leaks anything the push did not already carry — but a consumer that
-    // has to NAME the seat ("SEAT: coder-1") or run an elapsed clock cannot recover
-    // either from a boolean. The mobile command surface reads both; it used to get them
-    // from GET /kanban/plans (KanbanDatabase._readRows) and lost them when it moved onto
-    // this push. Empty string / null on a card that was never dispatched.
-    dispatchedTerminal?: string;
-    dispatchedAt?: string | null;
-    queuePosition?: number | null; // V60: 1-based STAGING session queue position; NULL = not staged (sorts last)
+    // The seat the card was last handed to and the moment. `working` is DERIVED
+    // from ownerSince, so neither field leaks anything the push did not already
+    // carry — but a consumer that has to NAME the seat ("SEAT: coder-1") or run
+    // an elapsed clock cannot recover either from a boolean. The mobile command
+    // surface reads both. ADVISORY display metadata only — never a dispatch gate
+    // (V81). Empty string / null on a card that was never dispatched.
+    ownerSeat?: string;
+    ownerSince?: string | null;
     columnEnteredAt?: string | null; // V61: when the card entered its current column (board sort key)
     priorityStarred?: number; // V63: 0/1 priority flag; starred cards sort first in every consumer
     // V67: native card priority, 1-4 (1=urgent, 4=low) or null for no priority.
@@ -169,29 +169,23 @@ export interface KanbanCard {
     missionName?: string; // the mission's codename, for the group label
 }
 
-// Activity-light window default. A card is `working` while dispatched_at is set and
-// younger than the configured timeout. The timeout sweep (GlobalPlanWatcherService) is the
-// authoritative backstop that nulls dispatched_at past this age; this read-time check keeps
-// the light accurate between sweeps. Reads the live `switchboard.activityLight.timeoutMs`
-// setting so the read-time check and the sweep stay in sync when the user changes it.
+// Activity-light window default. A card is `working` while owner_since is set and
+// younger than the configured timeout. Reads the live `switchboard.activityLight.timeoutMs`
+// setting so the read-time check and the dead-seat sweep stay in sync when the user changes it.
 const DEFAULT_WORKING_STATE_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Read-time activity-light derive. A card is `working` while its widened age basis —
- * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)` — is younger than `timeoutMs`.
+ * Read-time activity-light derive. A card is `working` while its `ownerSince`
+ * stamp is younger than `timeoutMs`.
  */
 function isWorkingState(
-    dispatchedAt: string | null | undefined,
-    timeoutMs: number,
-    lastLivenessAt?: string | null
+    ownerSince: string | null | undefined,
+    timeoutMs: number
 ): { working: boolean } {
-    if (!dispatchedAt) return { working: false };
-    const ts = Date.parse(dispatchedAt);
+    if (!ownerSince) return { working: false };
+    const ts = Date.parse(ownerSince);
     if (!Number.isFinite(ts)) return { working: false };
-    const now = Date.now();
-    const livenessTs = lastLivenessAt ? Date.parse(lastLivenessAt) : NaN;
-    const basis = Number.isFinite(livenessTs) && (livenessTs as number) > ts ? (livenessTs as number) : ts;
-    const working = (now - basis) < timeoutMs;
+    const working = (Date.now() - ts) < timeoutMs;
     return { working };
 }
 
@@ -2332,7 +2326,7 @@ export class KanbanProvider implements vscode.Disposable {
             const featureState = row.isFeature ? featureWorkingMap.get(row.planId) : undefined;
             const cardState = row.isFeature
                 ? { working: featureState?.working ?? false }
-                : isWorkingState(row.dispatchedAt, timeoutMs, row.lastLivenessAt);
+                : isWorkingState(row.ownerSince, timeoutMs);
             return {
                 planId: row.planId,
                 sessionId: row.sessionId,
@@ -2356,9 +2350,8 @@ export class KanbanProvider implements vscode.Disposable {
                 // consumer guards with truthiness / nullish-coalescing / explicit
                 // `=== null || === undefined` — none use `in`, `hasOwnProperty`,
                 // `.length`, or `.startsWith` on these fields, so absent == null.
-                dispatchedTerminal: row.dispatchedTerminal || undefined,
-                dispatchedAt: row.dispatchedAt ?? undefined,
-                queuePosition: row.queuePosition ?? undefined,
+                ownerSeat: row.ownerSeat || undefined,
+                ownerSince: row.ownerSince ?? undefined,
                 columnEnteredAt: row.columnEnteredAt ?? undefined,
                 priorityStarred: row.priorityStarred ?? 0,
                 priority: row.priority ?? undefined,
@@ -2883,7 +2876,7 @@ export class KanbanProvider implements vscode.Disposable {
             // Queue-mode staging (subtask 7): stage a remote-arriving card into
             // the session queue (STAGING column) instead of dispatching. Reuses the same
             // stageForQueue the webview's drag-into-STAGING calls — one
-            // staging path, one queue_position assignment. Returns the position
+            // staging path, one column_order assignment. Returns the position
             // so the ack comment can name it.
             onStageForQueue: async (plan) => {
                 try {
@@ -2896,7 +2889,7 @@ export class KanbanProvider implements vscode.Disposable {
                             const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
                             const board = await db.getBoard?.(wsId) || [];
                             const card = board.find((p: any) => p && p.planId === plan.planId);
-                            const pos = card?.queuePosition ?? -1;
+                            const pos = card?.columnOrder ?? -1;
                             return { staged: true, position: typeof pos === 'number' ? pos : -1 };
                         }
                         return { staged: true, position: -1 };
@@ -2948,11 +2941,11 @@ export class KanbanProvider implements vscode.Disposable {
                     // and hand off. The bound is enforced by the handoff endpoint's
                     // own state machine — if Mission Control never calls handoff,
                     // the queue stays in arrival order (the lead pulls in
-                    // queue_position order, which is arrival order). A timer-based
+                    // column_order order, which is arrival order). A timer-based
                     // fallback is not needed here because the queue is never held
                     // shut: the lead can pull the first card while Mission Control
                     // is still sequencing, and a reorder by Mission Control
-                    // updates queue_positions for the remaining cards.
+                    // updates column_order for the remaining cards.
                     this._outputChannel?.appendLine(
                         `[KanbanProvider] Queue sequencing: Mission Control seated for ${stagedPlanIds.length} staged card(s) in ${wsRoot}.`
                     );
@@ -3033,6 +3026,11 @@ export class KanbanProvider implements vscode.Disposable {
                 db: this._getKanbanDb(resolved),
                 getWorkspaceId, getPlansDir, log,
             });
+        }
+        if (kind === 'store') {
+            // The queue-backed provider — without this branch, a 'store' config
+            // fell through to Linear and reported Linear's capabilities.
+            return new StoreRemoteProvider({ db: this._getKanbanDb(resolved), workspaceRoot: resolved });
         }
         const terminalVerb = this._taskViewerProvider
             ? (verb: string, payload: any, wsRoot?: string, signal?: AbortSignal) => this._taskViewerProvider!.handleTerminalVerb(verb, payload, wsRoot || resolved, signal)
@@ -3172,9 +3170,9 @@ export class KanbanProvider implements vscode.Disposable {
             label: item.label,
             active: item.workspaceRoot === workspaceRoot,
         }));
-        // Declared provider capabilities for honest UI gating.
-        // Linear: pull+push, Notion: pull+push (after 2/3), ClickUp: state-pull+push (no comment bus).
-        const capabilities = { pull: true, push: true };
+        // Declared provider capabilities for honest UI gating — read from the
+        // provider itself so a capability flip needs no parallel payload edit.
+        const capabilities = this._buildRemoteProvider(workspaceRoot, config.provider).capabilities;
         return {
             type: 'remoteConfig',
             config,
@@ -3969,7 +3967,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const db = this._getKanbanDb(workspaceRoot);
             if (await db.ensureReady()) {
                 await db.updateDispatchInfo(sessionId, {
-                    routedTo: role,
                     dispatchedAgent: agentName,
                     dispatchedIde: ideName,
                     // Stamp the terminal name so attributePlansToTerminals'
@@ -3980,7 +3977,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     // extension's twin. Only pass when a real terminal name
                     // was resolved (not the IDE-dispatch or 'unknown' arms),
                     // so those paths keep stamping '' as before.
-                    ...(terminalName ? { dispatchedTerminal: terminalName } : {}),
+                    ownerSeat: terminalName || '',
                 });
             }
         } catch (err) {
@@ -4258,7 +4255,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     const featureState2 = row.isFeature ? featureWorkingMap2.get(row.planId) : undefined;
                     const cardState2 = row.isFeature
                         ? { working: featureState2?.working ?? false }
-                        : isWorkingState(row.dispatchedAt, timeoutMs2, row.lastLivenessAt);
+                        : isWorkingState(row.ownerSince, timeoutMs2);
                     return {
                         planId: row.planId,
                         sessionId: row.sessionId,
@@ -4275,9 +4272,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         featureId: row.featureId || undefined,
                         subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined,
                         working: cardState2.working,
-                        dispatchedTerminal: row.dispatchedTerminal || '',
-                        dispatchedAt: row.dispatchedAt ?? null,
-                        queuePosition: row.queuePosition ?? null,
+                        ownerSeat: row.ownerSeat || '',
+                        ownerSince: row.ownerSince ?? null,
                         columnEnteredAt: row.columnEnteredAt ?? null,
                         priorityStarred: row.priorityStarred ?? 0,
                         priority: row.priority ?? null,
@@ -4520,7 +4516,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const featureState3 = row.isFeature ? featureWorkingMap3.get(row.planId) : undefined;
                 const cardState3 = row.isFeature
                     ? { working: featureState3?.working ?? false }
-                    : isWorkingState(row.dispatchedAt, timeoutMs3, row.lastLivenessAt);
+                    : isWorkingState(row.ownerSince, timeoutMs3);
                 return {
                     planId: row.planId,
                     sessionId: row.sessionId,
@@ -4533,7 +4529,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     workspaceRoot: resolvedWorkspaceRoot,
                     project: row.project || '',
                     working: cardState3.working,
-                    queuePosition: row.queuePosition ?? null,
                     columnEnteredAt: row.columnEnteredAt ?? null,
                     priorityStarred: row.priorityStarred ?? 0,
                     priority: row.priority ?? null,
@@ -4956,7 +4951,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 column: rec.kanbanColumn,
                 priorityStarred: rec.priorityStarred,
                 priority: rec.priority ?? null,
-                queuePosition: rec.queuePosition,
                 columnOrder: rec.columnOrder,
                 columnEnteredAt: rec.columnEnteredAt,
                 createdAt: rec.createdAt,
@@ -4976,6 +4970,23 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     console.warn(`[KanbanProvider] feature subtask expansion failed for ${rec.planId}:`, err);
                     // keep primary + any already-pushed subtasks; do not abort
                 }
+            }
+        }
+        // Opportunistic checkpoint read — the latest `checkpoint` event per card
+        // becomes a `Resume from:` line in the prompt. Never a gate: a missing
+        // or unreadable checkpoint leaves the field absent and dispatch proceeds
+        // identically. Never fabricated — only a real event produces a line.
+        if (hasDb && typeof db.getLatestCheckpointsByPlanIds === 'function') {
+            try {
+                const checkpoints = await db.getLatestCheckpointsByPlanIds(
+                    out.map(p => p.planId).filter((id): id is string => !!id)
+                );
+                for (const p of out) {
+                    const cp = p.planId ? checkpoints.get(p.planId) : undefined;
+                    if (cp?.text) { p.checkpoint = cp.text; }
+                }
+            } catch (err) {
+                console.warn('[KanbanProvider] checkpoint read failed (dispatch unaffected):', err);
             }
         }
         return out;
@@ -6419,9 +6430,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
     /**
      * Split a batch bound for a team head into the plans that go and the plans that
-     * stay, ordered by the shared V63 precedence comparator — `queue_position` in
-     * STAGING, `column_order` everywhere else, starred-first, then column_entered_at /
-     * createdAt DESC. Same comparator `_distributePlannerDispatch` uses, so the batch
+     * stay, ordered by the shared V63 precedence comparator — `column_order`
+     * everywhere (V81 folded STAGING's queue_position into it), starred-first,
+     * then column_entered_at / createdAt DESC. Same comparator `_distributePlannerDispatch` uses, so the batch
      * cap and the planner fan-out pick the same plans out of the same column, and a
      * hand-arranged column is respected rather than overridden by age.
      */
@@ -7664,26 +7675,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
-    /**
-     * V63 — the in-flight cards an ordering-driven dispatch must skip, shaped as
-     * moveCardsFailed entries. `working` (dispatched_at set and inside the
-     * liveness window) is the "already being worked on" predicate that the old
-     * oldest-first sort was standing in for; once the sort follows user intent
-     * the predicate has to be tested outright. Reporting rather than silently
-     * dropping matters because the webview already optimistically moved every
-     * selected card: an unreported skip leaves that move on screen and its
-     * optimistic-guard ledger entry armed.
-     */
-    private _inFlightSkipFailures(cards: KanbanCard[]): { id: string; sourceColumn: string; reason: string }[] {
-        return cards
-            .filter(c => c.working)
-            .map(c => ({
-                id: this._cardId(c),
-                sourceColumn: c.column,
-                reason: 'already dispatched and still working — not re-dispatched'
-            }));
-    }
-
     private async _distributePlannerDispatch(
         workspaceRoot: string,
         sourceCards: KanbanCard[],
@@ -7707,73 +7698,44 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // permanently empty.
         const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot, { allowPtyFleet: true });
         if (terminals.length === 0) {
-            // No live planner terminals — fall back to single trigger via default resolution
-            // V63: filter in-flight cards (same guard as the multi-terminal path).
-            const dispatchable = sourceCards.filter(c => !c.working);
+            // No live planner terminals — fall back to single trigger via default resolution.
+            // V81: no in-flight filter — the board never refuses a dispatch. A card
+            // already being worked on is re-dispatched; the agent reads the plan,
+            // sees the work is done, and says so.
             // Move half is the shared operation (dispatch: false — the
-            // 'improve-plan' batch trigger below owns dispatch). In-flight
-            // skips are reported through the same moveCardsFailed channel
-            // the operation uses for write failures.
-            const moveResult = await this._advanceCards(workspaceRoot, dispatchable.map(c => this._cardId(c)), {
+            // 'improve-plan' batch trigger below owns dispatch).
+            const moveResult = await this._advanceCards(workspaceRoot, sourceCards.map(c => this._cardId(c)), {
                 target: nextCol,
                 dispatch: false
             });
             const dispatchIds = moveResult.moved.map(m => m.id);
-            const skipFailures = this._inFlightSkipFailures(sourceCards);
-            if (skipFailures.length > 0) {
-                this.postMessage({ type: 'moveCardsFailed', failures: skipFailures });
-            }
             await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot, undefined);
             return;
         }
 
-        // V63: filter in-flight cards BEFORE sorting. `working` is the derived
-        // in-flight flag (dispatched_at set and within the timeout window) — the
-        // exact "not currently being worked on" condition age was standing in
-        // for. Without this filter, changing the sort from oldest-first to user
-        // intent would let automation pick up work already underway. The filter
-        // is applied here (the source set) rather than in the resolver because
-        // !dispatchedAt is a predicate, not a sort key — see the plan's
-        // Complexity Audit. The resolver then sorts the filtered set by the
-        // shared precedence (starred → manual order → column_entered_at DESC →
-        // createdAt DESC), replacing the former lastActivity ASC sort which was
-        // a proxy for this very filter and added nothing once the filter exists.
-        const dispatchable = sourceCards.filter(c => !c.working);
-        const sortColumn = dispatchable[0]?.column || '';
+        // The resolver sorts the source set by the shared precedence
+        // (starred → manual order → column_entered_at DESC → createdAt DESC).
+        const sortColumn = sourceCards[0]?.column || '';
         const orderByMode = this._resolveOrderByModeSync(workspaceRoot);
-        const ordered = [...dispatchable].sort((a, b) => compareByPrecedence(a, b, sortColumn, orderByMode));
-        // The webview optimistically moved EVERY selected card on drop. A card the
-        // in-flight filter drops is never named in the moveCards echo, so without
-        // this its optimistic move is never reverted and its guard-ledger entry
-        // never resolves — the card sits in the wrong column until an unrelated
-        // push repaints the board. Report it through the same moveCardsFailed
-        // channel a failed write uses, which reverts it and states why.
-        const skipFailures = this._inFlightSkipFailures(sourceCards);
+        const ordered = [...sourceCards].sort((a, b) => compareByPrecedence(a, b, sortColumn, orderByMode));
 
         // Limit: only oldest N plans (N = live terminal count), one per terminal
         const limit = !options?.skipLimit && await tvp.getLimitDispatchToTerminals('planner', workspaceRoot);
         const plans = limit ? ordered.slice(0, terminals.length) : ordered;
 
         if (plans.length === 0) {
-            if (skipFailures.length > 0) { this.postMessage({ type: 'moveCardsFailed', failures: skipFailures }); }
-            else { this.postMessage({ type: 'showStatusMessage', message: 'No plans to dispatch.', isError: false }); }
+            this.postMessage({ type: 'showStatusMessage', message: 'No plans to dispatch.', isError: false });
             return;
         }
 
-        // Pre-move only dispatched cards (optimistic UI). Persist BEFORE the slow /clear+send
-        // chain so the move sticks immediately. Capture failed writes so the UI reverts them
-        // with a reason instead of silently (the trailing full refresh that used to do this is
-        // gone). The move itself is the shared operation (dispatch: false — the
-        // per-terminal bucket fan-out below owns dispatch); in-flight skips go
-        // through the same moveCardsFailed channel its write failures use.
+        // Pre-move the dispatched cards (optimistic UI). Persist BEFORE the slow /clear+send
+        // chain so the move sticks immediately. The move itself is the shared
+        // operation (dispatch: false — the per-terminal bucket fan-out below owns dispatch).
         const dispatchedIds = plans.map(c => this._cardId(c));
         await this._advanceCards(workspaceRoot, dispatchedIds, {
             target: nextCol,
             dispatch: false
         });
-        if (skipFailures.length > 0) {
-            this.postMessage({ type: 'moveCardsFailed', failures: skipFailures });
-        }
 
         // Round-robin partition into per-terminal buckets, starting from the
         // persisted rotation cursor for this terminal set. A batch of N fans out
@@ -9018,16 +8980,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         );
                     }
                 }
-                // V60: a card leaving STAGING drops its queue_position so a later
-                // re-stage does not jump the queue on a stale position. Covers both
-                // the dispatch-to-coder path (advance / Run queue) and a manual drag
-                // out of the Staging column. The feature cascade clears the feature
-                // card's position; subtask positions are already NULL (subtasks never
-                // stage — the staged count excludes them).
-                if (plan && plan.kanbanColumn === 'STAGING' && targetColumn !== 'STAGING') {
-                    const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-                    if (wsId) { await db.clearQueuePosition(plan.planId, wsId); }
-                }
                 // V63: a card moving to ANY different column drops its column_order.
                 // The number is per-column, so it must not travel — a card that was
                 // 2nd in CREATED would otherwise land ahead of the cards deliberately
@@ -9045,9 +8997,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 //
                 // STAGING is NOT excluded on either side: excluding it left a
                 // CREATED → STAGING → CREATED round-trip holding its stale pre-staging
-                // position. STAGING never reads column_order (its order is
-                // queue_position, cleared above), so clearing on the way in is free
-                // and clearing on the way out is required. Same-column drops never
+                // position. Under V81 STAGING's queue order IS column_order — a
+                // card leaving STAGING drops it here so a later re-stage does not
+                // jump the queue on a stale position, and a card entering STAGING
+                // clears the position of the column it left (stageForQueue assigns
+                // the fresh one). Same-column drops never
                 // reach this path (the drop handler routes them to reorderColumn).
                 // priority_starred is untouched — a star follows the card.
                 if (plan && plan.kanbanColumn !== targetColumn) {
@@ -9127,7 +9081,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
     /**
      * V60 — stage the given plan ids into STAGING as an ordered session
-     * queue, appending positions from MAX(queue_position)+1 in the caller's
+     * queue, appending positions from MAX(column_order)+1 in the caller's
      * order. The webview passes selection order; subtask 6 (scoped handoff)
      * and subtask 7 (remote intake) call this same helper so all three stage
      * identically. A card already in STAGING is re-positioned rather than
@@ -9176,7 +9130,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         //
         // The open mission receives it, or one is created with a codename. A
         // launched mission is a sealed set, so a card arriving after launch starts
-        // the next one rather than being refused. `queue_position` (written just
+        // the next one rather than being refused. `column_order` (written just
         // above) remains the intra-mission order: cards joining later take higher
         // positions, so a mission's sequence is the order it was assembled in, and
         // item 12 holds — the board's star does not reach inside.
@@ -9268,14 +9222,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (plan) planIds.push(plan.planId);
         }
         if (planIds.length === 0) return { success: false, reordered: 0, error: 'No staged plans resolved' };
-        const ok = await db.setQueuePositions(workspaceId, planIds);
+        const ok = await db.setColumnOrders(workspaceId, planIds);
         if (!ok) return { success: false, reordered: 0, error: 'Failed to rewrite queue order' };
         await this._refreshBoard(workspaceRoot);
         return { success: true, reordered: planIds.length };
     }
 
     /**
-     * V60 — clear a card's queue_position. Exported so subtask 1's
+     * V60 — clear a card's queue position (V81: column_order on a STAGING row).
+     * Exported so subtask 1's
      * dispatchNextFromQueue pop path can call it when a card leaves the queue
      * via the lead pull (column updates cover webview-driven moves; this covers
      * the API-driven pop). Idempotent.
@@ -9286,7 +9241,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!db || !(await db.ensureReady())) return false;
         const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
         if (!workspaceId) return false;
-        return db.clearQueuePosition(planId, workspaceId);
+        return db.clearColumnOrder(planId, workspaceId);
     }
 
     /**
@@ -9294,7 +9249,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * post-drop id list. Analogous to reorderQueue but writes column_order
      * via setColumnOrders (one transaction, 1..N). The webview's same-column
      * drop handler computes the insertion index and sends the full ordered
-     * list. STAGING is excluded — its order is queue_position (reorderQueue).
+     * list. STAGING reads the same column_order under V81 — a same-column drop
+     * inside STAGING routes through reorderQueue, which now also writes
+     * column_order via setColumnOrders.
      */
     public async reorderColumn(
         workspaceRoot: string,
@@ -10265,8 +10222,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     project: plan.project || '',
                     isFeature: !!plan.isFeature,
                     featureId: plan.featureId || undefined,
-                    ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt),
-                    queuePosition: plan.queuePosition ?? null,
+                    ...isWorkingState(plan.ownerSince, timeoutMs),
                     columnEnteredAt: plan.columnEnteredAt ?? null,
                     priorityStarred: plan.priorityStarred ?? 0,
                     priority: plan.priority ?? null,
@@ -10954,22 +10910,22 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'mcStopMission': {
                 const ctx = await this._resolveMissionDb(msg.workspaceRoot);
                 if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
-                // A launched mission is stopped by releasing its in-flight member,
-                // not by writing a status: `runState` is derived, so clearing the
-                // holder is what makes the mission read not-started again. The
-                // release path is the queue's own (`releaseDispatchHolder`), so
-                // stop and a failed dispatch converge on one mechanism.
+                // A launched mission is stopped by clearing its in-flight member's
+                // owner stamp, not by writing a status: `runState` is derived, so
+                // clearing the holder is what makes the mission read not-started
+                // again. The clear is the queue's own (`clearOwnerStamp`), so
+                // stop and queue/done converge on one mechanism.
                 const mission = await ctx.db.getMissionById(msg.missionId);
                 if (!mission) return { success: false, error: 'Mission not found' };
                 const members = [...(mission.plans || []), ...(mission.features || [])];
                 let released = 0;
                 for (const memberId of members) {
                     const plan = await ctx.db.getPlanByPlanId(memberId);
-                    // releaseDispatchHolder is keyed by PLAN FILE + workspace id, not
+                    // clearOwnerStamp is keyed by PLAN FILE + workspace id, not
                     // by plan id. Passing the member id would no-op silently, which is
                     // how a Stop button reports success and stops nothing.
-                    if (plan && plan.planFile && plan.dispatchedAt && !plan.completedAt) {
-                        if (await ctx.db.releaseDispatchHolder(plan.planFile, ctx.wsId)) {
+                    if (plan && plan.planFile && plan.ownerSince && !plan.completedAt) {
+                        if (await ctx.db.clearOwnerStamp(plan.planFile, ctx.wsId)) {
                             released++;
                         }
                     }
@@ -12706,12 +12662,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const planIds: string[] = Array.isArray(msg.planIds) ? msg.planIds : [];
                 const planFiles: string[] = Array.isArray(msg.planFiles) ? msg.planFiles : [];
                 // Optional explicit stamp. The fleet delivery-layer backstop
-                // captures `dispatched_at` BEFORE the send and passes it through
+                // captures `owner_since` BEFORE the send and passes it through
                 // here, because fire-and-forget registration lands AFTER the send
                 // and stamping at write time inverts the completion compare.
                 // Absent ⇒ attributePasteDispatch defaults to now (byte-identical
                 // for the strict `payload.dispatch` branch and the paste/drop path).
-                const dispatchedAt: string | undefined = typeof msg.dispatchedAt === 'string' ? msg.dispatchedAt : undefined;
+                const since: string | undefined = typeof msg.since === 'string' ? msg.since : undefined;
 
                 const preferredRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const rootsToSearch = preferredRoot
@@ -12766,8 +12722,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     try {
                         const ok = await db.attributePasteDispatch(record.planFile, workspaceId, {
                             dispatchedAgent,
-                            dispatchedTerminal: terminalName,
-                            dispatchedAt,
+                            seat: terminalName,
+                            since,
                         });
                         if (ok) {
                             const pId = record.planId || record.sessionId;
@@ -13076,6 +13032,28 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await this._refreshBoard(workspaceRoot);
                 this.postMessage({ type: 'showStatusMessage', message: `Completed ${successCount} of ${reviewedCards.length} plans.`, isError: false });
                 return { success: true, completed: successCount, total: reviewedCards.length };
+            }
+            case 'checkpoint': {
+                // V81: the forward-looking record. An agent working a long
+                // mission reports where a future dispatcher should resume —
+                // appended to plan_events as an event, never a column, never a
+                // gate. Sanitization (non-empty, no HTML comment markers, 600
+                // char cap) lives in KanbanDatabase.appendCheckpointEvent.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const planId = typeof msg.planId === 'string' ? msg.planId.trim() : '';
+                const text = typeof msg.text === 'string' ? msg.text : '';
+                if (!workspaceRoot || !planId) {
+                    return { success: false, error: 'workspaceRoot and planId are required' };
+                }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) {
+                    return { success: false, error: 'Kanban database not available' };
+                }
+                const wrote = await db.appendCheckpointEvent(planId, text);
+                if (!wrote.ok) {
+                    return { success: false, error: wrote.error || 'checkpoint write failed' };
+                }
+                return { success: true, planId };
             }
             case 'uncompleteCard': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -13557,9 +13535,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         }
                         const topic = payload.dispatched?.topic || payload.dispatched?.planId || 'plan';
                         // Subtask 3: name the mode and, in seat pacing, the
-                        // seat the first card actually went to. Subtask 1's
-                        // pop returns the routed terminal in
-                        // `teamRouting.to` / `dispatchedTerminal`; fall back
+                        // seat the first card actually went to. The pop returns
+                        // the routed terminal in `teamRouting.to` /
+                        // `ownerSeat`; fall back
                         // to `from` (head) when absent (head pacing or a
                         // degraded pop). In seat pacing with a head-only team,
                         // every card routes to that one seat by degradation —
@@ -13567,7 +13545,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // broken.
                         if (pacing === 'seat') {
                             const routedSeat = payload.dispatched?.teamRouting?.to
-                                || payload.dispatched?.dispatchedTerminal
+                                || payload.dispatched?.ownerSeat
                                 || headTerminal;
                             const isDegraded = routedSeat === headTerminal;
                             const modeNote = isDegraded
@@ -13579,10 +13557,8 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         }
                         return { success: true, dispatched: payload.dispatched, from: headTerminal, pacing };
                     }
-                    if (status === 409) {
-                        this.postMessage({ type: 'showStatusMessage', message: payload.error || 'Team already in flight — a seat still holds a card with no completion post. POST /kanban/task/complete for it before asking for the next.', isError: true });
-                        return { success: false, error: payload.error || 'Team already in flight', inFlight: payload.inFlight };
-                    }
+                    // V81: there is no 409 arm — the board never refuses a
+                    // dispatch; a stale owner stamp is overwritten, not read.
                     // 400 / 404 / 500 / 502 / 503 — real failure
                     this.postMessage({ type: 'showStatusMessage', message: payload.error || `Queue dispatch failed (HTTP ${status}).`, isError: true });
                     return { success: false, error: payload.error || `Queue dispatch failed (HTTP ${status})` };
@@ -15839,17 +15815,17 @@ ${FOCUS_DIRECTIVE}`;
      *
      * Item 8c — "performs the column move and the fan-out as one action: seat
      * teams, stage, dispatch each unblocked stream head." Members are already in
-     * STAGING with `queue_position` (staging is what created the mission), so the
+     * STAGING with `column_order` (staging is what created the mission), so the
      * fan-out is the dispatch, and it goes through `dispatchNextFromQueue` — the
      * SAME path `POST /kanban/queue/next` and the Run queue button use. One
      * dispatch path, so the pop-time dependency gate applies here too: a member
      * whose predecessor has not asserted completion is skipped, not dispatched.
      *
-     * Item 8d — idempotent. Pressing Launch twice must not double-dispatch. The
-     * guard is derived, not a stored flag: a mission with a member already held
-     * (dispatchedAt set, completedAt null) is in flight and refuses. That is the
-     * same fact `_deriveMissionRunState` reads, so the button and the badge can
-     * never disagree.
+     * Item 8d — no launch-time guard. V81 deleted the refusal machinery: the
+     * board never refuses a dispatch. Pressing Launch again re-dispatches the
+     * head, which unconditionally resets owner/completion state — the agent
+     * reads the plan, sees the work is done, and says so. Duplicate work is not
+     * a failure mode.
      */
     public async launchMission(
         workspaceRoot: string,
@@ -15863,14 +15839,6 @@ ${FOCUS_DIRECTIVE}`;
 
         const members = [...(mission.plans || []), ...(mission.features || [])];
         if (members.length === 0) return { success: false, error: 'Mission has no members to launch.' };
-
-        // Idempotency (item 8d), derived from member state.
-        if (mission.runState === 'in-flight') {
-            return { success: false, error: `Mission '${mission.name}' is already in flight.` };
-        }
-        if (mission.runState === 'completed') {
-            return { success: false, error: `Mission '${mission.name}' has already completed.` };
-        }
 
         const apiServer: any = this._apiServer;
         if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') {
@@ -16844,7 +16812,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             sourceType: 'local',
             brainSourcePath: '',
             mirrorPath: '',
-            routedTo: '',
             dispatchedAgent: '',
             dispatchedIde: '',
             isFeature: 1,
