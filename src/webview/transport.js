@@ -326,7 +326,9 @@
         probeTimer = setInterval(function () {
             // No retry pending means we are connected or closing deliberately.
             if (!reconnectTimer) { disarmReachabilityProbe(); return; }
-            fetch('/health', { credentials: 'same-origin', cache: 'no-store' })
+            // A reachability probe with no timeout is the worst kind: it fires on a
+            // reconnect timer, so a hung socket stacks probes that never settle.
+            fetch('/health', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(5000) })
                 .then(function (r) {
                     if (!r || !r.ok || !reconnectTimer) { return; }
                     wsLog('reachability probe succeeded — reconnecting without waiting out the backoff');

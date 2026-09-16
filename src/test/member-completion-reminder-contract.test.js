@@ -93,8 +93,8 @@ function heldCard(extra) {
         // log) written into the fixture as the expected case. A card the seat has
         // genuinely held is the only scenario in which "you have gone idle
         // holding card X" is a true sentence.
-        dispatchedAt: new Date(1788750000000 - 900000).toISOString(),
-        dispatchedTerminal: MEMBER,
+        ownerSince: new Date(1788750000000 - 900000).toISOString(),
+        ownerSeat: MEMBER,
         completedAt: null,
         kanbanColumn: 'CODER CODED',
     }, extra || {});
@@ -131,7 +131,7 @@ testAsync('a freshly dispatched seat is NOT reminded, however stale its lastData
     // second ago. `lastDataAt` is an hour old and the cache has not refreshed.
     const sent = await sweep(makeEngine(), {
         folder: '/ws',
-        board: [heldCard({ dispatchedAt: new Date(T0 - 1000).toISOString() })],
+        board: [heldCard({ ownerSince: new Date(T0 - 1000).toISOString() })],
         groups: [teamGroup()],
         liveness: [quiet(MEMBER, 3600000), quiet(HEAD, 1000)], nowMs: T0,
     });
@@ -145,7 +145,7 @@ testAsync('a seat that has produced no output since dispatch is NOT reminded', a
     // The dispatch-stall sweep owns that case.
     const sent = await sweep(makeEngine(), {
         folder: '/ws',
-        board: [heldCard({ dispatchedAt: new Date(T0 - (SILENCE_MS * 4)).toISOString() })],
+        board: [heldCard({ ownerSince: new Date(T0 - (SILENCE_MS * 4)).toISOString() })],
         groups: [teamGroup()],
         liveness: [quiet(MEMBER, SILENCE_MS * 8), quiet(HEAD, 1000)], nowMs: T0,
     });
@@ -158,7 +158,7 @@ testAsync('a seat that worked and then went quiet IS reminded', async () => {
     // after the dispatch, and has now been silent for a full window.
     const sent = await sweep(makeEngine(), {
         folder: '/ws',
-        board: [heldCard({ dispatchedAt: new Date(T0 - (SILENCE_MS * 10)).toISOString() })],
+        board: [heldCard({ ownerSince: new Date(T0 - (SILENCE_MS * 10)).toISOString() })],
         groups: [teamGroup()],
         liveness: [quiet(MEMBER, SILENCE_MS + 1000), quiet(HEAD, 1000)], nowMs: T0,
     });
@@ -194,7 +194,7 @@ testAsync('a card with completedAt set produces nothing', async () => {
 
 testAsync('the head is never reminded — it has head-prompt.md and the turn-end top-up', async () => {
     const sent = await sweep(makeEngine(), {
-        folder: '/ws', board: [heldCard({ dispatchedTerminal: HEAD })], groups: [teamGroup()],
+        folder: '/ws', board: [heldCard({ ownerSeat: HEAD })], groups: [teamGroup()],
         liveness: [quiet(HEAD, SILENCE_MS + 1000)], nowMs: T0,
     });
     assert.strictEqual(sent.length, 0, 'the head is roster[0] and must be filtered by name === group.head');
@@ -202,7 +202,7 @@ testAsync('the head is never reminded — it has head-prompt.md and the turn-end
 
 testAsync('a standalone (non-team) seat is never reminded', async () => {
     const sent = await sweep(makeEngine(), {
-        folder: '/ws', board: [heldCard({ dispatchedTerminal: 'planner-1' })], groups: [teamGroup()],
+        folder: '/ws', board: [heldCard({ ownerSeat: 'planner-1' })], groups: [teamGroup()],
         liveness: [quiet('planner-1', SILENCE_MS + 1000)], nowMs: T0,
     });
     assert.strictEqual(sent.length, 0);
@@ -271,7 +271,7 @@ testAsync('the reminder\'s own echo cannot re-arm the reminder (no nag loop)', a
         + 'Re-arming on advanced lastDataAt nags forever, because the reminder is itself output.');
 });
 
-testAsync('a NEW dispatchedAt re-arms the budget — new work, the one signal a reminder cannot fake', async () => {
+testAsync('a NEW ownerSince re-arms the budget — new work, the one signal a reminder cannot fake', async () => {
     const engine = makeEngine();
     const groups = [teamGroup()];
     let now = T0;
@@ -289,9 +289,9 @@ testAsync('a NEW dispatchedAt re-arms the budget — new work, the one signal a 
     // A second card dispatched to the same seat.
     const afterRedispatch = await sweep(engine, {
         // Relative to the advanced `now`, not a fixed future timestamp: the
-        // re-arm keys on the dispatchedAt STRING (so it only has to differ), but
+        // re-arm keys on the ownerSince STRING (so it only has to differ), but
         // the post-dispatch-silence gate needs it to be genuinely in the past.
-        folder: '/ws', board: [heldCard({ planId: 'plan-2', dispatchedAt: new Date(now - 900000).toISOString() })], groups,
+        folder: '/ws', board: [heldCard({ planId: 'plan-2', ownerSince: new Date(now - 900000).toISOString() })], groups,
         liveness: [{ friendlyName: MEMBER, lastDataAt: now - SILENCE_MS - 1000, status: 'active' }],
         nowMs: now,
     });
