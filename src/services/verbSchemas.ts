@@ -586,15 +586,6 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             targetProject: { type: 'string' },
         },
     },
-    // sessionIds is OPTIONAL: omitting it copies the prompt for the whole column
-    // (scoped to the caller's project filter), the same default dispatchAnalyze uses.
-    copyDispatchPromptSelected: {
-        fields: {
-            sessionIds: { type: 'array' },
-            column: { type: 'string' },
-            workspaceRoot: { type: 'string' },
-        },
-    },
     testingFailed: {
         fields: {
             sessionIds: { type: 'array', required: true },

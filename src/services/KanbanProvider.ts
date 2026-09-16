@@ -30,7 +30,7 @@ import type { ProtocolResolution } from './protocolDirectives';
 import { renderPlannerWorkflowRef } from './protocolDirectives';
 import { HostCapabilityService } from './hostCapability';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
-import { compareByPrecedence, type SortMode } from './kanbanOrdering';
+import { compareByPrecedence, resolveSendableBatch, type SortMode } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
 import { GlobalIntegrationConfigService, type ScheduledJob, type SchedulerConfig } from './GlobalIntegrationConfigService';
 import { BOARD_DRIVING_CONTRACT as SHARED_BOARD_DRIVING_CONTRACT } from './schedulerPresets';
@@ -167,6 +167,15 @@ export interface KanbanCard {
     // and on rows staged before this landed.
     missionId?: string;
     missionName?: string; // the mission's codename, for the group label
+    // V62/V64: the completion stamp and the analysis fingerprint. The webview's
+    // sendable filter and staleness indicator read these; the mapper used to drop
+    // both, which left the filter with no data to check predecessors or staleness.
+    completedAt?: string | null;
+    mapFingerprint?: string | null;
+    // The persisted write set (JSON array of repo-relative files). NULL = never
+    // analysed — distinct from [] ("touches nothing"). Carried so the filter can
+    // be a view of the backend's resolver rather than recomputing overlap itself.
+    analysisFileSet?: string[] | null;
 }
 
 // Activity-light window default. A card is `working` while owner_since is set and
@@ -1550,6 +1559,7 @@ export class KanbanProvider implements vscode.Disposable {
             const codingRounds = typeof db.getCodingRoundsByWorkspace === 'function'
                 ? await db.getCodingRoundsByWorkspace(wsId)
                 : [];
+            const { sendablePlanIds, stalePlanIds } = await this._resolveSendableForBoard(cards, db, root, wsId);
             const snapshot: Record<string, any>[] = [
                 { type: 'updateColumns', columns: filteredColumns, surface: SURFACES.kanban },
                 {
@@ -1570,7 +1580,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, missions: boardMissions, orderByMode, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, codingRounds, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, missions: boardMissions, orderByMode, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, codingRounds, sendablePlanIds, stalePlanIds, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -2359,6 +2369,9 @@ export class KanbanProvider implements vscode.Disposable {
                 columnOrder: row.columnOrder ?? undefined,
                 missionId: missionByMember.get(row.planId)?.id,
                 missionName: missionByMember.get(row.planId)?.name,
+                completedAt: row.completedAt ?? null,
+                mapFingerprint: row.mapFingerprint ?? null,
+                analysisFileSet: row.analysisFileSet ?? null,
             };
         });
 
@@ -2380,9 +2393,77 @@ export class KanbanProvider implements vscode.Disposable {
             priorityStarred: rec.priorityStarred ?? 0,
             priority: rec.priority ?? undefined,
             columnOrder: rec.columnOrder ?? undefined,
+            completedAt: rec.completedAt ?? null,
+            mapFingerprint: rec.mapFingerprint ?? null,
+            analysisFileSet: rec.analysisFileSet ?? null,
         })));
 
         return cards;
+    }
+
+    /**
+     * The sendable batch for the Planned column, computed by the ONE shared
+     * resolver (`resolveSendableBatch` in kanbanOrdering) — the same function
+     * `GET /kanban/sendable` calls, so the webview filter and a controller never
+     * disagree. The webview does NOT recompute the batch; it reads this field.
+     *
+     * Failure is empty, not the full column: the filter renders what is KNOWN to
+     * be sendable, and an error means nothing is known.
+     */
+    private async _resolveSendableForBoard(
+        cards: KanbanCard[],
+        db: KanbanDatabase,
+        workspaceRoot: string,
+        workspaceId: string
+    ): Promise<{ sendablePlanIds: string[]; stalePlanIds: string[] }> {
+        const empty = { sendablePlanIds: [] as string[], stalePlanIds: [] as string[] };
+        try {
+            const planned = (cards || []).filter(c => c && c.column === 'PLAN REVIEWED');
+            if (planned.length === 0) return empty;
+            if (typeof (db as any).getPlanDependencies !== 'function') return empty;
+
+            const byId = new Map<string, KanbanCard>();
+            for (const c of cards || []) { if (c && c.planId) byId.set(String(c.planId), c); }
+            const deps = {
+                getPlanDependencies: (planId: string) => (db as any).getPlanDependencies(planId),
+                resolvePlan: async (depId: string) => {
+                    const hit = byId.get(depId);
+                    if (hit) return hit;
+                    const anyDb: any = db as any;
+                    if (typeof anyDb.getPlanByPlanIdUnion === 'function') {
+                        const unioned = await anyDb.getPlanByPlanIdUnion(depId);
+                        if (unioned) return unioned;
+                    }
+                    if (typeof anyDb.getPlanByPlanId === 'function') {
+                        const hot = await anyDb.getPlanByPlanId(depId);
+                        if (hot) return hot;
+                    }
+                    return 'absent' as const;
+                },
+            };
+            const mode = (typeof (db as any).getOrderByMode === 'function' && workspaceId)
+                ? await (db as any).getOrderByMode(workspaceId)
+                : 'manual';
+            // Real fs, not the stateFs bridge — plan files live in the workspace.
+            const nodeFs: typeof import('fs') = require('fs');
+            const readPlanFile = (planFile: string): string | null => {
+                if (!planFile) return null;
+                try {
+                    const abs = path.isAbsolute(planFile) ? planFile : path.join(workspaceRoot, planFile);
+                    return nodeFs.readFileSync(abs, 'utf8');
+                } catch {
+                    return null;
+                }
+            };
+            return await resolveSendableBatch(
+                planned as any,
+                deps as any,
+                { column: 'PLAN REVIEWED', mode, readPlanFile }
+            );
+        } catch (err) {
+            console.warn('[KanbanProvider] sendable-batch resolution failed; the filter will show nothing rather than a guess:', err);
+            return empty;
+        }
     }
 
     /**
@@ -2561,8 +2642,9 @@ export class KanbanProvider implements vscode.Disposable {
             // coming online changes NO card and leaves coderTerminalCount at 0, but must
             // flip the Run-queue button enabled.
             const orderByMode = (typeof db.getOrderByMode === 'function' && workspaceId) ? await db.getOrderByMode(workspaceId) : 'manual';
+            const { sendablePlanIds, stalePlanIds } = await this._resolveSendableForBoard(cards, db, resolvedWorkspaceRoot, workspaceId);
             const snapshotHash = crypto.createHash('sha256')
-                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, teamHeadColumns, orderByMode }))
+                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, teamHeadColumns, orderByMode, sendablePlanIds, stalePlanIds }))
                 .digest('hex');
             const snapshotUnchanged = snapshotKey === this._lastBoardSnapshotKey
                 && snapshotHash === this._lastBoardSnapshotHash;
@@ -2584,7 +2666,9 @@ export class KanbanProvider implements vscode.Disposable {
                     routingConfig: this._routingMapForScope(scope),
                     featureWorktrees,
                     teamHeadColumns,
-                    teamBatchPlanCap: TEAM_BATCH_PLAN_CAP
+                    teamBatchPlanCap: TEAM_BATCH_PLAN_CAP,
+                    sendablePlanIds,
+                    stalePlanIds
                 }));
             }
 
@@ -4416,6 +4500,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const codingRounds = (dbReady && typeof db.getCodingRoundsByWorkspace === 'function' && workspaceId)
                 ? await db.getCodingRoundsByWorkspace(workspaceId)
                 : [];
+            const { sendablePlanIds, stalePlanIds } = dbReady
+                ? await this._resolveSendableForBoard(cards, db, resolvedWorkspaceRoot, workspaceId)
+                : { sendablePlanIds: [], stalePlanIds: [] };
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4431,6 +4518,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 featureWorktrees,
                 teamHeadColumns,
                 teamBatchPlanCap: TEAM_BATCH_PLAN_CAP,
+                sendablePlanIds,
+                stalePlanIds,
                 codingRounds
             }));
             this.postMessage((scope: string | null | undefined) => ({
@@ -4636,6 +4725,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
             const teamHeadColumns = await this.resolveTeamHeadColumns(resolvedWorkspaceRoot, columns);
             const orderByMode = (typeof db.getOrderByMode === 'function' && workspaceId) ? await db.getOrderByMode(workspaceId) : 'manual';
+            const { sendablePlanIds, stalePlanIds } = await this._resolveSendableForBoard(cards, db, resolvedWorkspaceRoot, workspaceId);
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4648,7 +4738,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 anyCodingTerminalLive,
                 routingConfig: this._routingMapForScope(scope),
                 teamHeadColumns,
-                teamBatchPlanCap: TEAM_BATCH_PLAN_CAP
+                teamBatchPlanCap: TEAM_BATCH_PLAN_CAP,
+                sendablePlanIds,
+                stalePlanIds
             }));
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'cliTriggersState',
@@ -6658,6 +6750,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 `WORKSPACE_ROOT=${workspaceRoot}\n` +
                 `API_PORT=${apiPort}\n` +
                 `${scopeLine}` +
+                `${worktreeModeLine}` +
                 `\nPLANS TO PROCESS:\n${dispatchContext.planList}`;
             return dispatchPrompt;
         }
@@ -13609,67 +13702,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
             case 'importFromClipboard':
                 await this._seams().commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
                 return { success: true };
-            case 'copyDispatchPromptSelected': {
-                // The clipboard counterpart of the Analyze button: same dispatch-analysis
-                // prompt, same planner role, same project scope — written to the clipboard
-                // instead of fired into a terminal.
-                //
-                // Every send/copy pair on this column copies exactly the prompt its
-                // send-counterpart dispatches (moveSelected↔promptSelected,
-                // moveAll↔promptAll). This arm used to call _generatePromptForColumn,
-                // which builds the CODER advance prompt — making it a duplicate of
-                // promptSelected minus the advance, and leaving the dispatch-analysis
-                // prompt with no clipboard path at all.
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
-                const column: string = msg.column || 'PLAN REVIEWED';
-                // The initiating client's own view filter — identical three-way handling to
-                // the dispatchAnalyze arm (undefined = raw API caller, no scope).
-                const copyScope: string | null =
-                    msg.initiatorProject === undefined ? null : msg.initiatorProject;
-                let sourceCards: KanbanCard[];
-                if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
-                    sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
-                    if (sourceCards.length === 0) {
-                        const dbCards = await this._buildCardsFromDbSessionIds(workspaceRoot, msg.sessionIds);
-                        if (dbCards.length === 0) {
-                            void this._seams().ui.showInformationMessage('No matching plans found for prompt generation.');
-                            return { success: false, error: 'No matching plans found for prompt generation.' };
-                        }
-                        sourceCards = dbCards;
-                    }
-                } else {
-                    // No selection = the whole column, scoped to the caller's own project
-                    // filter — the same default the Analyze button uses. An empty selection
-                    // is not an error; the button is a batch, not a selection gate.
-                    sourceCards = this._visibleColumnCards(workspaceRoot, column)
-                        .filter(card => this._cardMatchesProjectFilter(card, copyScope));
-                    if (sourceCards.length === 0) {
-                        void this._seams().ui.showInformationMessage(`No plans in ${column} to copy a dispatch prompt for.`);
-                        return { success: false, error: `No plans in ${column} to copy a dispatch prompt for.` };
-                    }
-                }
-                // Same prompt the Analyze button dispatches: planner role + the
-                // 'dispatch-analysis' instruction that routes it to the dispatch-analysis
-                // skill, carrying the initiator's project scope. Deliberately NOT
-                // _generatePromptForColumn — that is promptSelected's coder advance prompt.
-                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot);
-                if (plans.length === 0) {
-                    void this._seams().ui.showInformationMessage('No matching plans found for prompt generation.');
-                    return { success: false, error: 'No matching plans found for prompt generation.' };
-                }
-                const prompt = await this.generateUnifiedPrompt('planner', plans, workspaceRoot, {
-                    instruction: 'dispatch-analysis',
-                    analysisScope: copyScope
-                });
-                await this._seams().clipboard.writeText(prompt);
-                for (const card of sourceCards) {
-                    const sid = this._cardId(card);
-                    this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
-                }
-                this.postMessage({ type: 'showStatusMessage', message: `Copied dispatch-analysis prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
-                return { success: true, prompt };
-            }
             case 'codeMapConfirm': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {

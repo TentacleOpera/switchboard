@@ -85,6 +85,11 @@ export const SHARED_PLAN_COLUMNS = [
     'priority',
     'owner_seat',
     'owner_since',
+    // The undirected half of the dependency graph, beside map_fingerprint (the
+    // directed half's fingerprint). Board state, not machine state: every machine
+    // that opens the store must see the same file sets, or the sendable filter
+    // answers differently per machine.
+    'analysis_file_set',
 ] as const;
 
 export type SharedPlanColumn = typeof SHARED_PLAN_COLUMNS[number];

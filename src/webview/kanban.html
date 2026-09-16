@@ -3203,6 +3203,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // feature shows a round indicator (no fabrication from card counts).
         // Keyed by featureId for O(1) lookup in the card renderer.
         let currentCodingRounds = [];
+        // Sendable-batch filter (the Planned column). The batch is COMPUTED BY THE
+        // BACKEND (resolveSendableBatch) and arrives on the updateBoard message —
+        // the webview never recomputes overlap, or the filter and the dispatcher
+        // would be two opinions. Off by default: the full column is the default view.
+        let sendableFilterOn = false;
+        // The batch the backend last sent, and the staleness signal. Empty means
+        // "nothing is known to be sendable" — the filter then shows ZERO cards,
+        // never the full column (an empty answer is not an absent one).
+        let sendablePlanIds = [];
+        let stalePlanIds = [];
+        let lastSendableSignature = '';
         // Per-column render cap (plan change 1): only the first N rows of every
         // column are built into the DOM at first paint; the rest page in on
         // demand via the "Load more" control. No column is special — the same N
@@ -4321,13 +4332,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                <img src="${ICON_JULES}" alt="Jules">
                            </button>`
                         : '';
-                    // ONE button, not a Selected/All pair: it copies the selection, or the
-                    // whole column when nothing is selected. A second "All" button would be
-                    // an identical-looking twin of this one with no distinct behaviour.
-                    const copyDispatchPromptBtn = isPlanReviewed
-                        ? `<button class="column-icon-btn" data-action="copyDispatchPromptSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Copy the dispatch-analysis prompt to clipboard (the Analyze prompt, not sent to a terminal) — selected plans, or the whole column if none are selected">
-                               <img src="${ICON_PROMPT_SELECTED}" alt="Copy Dispatch Prompt">
+                    // The sendable-batch filter replaces the old Copy-analysis-prompt
+                    // button: Analyze no longer moves cards, so it is itself the safe
+                    // non-committing action and the clipboard escape hatch has nothing
+                    // left to escape. The toggle is a pure VIEW — no card moves, no
+                    // order is written, no mission appears. The batch comes from the
+                    // backend, so this button never computes overlap itself.
+                    const sendableFilterBtn = isPlanReviewed
+                        ? `<button class="column-icon-btn sendable-filter-btn${sendableFilterOn ? ' active' : ''}" data-action="toggleSendableFilter" data-column="${escapeAttr(def.id)}" data-tooltip="Show only the sendable batch — plans whose dependencies are complete and that do not overlap one another. Needs an analysis run first; with no graph this column shows nothing.">
+                               <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 2h14l-5.5 6.5V14l-3 1.5V8.5z"/></svg>
                            </button>`
+                        : '';
+                    // Staleness is surfaced, never hidden: a silently stale batch is
+                    // worse than no filter. Clicking re-runs the analysis.
+                    const staleIndicator = (isPlanReviewed && sendableFilterOn && stalePlanIds.length > 0)
+                        ? `<button class="column-icon-btn sendable-stale-btn" data-action="dispatchAnalyze" data-column="${escapeAttr(def.id)}" data-tooltip="The sendable batch is stale — a plan changed since the analysis. Click to re-analyze." style="width:auto; padding:0 6px; font-size:10px;">stale — re-analyze</button>`
                         : '';
                     const featureAddBtn = isCreated
                         ? `<button class="column-icon-btn" data-action="addBlankFeature" data-column="${escapeAttr(def.id)}" data-tooltip="Add a blank feature to this column">
@@ -4395,7 +4414,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         ${analyzeBtn}
                         ${stagingViewControls}
                         ${julesBtn}
-                        ${copyDispatchPromptBtn}
+                        ${sendableFilterBtn}
+                        ${staleIndicator}
                         ${featureAddBtn}
                         ${testingFailBtn}
                         ${phoneAFriendBtn}
@@ -4504,7 +4524,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'copyDispatchPromptSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'addCoderTerminal' && action !== 'runQueue' && action !== 'stageForQueue' && action !== 'phoneAFriendSelected') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'toggleSendableFilter' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'addCoderTerminal' && action !== 'runQueue' && action !== 'stageForQueue' && action !== 'phoneAFriendSelected') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -4607,16 +4627,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
-                        case 'copyDispatchPromptSelected': {
-                            // Selection NARROWS the batch; it is not a precondition. With
-                            // nothing selected this copies the prompt for the whole column —
-                            // the same default the Analyze button uses. (It used to error out
-                            // instead, because it was modelled on promptSelected and never got
-                            // the promptAll half of the pair.)
-                            const selected = getSelectedInColumn(column);
-                            const ids = selected.length > 0 ? selected : getAllInColumn(column);
-                            if (ids.length === 0) return;
-                            postKanbanMessage({ type: 'copyDispatchPromptSelected', column: backendColumn, sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
+                        case 'toggleSendableFilter': {
+                            // A pure view toggle. No backend call: the batch is already
+                            // in the last updateBoard message, and asking again would
+                            // make the filter a second opinion rather than a view.
+                            sendableFilterOn = !sendableFilterOn;
+                            renderBoard(currentCards);
                             break;
                         }
                         case 'dispatchAnalyze': {
@@ -5545,6 +5561,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // scoped to that column. Membership is not cleared on dispatch, so an
             // unscoped predicate hides every launched card from the board.
             displayCards = displayCards.filter(card => !card.featureId && !(card.missionId && (card._effectiveColumn || card.column) === 'STAGING'));
+
+            // Sendable-batch filter — a VIEW over the backend's answer. Only the
+            // Planned column is filtered; every other column is untouched. With no
+            // analysis run the batch is empty, so this shows ZERO cards: that is
+            // "nothing is known to be sendable", not an error and never a fallback
+            // to the full column (which would look like an answer while being the
+            // absence of one).
+            if (sendableFilterOn) {
+                const sendable = new Set(sendablePlanIds);
+                displayCards = displayCards.filter(card => {
+                    const effectiveCol = card._effectiveColumn || card.column;
+                    if (effectiveCol !== 'PLAN REVIEWED') return true;
+                    return sendable.has(card.planId || card.sessionId);
+                });
+            }
 
             displayCards.forEach(card => {
                 const effectiveCol = card._effectiveColumn || card.column;
@@ -7457,6 +7488,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // records read directly from coding_rounds. Empty/absent
                     // → no feature shows a round indicator (no fabrication).
                     currentCodingRounds = Array.isArray(msg.codingRounds) ? msg.codingRounds : [];
+                    // The sendable batch, computed backend-side. Store it and note
+                    // whether it changed: a staleness-only change moves no card, so
+                    // the board signature is identical and the render gate below
+                    // would skip the repaint that surfaces the indicator.
+                    const nextSendableSignature = JSON.stringify([
+                        Array.isArray(msg.sendablePlanIds) ? msg.sendablePlanIds : [],
+                        Array.isArray(msg.stalePlanIds) ? msg.stalePlanIds : [],
+                    ]);
+                    const sendableChanged = nextSendableSignature !== lastSendableSignature;
+                    sendablePlanIds = Array.isArray(msg.sendablePlanIds) ? msg.sendablePlanIds : [];
+                    stalePlanIds = Array.isArray(msg.stalePlanIds) ? msg.stalePlanIds : [];
+                    lastSendableSignature = nextSendableSignature;
                     if (msg.orderByMode) {
                         currentOrderByMode = msg.orderByMode;
                         const orderSel = document.getElementById('orderByModeSelect');
@@ -7597,7 +7640,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         }
                     } else {
                         currentCards = nextCards;
-                        if (featureWorktreesChanged && !optimisticActive) {
+                        if ((featureWorktreesChanged || (sendableFilterOn && sendableChanged)) && !optimisticActive) {
                             console.log('[Kanban WV] featureWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
                             const activeFinished = pendingFinished.length ? pendingFinished.splice(0) : [];
                             renderBoard(currentCards, new Set(activeFinished.map(f => f.id)));

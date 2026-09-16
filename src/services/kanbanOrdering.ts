@@ -52,6 +52,8 @@
  * display metadata that no eligibility rule may read.
  */
 
+import * as crypto from 'crypto';
+
 export type SortMode = 'manual' | 'priority' | 'date' | 'complexity';
 
 export interface OrderableCard {
@@ -183,4 +185,181 @@ function toMs(ts: string | null | undefined): number | null {
     if (!ts) return null;
     const t = new Date(ts).getTime();
     return isNaN(t) ? null : t;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dependency readiness and the sendable batch.
+//
+// The dependency graph has two halves. `plan_dependencies` is the directed half
+// (A depends on B) and `plans.analysis_file_set` is the undirected half (the
+// files a plan will touch). Both are written by the dispatch-analysis pass and
+// read here — nothing recomputes them from plan prose at read time except the
+// staleness check, which only needs to detect that a plan file changed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where dependency-readiness reads come from. Both consumers — the queue pop
+ * (STAGING) and the sendable-batch filter (PLAN REVIEWED) — call
+ * {@link isDependencyReady} with one of these, so the readiness rule has exactly
+ * one implementation.
+ */
+export interface DependencyReadinessSource {
+    /** The plan's declared predecessors, read from `plan_dependencies`. */
+    getPlanDependencies(planId: string): Promise<string[]>;
+    /**
+     * Resolve a predecessor through the hot board and the cold archive.
+     * `'absent'` means the plan no longer exists anywhere — a stale edge.
+     */
+    resolvePlan(planId: string): Promise<{ completedAt?: string | null } | null | 'absent'>;
+    /** Called when an edge names a predecessor that no longer exists. */
+    onStaleEdge?(planId: string, depId: string): void;
+}
+
+/**
+ * THE dependency-readiness predicate, shared by the queue pop and the sendable
+ * filter.
+ *
+ * A plan is ready when every declared predecessor has asserted completion
+ * (`completed_at IS NOT NULL`). A predecessor absent from BOTH stores is a stale
+ * edge and is treated as satisfied — an unsatisfiable edge would deadlock the
+ * queue forever with no UI to clear it. A lookup fault THROWS; the caller must
+ * treat a throw as not-ready, because the gate exists to refuse and failing open
+ * dispatches a dependent whose predecessor was never checked.
+ */
+export async function isDependencyReady(planId: string, source: DependencyReadinessSource): Promise<boolean> {
+    const deps = await source.getPlanDependencies(planId);
+    for (const depId of (deps || [])) {
+        const dep = await source.resolvePlan(String(depId));
+        if (dep === 'absent') { source.onStaleEdge?.(planId, String(depId)); continue; }
+        if (!dep || !dep.completedAt) return false;
+    }
+    return true;
+}
+
+/** A card the sendable resolver can consider. */
+export interface SendableCandidate extends OrderableCard {
+    planId: string;
+    planFile?: string;
+    /** The persisted write set. `null` = never analysed; `[]` = touches nothing. */
+    analysisFileSet?: string[] | null;
+    /** The fingerprint recorded at analysis time, for staleness detection. */
+    mapFingerprint?: string | null;
+}
+
+export interface SendableBatchResult {
+    sendablePlanIds: string[];
+    stalePlanIds: string[];
+}
+
+/** Two write sets conflict when they share a path. A null/empty set conflicts with nothing. */
+export function filesOverlap(a: string[] | null | undefined, b: string[] | null | undefined): boolean {
+    if (!a || !b || a.length === 0 || b.length === 0) return false;
+    const set = new Set(a);
+    return b.some((f) => set.has(f));
+}
+
+/**
+ * Conservative repo-relative path extraction from a plan file's text.
+ *
+ * This is a CHANGE DETECTOR for the staleness check, never the conflict input —
+ * file overlap reads the persisted `analysis_file_set`. It deliberately
+ * over-collects (a path cited as evidence counts), because over-reporting
+ * staleness is the safe direction: a silently stale batch is worse than one that
+ * asks to be re-analysed. Do not "improve" this into the write-set extractor —
+ * deciding which files a plan *writes* is the agent's judgement, not a regex.
+ */
+export function extractFileSetFromPlanText(text: string): string[] {
+    if (!text) return [];
+    const out = new Set<string>();
+    const re = /(?:^|[\s`("'])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+        const p = m[1].replace(/[.,;:]+$/, '');
+        if (p && !p.startsWith('http')) out.add(p);
+    }
+    return Array.from(out).sort();
+}
+
+function sameStringSet(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) return false;
+    const sa = [...a].sort();
+    const sb = [...b].sort();
+    return sa.every((v, i) => v === sb[i]);
+}
+
+/**
+ * THE sendable-batch resolver — the filter's answer and, for a controller,
+ * `GET /kanban/sendable`'s answer.
+ *
+ * Order of operations matters and mirrors the dispatch path exactly: filter to
+ * dependency-ready, sort by {@link compareByPrecedence} (the same comparator the
+ * board and the queue pop use), then greedily take each card whose write set does
+ * not overlap anything already taken. A different order here would produce a
+ * different batch than the dispatcher would — the filter must be a view of the
+ * dispatcher's answer, not a second opinion.
+ *
+ * Cards with NO analysis data (`analysisFileSet` and `mapFingerprint` both null)
+ * are EXCLUDED, not treated as conflict-free. Before an analysis run nothing is
+ * known to be sendable, and an empty batch is the honest answer.
+ */
+export async function resolveSendableBatch(
+    cards: SendableCandidate[],
+    deps: DependencyReadinessSource,
+    options?: {
+        column?: string;
+        mode?: SortMode;
+        /** Read a plan file's text. Omit to skip the staleness check. */
+        readPlanFile?: (planFile: string) => string | null;
+    }
+): Promise<SendableBatchResult> {
+    const column = options?.column ?? 'PLAN REVIEWED';
+    const mode = options?.mode ?? 'manual';
+
+    const candidates = (cards || []).filter(
+        (c): c is SendableCandidate => !!c && !!c.planId
+            && (c.analysisFileSet !== null && c.analysisFileSet !== undefined || c.mapFingerprint !== null && c.mapFingerprint !== undefined)
+    );
+
+    const ready: SendableCandidate[] = [];
+    for (const c of candidates) {
+        try {
+            if (await isDependencyReady(c.planId, deps)) ready.push(c);
+        } catch {
+            // A readiness lookup fault holds the card back. Refusal is the safe
+            // direction here, exactly as in the pop-time gate.
+        }
+    }
+
+    ready.sort((a, b) => compareByPrecedence(a, b, column, mode));
+
+    const selected: SendableCandidate[] = [];
+    for (const c of ready) {
+        if (selected.some((s) => filesOverlap(s.analysisFileSet, c.analysisFileSet))) continue;
+        selected.push(c);
+    }
+
+    const stalePlanIds: string[] = [];
+    if (options?.readPlanFile) {
+        for (const c of selected) {
+            const persisted = c.analysisFileSet || [];
+            const text = options.readPlanFile(c.planFile || '');
+            const current = text === null ? [] : extractFileSetFromPlanText(text);
+            if (!sameStringSet(persisted, current)) stalePlanIds.push(c.planId);
+        }
+    }
+
+    return { sendablePlanIds: selected.map((c) => c.planId), stalePlanIds };
+}
+
+/**
+ * The analysis fingerprint: SHA-256 over `{planId}:{sortedFileSet}` pairs,
+ * sorted by planId. Exported so the server and any test compute it the same way;
+ * the skill's step 4 must use this exact shape.
+ */
+export function computeMapFingerprint(entries: Array<{ planId: string; fileSet: string[] }>): string {
+    const payload = [...entries]
+        .sort((a, b) => (a.planId < b.planId ? -1 : a.planId > b.planId ? 1 : 0))
+        .map((e) => `${e.planId}:${[...(e.fileSet || [])].sort().join(',')}`)
+        .join('\n');
+    return crypto.createHash('sha256').update(payload).digest('hex');
 }

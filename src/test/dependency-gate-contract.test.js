@@ -307,8 +307,18 @@ async function run() {
             /const next = candidates\[0\];/.test(src),
             'the pop must still take the first candidate outright — no star exception, no post-selection refusal'
         );
+        // The readiness rule moved to the ONE shared predicate (kanbanOrdering's
+        // isDependencyReady) so the pop and the sendable filter cannot drift. The
+        // gate now delegates; the cold-store lookup lives in the source builder it
+        // is handed. Asserting the lookup inside the gate block would pin the
+        // duplication this refactor removed.
         assert.ok(
-            /getPlanByPlanIdUnion/.test(block),
+            /isDependencyReady\(String\(p\.planId\), readiness\)/.test(block),
+            'the gate must call the shared readiness predicate'
+        );
+        const builder = src.slice(src.indexOf('_dependencyReadinessSource(db: any, board: any[])'), src.indexOf('_handleGetSendable'));
+        assert.ok(
+            /getPlanByPlanIdUnion/.test(builder),
             'the predecessor lookup must reach the cold store, or an archived predecessor blocks forever'
         );
     });

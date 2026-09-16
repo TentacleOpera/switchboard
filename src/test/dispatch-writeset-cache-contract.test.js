@@ -388,11 +388,16 @@ async function main() {
         assert.ok(/sourceMtimeMs/.test(skill), 'the POST must carry the observed stamp so a stale extraction stays a miss');
     });
 
-    await test('step 5 re-verifies the stamps before moving', () => {
+    await test('step 5 moves nothing, so there is no read-to-move window left to re-check', () => {
+        // The pre-move stamp re-verify this case used to pin was retired with the
+        // move itself: the analysis pass now writes the graph and stops (see the
+        // sendable-batch plan). A re-verify step would be dead prose guarding a
+        // write that no longer happens.
         const skill = skillBody();
-        assert.ok(/Re-`GET \/dispatch\/writesets` for the selected set only/.test(skill),
-            'the read-to-move window must be re-checked immediately before the moves');
-        assert.ok(/edited during analysis — not staged/.test(skill), 'a card edited mid-pass must be dropped and named');
+        assert.ok(!/Move cards to STAGING/.test(skill), 'the card move must be gone');
+        assert.ok(!/Re-`GET \/dispatch\/writesets` for the selected set only/.test(skill),
+            'the re-verify block must be gone with the move it guarded');
+        assert.ok(/Move nothing/.test(skill), 'the no-move rule must be stated');
     });
 
     await test('the rules carry the fallback and the extractor_version lever', () => {

@@ -189,6 +189,14 @@ export interface KanbanPlanRecord {
      * (binary override) — this field describes, the star directs.
      */
     priority?: number | null;
+    /**
+     * The repo-relative files the dispatch-analysis pass extracted for this plan,
+     * persisted so the sendable-batch filter can compute file overlap without
+     * re-reading plan files. NULL means "never analysed" — deliberately distinct
+     * from `[]`, which means "analysed and touches nothing". The resolver excludes
+     * NULL rather than reading it as conflict-free.
+     */
+    analysisFileSet?: string[] | null;
 }
 
 export interface ImportedDocEntry {
@@ -397,7 +405,14 @@ CREATE TABLE IF NOT EXISTS plans (
     map_fingerprint   TEXT DEFAULT NULL,
     priority          INTEGER DEFAULT NULL,
     owner_seat        TEXT DEFAULT '',
-    owner_since       TEXT DEFAULT NULL
+    owner_since       TEXT DEFAULT NULL,
+    -- analysis_file_set: JSON array of the repo-relative files the dispatch-analysis
+    -- pass extracted for this plan (the undirected half of the graph; plan_dependencies
+    -- holds the directed half). Persisted so the sendable-batch filter can compute
+    -- file overlap with zero file I/O at filter time. NULL = never analysed, which
+    -- is NOT "touches nothing" — the resolver excludes it rather than treating an
+    -- unknown set as conflict-free. Added by schema reconciliation on next open.
+    analysis_file_set TEXT DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS plan_runtime_state (
     plan_id             TEXT NOT NULL,
@@ -1718,7 +1733,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id, column_entered_at, completed_at,
                        priority_starred, column_order, map_fingerprint, priority,
-                       owner_seat, owner_since`;
+                       owner_seat, owner_since, analysis_file_set`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -15237,7 +15252,11 @@ FROM plans
                     // Absent from SELECT lists that predate V64 → undefined → null.
                     mapFingerprint: row.map_fingerprint !== null && row.map_fingerprint !== undefined ? String(row.map_fingerprint) : null,
                     // Absent from SELECT lists that predate V67 → undefined → null (no priority).
-                    priority: row.priority !== null && row.priority !== undefined ? Number(row.priority) : null
+                    priority: row.priority !== null && row.priority !== undefined ? Number(row.priority) : null,
+                    // Absent from SELECT lists that predate the column → undefined → null
+                    // ("never analysed"). A stored '[]' parses to [] ("touches nothing") —
+                    // the two must not collapse, which is why null is preserved.
+                    analysisFileSet: this._parseAnalysisFileSet(row.analysis_file_set)
                 });
             }
         } finally {
@@ -15697,6 +15716,36 @@ FROM plans
         );
     }
 
+    /**
+     * Persist a plan's extracted write set. `null` clears it back to "never
+     * analysed"; an empty array is stored as `[]` and means "touches nothing".
+     * Both are meaningful and the filter distinguishes them, so neither is coerced
+     * into the other.
+     */
+    public async setAnalysisFileSet(planId: string, fileSet: string[] | null): Promise<boolean> {
+        if (!planId) return false;
+        const payload = fileSet === null || fileSet === undefined
+            ? null
+            : JSON.stringify(Array.from(new Set(fileSet.map((f) => String(f)))).sort());
+        return this._persistedUpdate(
+            'UPDATE plans SET analysis_file_set = ?, updated_at = ? WHERE plan_id = ?',
+            [payload, new Date().toISOString(), planId]
+        );
+    }
+
+    public async getAnalysisFileSet(planId: string): Promise<string[] | null> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return null;
+        const stmt = this._db.prepare('SELECT analysis_file_set FROM plans WHERE plan_id = ?', [planId]);
+        try {
+            if (stmt.step()) {
+                return this._parseAnalysisFileSet(stmt.getAsObject().analysis_file_set);
+            }
+        } finally {
+            stmt.free();
+        }
+        return null;
+    }
+
     public async getMapFingerprint(planId: string): Promise<string | null> {
         if (!(await this.ensureReady()) || !this._db || !planId) return null;
         const stmt = this._db.prepare('SELECT map_fingerprint FROM plans WHERE plan_id = ?', [planId]);
@@ -15743,6 +15792,16 @@ FROM plans
         } catch {
             return [];
         }
+    }
+
+    /**
+     * `plans.analysis_file_set` → string[] | null. NULL (or an absent column on a
+     * DB that predates it) stays NULL: "never analysed" must not collapse into
+     * `[]`, which means "analysed and touches nothing".
+     */
+    private _parseAnalysisFileSet(raw: unknown): string[] | null {
+        if (raw === null || raw === undefined || String(raw) === '') return null;
+        return this._parseJsonStringArray(raw);
     }
 
     /**

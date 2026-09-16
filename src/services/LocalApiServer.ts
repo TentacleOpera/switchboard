@@ -63,7 +63,7 @@ import { isAllowedHostFor, isAllowedOriginFor, isTailnetPolicy, LOOPBACK_ONLY_PO
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION, TURN_END_VERIFY_INSTRUCTION_STANDALONE } from './PlanIngestionEngine';
-import { compareByPrecedence } from './kanbanOrdering';
+import { compareByPrecedence, isDependencyReady, resolveSendableBatch, type DependencyReadinessSource } from './kanbanOrdering';
 import { TransferBundleService } from './TransferBundleService';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
@@ -3818,34 +3818,14 @@ export class LocalApiServer {
             //
             // NULL-inert: with no rows in `plan_dependencies` this is one empty
             // query per staged card and the queue behaves exactly as before.
+            // The readiness rule itself lives in `isDependencyReady`
+            // (kanbanOrdering), shared with the sendable-batch filter — one
+            // implementation, not two that drift. This block only supplies the
+            // board-scoped source and records the refusals.
             const dependencyBlockers = new Map<string, string>();
             if (db.getPlanDependencies) {
                 try {
-                    const boardById = new Map<string, any>();
-                    for (const p of board) {
-                        if (!p) continue;
-                        if (p.planId) boardById.set(String(p.planId), p);
-                        if (p.sessionId) boardById.set(String(p.sessionId), p);
-                    }
-                    // A predecessor row absent from BOTH stores is a stale edge —
-                    // the plan was deleted. Such an edge can never be satisfied,
-                    // so treating it as blocking deadlocks the queue permanently
-                    // with no UI to clear it. Archived predecessors are still
-                    // real, so resolve through the union (hot + cold) first.
-                    const resolveDep = async (depId: string): Promise<any | null | 'absent'> => {
-                        const onBoard = boardById.get(depId);
-                        if (onBoard) return onBoard;
-                        const anyDb: any = db as any;
-                        if (typeof anyDb.getPlanByPlanIdUnion === 'function') {
-                            const unioned = await anyDb.getPlanByPlanIdUnion(depId);
-                            if (unioned) return unioned;
-                        }
-                        if (typeof anyDb.getPlanByPlanId === 'function') {
-                            const hot = await anyDb.getPlanByPlanId(depId);
-                            if (hot) return hot;
-                        }
-                        return 'absent';
-                    };
+                    const readiness = this._dependencyReadinessSource(db, board);
                     for (const p of board) {
                         if (!p || p.kanbanColumn !== 'STAGING') continue;
                         // Per-card, so one card's lookup fault cannot delete the
@@ -3855,20 +3835,10 @@ export class LocalApiServer {
                         // dependent whose predecessor was never checked, which is
                         // exactly the invariant this block was written to hold
                         // ("no card is dispatched while any dependency predecessor
-                        // has not asserted completion"). The team-roster and pacing
-                        // resolvers above also swallow their faults, but both of
-                        // those degrade TOWARD restriction; this one would not.
+                        // has not asserted completion").
                         try {
-                            const depPlanIds = await db.getPlanDependencies(p.planId);
-                            for (const depId of (depPlanIds || [])) {
-                                const dep = await resolveDep(depId);
-                                if (dep === 'absent') {
-                                    console.warn(
-                                        `[LocalApiServer] Stale dependency edge: '${p.planId}' depends on '${depId}', which no longer exists. Treating the edge as satisfied.`
-                                    );
-                                    continue;
-                                }
-                                if (!dep || !dep.completedAt) { dependencyBlockers.set(String(p.planId), depId); break; }
+                            if (!await isDependencyReady(String(p.planId), readiness)) {
+                                dependencyBlockers.set(String(p.planId), '(dependency not complete)');
                             }
                         } catch (err) {
                             console.warn(`[LocalApiServer] Dependency lookup failed for '${p.planId}'; holding the card rather than dispatching it unchecked:`, err);
@@ -6111,8 +6081,9 @@ export class LocalApiServer {
                     // mismatch means the persisted map is stale. Storage alone
                     // detects nothing; the comparison is the point.
                     const mapFingerprint = await db.getMapFingerprint?.(planId) ?? null;
+                    const analysisFileSet = await db.getAnalysisFileSet?.(planId) ?? null;
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true, planId, dependencies: deps, mapFingerprint }));
+                    res.end(JSON.stringify({ success: true, planId, dependencies: deps, mapFingerprint, analysisFileSet }));
                 } else {
                     const wsId = (await db.getWorkspaceId?.()) || '';
                     const deps = await db.getAllPlanDependencies(wsId);
@@ -6137,6 +6108,19 @@ export class LocalApiServer {
                 // at analysis time, compared against a recomputation on read.
                 if (typeof body?.mapFingerprint === 'string' && body.mapFingerprint.trim()) {
                     await db.setMapFingerprint?.(planId, body.mapFingerprint.trim());
+                }
+
+                // The undirected half of the graph: the files this plan will touch.
+                // Persisted here so the sendable filter computes overlap with zero
+                // file I/O. `[]` is a real value ("touches nothing"); a missing
+                // field leaves the stored set untouched, and `null` clears it.
+                if (Array.isArray(body?.fileSet)) {
+                    await db.setAnalysisFileSet?.(
+                        planId,
+                        body.fileSet.map((f: unknown) => String(f || '').trim()).filter(Boolean)
+                    );
+                } else if (body?.fileSet === null) {
+                    await db.setAnalysisFileSet?.(planId, null);
                 }
 
                 const proposed: string[] | null = Array.isArray(body?.dependsOn)
@@ -6189,6 +6173,78 @@ export class LocalApiServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanDependencies failed' }));
         }
+    }
+
+    /**
+     * Build the board-scoped dependency-readiness source both consumers use: the
+     * queue pop and the sendable-batch filter. The board index is passed in so a
+     * caller that already resolved the board does not re-read it.
+     *
+     * A predecessor absent from BOTH stores is a stale edge — the plan was
+     * deleted. Such an edge can never be satisfied, so treating it as blocking
+     * deadlocks the queue permanently with no UI to clear it. Archived
+     * predecessors are still real, so resolution goes through the union
+     * (hot + cold) before declaring absence.
+     */
+    private _dependencyReadinessSource(db: any, board: any[]): DependencyReadinessSource {
+        const boardById = new Map<string, any>();
+        for (const p of board || []) {
+            if (!p) continue;
+            if (p.planId) boardById.set(String(p.planId), p);
+            if (p.sessionId) boardById.set(String(p.sessionId), p);
+        }
+        return {
+            getPlanDependencies: (planId: string) => db.getPlanDependencies(planId),
+            resolvePlan: async (depId: string) => {
+                const onBoard = boardById.get(depId);
+                if (onBoard) return onBoard;
+                if (typeof db.getPlanByPlanIdUnion === 'function') {
+                    const unioned = await db.getPlanByPlanIdUnion(depId);
+                    if (unioned) return unioned;
+                }
+                if (typeof db.getPlanByPlanId === 'function') {
+                    const hot = await db.getPlanByPlanId(depId);
+                    if (hot) return hot;
+                }
+                return 'absent';
+            },
+            onStaleEdge: (planId: string, depId: string) => {
+                console.warn(
+                    `[LocalApiServer] Stale dependency edge: '${planId}' depends on '${depId}', which no longer exists. Treating the edge as satisfied.`
+                );
+            },
+        };
+    }
+
+    /**
+     * GET /kanban/sendable?workspaceRoot=&column=PLAN REVIEWED — the batch that
+     * can go now: dependency-ready cards in the column, greedily selected so no
+     * two share a file. Read-only: no mission, no staging, no card move. The
+     * controller's "dispatch all safe plans to coders" reads this, and the board
+     * filter reads the same resolver, so the two cannot disagree.
+     */
+    private async _handleGetSendable(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._requireReadableStore(req);
+            const url = new URL(req.url || '', `http://localhost:${this._port}`);
+            const column = url.searchParams.get('column') || 'PLAN REVIEWED';
+            const workspaceRoot = url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '';
+            const board = await this._resolveBoard(db);
+            const cards = (board || []).filter((p: any) => p && p.kanbanColumn === column);
+            const wsId = await this._wsId(db);
+            const mode = (typeof db.getOrderByMode === 'function') ? await db.getOrderByMode(wsId) : 'manual';
+            const readPlanFile = (planFile: string): string | null => {
+                if (!planFile) return null;
+                try {
+                    const abs = path.isAbsolute(planFile) ? planFile : path.join(workspaceRoot, planFile);
+                    return fsSync.readFileSync(abs, 'utf8');
+                } catch {
+                    // Unreadable/deleted → the file set is now empty → stale.
+                    return null;
+                }
+            };
+            return await resolveSendableBatch(cards, this._dependencyReadinessSource(db, board), { column, mode, readPlanFile });
+        });
     }
 
     private async _handleKanbanMissionRoute(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -13505,6 +13561,8 @@ export class LocalApiServer {
                 await this._handleKanbanQueueDone(req, res);
             } else if (pathname === '/kanban/dependencies' && (req.method === 'GET' || req.method === 'POST')) {
                 await this._handleKanbanDependencies(req, res);
+            } else if (pathname === '/kanban/sendable' && req.method === 'GET') {
+                await this._handleGetSendable(req, res);
             } else if (pathname === '/dispatch/writesets' && req.method === 'GET') {
                 await this._handleGetDispatchWriteSets(req, res);
             } else if (pathname === '/dispatch/writesets' && req.method === 'POST') {
