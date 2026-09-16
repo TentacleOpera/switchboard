@@ -93,3 +93,11 @@ None. Additive read path; no schema or persisted-state change.
 ## Outstanding Questions
 
 None.
+
+## Implementation summary (2026-09-16)
+
+`ClickUpSyncService.restoreBoardFromClickUp(workspaceRoot, options)` is the bulk pass: one paginated fetch per mapped list with `includeClosed: true` (via a new `getListTasksWithCompleteness`, which exposes both the `complete` flag and `includeClosed` — `getListTasks` drops `complete`, `getListTasksLive` takes no options), match every task to a local plan by parsing all three anchors (configured custom field, `switchboard:{planId}` tag, description footer `[Switchboard] PlanFile: … | Plan: …`), then apply additively keyed on `planId`. It is exposed through the provider seam as `ClickUpRemoteProvider.boardSyncRestore`, which populates `_listIdToColumn` so `stateKeyToColumn` — the interface primitive, passed into the service as `resolveColumn` — resolves the column.
+
+Safety properties: an incomplete listing (never observed `last_page`) refuses the WHOLE restore with `incomplete: true` and applies nothing; a local plan the remote omits is left untouched and counted in `skipped`; a remote anchor with no local plan is counted in `notFoundLocally` and never creates a row; an unmappable status is counted in `unmapped` and skipped rather than defaulted; duplicate anchors pick the newest `dateUpdated` deterministically and report the collision; `planId` (never `sessionId`) is the match key. Feature relations resolve in a second pass (`updateFeatureStatus(child, 0, parentPlanId)` then mark the parent `isFeature=1`), mirroring Notion's ordering. Matched tasks also get `clickup_task_id` persisted — on a fresh machine that is exactly the field that went missing.
+
+`ClickUpTask` gained `customFields` so the custom-field anchor survives `_normalizeClickUpTask`. `ClickUpRemoteProvider` now declares `boardRestore: true` and the parity contract test's ClickUp board-restore exemption is deleted; the contract test's board-sync-on-the-interface check is now per-provider (Notion push+restore, ClickUp restore) and asserts each method delegates to a real implementation. New integration tests cover the happy path (tag anchor, footer anchor, orphan anchor, local-only plan) and the incomplete-listing refusal. Compilation and test execution were skipped per this run's directives; `node --check` passes on the touched JS.
