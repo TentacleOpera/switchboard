@@ -213,6 +213,12 @@ export interface DependencyReadinessSource {
     resolvePlan(planId: string): Promise<{ completedAt?: string | null } | null | 'absent'>;
     /** Called when an edge names a predecessor that no longer exists. */
     onStaleEdge?(planId: string, depId: string): void;
+    /**
+     * Called with the first predecessor found incomplete, so a caller that
+     * reports "why not" (the queue pop's `dependencyBlocked.blockedBy`) can name
+     * it. The predicate's boolean is unchanged.
+     */
+    onBlocked?(depId: string): void;
 }
 
 /**
@@ -231,7 +237,10 @@ export async function isDependencyReady(planId: string, source: DependencyReadin
     for (const depId of (deps || [])) {
         const dep = await source.resolvePlan(String(depId));
         if (dep === 'absent') { source.onStaleEdge?.(planId, String(depId)); continue; }
-        if (!dep || !dep.completedAt) return false;
+        if (!dep || !dep.completedAt) {
+            source.onBlocked?.(String(depId));
+            return false;
+        }
     }
     return true;
 }
@@ -301,6 +310,12 @@ function sameStringSet(a: string[], b: string[]): boolean {
  * Cards with NO analysis data (`analysisFileSet` and `mapFingerprint` both null)
  * are EXCLUDED, not treated as conflict-free. Before an analysis run nothing is
  * known to be sendable, and an empty batch is the honest answer.
+ *
+ * STALE cards are excluded the same way and for the same reason: a persisted
+ * file set that no longer matches its plan file is no better known than no set
+ * at all. Staleness is evaluated before selection (never after), so it can
+ * actually change what is offered; the stale IDs are returned alongside so the
+ * UI can surface them.
  */
 export async function resolveSendableBatch(
     cards: SendableCandidate[],
@@ -320,8 +335,29 @@ export async function resolveSendableBatch(
             && (c.analysisFileSet !== null && c.analysisFileSet !== undefined || c.mapFingerprint !== null && c.mapFingerprint !== undefined)
     );
 
+    // Staleness is computed BEFORE selection and EXCLUDES the card. A persisted
+    // file set that no longer matches its plan file is no better known than no
+    // set at all, so offering it as sendable is the same silent false negative
+    // the whole plan exists to prevent — and running this after selection would
+    // make it an indicator that cannot change what is offered. Stale cards are
+    // still NAMED in stalePlanIds so the UI can surface them.
+    const stalePlanIds: string[] = [];
+    const stale = new Set<string>();
+    if (options?.readPlanFile) {
+        for (const c of candidates) {
+            const persisted = c.analysisFileSet || [];
+            const text = options.readPlanFile(c.planFile || '');
+            const current = text === null ? [] : extractFileSetFromPlanText(text);
+            if (!sameStringSet(persisted, current)) {
+                stale.add(c.planId);
+                stalePlanIds.push(c.planId);
+            }
+        }
+    }
+
     const ready: SendableCandidate[] = [];
     for (const c of candidates) {
+        if (stale.has(c.planId)) continue;
         try {
             if (await isDependencyReady(c.planId, deps)) ready.push(c);
         } catch {
@@ -336,16 +372,6 @@ export async function resolveSendableBatch(
     for (const c of ready) {
         if (selected.some((s) => filesOverlap(s.analysisFileSet, c.analysisFileSet))) continue;
         selected.push(c);
-    }
-
-    const stalePlanIds: string[] = [];
-    if (options?.readPlanFile) {
-        for (const c of selected) {
-            const persisted = c.analysisFileSet || [];
-            const text = options.readPlanFile(c.planFile || '');
-            const current = text === null ? [] : extractFileSetFromPlanText(text);
-            if (!sameStringSet(persisted, current)) stalePlanIds.push(c.planId);
-        }
     }
 
     return { sendablePlanIds: selected.map((c) => c.planId), stalePlanIds };

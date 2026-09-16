@@ -3825,7 +3825,7 @@ export class LocalApiServer {
             const dependencyBlockers = new Map<string, string>();
             if (db.getPlanDependencies) {
                 try {
-                    const readiness = this._dependencyReadinessSource(db, board);
+                    const base = this._dependencyReadinessSource(db, board);
                     for (const p of board) {
                         if (!p || p.kanbanColumn !== 'STAGING') continue;
                         // Per-card, so one card's lookup fault cannot delete the
@@ -3836,9 +3836,18 @@ export class LocalApiServer {
                         // exactly the invariant this block was written to hold
                         // ("no card is dispatched while any dependency predecessor
                         // has not asserted completion").
+                        //
+                        // The blocking predecessor is captured so the not-ready
+                        // body can NAME it (`dependencyBlocked.blockedBy`) — a
+                        // bare "blocked" is not diagnosable.
+                        let blockedBy = '';
+                        const readiness: DependencyReadinessSource = {
+                            ...base,
+                            onBlocked: (depId: string) => { blockedBy = depId; },
+                        };
                         try {
                             if (!await isDependencyReady(String(p.planId), readiness)) {
-                                dependencyBlockers.set(String(p.planId), '(dependency not complete)');
+                                dependencyBlockers.set(String(p.planId), blockedBy || '(dependency not complete)');
                             }
                         } catch (err) {
                             console.warn(`[LocalApiServer] Dependency lookup failed for '${p.planId}'; holding the card rather than dispatching it unchecked:`, err);

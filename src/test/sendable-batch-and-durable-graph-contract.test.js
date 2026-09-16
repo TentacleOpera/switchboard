@@ -142,7 +142,7 @@ async function main() {
     });
 
     // ── 3. Staleness ─────────────────────────────────────────────────────────
-    console.log('\n── 3. staleness is surfaced, not hidden ──');
+    console.log('\n── 3. staleness is excluded from the batch AND surfaced ──');
 
     await test('a plan file that changed since analysis marks its card stale', async () => {
         const cards = [card('A', { planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'] })];
@@ -150,16 +150,46 @@ async function main() {
             readPlanFile: () => 'writes src/a.ts',
         });
         assert.deepStrictEqual(unchanged.stalePlanIds, []);
+        assert.deepStrictEqual(unchanged.sendablePlanIds, ['A'], 'a fresh card stays sendable');
         const changed = await resolveSendableBatch(cards, source({}, {}), {
             readPlanFile: () => 'writes src/a.ts and src/new.ts',
         });
         assert.deepStrictEqual(changed.stalePlanIds, ['A']);
     });
 
-    await test('an unreadable plan file is stale (its set is now empty)', async () => {
+    await test('a STALE card is never offered as sendable', async () => {
+        // The whole point: a file set that no longer matches its plan file is no
+        // better known than no set at all. Offering it is the silent false
+        // negative the plan exists to prevent.
+        const cards = [card('A', { planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'] })];
+        const r = await resolveSendableBatch(cards, source({}, {}), {
+            readPlanFile: () => 'writes src/a.ts and src/new.ts',
+        });
+        assert.deepStrictEqual(r.stalePlanIds, ['A'], 'stale is still surfaced');
+        assert.ok(!r.sendablePlanIds.includes('A'),
+            'a stale card must not ALSO be sendable — surfaced is not the same as offered');
+    });
+
+    await test('stale exclusion runs BEFORE selection, so it changes the batch', async () => {
+        // A stale card must not hold a file against a fresh card either: the
+        // greedy pass only ever sees fresh candidates.
+        const cards = [
+            card('STALE', { planFile: '/ws/stale.md', analysisFileSet: ['src/shared.ts'], columnOrder: 1 }),
+            card('FRESH', { planFile: '/ws/fresh.md', analysisFileSet: ['src/shared.ts'], columnOrder: 2 }),
+        ];
+        const r = await resolveSendableBatch(cards, source({}, {}), {
+            readPlanFile: (p) => (p === '/ws/stale.md' ? 'now writes src/shared.ts and src/more.ts' : 'writes src/shared.ts'),
+        });
+        assert.deepStrictEqual(r.stalePlanIds, ['STALE']);
+        assert.deepStrictEqual(r.sendablePlanIds, ['FRESH'],
+            'the fresh card takes the shared file because the stale one is not in the greedy pass');
+    });
+
+    await test('an unreadable plan file is stale (its set is now empty) and not sendable', async () => {
         const cards = [card('A', { planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'] })];
         const r = await resolveSendableBatch(cards, source({}, {}), { readPlanFile: () => null });
         assert.deepStrictEqual(r.stalePlanIds, ['A']);
+        assert.ok(!r.sendablePlanIds.includes('A'), 'a deleted plan file must not be offered as sendable');
     });
 
     await test('extractFileSetFromPlanText is deterministic and sorted', () => {

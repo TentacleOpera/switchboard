@@ -241,12 +241,16 @@ async function main() {
         const { root, db } = await seed('size', ['p1']);
         try {
             const abs = path.join(root, '.switchboard/plans/p1.md');
+            // Pin mtime to a WHOLE-SECOND value and restore it to that exact value
+            // after the append. Restoring a sub-millisecond float from statSync is
+            // not stable across filesystems, and a 1ms drift makes the cache report
+            // mtime-changed first — so the test would silently stop exercising the
+            // size key. A whole second round-trips exactly.
+            const pinned = new Date(Math.floor(Date.now() / 1000) * 1000);
+            fs.utimesSync(abs, pinned, pinned);
             await upsert(db, [{ planId: 'p1', planFile: '.switchboard/plans/p1.md', files: ['src/a.ts'] }]);
-            const before = fs.statSync(abs).mtimeMs;
             fs.appendFileSync(abs, 'x');
-            // Hold mtime constant so ONLY size differs — otherwise the test would pass
-            // on mtime and never exercise the size key.
-            fs.utimesSync(abs, new Date(before), new Date(before));
+            fs.utimesSync(abs, pinned, pinned);
             const { misses } = await db.getPlanWriteSets(['p1']);
             assert.strictEqual(misses[0].reason, 'size-changed');
         } finally { await KanbanDatabase.invalidateWorkspace(root); fs.rmSync(root, { recursive: true, force: true }); }

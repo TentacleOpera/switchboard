@@ -2414,7 +2414,7 @@ export class KanbanProvider implements vscode.Disposable {
         cards: KanbanCard[],
         db: KanbanDatabase,
         workspaceRoot: string,
-        workspaceId: string
+        workspaceId: string | null | undefined
     ): Promise<{ sendablePlanIds: string[]; stalePlanIds: string[] }> {
         const empty = { sendablePlanIds: [] as string[], stalePlanIds: [] as string[] };
         try {
@@ -16079,10 +16079,10 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
      * TaskViewerProvider still gets a valid worktree + DB row, never a failed
      * creation for a worktree that in fact exists.
      *
-     * NOT shared with `_ensureFeatureIntegrationWorktree`, which runs the same
-     * guard/create/seat sequence for the feature-workflow integration worktree
-     * with a narrower predicate (`!subtask_plan_id && !tier`) and non-forced
-     * seating. Two implementations by design; do not let this become three.
+     * This is the ONLY implementation of that sequence. A second copy once
+     * existed for the feature-workflow integration worktree (narrower predicate,
+     * non-forced seating); it was removed with staging's per-feature
+     * provisioning. Do not reintroduce a second copy — route through here.
      */
     public async createWorktreeForFeature(
         workspaceRoot: string,
