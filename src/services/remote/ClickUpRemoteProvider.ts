@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import type { ClickUpSyncService } from '../ClickUpSyncService';
 import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
-import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta, RemoteProviderCapabilities, ArchiveResult } from './RemoteProvider';
+import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta, RemoteProviderCapabilities, ArchiveResult, BoardSyncRestoreResult, BoardSyncProgress } from './RemoteProvider';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
 
 /**
@@ -26,7 +26,7 @@ export class ClickUpRemoteProvider implements RemoteProvider {
         push: true,
         archive: false,        // ClickUp has close/delete but no true archive — platform limitation
         boardPush: true,       // syncPlan carries columns + subtask projection
-        boardRestore: false,   // no restoreFrom* orchestration — .switchboard/plans/clickup-board-restore.md
+        boardRestore: true,    // restoreBoardFromClickUp — bulk fetch by list, match by planId
         automation: true,      // ClickUpAutomationService
         missions: false,
     };
@@ -217,6 +217,25 @@ export class ClickUpRemoteProvider implements RemoteProvider {
 
     public async archiveCard(_remoteId: string): Promise<ArchiveResult> {
         return { ok: true, skipped: true };
+    }
+
+    /**
+     * Bulk board restore (`capabilities.boardRestore`). Populates the list→column
+     * map so `stateKeyToColumn` — the interface primitive — resolves, then hands
+     * the orchestration to `ClickUpSyncService.restoreBoardFromClickUp`, which
+     * fetches every mapped list, matches by the planId anchors, and applies
+     * additively.
+     */
+    public async boardSyncRestore(workspaceRoot: string, progress?: BoardSyncProgress): Promise<BoardSyncRestoreResult> {
+        const config = await this._clickup.loadConfig();
+        this._listIdToColumn = {};
+        for (const [column, listId] of Object.entries(config?.columnMappings || {})) {
+            if (listId) { this._listIdToColumn[listId] = column; }
+        }
+        return this._clickup.restoreBoardFromClickUp(workspaceRoot, {
+            progress,
+            resolveColumn: (stateKey) => this.stateKeyToColumn(stateKey),
+        });
     }
 
     /**

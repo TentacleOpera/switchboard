@@ -89,7 +89,8 @@ export interface RemoteProviderCapabilities {
     /**
      * Provider can rebuild the board from the remote — bulk fetch, match by
      * planId, apply columns, resolve feature structure (NotionSyncService.
-     * restoreFromNotion only; ClickUp/Linear have no restoreFrom* pass).
+     * restoreFromNotion and ClickUpSyncService.restoreBoardFromClickUp; Linear
+     * has no restore pass).
      */
     boardRestore: boolean;
     /** Provider has a board-automation service (<Kind>AutomationService — Linear, ClickUp; none for Notion). */
@@ -134,8 +135,14 @@ export interface BoardSyncRestoreResult {
     success: boolean;
     /** Cards rebuilt locally from the remote. */
     restored: number;
-    /** Remote cards skipped (local record newer than the remote row). */
+    /** Cards left untouched — duplicates beyond the chosen anchor, apply failures, and local plans the remote did not mention. */
     skipped: number;
+    /** Remote cards whose state key mapped to no local column — skipped and reported, never defaulted. */
+    unmapped?: number;
+    /** Remote anchors with no local plan — left alone; restore is additive and never creates rows. */
+    notFoundLocally?: number;
+    /** true → a bulk fetch was truncated or aborted and NOTHING was applied. */
+    incomplete?: boolean;
     error?: string;
 }
 
@@ -234,9 +241,12 @@ export interface RemoteProvider {
      * row, match by `planId` (never `sessionId`), apply columns, and resolve
      * feature structure in a second pass. Gated on `capabilities.boardRestore`; a
      * provider that declares the capability must implement this. Notion delegates
-     * to `NotionSyncService.restoreFromNotion` — the only restore that exists
-     * today; ClickUp/Linear have none. Optional: providers without a board
-     * restore omit it (and declare `boardRestore: false`).
+     * to `NotionSyncService.restoreFromNotion`; ClickUp delegates to
+     * `ClickUpSyncService.restoreBoardFromClickUp` (bulk fetch per mapped list,
+     * match by the planId anchors). Linear has none. Additive: a local plan the
+     * remote does not mention is left alone, and an incomplete fetch applies
+     * nothing. Optional: providers without a board restore omit it (and declare
+     * `boardRestore: false`).
      */
     boardSyncRestore?(workspaceRoot: string, progress?: BoardSyncProgress): Promise<BoardSyncRestoreResult>;
 

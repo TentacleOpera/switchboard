@@ -82,11 +82,6 @@ const EXEMPTIONS = [
         reason: 'ClickUp has close/delete but no true archive — permanently correct; AutoArchiveService already honours archive:false',
     },
     {
-        provider: 'clickup', capability: 'boardRestore', kind: 'not-yet-built',
-        plan: '.switchboard/plans/clickup-board-restore.md',
-        reason: 'no restoreFrom* orchestration — the planId anchors exist, the bulk pass does not',
-    },
-    {
         provider: 'linear', capability: 'boardRestore', kind: 'not-yet-built',
         plan: '.switchboard/plans/linear-board-restore-and-planid-anchor.md',
         reason: 'no planId anchor on remote objects; restore is blocked on the anchor + backfill plan',
@@ -133,7 +128,6 @@ const OFF_INTERFACE_EVIDENCE = {
     },
     boardRestore: {
         // methodPattern watches for the restore landing before the flag flips.
-        clickup: { module: 'services/ClickUpSyncService.js', cls: 'ClickUpSyncService', methodPattern: /^restoreFrom/ },
         linear: { module: 'services/LinearSyncService.js', cls: 'LinearSyncService', methodPattern: /^restoreFrom/ },
     },
     automation: {
@@ -143,15 +137,23 @@ const OFF_INTERFACE_EVIDENCE = {
     },
 };
 
-// ── Board sync ON the interface (Notion) ─────────────────────────────────────
+// ── Board sync ON the interface ──────────────────────────────────────────────
 // The capability must be a declared interface method that delegates to a real
 // implementation — the cautionary precedent is `NotionRemoteProvider.
 // createPageForPlan`, a public method the interface never declared and no
-// capability gate could see.
+// capability gate could see. Only providers listed here may implement the
+// board-sync methods; a provider whose push is realised off-interface (ClickUp
+// and Linear push per-plan through `syncPlan`) must NOT implement one.
 const BOARD_SYNC_INTERFACE = {
-    boardPush: { method: 'boardSyncPush', delegate: 'backupToNotion', probe: (p) => p.boardSyncPush([]) },
-    boardRestore: { method: 'boardSyncRestore', delegate: 'restoreFromNotion', probe: (p) => p.boardSyncRestore('/tmp/notion-ws') },
+    notion: {
+        boardPush: { method: 'boardSyncPush', delegate: 'backupToNotion', probe: (p) => p.boardSyncPush([]) },
+        boardRestore: { method: 'boardSyncRestore', delegate: 'restoreFromNotion', probe: (p) => p.boardSyncRestore('/tmp/notion-ws') },
+    },
+    clickup: {
+        boardRestore: { method: 'boardSyncRestore', delegate: 'restoreBoardFromClickUp', probe: (p) => p.boardSyncRestore('/tmp/clickup-ws') },
+    },
 };
+const BOARD_SYNC_METHODS = { boardPush: 'boardSyncPush', boardRestore: 'boardSyncRestore' };
 
 function evidenceResolves(spec) {
     try {
@@ -185,6 +187,10 @@ function buildClickUp(rec) {
         getTaskDetails: async (id) => ({ task: { id, name: 'Task', markdownDescription: 'd' } }),
         syncPlan: async (plan) => { rec.record('syncPlan', plan); return { success: true }; },
         syncPlanContent: async () => ({ success: true }),
+        restoreBoardFromClickUp: async (workspaceRoot) => {
+            rec.record('restoreBoardFromClickUp', workspaceRoot);
+            return { success: true, restored: 2, skipped: 1, unmapped: 0, notFoundLocally: 0, incomplete: false };
+        },
         hasApiToken: async () => true,
     };
     const db = {
@@ -515,34 +521,39 @@ async function run() {
         }
     }
 
-    // 6b. Board sync declared ON the interface: Notion implements the method and
-    //     the method delegates to a real implementation. This is the check that
-    //     makes the capability non-decorative — a public method the interface
-    //     never declares (createPageForPlan) is what this rules out.
-    await check('notion: board sync is on the RemoteProvider interface, not a service lookup', async () => {
-        const b = built.notion;
-        for (const [cap, spec] of Object.entries(BOARD_SYNC_INTERFACE)) {
-            assert.strictEqual(b.provider.capabilities[cap], true, `notion must declare ${cap}: true`);
-            assert.strictEqual(typeof b.provider[spec.method], 'function',
-                `notion declares ${cap}: true but does not implement ${spec.method} on RemoteProvider`);
-            const before = b.rec.calls.length;
-            const result = await spec.probe(b.provider);
-            const delegated = b.rec.calls.slice(before).some((c) => c.name === spec.delegate);
-            assert.ok(delegated,
-                `notion.${spec.method} returned without delegating to ${spec.delegate} — a stub behind a true`);
-            assert.strictEqual(result.success, true, `notion.${spec.method} did not report success`);
-        }
-    });
+    // 6b. Board sync declared ON the interface: each provider listed in
+    //     BOARD_SYNC_INTERFACE must implement the method and the method must
+    //     delegate to a real implementation. This is the check that makes the
+    //     capability non-decorative — a public method the interface never
+    //     declares (createPageForPlan) is what this rules out.
+    for (const [kind, caps] of Object.entries(BOARD_SYNC_INTERFACE)) {
+        await check(`${kind}: board sync is on the RemoteProvider interface, not a service lookup`, async () => {
+            const b = built[kind];
+            for (const [cap, spec] of Object.entries(caps)) {
+                assert.strictEqual(b.provider.capabilities[cap], true, `${kind} must declare ${cap}: true`);
+                assert.strictEqual(typeof b.provider[spec.method], 'function',
+                    `${kind} declares ${cap}: true but does not implement ${spec.method} on RemoteProvider`);
+                const before = b.rec.calls.length;
+                const result = await spec.probe(b.provider);
+                const delegated = b.rec.calls.slice(before).some((c) => c.name === spec.delegate);
+                assert.ok(delegated,
+                    `${kind}.${spec.method} returned without delegating to ${spec.delegate} — a stub behind a true`);
+                assert.strictEqual(result.success, true, `${kind}.${spec.method} did not report success`);
+            }
+        });
+    }
 
-    // 6c. The interface method is NOT implemented by providers whose capability
-    //     is realised off-interface (ClickUp/Linear push per-plan via syncPlan).
-    //     If one lands, its declaration must move with it.
-    check('only Notion implements the board-sync interface methods', () => {
+    // 6c. A provider NOT listed in BOARD_SYNC_INTERFACE must not implement the
+    //     board-sync methods — its capability is realised off-interface
+    //     (ClickUp/Linear push per-plan via syncPlan). If one lands, its
+    //     declaration and evidence must move onto the interface.
+    check('only the enumerated providers implement the board-sync interface methods', () => {
         for (const [kind, b] of Object.entries(built)) {
-            if (kind === 'notion') { continue; }
-            for (const spec of Object.values(BOARD_SYNC_INTERFACE)) {
-                assert.strictEqual(typeof b.provider[spec.method], 'undefined',
-                    `${kind} implements ${spec.method} — move its ${spec.method} declaration and evidence onto the interface`);
+            const declared = BOARD_SYNC_INTERFACE[kind] || {};
+            for (const [cap, method] of Object.entries(BOARD_SYNC_METHODS)) {
+                if (declared[cap]) { continue; }
+                assert.strictEqual(typeof b.provider[method], 'undefined',
+                    `${kind} implements ${method} — add it to BOARD_SYNC_INTERFACE with its delegate and evidence`);
             }
         }
     });

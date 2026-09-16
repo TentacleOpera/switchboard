@@ -734,6 +734,154 @@ async function testSyncBailsSilentlyWithoutToken() {
     });
 }
 
+/**
+ * Board restore — the bulk pass that rebuilds local columns and feature
+ * relations from ClickUp, matching by the planId anchors.
+ */
+async function testRestoreBoardFromClickUp() {
+    await withWorkspace('clickup-restore', async ({ workspaceRoot }) => {
+        const { service } = createContext(workspaceRoot, { 'switchboard.clickup.apiToken': 'pk_token' });
+        const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js'));
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
+        await db.ensureReady();
+        await db.setWorkspaceId('restore-ws-1');
+
+        const seedPlan = (planId, planFile, kanbanColumn) => createPlanRecord({
+            planId,
+            planFile,
+            kanbanColumn,
+            workspaceId: 'restore-ws-1',
+            sourceType: 'local',
+            repoScope: '',
+            brainSourcePath: '',
+            mirrorPath: ''
+        });
+        await db.upsertPlans([
+            seedPlan('plan-1', '.switchboard/plans/plan-1.md', 'BACKLOG'),
+            seedPlan('plan-2', '.switchboard/plans/plan-2.md', 'BACKLOG'),
+            seedPlan('plan-local-only', '.switchboard/plans/plan-local.md', 'REVIEWED')
+        ]);
+
+        await writeConfig(buildConfig({ CREATED: 'list-created', CODING: 'list-coding' }));
+
+        const http = installHttpsMock();
+        try {
+            http.queueJson(200, {
+                tasks: [
+                    createClickUpTask({
+                        id: 'task-1',
+                        list: { id: 'list-created', name: 'New' },
+                        tags: [{ name: 'switchboard:plan-1', tag_fg: '', tag_bg: '' }],
+                        custom_fields: [{ id: 'field-plan', value: 'plan-1' }]
+                    }),
+                    // Anchor carried by the description footer alone — the tag is
+                    // absent, so the third anchor must resolve it.
+                    createClickUpTask({
+                        id: 'task-2',
+                        list: { id: 'list-coding', name: 'Coding' },
+                        description: 'Body\n\n---\n[Switchboard] PlanFile: .switchboard/plans/plan-2.md | Plan: plan-2',
+                        markdown_description: 'Body\n\n---\n[Switchboard] PlanFile: .switchboard/plans/plan-2.md | Plan: plan-2',
+                        tags: []
+                    }),
+                    // A remote anchor with no local plan — counted, never created.
+                    createClickUpTask({
+                        id: 'task-orphan',
+                        list: { id: 'list-created', name: 'New' },
+                        tags: [{ name: 'switchboard:plan-missing', tag_fg: '', tag_bg: '' }]
+                    })
+                ],
+                last_page: true
+            }, (req) => req.method === 'GET' && req.path.includes('/list/list-created/task?'));
+            http.queueJson(200, { tasks: [], last_page: true },
+                (req) => req.method === 'GET' && req.path.includes('/list/list-coding/task?'));
+
+            const result = await service.restoreBoardFromClickUp(workspaceRoot, {
+                resolveColumn: (stateKey) => ({ 'list-created': 'CREATED', 'list-coding': 'CODING' })[stateKey]
+            });
+
+            assert.strictEqual(result.success, true, `restore failed: ${result.error}`);
+            assert.strictEqual(result.incomplete, false);
+            assert.strictEqual(result.restored, 2, `expected 2 restored, got ${result.restored}`);
+            assert.strictEqual(result.notFoundLocally, 1, `expected 1 remote anchor without a local plan, got ${result.notFoundLocally}`);
+            assert.ok(result.skipped >= 1, 'the local-only plan must be counted as skipped');
+
+            const p1 = await db.getPlanByPlanId('plan-1');
+            assert.strictEqual(p1.kanbanColumn, 'CREATED');
+            assert.strictEqual(p1.clickupTaskId, 'task-1');
+            const p2 = await db.getPlanByPlanId('plan-2');
+            assert.strictEqual(p2.kanbanColumn, 'CODING');
+            assert.strictEqual(p2.clickupTaskId, 'task-2');
+
+            // Additive: a local plan the remote omits is left exactly as it was.
+            const pLocal = await db.getPlanByPlanId('plan-local-only');
+            assert.strictEqual(pLocal.kanbanColumn, 'REVIEWED');
+
+            // No row was created for the orphan anchor.
+            assert.strictEqual(await db.getPlanByPlanId('plan-missing'), null);
+        } finally {
+            http.restore();
+        }
+    });
+}
+
+/**
+ * A listing that never observes last_page is not authoritative — the restore
+ * must report incomplete and apply NOTHING rather than treat the un-fetched
+ * tail as deleted.
+ */
+async function testRestoreRefusesIncompleteListing() {
+    await withWorkspace('clickup-restore-incomplete', async ({ workspaceRoot }) => {
+        const { service } = createContext(workspaceRoot, { 'switchboard.clickup.apiToken': 'pk_token' });
+        const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js'));
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
+        await db.ensureReady();
+        await db.setWorkspaceId('restore-ws-2');
+
+        await db.upsertPlans([createPlanRecord({
+            planId: 'plan-1',
+            planFile: '.switchboard/plans/plan-1.md',
+            kanbanColumn: 'BACKLOG',
+            workspaceId: 'restore-ws-2',
+            sourceType: 'local',
+            repoScope: '',
+            brainSourcePath: '',
+            mirrorPath: ''
+        })]);
+
+        await writeConfig(buildConfig({ CREATED: 'list-created' }));
+
+        const http = installHttpsMock();
+        try {
+            // Page 0 has data but no last_page; page 1 is empty → the fetch ends
+            // WITHOUT ever observing last_page, so complete stays false.
+            http.queueJson(200, {
+                tasks: [createClickUpTask({
+                    id: 'task-1',
+                    list: { id: 'list-created', name: 'New' },
+                    tags: [{ name: 'switchboard:plan-1', tag_fg: '', tag_bg: '' }]
+                })]
+            }, (req) => req.method === 'GET' && req.path.includes('/list/list-created/task?page=0'));
+            http.queueJson(200, { tasks: [] },
+                (req) => req.method === 'GET' && req.path.includes('/list/list-created/task?page=1'));
+
+            const result = await service.restoreBoardFromClickUp(workspaceRoot, {
+                resolveColumn: (stateKey) => ({ 'list-created': 'CREATED' })[stateKey]
+            });
+
+            assert.strictEqual(result.success, false);
+            assert.strictEqual(result.incomplete, true);
+            assert.strictEqual(result.restored, 0, 'an incomplete listing must apply nothing');
+
+            const p1 = await db.getPlanByPlanId('plan-1');
+            assert.strictEqual(p1.kanbanColumn, 'BACKLOG', 'the local column must be untouched');
+        } finally {
+            http.restore();
+        }
+    });
+}
+
 async function run() {
     await testConfigNormalizationAndSetupFlow();
     await testApplyConfigOptionsAndValidation();
@@ -741,6 +889,8 @@ async function run() {
     await testLoopGuardAndUnmappedColumns();
     await testSyncBailsSilentlyWithoutToken();
     await testNativeTaskQueryAndMutationHelpers();
+    await testRestoreBoardFromClickUp();
+    await testRestoreRefusesIncompleteListing();
     console.log('clickup sync service test passed');
 }
 
