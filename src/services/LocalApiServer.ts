@@ -5084,19 +5084,18 @@ export class LocalApiServer {
                 res.end(JSON.stringify({ success: true, completed: [], cleared: [], note: 'No round in flight for this team — nothing to close' }));
                 return;
             }
+            // More than one in-flight round is an inconsistent state, but it is
+            // NOT a reason to refuse. This used to 409 "refusing to close an
+            // ambiguous round set", which blocked the close, which blocked the
+            // next round's dispatch — a wedge with no recovery path, since the
+            // only way to reduce the in-flight count is to close one. Take the
+            // lowest ordinal (the oldest, the one the lead is reporting on) and
+            // log the ambiguity instead of stalling the pipeline on it.
             if (inFlightRounds.length > 1) {
-                // One in-flight round per team. More than one is an inconsistent
-                // state — refuse to close an ambiguous round set rather than
-                // guessing which round the lead meant.
-                res.writeHead(409, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    success: false,
-                    error: `Team has ${inFlightRounds.length} rounds in flight (expected one) — refusing to close an ambiguous round set`,
-                }));
-                return;
+                console.warn(`[LocalApiServer] round/complete: team '${teamId}' has ${inFlightRounds.length} rounds in flight (expected one) — closing the lowest ordinal: ${inFlightRounds.map(r => r.ordinal).sort((a, b) => a - b).join(', ')}`);
             }
 
-            const currentRound = inFlightRounds[0];
+            const currentRound = inFlightRounds.slice().sort((a, b) => a.ordinal - b.ordinal)[0];
             // The next round to dispatch is the lowest-ordinal registered round
             // after the current one. If none exists, the current round is the
             // last — its close is the feature's end.
@@ -5440,27 +5439,37 @@ export class LocalApiServer {
                 })),
             };
 
-            // Start the first round. Registration is the ONLY trigger the lead
-            // has: its rounds-variant standing orders say "the system dispatches
-            // each round's subtasks to your seats — you do not dispatch subtasks
-            // to seats yourself", and round/complete only advances a round that
-            // is already in flight. Without this, registering rounds left the
-            // team inert — the lead was told not to dispatch and nothing else
-            // ever did (POST /kanban/round/dispatch exists but is named in no
-            // prompt, CLI or automation, so no agent reaches it).
+            // Start the earliest unfinished round. Registration is the ONLY
+            // trigger the lead has: its rounds-variant standing orders say "the
+            // system dispatches each round's subtasks to your seats — you do not
+            // dispatch subtasks to seats yourself", and round/complete only
+            // advances a round that is already in flight. Without this,
+            // registering rounds left the team inert — the lead was told not to
+            // dispatch and nothing else ever did (POST /kanban/round/dispatch
+            // exists but is named in no prompt, CLI or automation, so no agent
+            // reaches it).
             //
-            // Gated on nothing being in flight: a re-registration mid-feature
-            // replaces PENDING rounds only, and the round already running keeps
-            // running — round/complete advances it. Only a feature with no
-            // dispatched/partial round starts one here.
+            // NOT gated on anything being in flight. A gate here refuses a
+            // dispatch, and the board never refuses a dispatch (V81). The gate
+            // that used to live here — `keptRounds.some(state === 'dispatched'
+            // || 'partial')` — wedged this feature for a day: round 1 was
+            // stamped 'dispatched' on 2026-09-15T11:11:09Z with nothing actually
+            // delivered, never closed (closing needs completions from seats that
+            // were never prompted), and so every later registration skipped the
+            // dispatch and returned `dispatched: null`. The lead read that as
+            // "already running" and ended its turn, forever. Re-dispatch is the
+            // recovery path, so re-dispatch must not be gated on the very state
+            // that is wrong.
+            //
+            // Duplicate dispatch is not a failure mode: the agent reads the
+            // plan, sees the work is done, and says so.
             let dispatchedNow: {
                 roundId: string; ordinal: number; state: string; dispatched: boolean; error?: string;
             } | null = null;
-            const inFlight = keptRounds.some(r => r.state === 'dispatched' || r.state === 'partial');
-            if (!inFlight && insertedRounds.length > 0) {
+            {
                 const afterInsert: CodingRoundRow[] = await db.getCodingRoundsByFeature(featureId);
                 const first = afterInsert
-                    .filter(r => r.state === 'registered')
+                    .filter(r => r.state !== 'closed')
                     .sort((a, b) => a.ordinal - b.ordinal)[0];
                 if (first) {
                     const dispatchResult = await this._dispatchRoundCore({
@@ -10125,6 +10134,85 @@ export class LocalApiServer {
         });
     }
 
+    /**
+     * GET /dispatch/writesets?workspaceRoot=&planIds=<csv> — the dispatch-analysis
+     * pass's write-set cache read. The SERVER decides hit versus miss (stat, path,
+     * mtime, size, extractor_version); the agent never compares stamps itself. A
+     * miss carries a typed `reason` so a cache that has quietly stopped hitting is
+     * diagnosable rather than merely slow.
+     *
+     * A host whose store predates V82 (or a partial test double) degrades to
+     * "everything is a miss" rather than throwing — the cache is an accelerator
+     * with no correctness authority.
+     */
+    private async _handleGetDispatchWriteSets(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._requireReadableStore(req);
+            const url = new URL(req.url || '', `http://localhost:${this._port}`);
+            const raw = (url.searchParams.get('planIds') || '').trim();
+            const planIds = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            if (planIds.length === 0) {
+                throw Object.assign(new Error('planIds is required (a comma-separated list of plan IDs)'), { statusCode: 400 });
+            }
+            if (typeof db.getPlanWriteSets !== 'function') {
+                return { hits: [], misses: planIds.map(planId => ({ planId, planFile: '', reason: 'no-row' })) };
+            }
+            return await db.getPlanWriteSets(planIds);
+        });
+    }
+
+    /**
+     * POST /dispatch/writesets — upsert extracted write sets.
+     * Body: { workspaceRoot?, entries: [{ planId, planFile?, files: string[], declaredDeps?: string[] }] }.
+     *
+     * The server re-stats at write time and stores the stamp it observed, so a file
+     * edited during extraction is stored with the newer stamp and correctly misses
+     * next run. `files` / `declaredDeps` are caller-supplied arrays and are validated
+     * at the boundary (PRD contract #5).
+     */
+    private async _handlePostDispatchWriteSets(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const entries = body?.entries;
+            if (!Array.isArray(entries)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'entries must be an array' }));
+                return;
+            }
+            for (const entry of entries) {
+                if (!entry || typeof entry.planId !== 'string' || entry.planId.trim() === '') {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'every entry must carry a non-empty planId' }));
+                    return;
+                }
+                for (const key of ['files', 'declaredDeps']) {
+                    if (entry[key] !== undefined && !Array.isArray(entry[key])) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: `entry.${key} must be an array of strings when present` }));
+                        return;
+                    }
+                }
+            }
+            const db = await this._resolveDbFromQuery(req);
+            if (!db || typeof db.upsertPlanWriteSets !== 'function') {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'board store does not support the write-set cache' }));
+                return;
+            }
+            const result = await db.upsertPlanWriteSets(entries);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, data: result }));
+        } catch (err) {
+            console.error('[LocalApiServer] _handlePostDispatchWriteSets error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'write-set upsert failed' }));
+        }
+    }
+
     private async _handleGetMissionControlSessionLog(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
             const root = this._options.workspaceRoot;
@@ -13344,6 +13432,10 @@ export class LocalApiServer {
                 await this._handleKanbanQueueDone(req, res);
             } else if (pathname === '/kanban/dependencies' && (req.method === 'GET' || req.method === 'POST')) {
                 await this._handleKanbanDependencies(req, res);
+            } else if (pathname === '/dispatch/writesets' && req.method === 'GET') {
+                await this._handleGetDispatchWriteSets(req, res);
+            } else if (pathname === '/dispatch/writesets' && req.method === 'POST') {
+                await this._handlePostDispatchWriteSets(req, res);
             } else if (pathname.startsWith('/kanban/mission') && (req.method === 'GET' || req.method === 'POST')) {
                 await this._handleKanbanMissionRoute(pathname, req, res);
             } else if (pathname === '/kanban/task/complete' && req.method === 'POST') {

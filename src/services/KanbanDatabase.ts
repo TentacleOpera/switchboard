@@ -664,6 +664,30 @@ CREATE TABLE IF NOT EXISTS coding_rounds (
     closed_at        TEXT DEFAULT NULL,
     UNIQUE(feature_id, ordinal)
 );
+-- plan_write_sets: the dispatch-analysis pass's extracted write set per plan —
+-- the repo-relative files a plan will create/modify, plus its declared plan-level
+-- dependencies — keyed on the plan file's mtime + size so a pass reads only the
+-- files that changed. See plan
+-- feature_plan_20260811094600_cache-plan-write-sets-for-dispatch-analysis.md.
+--
+-- The AGENT extracts (deciding which files a plan *writes* versus merely cites is
+-- a judgement over prose); the extension stores and invalidates. The files and
+-- declared_deps columns are JSON arrays. extractor_version is a single integer that
+-- invalidates every row when the skill's extraction rules change — a rules change
+-- no per-file mtime can detect. An empty files array is a HIT meaning "touches
+-- nothing", distinct from a missing row meaning "unknown"; conflating them would
+-- let an unread plan look parallel-safe.
+CREATE TABLE IF NOT EXISTS plan_write_sets (
+    plan_id           TEXT PRIMARY KEY,
+    workspace_id      TEXT NOT NULL,
+    plan_file         TEXT NOT NULL,
+    source_mtime_ms   INTEGER NOT NULL,
+    source_size       INTEGER NOT NULL,
+    files             TEXT NOT NULL DEFAULT '[]',
+    declared_deps     TEXT NOT NULL DEFAULT '[]',
+    extractor_version INTEGER NOT NULL DEFAULT 1,
+    extracted_at      TEXT NOT NULL
+);
 `;
 
 // Index DDL, one statement per entry so a single failure (e.g. a column not yet
@@ -684,6 +708,7 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_linear_managed_artifacts_workspace ON linear_managed_artifacts(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_write_sets_ws ON plan_write_sets(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_control_plane_kind ON control_plane(kind)`,
     `CREATE INDEX IF NOT EXISTS idx_activity_workspace ON activity_log(workspace_id, timestamp)`,
     `CREATE INDEX IF NOT EXISTS idx_board_move_workspace ON board_move_requests(workspace_id, timestamp)`,
@@ -1220,6 +1245,35 @@ const MIGRATION_V80_SQL = [
     )`,
     `CREATE INDEX IF NOT EXISTS idx_linear_managed_artifacts_workspace ON linear_managed_artifacts(workspace_id)`,
 ];
+
+// V82: plan_write_sets — the dispatch-analysis pass's per-plan write-set cache,
+// keyed on the plan file's mtime + size. Additive; fresh DBs get the table from
+// SCHEMA_TABLES_SQL. Two separate array elements (CREATE TABLE, CREATE INDEX) so
+// a re-run's first failure cannot swallow the second — MIGRATION_V13_SQL is the
+// precedent.
+const MIGRATION_V82_SQL = [
+    `CREATE TABLE IF NOT EXISTS plan_write_sets (
+        plan_id           TEXT PRIMARY KEY,
+        workspace_id      TEXT NOT NULL,
+        plan_file         TEXT NOT NULL,
+        source_mtime_ms   INTEGER NOT NULL,
+        source_size       INTEGER NOT NULL,
+        files             TEXT NOT NULL DEFAULT '[]',
+        declared_deps     TEXT NOT NULL DEFAULT '[]',
+        extractor_version INTEGER NOT NULL DEFAULT 1,
+        extracted_at      TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_write_sets_ws ON plan_write_sets(workspace_id)`,
+];
+
+/**
+ * The extraction-rules version stamped on every `plan_write_sets` row. Bump this
+ * in the SAME change as any edit to step 2's extraction rules in the
+ * dispatch-analysis protocol: a rules change is invisible to mtime/size, so
+ * without a bump every cached row would serve sets produced under the old rules
+ * forever. `getPlanWriteSets` treats a row whose version differs as a miss.
+ */
+export const PLAN_WRITE_SET_EXTRACTOR_VERSION = 1;
 
 /**
  * Bound-parameter cap for the runtime overlay's `plan_id IN (…)` list in
@@ -11207,6 +11261,17 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V81 migration completed: advisory owner stamp, refusal columns dropped, coding rounds reduced to plan-id lists');
         }
 
+        // V82: plan_write_sets — the dispatch-analysis write-set cache. Additive;
+        // fresh DBs already get the table from SCHEMA_TABLES_SQL.
+        const v82 = await this.getMigrationVersion();
+        if (v82 < 82) {
+            for (const sql of MIGRATION_V82_SQL) {
+                try { this._db.exec(sql); } catch { /* table/index already exists */ }
+            }
+            await this.setMigrationVersion(82);
+            console.log('[KanbanDatabase] V82 migration completed: plan_write_sets cache table added');
+        }
+
         // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue
         // continuously (a plan deleted or archived elsewhere leaves this machine's
         // runtime row behind), so this is maintenance rather than a migration step.
@@ -15644,6 +15709,149 @@ FROM plans
             stmt.free();
         }
         return null;
+    }
+
+    // ── Plan write-set cache (V82) ──
+
+    /**
+     * The plan file a plan id currently points at, workspace-scoped. Used as the
+     * CURRENT path to compare against a cached row's `plan_file`, so a moved or
+     * renamed plan file forces a miss even when mtime and size coincide.
+     */
+    private async _currentPlanFile(planId: string, workspaceId: string): Promise<string | null> {
+        if (!this._db || !planId) return null;
+        const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE plan_id = ? AND workspace_id = ? LIMIT 1', [planId, workspaceId]);
+        try {
+            if (stmt.step()) {
+                const v = stmt.getAsObject().plan_file;
+                return v !== null && v !== undefined && String(v) !== '' ? String(v) : null;
+            }
+        } finally {
+            stmt.free();
+        }
+        return null;
+    }
+
+    private _planFilePath(planFile: string): string {
+        return path.isAbsolute(planFile) ? planFile : path.join(this._workspaceRoot, planFile);
+    }
+
+    private _parseJsonStringArray(raw: unknown): string[] {
+        try {
+            const parsed = JSON.parse(String(raw ?? '[]'));
+            return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Hit/miss for a set of plan ids. The SERVER owns the invalidation rule — the
+     * agent never compares stamps itself. Every ambiguous case resolves to a MISS,
+     * never a hit: a stale hit is a silent false negative that can put two coders in
+     * one file while the pass reports success.
+     *
+     * An empty stored `files` array is a HIT meaning "touches nothing" — distinct
+     * from a missing row, which means "unknown".
+     */
+    public async getPlanWriteSets(planIds: string[]): Promise<{ hits: any[]; misses: any[] }> {
+        const hits: any[] = [];
+        const misses: any[] = [];
+        if (!(await this.ensureReady()) || !this._db) return { hits, misses };
+        const workspaceId = await this.getWorkspaceId() || await this.getDominantWorkspaceId() || '';
+        const seen = new Set<string>();
+        for (const raw of planIds || []) {
+            const planId = String(raw || '').trim();
+            if (!planId || seen.has(planId)) continue;
+            seen.add(planId);
+            const currentPath = await this._currentPlanFile(planId, workspaceId);
+            const stmt = this._db.prepare('SELECT * FROM plan_write_sets WHERE plan_id = ? LIMIT 1', [planId]);
+            let row: any = null;
+            try { if (stmt.step()) row = stmt.getAsObject(); } finally { stmt.free(); }
+            if (!row || String(row.workspace_id || '') !== workspaceId) {
+                misses.push({ planId, planFile: currentPath || '', reason: 'no-row' });
+                continue;
+            }
+            const storedPath = String(row.plan_file || '');
+            if (!currentPath || currentPath !== storedPath) {
+                misses.push({ planId, planFile: currentPath || storedPath, reason: 'path-changed' });
+                continue;
+            }
+            if (Number(row.extractor_version || 0) !== PLAN_WRITE_SET_EXTRACTOR_VERSION) {
+                misses.push({ planId, planFile: currentPath, reason: 'extractor-version' });
+                continue;
+            }
+            let stat: fs.Stats;
+            try { stat = fs.statSync(this._planFilePath(currentPath)); }
+            catch { misses.push({ planId, planFile: currentPath, reason: 'stat-failed' }); continue; }
+            if (Math.round(stat.mtimeMs) !== Number(row.source_mtime_ms)) {
+                misses.push({ planId, planFile: currentPath, reason: 'mtime-changed' });
+                continue;
+            }
+            if (stat.size !== Number(row.source_size)) {
+                misses.push({ planId, planFile: currentPath, reason: 'size-changed' });
+                continue;
+            }
+            hits.push({
+                planId,
+                planFile: currentPath,
+                files: this._parseJsonStringArray(row.files),
+                declaredDeps: this._parseJsonStringArray(row.declared_deps),
+            });
+        }
+        return { hits, misses };
+    }
+
+    /**
+     * Upsert extracted write sets. The stamp is re-observed HERE, at write time, and
+     * the row stores that observed stamp.
+     *
+     * `sourceMtimeMs` / `sourceSize` are OPTIONAL and, when supplied, are the stamp
+     * the extractor observed when it READ the file. They are the safety interlock for
+     * the one window mtime cannot otherwise close: if the file changed between the
+     * extractor's read and this write, the extracted set describes the OLD content,
+     * and storing the newer stamp would fabricate a HIT for a stale set. A mismatch
+     * (or a stat failure) SKIPS the entry — it stays a miss, which is the safe
+     * direction. Omitting the stamp stores the write-time stamp (the plan's literal
+     * behaviour); supplying it is strictly safer and is what step 2 instructs.
+     */
+    public async upsertPlanWriteSets(entries: Array<{ planId: string; planFile?: string; files?: unknown; declaredDeps?: unknown; sourceMtimeMs?: unknown; sourceSize?: unknown }>): Promise<{ written: number; skipped: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { written: 0, skipped: 0 };
+        const workspaceId = await this.getWorkspaceId() || await this.getDominantWorkspaceId() || '';
+        const now = new Date().toISOString();
+        let written = 0;
+        let skipped = 0;
+        for (const entry of entries || []) {
+            const planId = String(entry?.planId || '').trim();
+            const planFile = String(entry?.planFile || '').trim() || (await this._currentPlanFile(planId, workspaceId)) || '';
+            if (!planId || !planFile) { skipped++; continue; }
+            let stat: fs.Stats;
+            try { stat = fs.statSync(this._planFilePath(planFile)); }
+            catch { skipped++; continue; }
+            const observedMtime = Math.round(stat.mtimeMs);
+            const observedSize = stat.size;
+            const claimedMtime = Number(entry?.sourceMtimeMs);
+            if (Number.isFinite(claimedMtime) && claimedMtime > 0) {
+                const claimedSize = Number(entry?.sourceSize);
+                const sizeMismatch = Number.isFinite(claimedSize) && claimedSize !== observedSize;
+                if (claimedMtime !== observedMtime || sizeMismatch) {
+                    // Edited during extraction: the set describes content that is no
+                    // longer there. Leave it a miss rather than stamping a stale set.
+                    skipped++;
+                    continue;
+                }
+            }
+            const files = JSON.stringify(Array.isArray(entry?.files) ? entry!.files.map(String) : []);
+            const deps = JSON.stringify(Array.isArray(entry?.declaredDeps) ? entry!.declaredDeps.map(String) : []);
+            const ok = await this._persistedUpdate(
+                `INSERT OR REPLACE INTO plan_write_sets
+                    (plan_id, workspace_id, plan_file, source_mtime_ms, source_size, files, declared_deps, extractor_version, extracted_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [planId, workspaceId, planFile, observedMtime, observedSize, files, deps, PLAN_WRITE_SET_EXTRACTOR_VERSION, now]
+            );
+            if (ok) written++; else skipped++;
+        }
+        return { written, skipped };
     }
 
     // ── Missions & Mission Members (V64) ──
