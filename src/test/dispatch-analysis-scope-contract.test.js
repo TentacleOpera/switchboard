@@ -67,6 +67,37 @@ async function test(name, fn) {
 
 const ROOT = '/ws';
 
+/**
+ * A KanbanProvider stripped to exactly what `generateUnifiedPrompt`'s
+ * dispatch-analysis arm touches.
+ *
+ * `Object.create` bypasses the class-field initializers, so the double must
+ * restore the two things the arm's store reads depend on:
+ *  - `_getKanbanDb` is overridden (the production one calls
+ *    `resolveEffectiveWorkspaceRoot` → `this._context.workspaceState`, which a
+ *    prototype-only instance does not have). The arm reads the board's
+ *    `feature_worktree_mode` through it, so the stub answers that key.
+ *  - `_context` / `_kanbanDbs` are still supplied for any other path a
+ *    non-stubbed call takes.
+ * The plan's prompt-layout assertions are the reason this file exists; a double
+ * that aborts before the regex runs verifies nothing.
+ */
+function makePlannerProvider() {
+    const kp = Object.create(KanbanProvider.prototype);
+    kp._taskViewerProvider = { getLocalApiServerPort: () => 4711 };
+    kp._kanbanDbs = new Map();
+    kp._context = {
+        globalState: { get: () => undefined, update: async () => {} },
+        workspaceState: { get: () => undefined, update: async () => {} },
+    };
+    kp._getKanbanDb = () => ({
+        ensureReady: async () => true,
+        getConfig: async () => null,
+        getConfigJson: async (_key, fallback) => fallback,
+    });
+    return kp;
+}
+
 function card(planId, project, extra) {
     return Object.assign({
         planId,
@@ -196,8 +227,7 @@ async function main() {
     console.log('\n── 3. features are one unit — no [SUBTASK] lines in an analysis prompt ──');
 
     await test('the dispatch-analysis prompt keeps [FEATURE: …] and drops every [SUBTASK] line', async () => {
-        const kp = Object.create(KanbanProvider.prototype);
-        kp._taskViewerProvider = { getLocalApiServerPort: () => 4711 };
+        const kp = makePlannerProvider();
         const plans = [
             { topic: 'Loose plan', absolutePath: '/ws/a.md', planId: 'a', sessionId: 'a' },
             { topic: 'The Feature', absolutePath: '/ws/f.md', planId: 'f', sessionId: 'f', isFeature: true, featureTopic: 'The Feature' },
@@ -252,8 +282,7 @@ async function main() {
     });
 
     await test('the dispatch-analysis arm emits PROJECT= then FEATURE_WORKTREE_MODE= then a blank line', async () => {
-        const kp = Object.create(KanbanProvider.prototype);
-        kp._taskViewerProvider = { getLocalApiServerPort: () => 4711 };
+        const kp = makePlannerProvider();
         const plans = [{ topic: 'A', absolutePath: '/ws/a.md', planId: 'a', sessionId: 'a' }];
         const scoped = await kp.generateUnifiedPrompt('planner', plans, ROOT, { instruction: 'dispatch-analysis', analysisScope: 'Browser Switchboard' });
         assert.ok(/API_PORT=4711\nPROJECT=Browser Switchboard\nFEATURE_WORKTREE_MODE=none\n\nPLANS TO PROCESS:/.test(scoped), scoped);

@@ -271,3 +271,15 @@ Landed, with three HEAD drifts corrected.
 **Not done, deliberately.** `protocol-catalog.json` was not regenerated: its `apiEndpoints` are scanned from the route ladder, so the new route appears on the next `npm run catalog:generate`, but regenerating on this shared tree would sweep other agents' in-flight route/verb changes into this commit. The integration step owns that regeneration. Compilation and the suite were skipped per dispatch directive; all edited sources were parsed clean with the TypeScript parser and the test file with `node --check`.
 
 **Note for the reviewer.** `feature-worktree-guardrail-contract.test.js` asserts the prompt builder never carries a `featureWorktreeMode` value ("it governs worktree CREATION, never prompt text"). The new line is a deliberate, narrow exception — the dispatch-analysis arm is the only emitter and the skill is its only reader — and the test still passes because the identifier is `buildFeatureWorktreeModeLine`. If that contract is meant to be absolute, this plan is the exception to record there.
+
+## Fix Round (2026-09-16) — the prompt-layout assertion was red
+
+Review found the assertion this plan is sole owner of never executed: the layout case aborted with `TypeError: Cannot read properties of undefined (reading 'workspaceState')` from `KanbanProvider.resolveEffectiveWorkspaceRoot`, so the byte order it pins was never verified. The same double also left section 3's feature-unit case red (pre-existing).
+
+**Cause, and it is the test's, not the wiring.** Both cases built the provider with `Object.create(KanbanProvider.prototype)`, which bypasses the class-field initializers. The dispatch-analysis arm now reads `feature_worktree_mode` through `_getKanbanDb`, and the production `_getKanbanDb` calls `resolveEffectiveWorkspaceRoot` → `this._context.workspaceState`; a prototype-only instance has no `_context` and no `_kanbanDbs`. (The comment above `resolveDrive` in `KanbanProvider.generateUnifiedPrompt` already documents exactly this trap for the DB-reading paths — the arm joined that set when it gained the mode read.)
+
+**Fix (test only).** New `makePlannerProvider()` double: overrides `_getKanbanDb` with a store stub answering `feature_worktree_mode` (null → `none`), and supplies `_context` + `_kanbanDbs` for any other path — the same shape `batch-move-team-prompt-contract.test.js` uses. Both cases now use it. Production code unchanged; the emitted layout was already correct.
+
+**Verified.** `npm run compile-tests` clean, then `node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js` → **17 passed, 0 failed**. The two previously-aborting cases (section 3 and the layout case) both execute and pass.
+
+**Left alone deliberately.** The stale sentence in the `resolveDrive` comment ("the dispatch-analysis one returns without ever needing a DB") is now false — the arm does read the store. Correcting it is a production-file edit outside this fix's scope; it is recorded here so the next reader is not misled.
