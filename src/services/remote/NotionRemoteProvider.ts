@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import type { NotionFetchService } from '../NotionFetchService';
+import type { NotionSyncService } from '../NotionSyncService';
 import type {
     RemoteProvider, RemoteStateDelta, RemoteCommentDelta,
-    RemoteProviderCapabilities, ArchiveResult
+    RemoteProviderCapabilities, ArchiveResult,
+    BoardSyncProgress, BoardSyncPushResult, BoardSyncRestoreResult
 } from './RemoteProvider';
 import { loadNotionRemoteSetup, saveNotionRemoteSetup, type NotionRemoteSetup } from './notionRemoteConfig';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
@@ -30,6 +32,15 @@ interface NotionRemoteProviderDeps {
     db: KanbanDatabase;
     getWorkspaceId: () => Promise<string>;
     getPlansDir?: () => Promise<string>;
+    /**
+     * Board-sync orchestration — the bulk push/restore the `boardSyncPush` /
+     * `boardSyncRestore` interface methods delegate to. Optional: providers built
+     * for an archive-only or delta-polling path (PlanIngestionEngine's purge)
+     * omit it, and then the board-sync methods report "not wired".
+     */
+    boardSync?: NotionSyncService;
+    /** Workspace root the board sync runs against. Required when `boardSync` is set. */
+    workspaceRoot?: string;
     log?: (msg: string) => void;
 }
 
@@ -44,8 +55,8 @@ export class NotionRemoteProvider implements RemoteProvider {
         pullComments: true,
         push: true,
         archive: true,
-        boardPush: true,       // NotionBackupService.backupToNotion
-        boardRestore: true,    // NotionBackupService.restoreFromNotion — the only restore that exists
+        boardPush: true,       // NotionSyncService.backupToNotion
+        boardRestore: true,    // NotionSyncService.restoreFromNotion — the only restore that exists
         automation: false,     // no NotionAutomationService
         missions: false,
     };
@@ -122,7 +133,7 @@ export class NotionRemoteProvider implements RemoteProvider {
             const selfEdited = !!(botId && lastEditedById && lastEditedById === botId);
             if (remoteId && stateKey) {
                 // Feature structure — read Is Feature checkbox + Feature relation (added by
-                // NotionBackupService._ensureFeatureProperties). If the properties don't
+                // NotionSyncService._ensureFeatureProperties). If the properties don't
                 // exist yet (pre-feature-schema setup), these read falsy — safe degradation.
                 const featureRelation = row.properties?.['Feature']?.relation;
                 const parentRemoteId = Array.isArray(featureRelation) && featureRelation.length > 0
@@ -310,7 +321,7 @@ export class NotionRemoteProvider implements RemoteProvider {
 
         // Create with properties in one shot. The plans database schema uses 'Topic'
         // as the title property and 'Plan ID' as a rich_text (verified in
-        // NotionBackupService._planToNotionProperties). Kanban Column is a select.
+        // NotionSyncService._planToNotionProperties). Kanban Column is a select.
         const properties: Record<string, any> = {
             'Topic': { title: [{ text: { content: title } }] },
             'Plan ID': { rich_text: [{ text: { content: planId } }] },
@@ -362,9 +373,43 @@ export class NotionRemoteProvider implements RemoteProvider {
         return { ok: false, error: `Notion archive failed (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}` };
     }
 
+    /**
+     * Bulk board push (`capabilities.boardPush`). The board-sync orchestration
+     * lives in `NotionSyncService` — this delegates to its `backupToNotion`,
+     * which walks every plan in the workspace DB (so the `plans` snapshot the
+     * interface passes is redundant here and intentionally ignored).
+     */
+    public async boardSyncPush(plans: KanbanPlanRecord[]): Promise<BoardSyncPushResult> {
+        const sync = this._deps.boardSync;
+        const workspaceRoot = this._deps.workspaceRoot;
+        if (!sync || !workspaceRoot) {
+            return { success: false, pushed: 0, skipped: 0, error: 'Notion board sync is not wired for this workspace' };
+        }
+        const result = await sync.backupToNotion(workspaceRoot);
+        return {
+            success: result.success,
+            pushed: result.backedUp,
+            skipped: Math.max(0, result.total - result.backedUp),
+            error: result.error,
+        };
+    }
+
+    /**
+     * Bulk board restore (`capabilities.boardRestore`). Delegates to
+     * `NotionSyncService.restoreFromNotion` — fetch all pages, match by planId,
+     * apply columns, resolve feature relations.
+     */
+    public async boardSyncRestore(workspaceRoot: string, progress?: BoardSyncProgress): Promise<BoardSyncRestoreResult> {
+        const sync = this._deps.boardSync;
+        if (!sync) {
+            return { success: false, restored: 0, skipped: 0, error: 'Notion board sync is not wired for this workspace' };
+        }
+        return sync.restoreFromNotion(workspaceRoot, progress);
+    }
+
     public async pushState(remoteId: string, column: string): Promise<void> {
         // Write the `Kanban Column` select property on the Notion page.
-        // Same pattern as NotionBackupService._upsertPlanToNotion (PATCH /pages/{id}).
+        // Same pattern as NotionSyncService._upsertPlanToNotion (PATCH /pages/{id}).
         try {
             const result = await this._deps.notion.httpRequest(
                 'PATCH', `/pages/${remoteId}`,

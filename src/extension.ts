@@ -586,6 +586,30 @@ async function waitWithTimeout<T>(promise: Thenable<T> | Promise<T>, timeoutMs: 
 }
 
 
+/**
+ * Migrate the shipped `switchboard.notionBackup` setting to `switchboard.notionSync`.
+ *
+ * The key was renamed when the Notion board sync stopped being filed as a
+ * "backup" — the value is shipped user state, so it is copied forward rather
+ * than dropped. The legacy key is left in settings.json (VS Code refuses
+ * `update()` on a key that is no longer in the configuration schema), which is
+ * why the copy is guarded on the new key being empty: re-running is a no-op.
+ */
+async function migrateNotionSyncSetting(outputChannel?: vscode.OutputChannel): Promise<void> {
+    try {
+        const cfg = vscode.workspace.getConfiguration('switchboard');
+        // `get()` reads unregistered keys; the legacy value still lives in settings.json.
+        const legacy = cfg.get<Record<string, unknown>>('notionBackup');
+        if (!legacy || typeof legacy !== 'object' || Object.keys(legacy).length === 0) { return; }
+        const current = cfg.get<Record<string, unknown>>('notionSync');
+        if (current && typeof current === 'object' && Object.keys(current).length > 0) { return; }
+        await cfg.update('notionSync', legacy, vscode.ConfigurationTarget.Global);
+        outputChannel?.appendLine('[Switchboard] Migrated switchboard.notionBackup → switchboard.notionSync');
+    } catch (err) {
+        outputChannel?.appendLine(`[Switchboard] notionBackup → notionSync setting migration failed: ${err}`);
+    }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
     console.time('switchboard.activate');
     
@@ -602,6 +626,7 @@ export async function activate(context: vscode.ExtensionContext) {
         outputChannel?.appendLine('[Switchboard] Mapping index initialization completed successfully');
         await MigrationService.runMigration();
         outputChannel?.appendLine('[Switchboard] Global integration config migration completed');
+        await migrateNotionSyncSetting(outputChannel ?? undefined);
     } catch (err) {
         console.error('[Switchboard] Mapping index initialization or migration failed, continuing activation:', err);
         outputChannel?.appendLine(`[Switchboard] Mapping index/migration FAILED: ${err}`);

@@ -173,9 +173,9 @@ Members: `notion-backup-feature-schema-and-remote-orientation`, `remote-control-
 
 | Deliverable | Status | Evidence |
 |---|---|---|
-| Notion DB `Is Feature` + `Feature` (self-relation) props created | ✅ | `NotionBackupService.ts:243-246`, `_ensureFeatureProperties:435-452` |
-| Feature props written (two-pass) via `featureIdToNotionPageId` | ✅ | `NotionBackupService.ts:538-567`, setup two-pass `:311-353` |
-| `restoreFromNotion` applies feature structure | ✅ | `NotionBackupService.ts:116,145-148,176-186` |
+| Notion DB `Is Feature` + `Feature` (self-relation) props created | ✅ | `NotionSyncService.ts:243-246`, `_ensureFeatureProperties:435-452` |
+| Feature props written (two-pass) via `featureIdToNotionPageId` | ✅ | `NotionSyncService.ts:538-567`, setup two-pass `:311-353` |
+| `restoreFromNotion` applies feature structure | ✅ | `NotionSyncService.ts:116,145-148,176-186` |
 | `RemoteStateDelta.parentRemoteId` + `isFeatureCandidate` on **refactored** seam | ✅ | `remote/RemoteProvider.ts:19-30` (single interface, no old duplicate) |
 | Linear provider populates parent/children | ✅ | `LinearRemoteProvider.ts:52-77` |
 | Notion provider reads `Is Feature`/`Feature` with safe fallback | ✅ | `NotionRemoteProvider.ts:98-114` |

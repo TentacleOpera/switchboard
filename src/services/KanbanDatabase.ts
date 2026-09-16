@@ -2932,7 +2932,7 @@ export class KanbanDatabase {
 
     /**
      * Upsert a single plan record. Convenience wrapper around upsertPlans().
-     * Used by NotionBackupService restore flow.
+     * Used by NotionSyncService restore flow.
      */
     public async upsertPlan(record: KanbanPlanRecord): Promise<boolean> {
         return this.upsertPlans([record]);

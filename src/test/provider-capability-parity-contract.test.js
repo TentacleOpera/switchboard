@@ -121,14 +121,17 @@ const EXEMPTIONS = [
 // methods. A `true` declaration must resolve to a real implementation; an
 // implementation that appears while the flag stays false fails (the flag is
 // the declaration — flip it and delete the exemption in the same change).
+//
+// Notion is deliberately ABSENT for boardPush/boardRestore: its board sync is
+// now on the RemoteProvider interface (boardSyncPush/boardSyncRestore) and is
+// checked by the interface-method probe below, not by a service lookup. ClickUp
+// and Linear still push per-plan through their `syncPlan`, so they stay here.
 const OFF_INTERFACE_EVIDENCE = {
     boardPush: {
-        notion: { module: 'services/NotionBackupService.js', cls: 'NotionBackupService', method: 'backupToNotion' },
         clickup: { module: 'services/ClickUpSyncService.js', cls: 'ClickUpSyncService', method: 'syncPlan' },
         linear: { module: 'services/LinearSyncService.js', cls: 'LinearSyncService', method: 'syncPlan' },
     },
     boardRestore: {
-        notion: { module: 'services/NotionBackupService.js', cls: 'NotionBackupService', method: 'restoreFromNotion' },
         // methodPattern watches for the restore landing before the flag flips.
         clickup: { module: 'services/ClickUpSyncService.js', cls: 'ClickUpSyncService', methodPattern: /^restoreFrom/ },
         linear: { module: 'services/LinearSyncService.js', cls: 'LinearSyncService', methodPattern: /^restoreFrom/ },
@@ -138,6 +141,16 @@ const OFF_INTERFACE_EVIDENCE = {
         linear: { module: 'services/LinearAutomationService.js', cls: 'LinearAutomationService' },
         notion: { module: 'services/NotionAutomationService.js', cls: 'NotionAutomationService' },
     },
+};
+
+// ── Board sync ON the interface (Notion) ─────────────────────────────────────
+// The capability must be a declared interface method that delegates to a real
+// implementation — the cautionary precedent is `NotionRemoteProvider.
+// createPageForPlan`, a public method the interface never declared and no
+// capability gate could see.
+const BOARD_SYNC_INTERFACE = {
+    boardPush: { method: 'boardSyncPush', delegate: 'backupToNotion', probe: (p) => p.boardSyncPush([]) },
+    boardRestore: { method: 'boardSyncRestore', delegate: 'restoreFromNotion', probe: (p) => p.boardSyncRestore('/tmp/notion-ws') },
 };
 
 function evidenceResolves(spec) {
@@ -243,7 +256,17 @@ function buildNotion(rec) {
             : null,
         findPlanByNotionPageId: async () => null,
     };
-    return new NotionRemoteProvider({ notion, db, getWorkspaceId: async () => 'ws-1' });
+    // The board-sync orchestration the provider's interface methods delegate to.
+    // Records the delegation so a declared-true capability backed by a no-op is
+    // detectable (the same empty-stub rule the pull checks apply).
+    const boardSync = {
+        backupToNotion: async (workspaceRoot) => { rec.record('backupToNotion', workspaceRoot); return { success: true, backedUp: 2, total: 3 }; },
+        restoreFromNotion: async (workspaceRoot) => { rec.record('restoreFromNotion', workspaceRoot); return { success: true, restored: 4, skipped: 1 }; },
+    };
+    return new NotionRemoteProvider({
+        notion, db, getWorkspaceId: async () => 'ws-1',
+        boardSync, workspaceRoot: '/tmp/notion-ws',
+    });
 }
 
 function buildStore(rec) {
@@ -473,21 +496,56 @@ async function run() {
     }
 
     // 6. Off-interface capabilities: boardPush / boardRestore / automation.
+    //    Only providers with an evidence spec are checked here — Notion's board
+    //    sync is on the interface (step 6b), and a `false` declaration with no
+    //    implementation needs no spec.
     for (const [cap, byProvider] of Object.entries(OFF_INTERFACE_EVIDENCE)) {
-        for (const [kind, b] of Object.entries(built)) {
+        for (const [kind, spec] of Object.entries(byProvider)) {
             check(`${kind}: ${cap} declaration matches the service surface`, () => {
-                const spec = byProvider[kind];
+                const b = built[kind];
                 const declared = b.provider.capabilities[cap] === true;
-                const resolves = spec ? evidenceResolves(spec) : false;
+                const resolves = evidenceResolves(spec);
                 if (declared) {
                     assert.ok(resolves,
-                        `${kind} declares ${cap}: true but ${spec ? spec.module + '#' + (spec.method || spec.cls) : 'no evidence spec'} does not resolve — stub behind a true`);
+                        `${kind} declares ${cap}: true but ${spec.module}#${spec.method || spec.cls} does not resolve — stub behind a true`);
                 } else if (resolves) {
                     assert.fail(`${kind} declares ${cap}: false but the implementation exists (${spec.module}) — flip the flag and delete the exemption`);
                 }
             });
         }
     }
+
+    // 6b. Board sync declared ON the interface: Notion implements the method and
+    //     the method delegates to a real implementation. This is the check that
+    //     makes the capability non-decorative — a public method the interface
+    //     never declares (createPageForPlan) is what this rules out.
+    await check('notion: board sync is on the RemoteProvider interface, not a service lookup', async () => {
+        const b = built.notion;
+        for (const [cap, spec] of Object.entries(BOARD_SYNC_INTERFACE)) {
+            assert.strictEqual(b.provider.capabilities[cap], true, `notion must declare ${cap}: true`);
+            assert.strictEqual(typeof b.provider[spec.method], 'function',
+                `notion declares ${cap}: true but does not implement ${spec.method} on RemoteProvider`);
+            const before = b.rec.calls.length;
+            const result = await spec.probe(b.provider);
+            const delegated = b.rec.calls.slice(before).some((c) => c.name === spec.delegate);
+            assert.ok(delegated,
+                `notion.${spec.method} returned without delegating to ${spec.delegate} — a stub behind a true`);
+            assert.strictEqual(result.success, true, `notion.${spec.method} did not report success`);
+        }
+    });
+
+    // 6c. The interface method is NOT implemented by providers whose capability
+    //     is realised off-interface (ClickUp/Linear push per-plan via syncPlan).
+    //     If one lands, its declaration must move with it.
+    check('only Notion implements the board-sync interface methods', () => {
+        for (const [kind, b] of Object.entries(built)) {
+            if (kind === 'notion') { continue; }
+            for (const spec of Object.values(BOARD_SYNC_INTERFACE)) {
+                assert.strictEqual(typeof b.provider[spec.method], 'undefined',
+                    `${kind} implements ${spec.method} — move its ${spec.method} declaration and evidence onto the interface`);
+            }
+        }
+    });
 
     // 7. Research adapters: all three trackers have one — this is parity, and
     //    it must never need an exemption (a false-premise exemption was seeded

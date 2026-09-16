@@ -2,12 +2,12 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { NotionBackupService, NotionBackupConfig } from '../NotionBackupService';
+import { NotionSyncService, NotionSyncConfig } from '../NotionSyncService';
 import { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 
-suite('NotionBackupService', () => {
+suite('NotionSyncService', () => {
     let tmpDir: string;
-    let service: NotionBackupService;
+    let service: NotionSyncService;
     let kanbanDb: KanbanDatabase;
     let mockResponses: Array<{ status: number; data: any }>;
 
@@ -36,7 +36,7 @@ suite('NotionBackupService', () => {
     });
 
     setup(() => {
-        service = new NotionBackupService(tmpDir, fakeSecretStorage);
+        service = new NotionSyncService(tmpDir, fakeSecretStorage);
         mockResponses = [];
 
         // Inject mock NotionFetchService
@@ -95,7 +95,7 @@ suite('NotionBackupService', () => {
     });
 
     test('saveConfig and loadConfig round-trip', async () => {
-        const config: NotionBackupConfig = {
+        const config: NotionSyncConfig = {
             databaseUrl: 'https://notion.so/db/abc123',
             databaseId: 'abc123',
             databaseTitle: 'Test',
@@ -107,6 +107,32 @@ suite('NotionBackupService', () => {
         assert.notStrictEqual(loaded, null);
         assert.strictEqual(loaded!.databaseId, 'abc123');
         assert.strictEqual(loaded!.databaseTitle, 'Test');
+    });
+
+    test('loadConfig migrates the legacy notion-backup-config.json forward, preserving unknown keys', async () => {
+        const legacyPath = path.join(tmpDir, '.switchboard', 'notion-backup-config.json');
+        const newPath = path.join(tmpDir, '.switchboard', 'notion-sync-config.json');
+        await fs.promises.rm(newPath, { force: true });
+        await fs.promises.writeFile(legacyPath, JSON.stringify({
+            databaseId: 'legacy-db',
+            databaseTitle: 'Legacy',
+            lastBackupAt: null,
+            lastRestoreAt: null,
+            futureUnknownKey: { kept: true },
+        }), 'utf8');
+
+        const loaded = await service.loadConfig();
+        assert.strictEqual(loaded!.databaseId, 'legacy-db');
+        assert.deepStrictEqual((loaded as any).futureUnknownKey, { kept: true });
+
+        // Migrated forward: the new path now carries the value (legacy kept on disk).
+        const migrated = JSON.parse(await fs.promises.readFile(newPath, 'utf8'));
+        assert.strictEqual(migrated.databaseId, 'legacy-db');
+        assert.deepStrictEqual(migrated.futureUnknownKey, { kept: true });
+        assert.ok(fs.existsSync(legacyPath), 'the legacy file must not be unlinked');
+
+        await fs.promises.rm(legacyPath, { force: true });
+        await fs.promises.rm(newPath, { force: true });
     });
 
     // ── backupToNotion ─────────────────────────────────────────────
@@ -618,6 +644,50 @@ suite('NotionBackupService', () => {
         const result = await service.autoCreateDatabase();
         assert.strictEqual(result.success, false);
         assert.ok(result.error?.includes('Failed to create database'));
+    });
+
+    // ── Shipped Notion schema — property names are load-bearing ──────
+    // Every name below exists in real users' Notion databases. Renaming one
+    // orphans every page, so the schema is explicitly NOT migrated by the
+    // service rename — this test makes an accidental rename fail.
+
+    test('the plan-push property names are byte-identical to the shipped schema', () => {
+        const plan: any = {
+            planId: 'p1', sessionId: 's1', topic: 'T', planFile: '/tmp/p.md',
+            kanbanColumn: 'CODED', status: 'active', complexity: '3', tags: 'a,b',
+            repoScope: 'r', workspaceId: 'w', createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-02T00:00:00.000Z', lastAction: 'x', sourceType: 'local',
+            clickupTaskId: '', linearIssueId: '', notionPageId: '', isFeature: 1, featureId: '',
+        };
+        const props = (service as any)._planToNotionProperties(plan, undefined);
+        assert.deepStrictEqual(Object.keys(props).sort(), [
+            'ClickUp Task ID', 'Complexity', 'Created At', 'Feature', 'Is Feature',
+            'Kanban Column', 'Last Action', 'Linear Issue ID', 'Plan ID', 'Repo Scope',
+            'Session ID', 'Source Type', 'Status', 'Tags', 'Topic', 'Updated At',
+            'Workspace ID',
+        ].sort());
+    });
+
+    test('the database-creation property names are byte-identical to the shipped schema', async () => {
+        let createBody: any = null;
+        const mockFetchServiceCreate = {
+            parsePageId: () => 'parent-page-id',
+            httpRequest: async (method: string, apiPath: string, body: any) => {
+                if (method === 'POST' && apiPath === '/databases') { createBody = body; }
+                return { status: 200, data: { id: 'new-db-id', url: 'https://notion.so/db/new-db-id' } };
+            },
+            loadConfig: async () => ({ pageId: 'parent-page-id', pageUrl: '', pageTitle: '', setupComplete: true, lastFetchAt: null })
+        };
+        (service as any)._notionFetchService = mockFetchServiceCreate;
+
+        await service.autoCreateDatabase();
+        assert.ok(createBody, 'autoCreateDatabase did not POST /databases');
+        assert.deepStrictEqual(Object.keys(createBody.properties).sort(), [
+            'ClickUp Task ID', 'Complexity', 'Created At', 'Dependencies', 'Is Feature',
+            'Kanban Column', 'Last Action', 'Linear Issue ID', 'Plan ID', 'Repo Scope',
+            'Session ID', 'Source Type', 'Status', 'Tags', 'Topic', 'Updated At',
+            'Workspace ID',
+        ].sort());
     });
 
     // ── validateDatabaseAccess ─────────────────────────────────────

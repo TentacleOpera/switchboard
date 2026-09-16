@@ -3591,15 +3591,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // Setup only consumes the Notion parts of this aggregate push.
                     setIntegrationStatus('notion', message.notionSetupComplete ? 'configured' : 'idle');
 
-                    // Update Notion Database Backup status badge
-                    const notionBackupStatusEl = document.getElementById('notion-backup-status');
-                    if (notionBackupStatusEl) {
-                        if (message.notionBackupSetupComplete) {
-                            notionBackupStatusEl.textContent = 'Configured';
-                            notionBackupStatusEl.style.color = 'var(--accent-green)';
+                    // Update Notion Database Sync status badge
+                    const notionSyncStatusEl = document.getElementById('notion-sync-status');
+                    if (notionSyncStatusEl) {
+                        if (message.notionSyncSetupComplete) {
+                            notionSyncStatusEl.textContent = 'Configured';
+                            notionSyncStatusEl.style.color = 'var(--accent-green)';
                         } else {
-                            notionBackupStatusEl.textContent = 'Not configured';
-                            notionBackupStatusEl.style.color = 'var(--text-secondary)';
+                            notionSyncStatusEl.textContent = 'Not configured';
+                            notionSyncStatusEl.style.color = 'var(--text-secondary)';
                         }
                     }
 
@@ -3633,62 +3633,62 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     setApplyButtonBusy('notion', false);
                     setIntegrationStatus('notion', message.success ? 'configured' : 'failed', message.error || '');
                     break;
-                case 'notionBackupConfigResult': {
+                case 'notionSyncConfigResult': {
                     const status = message.success ? 'Configured' : 'Not configured';
-                    const badge = document.getElementById('notion-backup-status');
+                    const badge = document.getElementById('notion-sync-status');
                     if (badge) badge.textContent = status;
-                    const error = document.getElementById('notion-backup-error');
+                    const error = document.getElementById('notion-sync-error');
                     if (error && !message.success) error.textContent = message.error || 'Configuration failed';
                     break;
                 }
-                case 'notionBackupResult': {
-                    const backupError = document.getElementById('notion-backup-error');
-                    const backupProgress = document.getElementById('notion-backup-progress');
+                case 'notionSyncResult': {
+                    const backupError = document.getElementById('notion-sync-error');
+                    const backupProgress = document.getElementById('notion-sync-progress');
                     if (message.success) {
                         if (backupError) backupError.textContent = '';
-                        if (backupProgress) backupProgress.textContent = `Backed up ${message.backedUp}/${message.total} plans`;
+                        if (backupProgress) backupProgress.textContent = `Pushed ${message.pushed} plans (${message.skipped} skipped)`;
                     } else {
-                        if (backupError) backupError.textContent = message.error || 'Backup failed';
-                        if (backupProgress) backupProgress.textContent = `Partial: ${message.backedUp}/${message.total}`;
+                        if (backupError) backupError.textContent = message.error || 'Board sync failed';
+                        if (backupProgress) backupProgress.textContent = `Partial: ${message.pushed} pushed, ${message.skipped} skipped`;
                     }
                     // Re-enable buttons
-                    setButtonBusy(document.querySelector('.notion-backup-btn'), false);
-                    setButtonBusy(document.querySelector('.notion-restore-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-sync-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-sync-restore-btn'), false);
                     setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
                     break;
                 }
-                case 'notionRestoreResult': {
-                    const restoreError = document.getElementById('notion-backup-error');
-                    const restoreProgress = document.getElementById('notion-backup-progress');
+                case 'notionSyncRestoreResult': {
+                    const restoreError = document.getElementById('notion-sync-error');
+                    const restoreProgress = document.getElementById('notion-sync-progress');
                     if (message.success) {
                         if (restoreError) restoreError.textContent = '';
                         if (restoreProgress) restoreProgress.textContent = `Restored ${message.restored} plans (${message.skipped} skipped)`;
                     } else {
                         if (restoreError) restoreError.textContent = message.error || 'Restore failed';
                     }
-                    setButtonBusy(document.querySelector('.notion-backup-btn'), false);
-                    setButtonBusy(document.querySelector('.notion-restore-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-sync-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-sync-restore-btn'), false);
                     setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
                     break;
                 }
                 case 'notionAutoCreateResult': {
-                    const autoError = document.getElementById('notion-backup-error');
+                    const autoError = document.getElementById('notion-sync-error');
                     if (message.success && message.databaseUrl) {
                         const input = document.getElementById('notion-db-url-input');
                         if (input) input.value = message.databaseUrl;
                         if (autoError) autoError.textContent = '';
-                        const badge = document.getElementById('notion-backup-status');
+                        const badge = document.getElementById('notion-sync-status');
                         if (badge) { badge.textContent = 'Configured'; }
                     } else {
                         if (autoError) autoError.textContent = message.error || 'Auto-create failed';
                     }
-                    setButtonBusy(document.querySelector('.notion-backup-btn'), false);
-                    setButtonBusy(document.querySelector('.notion-restore-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-sync-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-sync-restore-btn'), false);
                     setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
                     break;
                 }
-                case 'notionBackupProgress': {
-                    const progressEl = document.getElementById('notion-backup-progress');
+                case 'notionSyncProgress': {
+                    const progressEl = document.getElementById('notion-sync-progress');
                     if (progressEl) progressEl.textContent = `${message.action} plan ${message.current} of ${message.total}...`;
                     break;
                 }

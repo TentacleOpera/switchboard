@@ -746,10 +746,10 @@
             "type": "string"
           }
         },
-        "switchboard.notionBackup": {
+        "switchboard.notionSync": {
           "type": "object",
           "default": {},
-          "description": "Notion database backup configuration"
+          "description": "Notion database board-sync configuration (legacy key: switchboard.notionBackup, migrated on activation)"
         },
         "switchboard.autoSelectFirstWorkspace": {
           "type": "boolean",

@@ -53,10 +53,10 @@ const SERVICES_SRC = path.join(repoRoot, 'src', 'services');
 // TypeError on a live code path and is never exemptible — see the hard-fail
 // rule below.
 const KNOWN_ORPHANED_IDS = new Set([
-    // ── Notion Backup: singleton → per-database refactor (setup.html renders
+    // ── Notion Sync: singleton → per-database refactor (setup.html renders
     //    these per db via class + data-db-index). Status surface never
     //    rewired. ──
-    'notion-backup-status', 'notion-backup-error', 'notion-backup-progress',
+    'notion-sync-status', 'notion-sync-error', 'notion-sync-progress',
     'notion-db-url-input', 'notion-option-realtime-sync', 'notion-option-delete-sync',
     'notion-option-inbound-delete',
     // Still read by setup.html's initControlPlaneGit result handler, whose button

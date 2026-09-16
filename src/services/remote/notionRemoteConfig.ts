@@ -69,7 +69,7 @@ export async function loadNotionRemoteSetup(db: NotionRemoteConfigStore): Promis
 }
 
 export async function saveNotionRemoteSetup(db: NotionRemoteConfigStore, setup: NotionRemoteSetup): Promise<void> {
-    // Callers that predate contextPageId (e.g. NotionBackupService.setupRemoteControl)
+    // Callers that predate contextPageId (e.g. NotionSyncService.setupRemoteControl)
     // build the blob without it — preserve the stored id rather than wiping it on
     // a setup re-run. Pass an explicit '' to intentionally clear it.
     let contextPageId = setup.contextPageId;

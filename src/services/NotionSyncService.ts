@@ -6,7 +6,7 @@ import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import { loadNotionRemoteSetup, saveNotionRemoteSetup } from './remote/notionRemoteConfig';
 import { syncOwnershipLease } from './SyncOwnershipLease';
 
-export interface NotionBackupConfig {
+export interface NotionSyncConfig {
     databaseUrl?: string;
     databaseId?: string;
     databaseTitle?: string;
@@ -15,30 +15,52 @@ export interface NotionBackupConfig {
 }
 
 /**
- * Service that backs up and restores kanban.db plans to/from a Notion database.
+ * Service that pushes and restores kanban.db plans to/from a Notion database —
+ * the Notion board sync, peer of `ClickUpSyncService` and `LinearSyncService`.
+ * (It was named `NotionBackupService` when backing the board up was its only
+ * job; the capability is general, so the name follows it.)
  * Uses Notion API with rate limiting (~3 requests/sec = 350ms delay).
  */
-export class NotionBackupService {
+export class NotionSyncService {
     private _workspaceRoot: string;
     private _configPath: string;
+    /** Pre-rename config path — read once and migrated forward; never deleted. */
+    private _legacyConfigPath: string;
     private _notionFetchService: NotionFetchService;
 
     constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
         this._workspaceRoot = workspaceRoot;
-        this._configPath = path.join(workspaceRoot, '.switchboard', 'notion-backup-config.json');
+        this._configPath = path.join(workspaceRoot, '.switchboard', 'notion-sync-config.json');
+        this._legacyConfigPath = path.join(workspaceRoot, '.switchboard', 'notion-backup-config.json');
         this._notionFetchService = new NotionFetchService(workspaceRoot, secretStorage);
     }
 
     // ── Config I/O ──────────────────────────────────────────────
 
-    async loadConfig(): Promise<NotionBackupConfig | null> {
-        try {
-            const content = await fs.promises.readFile(this._configPath, 'utf8');
-            return JSON.parse(content);
-        } catch { return null; }
+    async loadConfig(): Promise<NotionSyncConfig | null> {
+        const current = await this._readConfigFile(this._configPath);
+        if (current) { return current; }
+        // Legacy path (pre-rename). Read it and migrate forward, preserving
+        // unknown keys — never assume a prior migration already ran.
+        const legacy = await this._readConfigFile(this._legacyConfigPath);
+        if (!legacy) { return null; }
+        try { await this.saveConfig(legacy); } catch { /* serve the legacy value regardless */ }
+        return legacy;
     }
 
-    async saveConfig(config: NotionBackupConfig): Promise<void> {
+    /**
+     * Parse a config file, or null when it is absent. A *corrupt* file throws
+     * (loud) rather than reading as unconfigured — the two are not the same
+     * state and must not be indistinguishable.
+     */
+    private async _readConfigFile(filePath: string): Promise<NotionSyncConfig | null> {
+        let content: string;
+        try { content = await fs.promises.readFile(filePath, 'utf8'); }
+        catch { return null; }
+        return JSON.parse(content) as NotionSyncConfig;
+    }
+
+    async saveConfig(config: NotionSyncConfig): Promise<void> {
         await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
         await fs.promises.writeFile(this._configPath, JSON.stringify(config, null, 2));
     }
@@ -351,7 +373,7 @@ export class NotionBackupService {
                     properties: { 'Feature': { relation: [{ id: featurePageId }] } }
                 }, 10000);
             } catch (e) {
-                console.warn(`[NotionBackupService] Pass 2: failed to set Feature relation for ${plan.planId}:`, e);
+                console.warn(`[NotionSyncService] Pass 2: failed to set Feature relation for ${plan.planId}:`, e);
             }
             await this._delay(350);
         }
@@ -413,7 +435,7 @@ export class NotionBackupService {
             lines.splice(insertAt, 0, '', line);
             await fs.promises.writeFile(planFileAbs, lines.join('\n'), 'utf8');
         } catch (e) {
-            console.warn('[NotionBackupService] _writeNotionPageIdMetadata failed:', e);
+            console.warn('[NotionSyncService] _writeNotionPageIdMetadata failed:', e);
         }
     }
 
@@ -432,7 +454,7 @@ export class NotionBackupService {
                 properties: { 'Kanban Column': { select: { options } } }
             }, 10000);
         } catch (e) {
-            console.warn('[NotionBackupService] _ensureColumnSelectOptions failed:', e);
+            console.warn('[NotionSyncService] _ensureColumnSelectOptions failed:', e);
         }
     }
 
@@ -459,7 +481,7 @@ export class NotionBackupService {
                 await this._notionFetchService.httpRequest('PATCH', `/databases/${databaseId}`, { properties: patch }, 10000);
             }
         } catch (e) {
-            console.warn('[NotionBackupService] _ensureFeatureProperties failed:', e);
+            console.warn('[NotionSyncService] _ensureFeatureProperties failed:', e);
         }
     }
 

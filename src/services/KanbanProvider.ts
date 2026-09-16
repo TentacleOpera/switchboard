@@ -67,7 +67,7 @@ import { getProjectDesignSystemPath, migrateLegacyDesignSystemIfNeeded, setProje
 import { LastWriteWinsResolver } from './remote/ContentConflictResolver';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
-import { NotionBackupService } from './NotionBackupService';
+import { NotionSyncService } from './NotionSyncService';
 import { type AutoPullIntegration, type AutoPullIntervalMinutes, IntegrationAutoPullService } from './IntegrationAutoPullService';
 import { ContinuousSyncService } from './ContinuousSyncService';
 import type { LiveSyncState } from '../models/LiveSyncTypes';
@@ -309,6 +309,7 @@ export class KanbanProvider implements vscode.Disposable {
 
     private _linearAutomationServices = new Map<string, LinearAutomationService>();
     private _notionServices = new Map<string, NotionFetchService>();
+    private _notionSyncServices = new Map<string, NotionSyncService>();
     private _cacheServices = new Map<string, import('./PlanningPanelCacheService').PlanningPanelCacheService>();
     private readonly _integrationAutoPull = new IntegrationAutoPullService();
     private _clickUpSyncWarnings = new Map<string, string>();
@@ -3019,6 +3020,9 @@ export class KanbanProvider implements vscode.Disposable {
                 notion: this._getNotionService(resolved),
                 db: this._getKanbanDb(resolved),
                 getWorkspaceId, getPlansDir, log,
+                // Board-sync orchestration — backs boardSyncPush/boardSyncRestore.
+                boardSync: this._getNotionSyncService(resolved),
+                workspaceRoot: resolved,
             });
         }
         if (kind === 'clickup') {
@@ -3192,6 +3196,17 @@ export class KanbanProvider implements vscode.Disposable {
     // webviews (project Remote tab, kanban toolbar toggle) drive the SAME
     // service instances — never a second polling loop.
 
+    /**
+     * Build a provider for a workspace root and kind. The composition root for
+     * every provider seam — callers that need a declared capability (e.g. the
+     * board-sync push/restore) go through here rather than reaching for the
+     * concrete service, so the capability gate is the only gate.
+     */
+    public getRemoteProvider(workspaceRoot: string, kind: RemoteProviderKind): RemoteProvider {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot) || workspaceRoot;
+        return this._buildRemoteProvider(resolved, kind);
+    }
+
     /** Build the full remoteConfig payload for the Remote tab. Null when no workspace resolves. */
     public async remoteGetConfigPayload(workspaceRoot?: string): Promise<Record<string, unknown> | null> {
         const resolved = this._resolveWorkspaceRoot(workspaceRoot);
@@ -3223,7 +3238,7 @@ export class KanbanProvider implements vscode.Disposable {
         const config = await rc.getConfig();
         try {
             const columns = await this._getCurrentClickUpColumns(resolved);
-            const backup = new NotionBackupService(this.resolveEffectiveWorkspaceRoot(resolved), this._context.secrets);
+            const backup = new NotionSyncService(this.resolveEffectiveWorkspaceRoot(resolved), this._context.secrets);
             const result = await backup.setupRemoteControl(
                 this.resolveEffectiveWorkspaceRoot(resolved),
                 config.boards,
@@ -3477,6 +3492,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (existing) { return existing; }
         const service = new NotionFetchService(resolved, this._context.secrets);
         this._notionServices.set(resolved, service);
+        return service;
+    }
+
+    /**
+     * The Notion board-sync orchestration, wired into the provider seam so the
+     * `boardSyncPush`/`boardSyncRestore` interface methods delegate to it. Cached
+     * per workspace root, same as the other per-root services.
+     */
+    private _getNotionSyncService(workspaceRoot: string): NotionSyncService {
+        const resolved = path.resolve(workspaceRoot);
+        const existing = this._notionSyncServices.get(resolved);
+        if (existing) { return existing; }
+        const service = new NotionSyncService(resolved, this._context.secrets);
+        this._notionSyncServices.set(resolved, service);
         return service;
     }
 

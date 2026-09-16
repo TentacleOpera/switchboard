@@ -114,8 +114,8 @@ import { ProtocolService } from './ProtocolService';
 import { extractDispatchIdentity } from './dispatchIdentity';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
-import type { NotionBackupService } from './NotionBackupService';
-let NotionBackupServiceClass: any;
+import type { NotionSyncService } from './NotionSyncService';
+let NotionSyncServiceClass: any;
 import { PLAN_SCANNER_PRESETS, expandFlatGlob, type ResolvedFlatTarget } from './PlanScannerPresets';
 import { teamIsFree, HOP_SOURCE_COLUMNS, type HopName, type HopSnapshot, type HopReadinessResult, type HopId } from './HopReadiness';
 import type { ClickUpSyncService, ClickUpApplyOptions, ClickUpList, ClickUpMappingSelection, ClickUpTask } from './ClickUpSyncService';
@@ -2218,7 +2218,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _lastPlanIngestionValidationWarning: string | null = null;
     private _notifiedSessions = new Set<string>(); // Track sessions that have been notified of completion
     private _notionServices: Map<string, NotionFetchService> = new Map();
-    private _notionBackupServices: Map<string, NotionBackupService> = new Map();
+    private _notionSyncServices: Map<string, NotionSyncService> = new Map();
     private _clickUpServices: Map<string, ClickUpSyncService> = new Map();
     private _linearServices: Map<string, LinearSyncService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
@@ -9960,7 +9960,7 @@ Each plan file must include:
         clickupSetupComplete: boolean;
         linearSetupComplete: boolean;
         notionSetupComplete: boolean;
-        notionBackupSetupComplete: boolean;
+        notionSyncSetupComplete: boolean;
         clickupState?: ClickUpSetupState;
         linearState?: LinearSetupState;
         notionState?: NotionSetupState;
@@ -10000,7 +10000,7 @@ Each plan file must include:
                 clickupSetupComplete: false,
                 linearSetupComplete: false,
                 notionSetupComplete: false,
-                notionBackupSetupComplete: false,
+                notionSyncSetupComplete: false,
                 clickupState: undefined,
                 linearState: undefined,
                 notionState: {
@@ -10015,12 +10015,12 @@ Each plan file must include:
             };
         }
 
-        const [clickupConfig, linearConfig, notionConfig, kanbanStructure, notionBackupConfig, notionRemoteSetup] = await Promise.all([
+        const [clickupConfig, linearConfig, notionConfig, kanbanStructure, notionSyncConfig, notionRemoteSetup] = await Promise.all([
             this._getClickUpService(resolvedRoot).loadConfig(),
             this._getLinearService(resolvedRoot).loadConfig(),
             this._getNotionService(resolvedRoot).loadConfig(),
             this.handleGetKanbanStructure(resolvedRoot),
-            this._getNotionBackupService(resolvedRoot).loadConfig(),
+            this._getNotionSyncService(resolvedRoot).loadConfig(),
             loadNotionRemoteSetup(KanbanDatabase.forWorkspace(resolvedRoot))
         ]);
 
@@ -10148,7 +10148,7 @@ Each plan file must include:
             clickupSetupComplete: clickupConfig?.setupComplete === true,
             linearSetupComplete: linearConfig?.setupComplete === true,
             notionSetupComplete: notionConfig?.setupComplete === true,
-            notionBackupSetupComplete: !!notionBackupConfig?.databaseId,
+            notionSyncSetupComplete: !!notionSyncConfig?.databaseId,
             clickupState,
             linearState,
             notionState,
@@ -11283,11 +11283,11 @@ Each plan file must include:
         return { success: true };
     }
 
-    public async handleConfigureNotionBackup(databaseUrl: string, workspaceRoot?: string): Promise<{ success: boolean; error?: string }> {
+    public async handleConfigureNotionSync(databaseUrl: string, workspaceRoot?: string): Promise<{ success: boolean; error?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) return { success: false, error: 'No workspace found' };
 
-        const service = this._getNotionBackupService(resolvedRoot);
+        const service = this._getNotionSyncService(resolvedRoot);
         const databaseId = service.parseDatabaseId(databaseUrl);
         if (!databaseId) return { success: false, error: 'Invalid Notion database URL' };
 
@@ -11306,23 +11306,35 @@ Each plan file must include:
         return { success: true };
     }
 
-    public async handleBackupToNotion(workspaceRoot?: string): Promise<{ success: boolean; backedUp: number; total: number; error?: string }> {
+    public async handleNotionBoardPush(workspaceRoot?: string): Promise<{ success: boolean; pushed: number; skipped: number; error?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) return { success: false, backedUp: 0, total: 0, error: 'No workspace found' };
+        if (!resolvedRoot) return { success: false, pushed: 0, skipped: 0, error: 'No workspace found' };
 
         return vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Backing up to Notion...', cancellable: false },
-            async (progress) => this._getNotionBackupService(resolvedRoot).backupToNotion(resolvedRoot, progress)
+            { location: vscode.ProgressLocation.Notification, title: 'Syncing board to Notion...', cancellable: false },
+            async () => {
+                const provider = this._kanbanProvider?.getRemoteProvider(resolvedRoot, 'notion');
+                if (!provider || !provider.boardSyncPush || provider.capabilities.boardPush !== true) {
+                    return { success: false, pushed: 0, skipped: 0, error: 'The Notion provider does not offer a board push' };
+                }
+                return provider.boardSyncPush([]);
+            }
         );
     }
 
-    public async handleRestoreFromNotion(workspaceRoot?: string): Promise<{ success: boolean; restored: number; skipped: number; error?: string }> {
+    public async handleNotionBoardRestore(workspaceRoot?: string): Promise<{ success: boolean; restored: number; skipped: number; error?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) return { success: false, restored: 0, skipped: 0, error: 'No workspace found' };
 
         return vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: 'Restoring from Notion...', cancellable: false },
-            async (progress) => this._getNotionBackupService(resolvedRoot).restoreFromNotion(resolvedRoot, progress)
+            async (progress) => {
+                const provider = this._kanbanProvider?.getRemoteProvider(resolvedRoot, 'notion');
+                if (!provider || !provider.boardSyncRestore || provider.capabilities.boardRestore !== true) {
+                    return { success: false, restored: 0, skipped: 0, error: 'The Notion provider does not offer a board restore' };
+                }
+                return provider.boardSyncRestore(resolvedRoot, progress);
+            }
         );
     }
 
@@ -11332,7 +11344,7 @@ Each plan file must include:
 
         return vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: 'Creating Notion database...', cancellable: false },
-            async () => this._getNotionBackupService(resolvedRoot).autoCreateDatabase()
+            async () => this._getNotionSyncService(resolvedRoot).autoCreateDatabase()
         );
     }
 
@@ -11579,15 +11591,15 @@ Each plan file must include:
         return service;
     }
 
-    private _getNotionBackupService(workspaceRoot: string): NotionBackupService {
+    private _getNotionSyncService(workspaceRoot: string): NotionSyncService {
         const resolvedRoot = path.resolve(workspaceRoot);
-        const existing = this._notionBackupServices.get(resolvedRoot);
+        const existing = this._notionSyncServices.get(resolvedRoot);
         if (existing) { return existing; }
-        if (!NotionBackupServiceClass) {
-            NotionBackupServiceClass = require('./NotionBackupService').NotionBackupService;
+        if (!NotionSyncServiceClass) {
+            NotionSyncServiceClass = require('./NotionSyncService').NotionSyncService;
         }
-        const service = new NotionBackupServiceClass(resolvedRoot, this._context.secrets);
-        this._notionBackupServices.set(resolvedRoot, service);
+        const service = new NotionSyncServiceClass(resolvedRoot, this._context.secrets);
+        this._notionSyncServices.set(resolvedRoot, service);
         return service;
     }
 

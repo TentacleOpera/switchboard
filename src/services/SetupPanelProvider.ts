@@ -642,25 +642,25 @@ export class SetupPanelProvider implements vscode.Disposable {
                     return { success: true };
                 }
                 case 'configureNotionBackup': {
-                    const result = await this._taskViewerProvider.handleConfigureNotionBackup(
+                    const result = await this._taskViewerProvider.handleConfigureNotionSync(
                         typeof message.databaseUrl === 'string' ? message.databaseUrl : '',
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
                     );
-                    this.postMessage({ type: 'notionBackupConfigResult', ...result });
+                    this.postMessage({ type: 'notionSyncConfigResult', ...result });
                     return { success: true };
                 }
                 case 'backupToNotion': {
-                    const result = await this._taskViewerProvider.handleBackupToNotion(
+                    const result = await this._taskViewerProvider.handleNotionBoardPush(
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
                     );
-                    this.postMessage({ type: 'notionBackupResult', ...result });
+                    this.postMessage({ type: 'notionSyncResult', ...result });
                     return { success: true };
                 }
                 case 'restoreFromNotion': {
-                    const result = await this._taskViewerProvider.handleRestoreFromNotion(
+                    const result = await this._taskViewerProvider.handleNotionBoardRestore(
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
                     );
-                    this.postMessage({ type: 'notionRestoreResult', ...result });
+                    this.postMessage({ type: 'notionSyncRestoreResult', ...result });
                     return { success: true };
                 }
                 case 'autoCreateNotionDatabase': {

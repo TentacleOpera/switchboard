@@ -82,13 +82,13 @@ export interface RemoteProviderCapabilities {
     archive: boolean;
     /**
      * Provider can push the whole board — columns AND feature structure — to the
-     * remote (NotionBackupService.backupToNotion; ClickUp/Linear per-plan syncPlan
+     * remote (NotionSyncService.backupToNotion; ClickUp/Linear per-plan syncPlan
      * with the feature cascade). This is the orchestration, not the per-card push.
      */
     boardPush: boolean;
     /**
      * Provider can rebuild the board from the remote — bulk fetch, match by
-     * planId, apply columns, resolve feature structure (NotionBackupService.
+     * planId, apply columns, resolve feature structure (NotionSyncService.
      * restoreFromNotion only; ClickUp/Linear have no restoreFrom* pass).
      */
     boardRestore: boolean;
@@ -107,6 +107,35 @@ export interface ArchiveResult {
     ok: boolean;
     /** true → provider isn't configured for this workspace; not an error. */
     skipped?: boolean;
+    error?: string;
+}
+
+/**
+ * Progress sink for a bulk board-sync operation. Structurally identical to
+ * `vscode.Progress<{ message?: string }>` — declared here so the provider seam
+ * stays free of a `vscode` import (the standalone host loads this module).
+ */
+export interface BoardSyncProgress {
+    report(value: { message?: string }): void;
+}
+
+/** Outcome of a bulk board push (`boardSyncPush`). */
+export interface BoardSyncPushResult {
+    success: boolean;
+    /** Cards written to the remote. */
+    pushed: number;
+    /** Cards the push could not write (feature not yet paged, rate-limit skip, …). */
+    skipped: number;
+    error?: string;
+}
+
+/** Outcome of a bulk board restore (`boardSyncRestore`). */
+export interface BoardSyncRestoreResult {
+    success: boolean;
+    /** Cards rebuilt locally from the remote. */
+    restored: number;
+    /** Remote cards skipped (local record newer than the remote row). */
+    skipped: number;
     error?: string;
 }
 
@@ -187,6 +216,29 @@ export interface RemoteProvider {
      * the archive outward. Idempotent: safe to call on an already-archived card.
      */
     archiveCard(remoteId: string): Promise<ArchiveResult>;
+
+    /**
+     * Bulk board push — the whole board (columns AND feature structure) in one
+     * pass, not the per-card `pushState`. Gated on `capabilities.boardPush`; a
+     * provider that declares the capability must implement this. Notion delegates
+     * to `NotionSyncService.backupToNotion`; ClickUp/Linear push per-plan via
+     * their `syncPlan`. The `plans` argument is the board snapshot to push — a
+     * provider that already reads the board from the local DB may ignore it.
+     * Optional: providers without a board push omit it (and declare
+     * `boardPush: false`).
+     */
+    boardSyncPush?(plans: KanbanPlanRecord[]): Promise<BoardSyncPushResult>;
+
+    /**
+     * Bulk board restore — rebuild the board from the remote: fetch every remote
+     * row, match by `planId` (never `sessionId`), apply columns, and resolve
+     * feature structure in a second pass. Gated on `capabilities.boardRestore`; a
+     * provider that declares the capability must implement this. Notion delegates
+     * to `NotionSyncService.restoreFromNotion` — the only restore that exists
+     * today; ClickUp/Linear have none. Optional: providers without a board
+     * restore omit it (and declare `boardRestore: false`).
+     */
+    boardSyncRestore?(workspaceRoot: string, progress?: BoardSyncProgress): Promise<BoardSyncRestoreResult>;
 
     /**
      * Inbound-delete reconcile-sweep (provider-sync inbound-delete). Enumerate the
