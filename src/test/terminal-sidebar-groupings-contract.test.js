@@ -1081,6 +1081,54 @@ test('a load-time lock is dropped only when consent has removed its group', () =
     );
 });
 
+// ---------------------------------------------------------------- team grid sizing on enter
+
+test('layoutForGroupSwitch sizes for the full roster, not just live members', () => {
+    const fn = block(terminalsJs, 'function layoutForGroupSwitch(', 'function findGroupForTerminalName(');
+    // The fallback must not call smallestLayoutFitting(getGroupMembers(group).length)
+    // directly — it must use the roster size (group.order or group.members).
+    assert.ok(
+        !/smallestLayoutFitting\(getGroupMembers\(group\)\.length\)/.test(fn),
+        'layoutForGroupSwitch must not size the grid by live member count alone — fleetList may be stale'
+    );
+    assert.ok(
+        /rosterSize/.test(fn) && /group\.order|group\.members/.test(fn),
+        'layoutForGroupSwitch must compute a roster size from group.order or group.members for the fallback'
+    );
+    assert.ok(
+        /Math\.max\(rosterSize, getGroupMembers\(group\)\.length\)/.test(fn),
+        'the live count must be kept as a floor — group.members can hold live names absent from group.order'
+    );
+});
+
+test('fetchTerminalList re-seats the active group on subsequent (non-first) fetches', () => {
+    const fn = block(terminalsJs, 'async function fetchTerminalList(', 'function checkSoloNotFound(');
+    // The else-if branch after the restoredLockOnLoad block must call
+    // seatActiveGroupPage so newly-live members are seated.
+    assert.ok(
+        /else\s+if\s*\(activeGroupId\)/.test(fn) && /seatActiveGroupPage\(\)/.test(fn),
+        'fetchTerminalList must re-seat the active group on subsequent fetches, not just the first load'
+    );
+});
+
+test('fetchTerminalList gates the subsequent re-seat on live-member-count change', () => {
+    const fn = block(terminalsJs, 'async function fetchTerminalList(', 'function checkSoloNotFound(');
+    assert.ok(
+        /lastSeatedLiveCount/.test(fn),
+        'fetchTerminalList must track lastSeatedLiveCount to avoid overriding manual pane drags on every poll'
+    );
+    assert.ok(
+        /liveCount !== lastSeatedLiveCount/.test(fn),
+        'the re-seat must be gated on the live member count actually changing'
+    );
+    // The tracker must be module-level state, not a local, or the gate never persists
+    // across fetches and every poll re-seats.
+    assert.ok(
+        /let lastSeatedLiveCount = -1;/.test(terminalsJs),
+        'lastSeatedLiveCount must be declared as module state initialised to -1 (never seated)'
+    );
+});
+
 // ---------------------------------------------------------------- summary
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

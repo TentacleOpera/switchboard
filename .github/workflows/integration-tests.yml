@@ -1484,6 +1484,22 @@ jobs:
       - name: Terminal Grid entry point contract (openExternal, never simpleBrowser)
         run: npm run test:contract:terminal-grid-entry-point
 
+      # Start Grid must CREATE plannerTerminalCount planners, not top up to it.
+      # Both grid-building paths (extension createAgentGrid, panel openAllTerminals)
+      # had the off-by-existing bug: an already-live Planner ate a slot, so asking
+      # for 4 produced 3. The extension offset must be max-planner-number + 1, not
+      # the live count — with a gap (Planner 1 and 3 live, 2 closed) a count-based
+      # offset collides with a live terminal and is reused, restoring the undercount.
+      - name: Terminal grid planner-count contract (create N new, gap-safe)
+        run: npm run test:contract:terminal-grid-planner-count
+
+      # FILL GRID must open on 2x2, not mirror currentLayout — mirroring pre-selected
+      # 2x3 (6 agents, 750px min) for dense layouts and the floor then silently
+      # downgraded it. Silent on regression: the select falls back to its first
+      # option ('1') with no error if the default stops matching a LAYOUTS key.
+      - name: Terminal fill-grid default contract (2x2, not currentLayout)
+        run: npm run test:contract:terminal-fill-grid-default
+
       - name: Terminal pane pinning contract
         run: npm run test:contract:terminal-pane-pinning
 

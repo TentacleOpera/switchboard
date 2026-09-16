@@ -3608,10 +3608,34 @@ export async function activate(context: vscode.ExtensionContext) {
         ];
         const plannerCount = await taskViewerProvider.getPlannerTerminalCount(effectiveWorkspaceRoot);
         const agents: { name: string; role: string }[] = [];
+        // Highest planner number among live terminals. `plannerTerminalCount` means
+        // "create N NEW planners", not "top up to N total" — the create loop below
+        // reuses a live terminal whose name matches, so numbering from 1 would make
+        // an existing Planner 1 eat a slot and create only N-1 terminals.
+        //
+        // MAX, not COUNT: with Planner 1 and Planner 3 live (Planner 2 closed) the
+        // count is 2, so a count-based offset would start at 3 and collide with the
+        // live Planner 3 — reused, not created, and the undercount returns. Offsetting
+        // past the highest existing number makes collisions impossible.
+        //
+        // Standalone regex, not `matchesGridAgentName`: that helper is declared later
+        // in this function (it closes over mainRepoTerminalNames, which is not built
+        // yet at this point). Mirrors its pattern — optional numeric suffix, plus VS
+        // Code's ` (N)` dedup suffix on a duplicate name.
+        let maxPlannerNum = 0;
+        for (const t of vscode.window.terminals) {
+            if (t.exitStatus !== undefined) { continue; }
+            const m = (t.name || '').trim().match(/^Planner(?: (\d+))?(?: \(\d+\))?$/);
+            if (m) {
+                const num = m[1] ? parseInt(m[1], 10) : 1;
+                if (num > maxPlannerNum) { maxPlannerNum = num; }
+            }
+        }
         for (const builtIn of allBuiltInAgents) {
             if (visibleAgents[builtIn.role] !== false) {
                 if (builtIn.role === 'planner' && plannerCount > 1) {
-                    for (let n = 1; n <= plannerCount; n++) {
+                    const startN = maxPlannerNum + 1;
+                    for (let n = startN; n < startN + plannerCount; n++) {
                         agents.push({ name: n === 1 ? 'Planner' : `Planner ${n}`, role: 'planner' });
                     }
                 } else {

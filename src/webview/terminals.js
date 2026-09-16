@@ -142,6 +142,10 @@
     let activeGroupPage = 0; // transient: which page of the active group is showing
     let selectedTerminalNames = new Set(); // multi-select in the sidebar
     let restoredLockOnLoad = false; // one-shot: re-seat the locked group after first fleet fetch
+    // Live member count at the last fetchTerminalList re-seat. Gates the subsequent
+    // re-seat so a poll that changes nothing does not rebuild paneAssignments and
+    // wipe a manual pane drag. -1 = never seated.
+    let lastSeatedLiveCount = -1;
 
     // Display preferences for derived groups: threshold, hidden ids, pinned ids,
     // per-group member order, per-group stored layouts, and per-group extras
@@ -1190,7 +1194,7 @@
                     opt.textContent = `${mode} — ${LAYOUTS[mode].slots} agent${LAYOUTS[mode].slots === 1 ? '' : 's'}`;
                     fillGridMode.appendChild(opt);
                 }
-                fillGridMode.value = currentLayout;
+                fillGridMode.value = DEFAULT_FILL_GRID_MODE;
 
                 btnFillGrid.hidden = true;
                 fillGridForm.hidden = false;
@@ -2004,6 +2008,15 @@
     const LAYOUT_FLOOR_ORDER = ['3x3', '2x3', '1x3', '2x2', '2h', '2v', '1'];
     const LAYOUT_MODES = Object.keys(LAYOUTS);
 
+    // Pre-selected layout for the FILL GRID form. Deliberately NOT `currentLayout`:
+    // mirroring the active layout pre-selected 2x3 (6 agents, 750px min width) for
+    // anyone working dense, and the layout-floor then silently downgraded it on
+    // smaller windows. 2x2 fits most screens (500x300) and is a sane batch size the
+    // operator can grow from. Named so the coupling to a LAYOUTS key is grep-able —
+    // a bare '2x2' would silently fall back to the first option ('1') if the key
+    // were ever renamed.
+    const DEFAULT_FILL_GRID_MODE = '2x2';
+
     function getSlotCount(layout) {
         return (LAYOUTS[layout] || LAYOUTS['1']).slots;
     }
@@ -2542,6 +2555,36 @@
                             // that the next spawn would have restored.
                             clearGroupLock();
                         }
+                    } else if (activeGroupId) {
+                        // Subsequent fetch: re-seat the locked group so members that
+                        // became live since the last poll are seated into the grid. The
+                        // first-load branch above seats once via switchToGroup; without
+                        // this, a team whose members spawned after the initial load
+                        // stays half-visible until the operator clicks the group tab or
+                        // changes the layout — the "too few panes on first click" bug.
+                        //
+                        // Gated on live-member-count change: seatActiveGroupPage()
+                        // rebuilds paneAssignments from scratch, so an unconditional
+                        // call would wipe a manual pane drag on every 5 s poll. When the
+                        // count is unchanged the existing assignments are still valid,
+                        // and sanitizePaneAssignments (below) drops stale slots anyway.
+                        //
+                        // A set change with no count change (one member exits, another
+                        // spawns) does not trigger a re-seat: the exited member's pane
+                        // is nulled by sanitizePaneAssignments, and the new member is
+                        // seated on the next count-changing fetch. Narrow and
+                        // self-correcting.
+                        const group = getAllGroups().find(g => g.id === String(activeGroupId));
+                        const liveCount = group ? getGroupMembers(group).length : 0;
+                        if (liveCount !== lastSeatedLiveCount) {
+                            seatActiveGroupPage();
+                        }
+                    }
+                    // Track the live count after whichever seating path ran, so the
+                    // gate above can detect a change on the next fetch.
+                    if (activeGroupId) {
+                        const seatedGroup = getAllGroups().find(g => g.id === String(activeGroupId));
+                        lastSeatedLiveCount = seatedGroup ? getGroupMembers(seatedGroup).length : 0;
                     }
                     sanitizePaneAssignments();
                     renderSidebarList();
@@ -4417,7 +4460,20 @@
     function layoutForGroupSwitch(group) {
         const stored = getStoredGroupLayout(group);
         if (stored && LAYOUT_MODES.includes(stored)) { return stored; }
-        return smallestLayoutFitting(getGroupMembers(group).length);
+        // Size for the full authored roster, not just the live subset. fleetList can
+        // be stale at switch time (the 5 s poll has not caught up to a recent spawn),
+        // so getGroupMembers — which filters by liveness — can under-count and produce
+        // a grid too small for the team: a 4-agent team sized to '2h' with a
+        // "Showing 1-2 of 4" banner. The roster (group.order, else group.members) is
+        // the operator's authored set and is stable across fleet refreshes; panes for
+        // not-yet-live members render as idle slots until the next fetch seats them.
+        //
+        // Math.max with the live count covers group.members holding live names absent
+        // from group.order (getGroupMembers appends those), and falls back to the live
+        // count for derived (role/worktree) groups, which have no authored roster.
+        const rosterSize = Array.isArray(group.order) ? group.order.length
+            : (Array.isArray(group.members) ? group.members.length : 0);
+        return smallestLayoutFitting(Math.max(rosterSize, getGroupMembers(group).length));
     }
 
     function findGroupForTerminalName(name) {
@@ -10283,11 +10339,14 @@
         // Size the grid to the FINAL fleet before creating anything. Growing per
         // create would reflow the grid on every step (1 -> 2h -> 1x3 -> 2x2 -> 2x3),
         // refitting every live xterm each time. Counts existing terminals too: open-all
-        // is a top-up, so `created` alone under-sizes the grid whenever the operator
-        // already had panes open.
+        // is a top-up for most roles, but planners are batch-created (count NEW
+        // terminals regardless of live ones), so `created` alone under-sizes the
+        // grid whenever the operator already had panes open.
         let plannedTotal = liveCount;
         for (const [role, count] of wanted.entries()) {
-            plannedTotal += Math.max(0, count - (liveByRole.get(role) || 0));
+            plannedTotal += (role === 'planner' && count > 1)
+                ? count
+                : Math.max(0, count - (liveByRole.get(role) || 0));
         }
         // Gate on there being something to create. Pressing the button on a fleet that
         // already exceeds the picked layout must NOT override that pick: the operator
@@ -10298,7 +10357,14 @@
 
         let created = 0;
         for (const [role, count] of wanted.entries()) {
-            const missing = count - (liveByRole.get(role) || 0);
+            // Planners are created as a batch of `count` NEW terminals, not topped up
+            // to `count` total: the operator asking for 4 planners while one is
+            // already live expects Planner 2-5, not Planner 2-4. Every other role has
+            // `wanted = 1`, where reusing the live terminal is the correct top-up —
+            // pressing Start Grid when a Coder exists must not create a second one.
+            const missing = (role === 'planner' && count > 1)
+                ? count
+                : count - (liveByRole.get(role) || 0);
             if (missing > 0) {
                 // Sequential per role: ptyFleetService.create() picks the next free
                 // `${role}-${n}` name, so concurrent creates for the same role can
