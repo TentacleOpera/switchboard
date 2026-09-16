@@ -379,3 +379,41 @@ The write-endpoint assertion is deliberately loose on *which* endpoint: the stag
 Complexity 3 → **Send to Intern.** One skill-file section rewritten, a one-line quote strip, and two tests. The whole risk is concentrated in two sentences — step 1a's parent test and step 2's path resolution — so the reviewer's attention belongs there and almost nowhere else.
 
 ~~Land it **after** the staging plan, and write step 5's surrounding language against the stamp~~ — **VOID 2026-09-04 (Board Collapse audit).** That plan was retired and its file deleted; `DISPATCH` was replaced by a real `STAGING` column in `52404992`, so the `staged_at` stamp was never built. Write step 5 against the **live STAGING column**, and land this plan whenever it suits — it is unblocked.
+
+## Implementation Summary (2026-09-16)
+
+**Premise expired.** The plan's central mechanism — the per-column markdown mirror
+`.switchboard/kanban-state-plan-reviewed.md` — was **deleted on 2026-09-11** by commit
+`ef76fd45` ("refactor(board): delete the board mirrors — one infra model, one store"). Every
+change target in this plan was therefore gone at HEAD: the skill file
+`.agents/skills/dispatch-analysis/SKILL.md` no longer exists (the protocol is a control-plane
+row, body in `src/services/bundledProtocols.ts`); `_writeLocalBoardMirror` in `KanbanDatabase.ts`
+was deleted; and `src/test/kanban-auto-export.test.ts` was deleted. The commit that removed the
+mirrors explicitly repointed the same readers at the HTTP read endpoints
+(`GET /kanban/plans?column=`), which is what this implementation adopts.
+
+**Landed (adapted to the surviving transport):**
+
+1. `src/services/bundledProtocols.ts` — the `dispatch-analysis` body's step 1 no longer
+   instructs `GET /kanban/board` (1.6 MB of whole-board JSON). It now reads the per-column
+   `GET /kanban/plans?workspaceRoot={WORKSPACE_ROOT}&column=PLAN%20REVIEWED` — the plan's own
+   documented fallback promoted to primary, since the mirror it preferred no longer exists.
+   The Rules bullets were updated to match. The `contentHash` was recomputed (sha256 of the new
+   body) so `seedControlPlane` actually republishes the row; the `Re-query the board` rule
+   string is preserved (gated by `dependency-gate-contract.test.js`).
+2. `src/test/dispatch-analysis-scope-contract.test.js` — new section 6 asserts the protocol
+   names the per-column endpoint, no longer issues `GET /kanban/board` as an instruction, and
+   keeps its write endpoints. It reads the body out of the bundle (same pattern as
+   `dependency-gate-contract.test.js`), not the deleted on-disk path.
+
+**Not landed (void):** the `subtask-of:` quote strip (change 2) and the
+`kanban-auto-export.test.ts` marker test (change 3) — both target code deleted with the mirror
+writer; the JSON read carries structured `featureId`/`isFeature` fields, so no marker is parsed.
+
+**Not executed this run:** the plan's manual verification steps 1–7 (byte comparison, mirror/API
+parity, live freshness, end-to-end Analyze) all reference the deleted mirror and are unexecutable
+as written; automated compilation and tests were skipped per dispatch directive.
+
+Verified: the bundle body hashes to its declared `contentHash`; the new assertions were checked
+against the edited body (plans endpoint present, board instruction absent, write endpoint
+present); `node --check` on the test file is clean.

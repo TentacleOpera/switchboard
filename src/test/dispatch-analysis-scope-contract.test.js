@@ -278,6 +278,28 @@ async function main() {
         assert.deepStrictEqual(validateVerbPayload('kanban', 'dispatchAnalyze', { workspaceRoot: '/x' }), { ok: true });
     });
 
+    console.log('\n── 6. the skill reads the per-column endpoint, not the whole board ──');
+
+    // The dispatch-analysis protocol body is a control-plane row (bodies in
+    // bundledProtocols.ts), materialized on setup — so the bundle is the source
+    // of truth. Reading an on-disk `.agents/...` path would make this red on
+    // every checkout that has not run setup. Same pattern as
+    // dependency-gate-contract.test.js and skill-preconditions-contract.test.js.
+    await test('dispatch-analysis step 1 names the per-column read and demotes /kanban/board', () => {
+        const bundle = readSrc('src/services/bundledProtocols.ts');
+        const m = bundle.match(/"dispatch-analysis":\s*\{[^}]*"body":\s*"((?:[^"\\]|\\.)*)"/s);
+        assert.ok(m, 'dispatch-analysis body must be present in the bundle');
+        const skill = JSON.parse('"' + m[1] + '"');
+
+        assert.ok(/\/kanban\/plans\?workspaceRoot=\{WORKSPACE_ROOT\}&column=PLAN%20REVIEWED/.test(skill),
+            'step 1 must name the per-column plans read as the primary read');
+        // /kanban/board may still appear as the discouraged form, but never as an instruction.
+        assert.ok(!/GET\s+http:\/\/localhost:\{API_PORT\}\/kanban\/board/.test(skill),
+            'a bare GET /kanban/board pulls every column; the pass needs one');
+        assert.ok(/POST[\s\S]{0,120}\/kanban\/(move|dependencies)/.test(skill),
+            'the write endpoints must survive — only the READ moved off the whole-board endpoint');
+    });
+
     console.log(`\n${passed} passed, ${failed} failed\n`);
     if (failed > 0) { process.exit(1); }
 }
