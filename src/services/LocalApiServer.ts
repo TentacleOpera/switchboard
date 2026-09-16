@@ -657,6 +657,17 @@ interface LocalApiServerOptions {
         worktreeId: string | number
     ) => Promise<{ success: boolean; worktreeId?: string | number; prompt?: string; error?: string }>;
     /**
+     * Create the per-feature worktree for `POST /worktree/feature`. Wired to
+     * `KanbanProvider.createWorktreeForFeature` — the ONE implementation of the
+     * guard/create/seat sequence, shared with the webview message case. Optional:
+     * absent in test harnesses, where the route reports the unwired seam rather
+     * than pretending a worktree was made.
+     */
+    createFeatureWorktree?: (
+        workspaceRoot: string,
+        args: { featureId: string; featureTopic?: string; repoName?: string }
+    ) => Promise<{ success: boolean; branch?: string; path?: string; error?: string }>;
+    /**
      * Phone-a-Friend dispatch — reached by a coding agent's `curl` when it finishes a
      * plan batch. The host resolves the Phone-a-Friend terminal, sends `/clear` + a
      * second-pass coder prompt, and silently drops the dispatch if no terminal is
@@ -8223,6 +8234,68 @@ export class LocalApiServer {
         }
     }
 
+    /**
+     * POST /worktree/feature — create the per-feature worktree for an entangled
+     * feature. Reached by the dispatch-analysis pass acting on its own offer
+     * (step 6b) and by any fleet agent.
+     *
+     * Body: `{ workspaceRoot?, featureId, featureTopic?, repoName? }`. `featureTopic`
+     * is resolved from the board when omitted (it names the branch). The route is a
+     * thin caller of the provider method — it does NOT re-implement the
+     * already-active guard, the default-branch resolution, `addWorktree`, or the
+     * terminal seating. A guard rejection is `200 { success:false, error }` (not a
+     * 4xx) so a loop over several features can report that one and continue.
+     *
+     * This handler NEVER writes `feature_worktree_mode` — creating worktrees and
+     * changing the standing topology are different acts, and orchestration stashes a
+     * prior under that key that a stray write would clobber.
+     */
+    private async _handleCreateFeatureWorktree(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const createFeatureWorktree = this._options.createFeatureWorktree;
+        if (!createFeatureWorktree) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Feature worktree creation not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const featureId = String(body?.featureId || '').trim();
+            if (!featureId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: featureId' }));
+                return;
+            }
+            let featureTopic = body?.featureTopic ? String(body.featureTopic) : undefined;
+            if (!featureTopic) {
+                // The branch is named from the feature's topic; resolve it from the
+                // board rather than letting the caller's omission become a bare id.
+                try {
+                    const db = await this._resolveDbFromQuery(req);
+                    const rec = db ? await db.getPlanByPlanId?.(featureId) : null;
+                    if (rec?.topic) { featureTopic = String(rec.topic); }
+                } catch { /* the provider falls back to the id for the branch name */ }
+            }
+            const result = await createFeatureWorktree(workspaceRoot, {
+                featureId,
+                featureTopic,
+                repoName: body?.repoName ? String(body.repoName) : undefined,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] _handleCreateFeatureWorktree error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'feature worktree creation failed' }));
+        }
+    }
+
     private async _handleWorktreeCleanup(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
@@ -13624,6 +13697,8 @@ export class LocalApiServer {
                 await this._handleCreatePlan(req, res);
             } else if (pathname === '/kanban/plans' && req.method === 'DELETE') {
                 await this._handleDeletePlan(req, res);
+            } else if (pathname === '/worktree/feature' && req.method === 'POST') {
+                await this._handleCreateFeatureWorktree(req, res);
             } else if (pathname === '/worktree/cleanup' && req.method === 'POST') {
                 await this._handleWorktreeCleanup(req, res);
             } else if (pathname === '/worktree/merge' && req.method === 'POST') {

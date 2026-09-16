@@ -598,6 +598,29 @@ export function buildAnalysisScopeLine(scope: string | null | undefined): string
     return `PROJECT=${cleaned}\n`;
 }
 
+/**
+ * THE single resolver for the dispatch-analysis prompt's `FEATURE_WORKTREE_MODE=`
+ * line, shared verbatim by both hosts (KanbanProvider.generateUnifiedPrompt's arm
+ * and standalone bootstrap, which builds its prompts through the same provider
+ * method) so the two cannot drift.
+ *
+ * The skill reads the exact spelling (step 4a): `none` means shared-tree
+ * contention explains the file conflicts and the worktree offer is live;
+ * `per-feature` means isolation is already on and the offer must be suppressed.
+ *
+ * Any other value — `undefined`, `null`, empty, a retired `per-subtask`/`high-low`
+ * spelling, or newline-injected junk — resolves to `none`. That is the SAFE
+ * direction: `none` only ever produces an *offer* the user can decline, whereas a
+ * wrongly-emitted `per-feature` would silently suppress the escape hatch the pass
+ * exists to provide. `\r`/`\n` are stripped so a corrupt config value cannot break
+ * the prompt block.
+ */
+export function buildFeatureWorktreeModeLine(mode: string | null | undefined): string {
+    const cleaned = (mode ?? '').replace(/[\r\n]/g, '').trim();
+    if (cleaned !== 'none' && cleaned !== 'per-feature') { return 'FEATURE_WORKTREE_MODE=none\n'; }
+    return `FEATURE_WORKTREE_MODE=${cleaned}\n`;
+}
+
 export function resolveBaseInstructions(
     role: string,
     defaultBase: string,

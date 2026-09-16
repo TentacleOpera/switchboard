@@ -44,7 +44,7 @@ installVscodeTrap();
 
 const { KanbanProvider } = require('../../out/services/KanbanProvider');
 const { KanbanDatabase } = require('../../out/services/KanbanDatabase');
-const { buildAnalysisScopeLine, UNASSIGNED_PROJECT_SENTINEL } = require('../../out/services/agentPromptBuilder');
+const { buildAnalysisScopeLine, buildFeatureWorktreeModeLine, UNASSIGNED_PROJECT_SENTINEL } = require('../../out/services/agentPromptBuilder');
 const { VERB_SCHEMAS, validateVerbPayload } = require('../../out/services/verbSchemas');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
@@ -228,34 +228,80 @@ async function main() {
             'a newline in a user-authored project name would corrupt the prompt block');
     });
 
-    await test('both prompt builders route the PROJECT= line through the ONE shared resolver', () => {
+    await test('the dispatch-analysis prompt is built by ONE provider method, from the shared resolvers', () => {
         const kb = readSrc('src/services/KanbanProvider.ts');
-        const boot = readSrc('src/standalone/bootstrap.ts');
-        for (const [label, src] of [['KanbanProvider.ts', kb], ['bootstrap.ts', boot]]) {
-            assert.ok(/buildAnalysisScopeLine\(/.test(src), `${label} must call buildAnalysisScopeLine`);
-            const handRolled = src.match(/['"`]PROJECT=<(all|unassigned)>/g) || [];
-            assert.strictEqual(handRolled.length, 0,
-                `${label} hand-rolls a PROJECT= form (${handRolled.join(', ')}) — the two hosts will drift`);
+        assert.ok(/buildAnalysisScopeLine\(/.test(kb), 'KanbanProvider must call buildAnalysisScopeLine');
+        assert.ok(/buildFeatureWorktreeModeLine\(/.test(kb), 'KanbanProvider must call buildFeatureWorktreeModeLine');
+        // The standalone host builds its prompts through this same provider method
+        // (generateUnifiedPrompt), so neither host may hand-roll either line.
+        for (const [label, src] of [['KanbanProvider.ts', kb], ['bootstrap.ts', readSrc('src/standalone/bootstrap.ts')]]) {
+            assert.strictEqual((src.match(/['"`]PROJECT=<(all|unassigned)>/g) || []).length, 0,
+                `${label} hand-rolls a PROJECT= form — the shared resolver exists so the hosts cannot drift`);
+            assert.strictEqual((src.match(/['"`]FEATURE_WORKTREE_MODE=/g) || []).length, 0,
+                `${label} hand-rolls a FEATURE_WORKTREE_MODE= form — route it through buildFeatureWorktreeModeLine`);
         }
     });
 
-    await test('the extension arm emits PROJECT= between API_PORT and PLANS TO PROCESS', async () => {
+    await test('buildFeatureWorktreeModeLine emits the two spellings and defaults unknown to none', () => {
+        assert.strictEqual(buildFeatureWorktreeModeLine('none'), 'FEATURE_WORKTREE_MODE=none\n');
+        assert.strictEqual(buildFeatureWorktreeModeLine('per-feature'), 'FEATURE_WORKTREE_MODE=per-feature\n');
+        for (const bad of [undefined, null, '', 'per-subtask', 'high-low', 'Bad\nMode']) {
+            assert.strictEqual(buildFeatureWorktreeModeLine(bad), 'FEATURE_WORKTREE_MODE=none\n',
+                `unknown mode ${JSON.stringify(bad)} must resolve to none — a wrongly-emitted per-feature would silently suppress the offer`);
+        }
+    });
+
+    await test('the dispatch-analysis arm emits PROJECT= then FEATURE_WORKTREE_MODE= then a blank line', async () => {
         const kp = Object.create(KanbanProvider.prototype);
         kp._taskViewerProvider = { getLocalApiServerPort: () => 4711 };
         const plans = [{ topic: 'A', absolutePath: '/ws/a.md', planId: 'a', sessionId: 'a' }];
         const scoped = await kp.generateUnifiedPrompt('planner', plans, ROOT, { instruction: 'dispatch-analysis', analysisScope: 'Browser Switchboard' });
-        assert.ok(/API_PORT=4711\nPROJECT=Browser Switchboard\n\nPLANS TO PROCESS:/.test(scoped), scoped);
+        assert.ok(/API_PORT=4711\nPROJECT=Browser Switchboard\nFEATURE_WORKTREE_MODE=none\n\nPLANS TO PROCESS:/.test(scoped), scoped);
 
         const unfiltered = await kp.generateUnifiedPrompt('planner', plans, ROOT, { instruction: 'dispatch-analysis', analysisScope: null });
-        assert.ok(/API_PORT=4711\nPROJECT=<all>\n\nPLANS TO PROCESS:/.test(unfiltered), unfiltered);
+        assert.ok(/API_PORT=4711\nPROJECT=<all>\nFEATURE_WORKTREE_MODE=none\n\nPLANS TO PROCESS:/.test(unfiltered), unfiltered);
 
         // The single-plan planner path (TaskViewerProvider's dispatch-analysis
-        // allowlist) threads no scope. It must emit NO line — PROJECT=<all> there
-        // would be worse than the pre-scoping behaviour, actively telling the
-        // agent to widen to every project.
+        // allowlist) threads no scope. It must emit NO PROJECT= line — PROJECT=<all>
+        // there would be worse than the pre-scoping behaviour, actively telling the
+        // agent to widen to every project. The mode line is still emitted; its
+        // absence would read as "no topology".
         const unthreaded = await kp.generateUnifiedPrompt('planner', plans, ROOT, { instruction: 'dispatch-analysis' });
         assert.ok(!/PROJECT=/.test(unthreaded), unthreaded);
-        assert.ok(/API_PORT=4711\n\nPLANS TO PROCESS:/.test(unthreaded), unthreaded);
+        assert.ok(/API_PORT=4711\nFEATURE_WORKTREE_MODE=none\n\nPLANS TO PROCESS:/.test(unthreaded), unthreaded);
+    });
+
+    await test('the skill and the orchestration surface document the mode line and the create route', () => {
+        const bundle = readSrc('src/services/bundledProtocols.ts');
+        const m = bundle.match(/"dispatch-analysis":\s*\{[^}]*"body":\s*"((?:[^"\\]|\\.)*)"/s);
+        assert.ok(m, 'dispatch-analysis body must be present in the bundle');
+        const skill = JSON.parse('"' + m[1] + '"');
+        assert.ok(skill.includes('FEATURE_WORKTREE_MODE=none') && skill.includes('`per-feature`'),
+            'step 4a must spell both mode values');
+        assert.ok(/POST \/worktree\/feature/.test(skill), 'step 6b must name the create route');
+
+        const orchestration = readSrc('.agents/skills/switchboard-orchestration/SKILL.md');
+        assert.ok(/POST \/worktree\/feature/.test(orchestration),
+            'fleet agents read the orchestration surface — the route must be listed there');
+    });
+
+    await test('POST /worktree/feature is a thin caller that never writes feature_worktree_mode', () => {
+        const api = readSrc('src/services/LocalApiServer.ts');
+        assert.ok(/pathname === '\/worktree\/feature' && req\.method === 'POST'/.test(api), 'the route must be registered');
+        const start = api.indexOf('private async _handleCreateFeatureWorktree');
+        assert.ok(start > 0, 'the handler must exist');
+        const handler = api.slice(start, start + 4000);
+        assert.ok(/this\._options\.createFeatureWorktree/.test(handler),
+            'the route must delegate to the wired provider seam, never re-implement the create dance');
+        assert.ok(!/setConfig\s*\(/.test(handler),
+            'the handler must never write feature_worktree_mode — orchestration stashes a prior under that key');
+
+        const kb = readSrc('src/services/KanbanProvider.ts');
+        assert.ok(/public async createWorktreeForFeature\(/.test(kb), 'the ONE provider method must exist');
+        assert.ok(/createFeatureWorktree:/.test(readSrc('src/services/TaskViewerProvider.ts')),
+            'the extension host must wire the create seam');
+        assert.ok(/createFeatureWorktree:/.test(readSrc('src/standalone/bootstrap.ts')),
+            'the standalone host must wire the create seam — an unwired seam is invisible at runtime');
     });
 
     console.log('\n── 5. the HTTP boundary declares what the arm dereferences ──');

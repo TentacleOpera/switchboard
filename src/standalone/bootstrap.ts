@@ -5353,6 +5353,19 @@ Each plan file must include:
                 return { success: false, error: err instanceof Error ? err.message : String(err) };
             }
         },
+        createFeatureWorktree: async (wsRoot: string, args: { featureId: string; featureTopic?: string; repoName?: string }) => {
+            // Same single provider method the webview message case calls. On the
+            // standalone host _taskViewerProvider may be absent — the provider's
+            // seating is best-effort, so a worktree + row is still created.
+            if (!kanbanProvider) {
+                return { success: false, error: 'Kanban provider not available' };
+            }
+            try {
+                return await kanbanProvider.createWorktreeForFeature(wsRoot, args);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        },
         onTeamReleased: async (wsRoot: string, teamMemberNames: string[]) => {
             await taskViewerProvider?.clearAdvanceWhenReadyJobs(wsRoot, teamMemberNames);
         },

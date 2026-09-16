@@ -24,7 +24,7 @@ import {
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, SWITCHBOARD_CLI_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap, DIRECTIVE_PROTOCOL_NAMES, resolveProtocolSet } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, SWITCHBOARD_CLI_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, buildFeatureWorktreeModeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap, DIRECTIVE_PROTOCOL_NAMES, resolveProtocolSet } from './agentPromptBuilder';
 import { substituteCliPath } from '../utils/cliPathToken';
 import type { ProtocolResolution } from './protocolDirectives';
 import { renderPlannerWorkflowRef } from './protocolDirectives';
@@ -6641,6 +6641,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // Resolve the dispatch-analysis protocol (materialize delivery) so the
             // emitted reference is an absolute on-disk path, not a deleted relative one.
             const analysisDb = this._getKanbanDb(workspaceRoot);
+            // The board's CURRENT topology, resolved from the store here rather than
+            // threaded as a new positional through triggerBatchAgentFromKanban — the
+            // seventh positional is analysisScope and a misplaced value lands in
+            // targetTerminalOverride. The skill's step 4a reads this exact line.
+            const worktreeModeLine = buildFeatureWorktreeModeLine(
+                typeof analysisDb?.getConfig === 'function'
+                    ? await analysisDb.getConfig('feature_worktree_mode')
+                    : undefined
+            );
             const analysisResolved = await resolveProtocolSet(['dispatch-analysis'], workspaceRoot, analysisDb || undefined);
             const analysisRef = renderPlannerWorkflowRef('dispatch-analysis', analysisResolved);
             const dispatchPrompt =
@@ -15137,35 +15146,22 @@ ${FOCUS_DIRECTIVE}`;
                 }
             }
             case 'createWorktreeForFeature': {
+                // Thin caller — the guard/create/seat sequence lives in the ONE
+                // provider method shared with POST /worktree/feature. The toasts are
+                // the webview path's, not the API path's.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) return { success: false, error: 'No workspace root resolved' };
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !await db.ensureReady()) return { success: false, error: 'Database unavailable' };
-
-                // Block if feature already has an active linked worktree
-                const allWorktrees = await db.getWorktrees();
-                const existing = allWorktrees.find(w => String(w.feature_id) === msg.featureId && w.status === 'active');
-                if (existing) {
-                    void this._seams().ui.showInformationMessage(`Feature already has worktree: ${existing.branch}`);
-                    return { success: false, error: `Feature already has worktree: ${existing.branch}` };
+                const r = await this.createWorktreeForFeature(workspaceRoot, {
+                    featureId: msg.featureId ? String(msg.featureId) : '',
+                    featureTopic: msg.featureTopic,
+                    repoName: msg.repoName,
+                });
+                if (r.success) {
+                    void this._seams().ui.showInformationMessage(`Worktree created for feature: ${r.branch}`);
+                } else {
+                    void this._seams().ui.showWarningMessage(r.error || 'Failed to create worktree');
                 }
-
-                try {
-                    const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
-                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.featureTopic, msg.repoName, defaultBranch);
-                    await db.addWorktree(branch, wtPath, msg.featureId ? String(msg.featureId) : undefined, undefined, undefined, defaultBranch);
-
-                    // Force-create terminals in worktree using shared ensureWorktreeTerminals
-                    await this._openWorktreeTerminalsBestEffort(workspaceRoot, wtPath);
-
-                    void this._seams().ui.showInformationMessage(`Worktree created for feature: ${branch}`);
-                    await this._refreshBoard(workspaceRoot);
-                    await this._sendWorktreeConfig(workspaceRoot);
-                    return { success: true, branch, path: wtPath };
-                } catch (e: any) {
-                    void this._seams().ui.showErrorMessage(`Failed to create worktree: ${e.message}`);
-                    return { success: false, error: `Failed to create worktree: ${e.message}` };
-                }
+                return r;
             }
             case 'createWorktreeForProject': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -16041,6 +16037,48 @@ ${steps}
 After the merge succeeds, **ask the user whether they want you to clean up this worktree in Switchboard.** If they say yes, run the \`worktree-cleanup\` skill (\`.agents/skills/worktree-cleanup/SKILL.md\`) — it calls the Switchboard local API to mark the worktree merged and remove it. Do not clean up without the user's confirmation.`;
 
         return { success: true, worktreeId: wtRow.id, prompt };
+    }
+
+    /**
+     * THE single implementation of per-feature worktree creation, shared by the
+     * webview `createWorktreeForFeature` message case and the API's
+     * `POST /worktree/feature`. Terminal seating is best-effort (see
+     * `_openWorktreeTerminalsBestEffort`): a headless host with no
+     * TaskViewerProvider still gets a valid worktree + DB row, never a failed
+     * creation for a worktree that in fact exists.
+     *
+     * NOT shared with `_ensureFeatureIntegrationWorktree`, which runs the same
+     * guard/create/seat sequence for the feature-workflow integration worktree
+     * with a narrower predicate (`!subtask_plan_id && !tier`) and non-forced
+     * seating. Two implementations by design; do not let this become three.
+     */
+    public async createWorktreeForFeature(
+        workspaceRoot: string,
+        args: { featureId: string; featureTopic?: string; repoName?: string }
+    ): Promise<{ success: boolean; branch?: string; path?: string; error?: string }> {
+        const featureId = String(args?.featureId ?? '').trim();
+        if (!featureId) { return { success: false, error: 'featureId is required' }; }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) { return { success: false, error: 'Database unavailable' }; }
+
+        // Block if the feature already has an active linked worktree.
+        const allWorktrees = await db.getWorktrees();
+        const existing = allWorktrees.find(w => String(w.feature_id) === featureId && w.status === 'active');
+        if (existing) { return { success: false, error: `Feature already has worktree: ${existing.branch}` }; }
+
+        try {
+            const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
+            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, args.featureTopic, args.repoName, defaultBranch);
+            await db.addWorktree(branch, wtPath, featureId, undefined, undefined, defaultBranch);
+
+            await this._openWorktreeTerminalsBestEffort(workspaceRoot, wtPath);
+
+            await this._refreshBoard(workspaceRoot);
+            await this._sendWorktreeConfig(workspaceRoot);
+            return { success: true, branch, path: wtPath };
+        } catch (e: any) {
+            return { success: false, error: `Failed to create worktree: ${e.message}` };
+        }
     }
 
     public async cleanupWorktree(workspaceRoot: string, worktreeId: string | number): Promise<{ success: boolean; error?: string }> {
