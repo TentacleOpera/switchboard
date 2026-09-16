@@ -210,7 +210,7 @@
         "switchboard.linear.oauthClientId": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Linear OAuth application client id used for the `actor=app` PKCE handshake. Public by design — no client secret is ever shipped or stored. Leave empty to keep using a personal API key; the OAuth connect action refuses rather than starting a flow Linear cannot answer. Headless hosts may set `SWITCHBOARD_LINEAR_CLIENT_ID` instead."
+          "markdownDescription": "Linear OAuth application client id used for the `actor=app` PKCE handshake. Public by design \u2014 no client secret is ever shipped or stored. Leave empty to keep using a personal API key; the OAuth connect action refuses rather than starting a flow Linear cannot answer. Headless hosts may set `SWITCHBOARD_LINEAR_CLIENT_ID` instead."
         },
         "switchboard.defaultMode": {
           "type": "string",
@@ -337,7 +337,7 @@
         "switchboard.reviewer.advancedMode": {
           "type": "boolean",
           "default": true,
-          "description": "When enabled, reviewer prompts include deep regression analysis instructions (caller tracing, race condition checks, orphaned reference detection). Token-intensive — on by default; disable to save tokens."
+          "description": "When enabled, reviewer prompts include deep regression analysis instructions (caller tracing, race condition checks, orphaned reference detection). Token-intensive \u2014 on by default; disable to save tokens."
         },
         "switchboard.pairProgramming.aggressive": {
           "type": "boolean",
@@ -374,7 +374,7 @@
         "switchboard.terminal.claudeInlineRendering": {
           "type": "boolean",
           "default": true,
-          "description": "Run Claude CLI seats in the normal screen buffer so the terminal pane's own scrollbar and jump-to-latest work. Turn off to keep Claude's in-app scrolling and mouse support. Applies to newly created terminals only — environment is fixed when a seat spawns, so restart a seat after changing this."
+          "description": "Run Claude CLI seats in the normal screen buffer so the terminal pane's own scrollbar and jump-to-latest work. Turn off to keep Claude's in-app scrolling and mouse support. Applies to newly created terminals only \u2014 environment is fixed when a seat spawns, so restart a seat after changing this."
         },
         "switchboard.terminal.tmux.enabled": {
           "type": "boolean",
@@ -394,12 +394,12 @@
         "switchboard.terminal.tmux.paneTitlePattern": {
           "type": "string",
           "default": "",
-          "description": "Auto-adopt panes whose pane_title matches this pattern. Empty = matches nothing — adoption is explicit only. A non-empty default would turn dispatch into arbitrary command execution in a shell the user was using for something else."
+          "description": "Auto-adopt panes whose pane_title matches this pattern. Empty = matches nothing \u2014 adoption is explicit only. A non-empty default would turn dispatch into arbitrary command execution in a shell the user was using for something else."
         },
         "switchboard.terminal.tmux.autoCreate": {
           "type": "boolean",
           "default": false,
-          "description": "Allow triggerAction to create a tmux pane (in a dedicated 'switchboard' session) when no adopted pane resolves. Off by default — creating windows in someone's tmux session unprompted is surprising in a way creating a Switchboard-owned PTY is not."
+          "description": "Allow triggerAction to create a tmux pane (in a dedicated 'switchboard' session) when no adopted pane resolves. Off by default \u2014 creating windows in someone's tmux session unprompted is surprising in a way creating a Switchboard-owned PTY is not."
         },
         "switchboard.terminal.fleet.surviveBoard": {
           "type": "boolean",
@@ -531,7 +531,7 @@
         "switchboard.tickets.storeBodyInBoardStore": {
           "type": "boolean",
           "default": true,
-          "description": "Store the ticket description in the board database when a Linear/ClickUp ticket is imported as a plan, so the ticket's text survives a fresh clone and reaches teammates through a shared Board store. Turn OFF if ticket bodies must not leave the machine that imported them — the plan keeps its link, the title, state, assignee and labels, and the card shows the body as excluded by policy rather than as absent.",
+          "description": "Store the ticket description in the board database when a Linear/ClickUp ticket is imported as a plan, so the ticket's text survives a fresh clone and reaches teammates through a shared Board store. Turn OFF if ticket bodies must not leave the machine that imported them \u2014 the plan keeps its link, the title, state, assignee and labels, and the card shows the body as excluded by policy rather than as absent.",
           "scope": "resource"
         },
         "switchboard.tickets.storeCommentsInBoardStore": {
@@ -639,7 +639,7 @@
           "default": 600000,
           "minimum": 300000,
           "maximum": 3600000,
-          "description": "How long (ms) a team lead must be silent with work pending before a stall nudge fires. Default 10 min. Separate from turnEndSilenceMs (which gates turn-end detection at 90s) — a nudge is a backstop, not a turn-boundary probe. Only applies to the feature-level and queue-level stall nudges.",
+          "description": "How long (ms) a team lead must be silent with work pending before a stall nudge fires. Default 10 min. Separate from turnEndSilenceMs (which gates turn-end detection at 90s) \u2014 a nudge is a backstop, not a turn-boundary probe. Only applies to the feature-level and queue-level stall nudges.",
           "scope": "resource"
         },
         "switchboard.activityLight.dispatchStallMs": {
@@ -647,7 +647,7 @@
           "default": 1800000,
           "minimum": 300000,
           "maximum": 14400000,
-          "description": "How long (ms) a dispatched card may be out with no completion posted before the dispatch-stall nudge fires once for its lead. Default 30 min. Independent of the queue, of seat activity, and of the card's column — the only inputs are dispatched_at, completed_at and a clock. A legitimately long task will trip it; that is acceptable and what the threshold is for. Re-arms on evidence of progress (plan-file mtime advancing or the seat producing output after the nudge), so a card that stalls twice is nudged twice.",
+          "description": "How long (ms) a dispatched card may be out with no completion posted before the dispatch-stall nudge fires once for its lead. Default 30 min. Independent of the queue, of seat activity, and of the card's column \u2014 the only inputs are dispatched_at, completed_at and a clock. A legitimately long task will trip it; that is acceptable and what the threshold is for. Re-arms on evidence of progress (plan-file mtime advancing or the seat producing output after the nudge), so a card that stalls twice is nudged twice.",
           "scope": "resource"
         },
         "switchboard.activityLight.dispatchTimeoutMs": {
@@ -655,13 +655,13 @@
           "default": 14400000,
           "minimum": 3600000,
           "maximum": 604800000,
-          "description": "How long (ms) a dispatched card may be out with no completion posted before the dispatch-timeout sweep ends the attempt in a `timed out` state and releases the seat. Default 4 hours — well past the 30-min dispatch-stall nudge (dispatchStallMs), so a human has a long window to act between the nudge and the abandonment. Invariant: dispatchStallMs < dispatchTimeoutMs (the nudge fires before the timeout). The timeout does NOT write completed_at (an abandonment is not a completion) and does NOT retry — a re-dispatch is a human decision. The sole abandonment path that nulls dispatched_at for a live-but-silent seat now that the activity-light sweep (timeoutMs) no longer does.",
+          "description": "How long (ms) a dispatched card may be out with no completion posted before the dispatch-timeout sweep ends the attempt in a `timed out` state and releases the seat. Default 4 hours \u2014 well past the 30-min dispatch-stall nudge (dispatchStallMs), so a human has a long window to act between the nudge and the abandonment. Invariant: dispatchStallMs < dispatchTimeoutMs (the nudge fires before the timeout). The timeout does NOT write completed_at (an abandonment is not a completion) and does NOT retry \u2014 a re-dispatch is a human decision. The sole abandonment path that nulls dispatched_at for a live-but-silent seat now that the activity-light sweep (timeoutMs) no longer does.",
           "scope": "resource"
         },
         "switchboard.planScanner.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Master switch for the Plan Scanner: periodically scan AI IDE/agent folders for newly generated plan files and import them onto the kanban. Configure in Setup → Plan Scanner.",
+          "description": "Master switch for the Plan Scanner: periodically scan AI IDE/agent folders for newly generated plan files and import them onto the kanban. Configure in Setup \u2192 Plan Scanner.",
           "scope": "resource"
         },
         "switchboard.planScanner.intervalSeconds": {
@@ -850,8 +850,8 @@
             "claudify"
           ],
           "enumDescriptions": [
-            "Afterburner — Cyan immersive theme: Hanken headings (no glow), scanlines and glass always on, CRT sweep toggleable",
-            "Claudify — Claude terracotta accent, Hanken headings, flat neutral surface, scanlines and CRT sweep toggleable"
+            "Afterburner \u2014 Cyan immersive theme: Hanken headings (no glow), scanlines and glass always on, CRT sweep toggleable",
+            "Claudify \u2014 Claude terracotta accent, Hanken headings, flat neutral surface, scanlines and CRT sweep toggleable"
           ],
           "default": "afterburner",
           "description": "Visual theme for Switchboard webviews. Applies to Setup, Kanban, and Planning panels.",
@@ -881,6 +881,7 @@
   "scripts": {
     "vscode:prepublish": "npm run package",
     "compile": "node scripts/sync-webview-vendor.js && webpack",
+    "compile:standalone": "node scripts/sync-webview-vendor.js && webpack --config-name standalone",
     "watch": "node scripts/sync-webview-vendor.js && webpack --watch",
     "package": "node scripts/sync-webview-vendor.js && webpack --mode production --devtool hidden-source-map",
     "package:deb": "bash scripts/package-deb.sh",
