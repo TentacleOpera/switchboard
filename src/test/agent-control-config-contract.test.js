@@ -10,9 +10,11 @@
  *     to their own config keys and the API key to the encrypted secrets store
  *   - the API key is NEVER in any response body — keySet is all a client learns
  *   - GET /agent/control/config reports endpoint/model/keySet + modelConfigured
- *   - _resolveAgentControlModel reads agentControlEndpoint/agentControlModel
- *     and nothing else — the unreleased startupCommands URL overload took a
- *     clean break (no read, no migration)
+ *   - _resolveAgentControlModel reads the ACTIVE PROVIDER ROW and nothing else.
+ *     Two unreleased shapes took clean breaks here, neither with a migration:
+ *     the startupCommands URL overload, and the flat
+ *     agentControlEndpoint/agentControlModel keys (plus the unsuffixed shared
+ *     API key slot) that existed for one day between a9497bd6 and 2da42df4
  *   - BOTH composition roots wire store/delete on the encryptedSecretsStore
  *     seam — a get-only root would leave the surface able to read a key it
  *     cannot set, and "never wired" looks identical to "working"
@@ -41,6 +43,9 @@ const { GlobalIntegrationConfigService } = require(path.join(REPO, 'out', 'servi
 const localApiServerTs = fs.readFileSync(path.join(REPO, 'src', 'services', 'LocalApiServer.ts'), 'utf8');
 const bootstrapTs = fs.readFileSync(path.join(REPO, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
 const tvpTs = fs.readFileSync(path.join(REPO, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+const sharedUtilsJs = fs.readFileSync(path.join(REPO, 'src', 'webview', 'sharedUtils.js'), 'utf8');
+const dockJs = fs.readFileSync(path.join(REPO, 'src', 'webview', 'dock.js'), 'utf8');
+const commandJs = fs.readFileSync(path.join(REPO, 'src', 'webview', 'command.js'), 'utf8');
 
 let failures = 0;
 async function check(name, fn) {
@@ -147,6 +152,16 @@ async function request(server, method, url, body, authToken) {
     return { status, body: responseBody };
 }
 
+/**
+ * Configure the active provider ROW — the only shape the resolver reads.
+ * There is deliberately no flat-key equivalent: those keys are gone.
+ */
+async function setRow(provider, endpoint, model) {
+    await GlobalIntegrationConfigService.setAgentConfig('agentControlProvider', provider);
+    await GlobalIntegrationConfigService.setAgentConfig('agentControlProviders',
+        { [provider]: { endpoint, model } });
+}
+
 const getConfig = (s, tok) => request(s, 'GET', '/agent/control/config', undefined, tok);
 const postConfig = (s, b, tok) => request(s, 'POST', '/agent/control/config', b, tok);
 const postControl = (s, b, tok) => request(s, 'POST', '/agent/control', b, tok);
@@ -160,6 +175,7 @@ async function run() {
         const secrets = makeSecrets();
         const server = makeServer({ secrets });
         const r = await postConfig(server, {
+            provider: 'custom',
             endpoint: 'https://models.example/v1/chat',
             model: 'claude-opus-4.6',
             apiKey: 'sk-secret-xyz',
@@ -170,8 +186,14 @@ async function run() {
         const raw = JSON.stringify(r.body);
         assert.ok(!raw.includes('sk-secret-xyz'), 'the response body must never contain the key value');
         assert.ok(!('apiKey' in r.body), 'the response body must not carry an apiKey field');
-        assert.strictEqual(secrets._map.get('switchboard.agentControl.apiKey'), 'sk-secret-xyz',
-            'the key must land in the encrypted secrets store, not the config file');
+        // PROVIDER-SCOPED, always. The unsuffixed slot was the one-day
+        // pre-normalisation shape and is neither written nor read any more.
+        assert.strictEqual(secrets._map.get('switchboard.agentControl.apiKey.custom'), 'sk-secret-xyz',
+            'the key must land in the encrypted secrets store under its provider');
+        assert.strictEqual(secrets._map.get('switchboard.agentControl.apiKey'), undefined,
+            'nothing may write the unsuffixed pre-normalisation key slot');
+        assert.strictEqual(r.body.endpoint, 'https://models.example/v1/chat',
+            'the write reads back from the row it just wrote');
         // Key written BEFORE endpoint/model — the key-first write order keeps
         // a mid-write reader from seeing "new endpoint, no key".
         const storeIdx = secrets.calls.findIndex(c => c[0] === 'store');
@@ -179,10 +201,9 @@ async function run() {
     });
 
     await check('GET /agent/control/config reports endpoint + model + keySet — and never the key', async () => {
-        const secrets = makeSecrets({ 'switchboard.agentControl.apiKey': 'sk-hidden' });
+        const secrets = makeSecrets({ 'switchboard.agentControl.apiKey.custom': 'sk-hidden' });
         const server = makeServer({ secrets });
-        await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', 'https://ep.example/v1');
-        await GlobalIntegrationConfigService.setAgentConfig('agentControlModel', 'm-1');
+        await setRow('custom', 'https://ep.example/v1', 'm-1');
         const r = await getConfig(server);
         assert.strictEqual(r.status, 200);
         const cfg = r.body.data || r.body;
@@ -196,8 +217,7 @@ async function run() {
     await check('modelConfigured is false when the key is unset — and the reason is reported', async () => {
         const secrets = makeSecrets();
         const server = makeServer({ secrets });
-        await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', 'https://ep.example/v1');
-        await GlobalIntegrationConfigService.setAgentConfig('agentControlModel', 'm-1');
+        await setRow('custom', 'https://ep.example/v1', 'm-1');
         const r = await getConfig(server);
         const cfg = r.body.data || r.body;
         assert.strictEqual(cfg.modelConfigured, false, 'endpoint without a key is not configured');
@@ -206,10 +226,9 @@ async function run() {
     });
 
     await check('endpoint set but model unset is half-configured, not silently defaulted', async () => {
-        const secrets = makeSecrets({ 'switchboard.agentControl.apiKey': 'sk-x' });
+        const secrets = makeSecrets({ 'switchboard.agentControl.apiKey.custom': 'sk-x' });
         const server = makeServer({ secrets });
-        await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', 'https://ep.example/v1');
-        await GlobalIntegrationConfigService.setAgentConfig('agentControlModel', '');
+        await setRow('custom', 'https://ep.example/v1', '');
         const r = await getConfig(server);
         const cfg = r.body.data || r.body;
         assert.strictEqual(cfg.modelConfigured, false);
@@ -234,16 +253,17 @@ async function run() {
     await check('a URL in startupCommands.project_manager is NOT consulted — the overload is gone', async () => {
         const secrets = makeSecrets();
         const server = makeServer({ secrets });
-        await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', '');
+        await GlobalIntegrationConfigService.setAgentConfig('agentControlProvider', '');
+        await GlobalIntegrationConfigService.setAgentConfig('agentControlProviders', {});
         await GlobalIntegrationConfigService.setAgentStartupCommands({ project_manager: 'https://legacy.example/v1' });
         const r = await getConfig(server);
         const cfg = r.body.data || r.body;
         assert.strictEqual(r.status, 200);
         assert.strictEqual(cfg.endpoint, null,
             'a startup-command URL must not become the endpoint — the overload took a clean break');
-        assert.strictEqual(
-            await GlobalIntegrationConfigService.getAgentConfig('agentControlEndpoint') || '',
-            '', 'no migration write may resurrect the legacy URL into the new key');
+        assert.deepStrictEqual(
+            await GlobalIntegrationConfigService.getAgentConfig('agentControlProviders') || {},
+            {}, 'no migration write may resurrect the legacy URL into a provider row');
     });
 
     // ── The text arm is gone; the card-driven Resolve is what remains ──────
@@ -260,7 +280,6 @@ async function run() {
         const resolver = localApiServerTs.slice(
             localApiServerTs.indexOf('private async _resolveAgentControlEndpoint'),
             localApiServerTs.indexOf('private async _resolveAgentControlApiKey'));
-        assert.ok(resolver.includes("'agentControlEndpoint'"), 'the resolver must read agents.agentControlEndpoint');
         assert.ok(!resolver.includes('getAgentStartupCommands'),
             'the endpoint resolver must not read startupCommands — the unreleased overload took a clean break');
         assert.ok(!resolver.includes('project_manager') && !resolver.includes('mission-control'),
@@ -268,9 +287,76 @@ async function run() {
         const model = localApiServerTs.slice(
             localApiServerTs.indexOf('private async _resolveAgentControlModel'),
             localApiServerTs.indexOf('private static _usableAgentModel'));
-        assert.ok(model.includes("'agentControlModel'"), 'the resolver must read agents.agentControlModel');
         assert.ok(!model.includes('getAgentStartupCommands'),
             'the model resolver must not read startupCommands');
+        const row = localApiServerTs.slice(
+            localApiServerTs.indexOf('private async _resolveAgentControlRow'),
+            localApiServerTs.indexOf('private async _resolveAgentControlEndpoint'));
+        assert.ok(row.includes("'agentControlProviders'") && row.includes("'agentControlProvider'"),
+            'the row resolver must read the provider pointer and the rows');
+    });
+
+    // ── The flat config shape: clean break, no migration ───────────────────
+    // agentControlEndpoint/agentControlModel and the unsuffixed shared API key
+    // existed for ONE DAY in unreleased dev work (a9497bd6 -> 2da42df4) and were
+    // never in a release tag. Per CLAUDE.md, unreleased state takes a clean
+    // break — there was no install to migrate, only this working tree. These
+    // pins are the negative: nothing may read or resurrect that shape.
+
+    await check('the flat keys are gone — no read, no migration, no provider guess', async () => {
+        assert.ok(!localApiServerTs.includes("'agentControlEndpoint'"),
+            'nothing may read the flat agentControlEndpoint key');
+        assert.ok(!localApiServerTs.includes("'agentControlModel'"),
+            'nothing may read the flat agentControlModel key');
+        assert.ok(!localApiServerTs.includes('migrated-flat'),
+            'the migrated-flat source variant must be gone — a row is the only shape');
+        assert.ok(!localApiServerTs.includes('_providerIdForEndpoint'),
+            'the endpoint-to-provider guess existed only for the migration and must be gone');
+        assert.ok(!/get\('switchboard\.agentControl\.apiKey'\)/.test(localApiServerTs),
+            'the unsuffixed shared API key slot must not be read — a key must not answer '
+            + 'for a provider that never issued it');
+    });
+
+    await check('a stale flat key cannot resurrect itself into a row', async () => {
+        const secrets = makeSecrets();
+        const server = makeServer({ secrets });
+        await GlobalIntegrationConfigService.setAgentConfig('agentControlProvider', '');
+        await GlobalIntegrationConfigService.setAgentConfig('agentControlProviders', {});
+        // Write the retired shape directly, as an old working tree would have it.
+        await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', 'https://stale.example/v1');
+        await GlobalIntegrationConfigService.setAgentConfig('agentControlModel', 'stale-m');
+        const r = await getConfig(server);
+        const cfg = r.body.data || r.body;
+        assert.strictEqual(cfg.endpoint, null, 'a flat endpoint must not be read back');
+        assert.deepStrictEqual(
+            await GlobalIntegrationConfigService.getAgentConfig('agentControlProviders') || {},
+            {}, 'no row may be written from a flat key');
+    });
+
+    await check('the config row renders an unset provider AS unset — no guess, no default', async () => {
+        // The client twin of _providerIdForEndpoint. Guessing a provider from a
+        // stored URL only ever made sense for a flat endpoint with no row; an
+        // endpoint now lives inside a row and cannot exist without one.
+        // Code, not prose — the comment above the deletion names it deliberately.
+        assert.ok(!/function\s+inferFromEndpoint/.test(sharedUtilsJs),
+            'the endpoint-to-provider guess must not be defined');
+        assert.ok(!/\binferFromEndpoint\s*[,(]/.test(sharedUtilsJs),
+            'the endpoint-to-provider guess must be neither exported nor called');
+        assert.ok(!/providerId\s*=\s*[^;]*\|\|\s*'google'/.test(sharedUtilsJs),
+            'an unchosen provider must not default to Google — unset and chosen must not render alike');
+        assert.ok(/none\.value\s*=\s*''/.test(sharedUtilsJs),
+            'the provider select must carry an explicit unset option');
+    });
+
+    await check('BOTH surfaces refuse a save with no provider — the pane must not drift', async () => {
+        // dock.js and command.js each carry their own copy of this pane. A guard
+        // in one and not the other is the divergence no gate catches.
+        for (const [label, src] of [['dock.js', dockJs], ['command.js', commandJs]]) {
+            assert.ok(/selectedProviderId\(\)/.test(src),
+                `${label} must ask the shared row whether a provider is chosen`);
+            assert.ok(/Choose a provider before saving/.test(src),
+                `${label} must refuse a providerless save instead of reporting "Saved." for a no-op`);
+        }
     });
 
     await check('both composition roots wire store AND delete on encryptedSecretsStore', async () => {

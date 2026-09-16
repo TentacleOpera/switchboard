@@ -10563,15 +10563,6 @@ export class LocalApiServer {
     //  the-agent-control-surface-cannot-be-configured-and-is-driven-by-typing.
     // ═══════════════════════════════════════════════════════════════════════
 
-    /** Which provider a bare endpoint belongs to. Used ONLY by the migration. */
-    private static _providerIdForEndpoint(endpoint: string): string {
-        const u = String(endpoint || '');
-        if (/generativelanguage\.googleapis\.com/i.test(u)) { return 'google'; }
-        if (/openrouter\.ai/i.test(u)) { return 'openrouter'; }
-        if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|192\.168\.|10\.)/i.test(u)) { return 'local'; }
-        return 'custom';
-    }
-
     /**
      * The ACTIVE provider row: the pointer (`agents.agentControlProvider`)
      * looked up in the rows (`agents.agentControlProviders`). Each provider owns
@@ -10581,25 +10572,22 @@ export class LocalApiServer {
      * The result is TAGGED with `source`, so "this row is configured" is never
      * indistinguishable from "this was migrated" or "nothing is set".
      *
-     * Migration: an install configured before normalisation has flat
-     * `agentControlEndpoint`/`agentControlModel` and no row. Those are read ONCE,
-     * written into the row they belong to, then cleared — a flat value is not a
-     * standing fallback, because a stale one winning over a row is precisely the
-     * divergence the row shape exists to prevent.
+     * There is NO flat-key fallback and no migration. The pre-normalisation
+     * `agentControlEndpoint`/`agentControlModel` keys existed for ONE DAY in
+     * unreleased dev work (introduced a9497bd6, normalised 2da42df4, never in a
+     * release tag), so there was never an install to migrate — only this working
+     * tree. Per CLAUDE.md, unreleased state takes a clean break. A row is the
+     * only shape this reads; do not reintroduce a flat read.
      */
     private async _resolveAgentControlRow(): Promise<{
         providerId: string; endpoint: string; model: string;
-        source: 'row' | 'migrated-flat' | 'unset';
+        source: 'row' | 'unset';
     } | { error: string }> {
         let providerId = '';
         let rows: Record<string, { endpoint?: string; model?: string }> = {};
-        let flatEndpoint = '';
-        let flatModel = '';
         try {
             providerId = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlProvider') || '').trim();
             rows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, { endpoint?: string; model?: string }>>('agentControlProviders')) || {};
-            flatEndpoint = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint') || '').trim();
-            flatModel = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel') || '').trim();
         } catch (err) {
             console.error('[LocalApiServer] agent-control: config unreadable:', err);
             return { error: 'Agent-control config could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
@@ -10613,21 +10601,6 @@ export class LocalApiServer {
                 model: String(row.model || '').trim(),
                 source: 'row',
             };
-        }
-
-        if (flatEndpoint || flatModel) {
-            const migratedId = providerId || LocalApiServer._providerIdForEndpoint(flatEndpoint);
-            const next = { ...rows, [migratedId]: { endpoint: flatEndpoint, model: flatModel } };
-            try {
-                await GlobalIntegrationConfigService.setAgentConfig('agentControlProviders', next);
-                if (!providerId) { await GlobalIntegrationConfigService.setAgentConfig('agentControlProvider', migratedId); }
-                await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', '');
-                await GlobalIntegrationConfigService.setAgentConfig('agentControlModel', '');
-                console.log(`[LocalApiServer] agent-control: migrated flat config into provider row '${migratedId}'`);
-            } catch (err) {
-                console.error('[LocalApiServer] agent-control: row migration write failed:', err);
-            }
-            return { providerId: migratedId, endpoint: flatEndpoint, model: flatModel, source: 'migrated-flat' };
         }
 
         return { providerId, endpoint: '', model: '', source: 'unset' };
@@ -10662,20 +10635,17 @@ export class LocalApiServer {
         const secretsStore = this._options.encryptedSecretsStore;
         if (secretsStore && typeof secretsStore.get === 'function') {
             try {
-                // Per-provider key FIRST. Each provider issues its own credential,
-                // so one shared slot could only ever hold one of them — switching
-                // provider would present the previous provider's key and 401
-                // against an endpoint that was configured correctly.
+                // Per-provider ONLY. Each provider issues its own credential, so a
+                // shared slot could hold just one of them — switching provider would
+                // present the previous provider's key and 401 against an endpoint
+                // that was configured correctly. The unsuffixed
+                // `switchboard.agentControl.apiKey` slot was the pre-normalisation
+                // shape and is NOT read: it never shipped, and a key answering for a
+                // provider that did not issue it is exactly the identity fallback
+                // CLAUDE.md forbids.
                 if (providerId) {
                     const scoped = String(await secretsStore.get(`switchboard.agentControl.apiKey.${providerId}`) || '');
                     if (scoped) { return { apiKey: scoped, keySource: 'secrets-store' }; }
-                }
-                // The pre-normalisation shared key, so an existing install keeps
-                // working; the surface rewrites it under its provider on next save.
-                const stored = String(await secretsStore.get('switchboard.agentControl.apiKey') || '');
-                if (stored) {
-                    console.log(`[LocalApiServer] agent-control: using the pre-normalisation shared API key for provider '${providerId || 'unset'}'`);
-                    return { apiKey: stored, keySource: 'secrets-store' };
                 }
             } catch (err) {
                 console.error('[LocalApiServer] agent-control: secrets store read failed:', err);
@@ -10767,8 +10737,12 @@ export class LocalApiServer {
             // exactly what the model path would use.
             const model = await this._resolveAgentControlModel();
             const usable = LocalApiServer._usableAgentModel(model);
-            const endpoint = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint');
-            const modelName = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel');
+            // endpoint/model are fields of the ACTIVE ROW — the only place they are
+            // stored. This used to read the surface-wide flat keys, which the
+            // migration blanked, so a correctly configured provider reported null.
+            const activeRow = await this._resolveAgentControlRow();
+            const endpoint = 'error' in activeRow ? '' : activeRow.endpoint;
+            const modelName = 'error' in activeRow ? '' : activeRow.model;
             const provider = await this._resolveAgentControlProvider();
             const key = await this._resolveAgentControlApiKey(provider.value);
             // EVERY row, so the surface can switch provider and show that

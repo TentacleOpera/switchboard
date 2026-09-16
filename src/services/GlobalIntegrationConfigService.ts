@@ -62,14 +62,11 @@ export interface GlobalConfig {
          * The API key is NOT here — it is per-row in the encrypted secrets store
          * under `switchboard.agentControl.apiKey.<providerId>`.
          *
-         * `agentControlEndpoint`/`agentControlModel` are the pre-normalisation
-         * flat keys. They are READ ONCE to migrate an existing config into its
-         * row and are never written again; they are not a fallback, because a
-         * stale flat value winning over a row is the divergence this shape
-         * exists to prevent.
+         * The pre-normalisation flat `agentControlEndpoint`/`agentControlModel`
+         * keys are GONE. They existed for one day in unreleased dev work and were
+         * never in a release, so they took a clean break rather than a migration —
+         * there was no install to migrate. Do not reintroduce them as a fallback.
          */
-        agentControlEndpoint?: string;
-        agentControlModel?: string;
         agentControlProvider?: string;
         agentControlProviders?: Record<string, { endpoint?: string; model?: string }>;
     };
@@ -104,8 +101,7 @@ export const LOCAL_AGENT_MACHINE: AgentMachine = {
 
 /** Agent-config keys that are stored machine-globally (cross-workspace, cross-IDE). */
 export type AgentGlobalKey = 'startupCommands' | 'visibleAgents' | 'customAgents'
-    | 'agentControlEndpoint' | 'agentControlModel' | 'agentControlProvider'
-    | 'agentControlProviders';
+    | 'agentControlProvider' | 'agentControlProviders';
 
 /**
  * A single scheduled job. `source` picks the prompt preset; `target` picks the

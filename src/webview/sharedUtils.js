@@ -760,26 +760,16 @@ function initOverflowMenus() {
      * whether the endpoint was recognised, so "we know this is Google" is
      * never indistinguishable from "we defaulted to Google".
      */
-    function inferFromEndpoint(endpoint) {
-        const url = String(endpoint || '').trim();
-        if (!url) { return { providerId: null, matched: false, reason: 'no endpoint stored' }; }
-        const hit = PROVIDERS.find(p => p.endpoint && p.endpoint === url);
-        if (hit) { return { providerId: hit.id, matched: true, reason: 'exact endpoint match' }; }
-        // A localhost/LAN URL is a local server; anything else is custom. Both
-        // are endpoint-editable, so a wrong guess here is visible and fixable
-        // in the field itself rather than hidden behind a fixed URL.
-        const isLoopback = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|192\.168\.|10\.)/i.test(url);
-        return {
-            providerId: isLoopback ? 'local' : 'custom',
-            matched: false,
-            reason: isLoopback ? 'loopback/LAN URL, assumed local server' : 'unrecognised URL, treated as custom',
-        };
-    }
+    // There is deliberately NO inferFromEndpoint here. Guessing a provider from
+    // a stored URL was the client twin of LocalApiServer's _providerIdForEndpoint,
+    // and both existed only to place a flat pre-normalisation endpoint. An
+    // endpoint now lives INSIDE a provider row and cannot exist without one, so
+    // there is nothing left to infer from — and a guessed provider that renders
+    // identically to a chosen one is the routing fallback CLAUDE.md forbids.
 
     window.SwitchboardAgentProviders = {
         list: () => PROVIDERS.slice(),
         byId,
-        inferFromEndpoint,
         CUSTOM_MODEL,
     };
 })();
@@ -810,6 +800,13 @@ function initOverflowMenus() {
 
         function fillProviders() {
             if (!els.provider || els.provider.options.length) { return; }
+            // The unset state gets its own option. Without it the select would
+            // show whichever provider sorts first, making "nobody has chosen"
+            // look exactly like "the operator chose Google".
+            const none = document.createElement('option');
+            none.value = '';
+            none.textContent = 'Select a provider…';
+            els.provider.appendChild(none);
             for (const p of P.list()) {
                 const o = document.createElement('option');
                 o.value = p.id;
@@ -846,7 +843,16 @@ function initOverflowMenus() {
         /** Apply the visibility rules for the selected provider. */
         function render() {
             const prov = currentProvider();
-            if (!prov) { return; }
+            if (!prov) {
+                // Nothing chosen: show no provider-specific field at all. An
+                // early return here would leave the previous provider's fields
+                // on screen, which reads as a configured row.
+                for (const el of [els.endpoint, els.endpointLabel, els.modelSelect,
+                                  els.modelInput, els.modelLabel, els.key, els.keyLabel]) {
+                    show(el, false);
+                }
+                return;
+            }
             const hasList = Array.isArray(prov.models) && prov.models.length > 0;
             const noModelAtAll = prov.models === null;
             const customPicked = !hasList || (els.modelSelect && els.modelSelect.value === P.CUSTOM_MODEL);
@@ -896,14 +902,11 @@ function initOverflowMenus() {
         /** Seed the row from GET /agent/control/config. */
         function applyConfig(cfg) {
             fillProviders();
-            let providerId = cfg.provider || '';
-            // providerSource 'unset' means nobody chose one — infer from the
-            // stored endpoint so a config written before this row existed opens
-            // as what it IS, not as whichever provider sorts first.
-            if (!providerId || cfg.providerSource === 'unset') {
-                const guess = P.inferFromEndpoint(cfg.endpoint);
-                providerId = guess.providerId || 'google';
-            }
+            // `providerSource: 'unset'` is rendered AS unset. It is not inferred
+            // from the endpoint and not defaulted to a provider the operator
+            // never picked — the server keeps those two states distinct
+            // precisely so this row can show which one it is.
+            const providerId = cfg.providerSource === 'unset' ? '' : (cfg.provider || '');
             savedRows = (cfg && cfg.providers) || {};
             if (els.provider) { els.provider.value = providerId; }
             loadProviderRecord(providerId);
@@ -949,7 +952,12 @@ function initOverflowMenus() {
         if (els.modelSelect) { els.modelSelect.addEventListener('change', render); }
 
         fillProviders();
-        return { applyConfig, payload, render, needsKey };
+        /** The chosen provider id, or '' when none is chosen. */
+        function selectedProviderId() {
+            const prov = currentProvider();
+            return prov ? prov.id : '';
+        }
+        return { applyConfig, payload, render, needsKey, selectedProviderId };
     }
 
     window.SwitchboardAgentProviderRow = { create };

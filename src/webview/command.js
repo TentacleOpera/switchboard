@@ -2862,6 +2862,13 @@
 
     /** Save the endpoint/model/key the surface's config row holds. */
     async function saveAgentControlConfigMobile() {
+        // A save with no provider chosen would POST an empty body: the server
+        // writes nothing and answers success, and the row reports "Saved." for a
+        // no-op. Refuse it here and name what is missing.
+        if (agentProviderRowMobile && !agentProviderRowMobile.selectedProviderId()) {
+            setAgentConfigStatusMobile('Choose a provider before saving.', true);
+            return;
+        }
         const payload = agentProviderRowMobile ? agentProviderRowMobile.payload() : {};
         // The key field is write-only: an empty field means "leave the stored
         // key unchanged", so it is only sent when the operator typed one. A
