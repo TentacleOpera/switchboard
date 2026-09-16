@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import type { LinearSyncService } from '../LinearSyncService';
 import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import { hasMarker } from '../commentMarker';
@@ -56,9 +57,13 @@ function neutralizeFences(body: string): string {
 export class LinearRemoteProvider implements RemoteProvider {
     public readonly kind = 'linear' as const;
     public readonly capabilities: RemoteProviderCapabilities = {
-        pull: true,
+        pullState: true,
+        pullComments: true,
         push: true,
         archive: true,
+        boardPush: true,       // syncPlan carries columns + parent/child structure
+        boardRestore: false,   // no planId anchor, no restoreFrom* — .switchboard/plans/linear-board-restore-and-planid-anchor.md
+        automation: true,      // LinearAutomationService
         missions: true,
         agentSurface: true,
         agentSessions: true
@@ -376,6 +381,60 @@ export class LinearRemoteProvider implements RemoteProvider {
     }
 
     /**
+     * Stable identity for the cross-host import claim. The hostname is the host
+     * identity — deliberately no fallback string, so two misconfigured hosts
+     * can never silently share a claim tag.
+     */
+    private _hostTag(): string {
+        return String(os.hostname() || '').trim();
+    }
+
+    /**
+     * Cross-host claim for an assigned issue. Two hosts polling the same app
+     * actor would each import every assigned issue as a duplicate plan — the
+     * issue's comment thread is the only store both hosts share, so the claim
+     * is a marked `[sb-claim] host=<hostname>` comment there. First claim wins:
+     * on a race both hosts post, both re-read, and only the earliest comment's
+     * host proceeds. A claim by any other host means the work is already
+     * owned — skip, even if the claiming host later dies (an operator can
+     * release by deleting the comment; guessing at liveness would resurrect
+     * the duplicate-import bug).
+     */
+    private async _claimAssignedIssue(issueId: string): Promise<boolean> {
+        const CLAIM_TAG = '[sb-claim]';
+        const hostTag = this._hostTag();
+        if (!hostTag) {
+            this._deps.log?.('[LinearRemoteProvider] pollAssignedIssues: hostname unavailable — cannot claim, skipping import.');
+            return false;
+        }
+        const isClaim = (body: string) => hasMarker(body) && body.includes(CLAIM_TAG);
+        const isOurs = (body: string) => isClaim(body) && body.includes(`host=${hostTag}`);
+
+        const before = await this._linear.getIssueComments(issueId);
+        if (before.some(c => isClaim(c.body))) {
+            // Already claimed — by us (safe to proceed, idempotent re-poll) or
+            // by another host (not ours to import).
+            if (before.some(c => isOurs(c.body))) { return true; }
+            this._deps.log?.(`[LinearRemoteProvider] Assigned issue ${issueId} already claimed by another host — skipping import.`);
+            return false;
+        }
+
+        const res = await this._linear.postManagedComment(
+            issueId,
+            `${CLAIM_TAG} host=${hostTag} — this host is importing the issue as a board plan.`
+        );
+        if (!res.success) { return false; }
+
+        const after = await this._linear.getIssueComments(issueId);
+        const claims = after
+            .filter(c => isClaim(c.body))
+            .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+        if (claims.length === 0) { return false; }
+        // Earliest claim wins the race.
+        return isOurs(claims[0].body);
+    }
+
+    /**
      * Poll issues assigned or delegated to the app actor and import them as local plans.
      */
     public async pollAssignedIssues(db: KanbanDatabase, workspaceId: string): Promise<void> {
@@ -384,9 +443,15 @@ export class LinearRemoteProvider implements RemoteProvider {
             for (const issue of assigned) {
                 const existingPlan = await db.findPlanByLinearIssueId(workspaceId, issue.id);
                 if (!existingPlan) {
+                    if (!(await this._claimAssignedIssue(issue.id))) { continue; }
                     const imported = await this.importRemotePlan(issue.id);
                     if (imported) {
                         this._deps.log?.(`[LinearRemoteProvider] Imported assigned issue ${issue.identifier || issue.id} (${issue.title})`);
+                        void this.postAgentActivity(
+                            issue.id,
+                            `Switchboard imported this issue as plan "${imported.topic || imported.planId}" on host ${this._hostTag()}.`,
+                            true
+                        ).catch(() => { /* narration is best-effort */ });
                     }
                 }
             }
@@ -414,12 +479,12 @@ export class LinearRemoteProvider implements RemoteProvider {
                 const plan = await db.findPlanByLinearIssueId(workspaceId, remoteId);
                 let delivered = false;
 
-                if (plan && plan.dispatchedTerminal && this._deps.terminalVerb) {
+                if (plan && plan.ownerSeat && this._deps.terminalVerb) {
                     try {
                         const termList = await this._deps.terminalVerb('ptyListTerminals', {});
                         const activeTerms = Array.isArray(termList?.terminals) ? termList.terminals : [];
                         const isLive = activeTerms.some((t: any) =>
-                            String(t?.friendlyName || t?.name || '').trim() === plan.dispatchedTerminal && t?.status === 'active'
+                            String(t?.friendlyName || t?.name || '').trim() === plan.ownerSeat && t?.status === 'active'
                         );
 
                         if (isLive) {
@@ -431,7 +496,7 @@ export class LinearRemoteProvider implements RemoteProvider {
                                 `=== END LINEAR MENTION ===`;
 
                             const res = await this._deps.terminalVerb('ptySendPrompt', {
-                                name: plan.dispatchedTerminal,
+                                name: plan.ownerSeat,
                                 data: promptData,
                                 clearBeforePrompt: false,
                                 standingOrders: false,
@@ -442,6 +507,11 @@ export class LinearRemoteProvider implements RemoteProvider {
                                 delivered = true;
                                 await this._linear.archiveNotification(notif.id);
                                 MENTION_RELAY_FAILURES.delete(notif.id);
+                                void this.postAgentActivity(
+                                    remoteId,
+                                    `Switchboard relayed this mention to the active seat "${plan.ownerSeat}".`,
+                                    true
+                                ).catch(() => { /* narration is best-effort */ });
                             }
                         }
                     } catch (relayErr) {
@@ -459,6 +529,10 @@ export class LinearRemoteProvider implements RemoteProvider {
                                 `[Switchboard] Mention received on ${identifier}, but could not be delivered to an active agent seat after ${MENTION_RELAY_MAX_ATTEMPTS} attempts.`
                             );
                         } catch { /* ignore */ }
+                        void this.postAgentActivity(
+                            remoteId,
+                            `Mention on ${identifier} could not be delivered to an active agent seat after ${MENTION_RELAY_MAX_ATTEMPTS} attempts.`
+                        ).catch(() => { /* narration is best-effort */ });
                         await this._linear.archiveNotification(notif.id);
                         MENTION_RELAY_FAILURES.delete(notif.id);
                     }
@@ -470,7 +544,9 @@ export class LinearRemoteProvider implements RemoteProvider {
     }
 
     /**
-     * Post an agent activity into an issue's Linear agent session.
+     * Post an agent activity into an issue's Linear agent session. No-ops when
+     * the agent surface is unavailable (personal API key or unregistered OAuth
+     * client) — narration must never mint a session under a human's identity.
      */
     public async postAgentActivity(
         remoteId: string,
@@ -479,9 +555,17 @@ export class LinearRemoteProvider implements RemoteProvider {
         signal?: string
     ): Promise<boolean> {
         try {
+            if (!(await this._linear.isOAuthAppActor())) { return false; }
             const sessionId = await this._linear.getOrCreateAgentSession(remoteId);
             if (!sessionId) return false;
-            return await this._linear.postAgentActivity(sessionId, content, ephemeral, signal);
+            const posted = await this._linear.postAgentActivity(sessionId, content, ephemeral, signal);
+            if (posted) { return true; }
+            // The post failed — the cached session may have ended on Linear's
+            // side. Drop it and retry once on a fresh session before giving up.
+            this._linear.invalidateAgentSession(remoteId);
+            const retrySessionId = await this._linear.getOrCreateAgentSession(remoteId);
+            if (!retrySessionId) { return false; }
+            return await this._linear.postAgentActivity(retrySessionId, content, ephemeral, signal);
         } catch (e) {
             this._deps.log?.(`[LinearRemoteProvider] postAgentActivity failed for ${remoteId}: ${e instanceof Error ? e.message : String(e)}`);
             return false;

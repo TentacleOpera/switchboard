@@ -63,14 +63,37 @@ export interface RemoteCommentDelta {
  * project-context + archive capabilities ride the same object so feature 1's context
  * sync and the auto-archive rule dispatch through the provider seam, not a parallel
  * pipeline.
+ *
+ * Board-sync parity contract (src/test/provider-capability-parity-contract.test.js):
+ * every field here is enumerated per provider, every asymmetry must carry a typed
+ * exemption, and a `true` backed by an empty-stub implementation fails. `pull` was
+ * split into `pullState`/`pullComments` because a single boolean could not express
+ * "pulls state but has no comment bus" — ClickUp's `fetchCommentDeltas` is a stub
+ * that returned `true` under the old flag.
  */
 export interface RemoteProviderCapabilities {
-    /** Provider can pull/ingest state + comments (Linear, Notion). ClickUp = state-pull only (no comment bus). */
-    pull: boolean;
-    /** Provider can push state + content (Linear, ClickUp, Notion-after-2/3). */
+    /** Provider can pull/ingest remote state deltas — `fetchStateDeltas` queries a real source. */
+    pullState: boolean;
+    /** Provider can pull remote comments — `fetchCommentDeltas` queries a comment source (Linear comments entity / Notion Comments DB). ClickUp = false (comment bus never built). */
+    pullComments: boolean;
+    /** Provider can push state + content (Linear, ClickUp, Notion). */
     push: boolean;
-    /** Provider can archive a card (Linear issueArchive / Notion page archive). */
+    /** Provider can archive a card (Linear issueArchive / Notion page archive). ClickUp has close/delete but no true archive. */
     archive: boolean;
+    /**
+     * Provider can push the whole board — columns AND feature structure — to the
+     * remote (NotionBackupService.backupToNotion; ClickUp/Linear per-plan syncPlan
+     * with the feature cascade). This is the orchestration, not the per-card push.
+     */
+    boardPush: boolean;
+    /**
+     * Provider can rebuild the board from the remote — bulk fetch, match by
+     * planId, apply columns, resolve feature structure (NotionBackupService.
+     * restoreFromNotion only; ClickUp/Linear have no restoreFrom* pass).
+     */
+    boardRestore: boolean;
+    /** Provider has a board-automation service (<Kind>AutomationService — Linear, ClickUp; none for Notion). */
+    automation: boolean;
     /** Provider supports missions and dependency relations mirroring (Linear). */
     missions?: boolean;
     /** Provider supports agent actor surface (Linear). */

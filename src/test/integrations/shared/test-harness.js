@@ -29,6 +29,29 @@ async function resetGlobalIntegrationConfig() {
     } catch { /* out/ not built, or store unavailable — nothing to reset */ }
 }
 
+/**
+ * A real workspace has a database — KanbanDatabase._initialize() deliberately
+ * refuses to auto-create one (a missing file is a broken install, not a fresh
+ * one). The fixture must therefore run the product's createIfMissing() path so
+ * tests exercise a workspace that exists the way production makes it.
+ */
+async function createWorkspaceDatabase(workspaceRoot) {
+    let KanbanDatabase;
+    try {
+        ({ KanbanDatabase } = require(
+            path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js')
+        ));
+    } catch {
+        // out/ not built — consumers that never touch the DB still run.
+        // A suite that does touch it fails on the missing file, as before.
+        return;
+    }
+    const created = await KanbanDatabase.forWorkspace(workspaceRoot).createIfMissing();
+    if (!created) {
+        throw new Error(`test-harness: KanbanDatabase.createIfMissing() failed for ${workspaceRoot}`);
+    }
+}
+
 async function withWorkspace(name, run) {
     const workspaceRoot = path.join(
         GENERATED_ROOT,
@@ -37,6 +60,7 @@ async function withWorkspace(name, run) {
     const switchboardDir = path.join(workspaceRoot, '.switchboard');
     await fs.promises.mkdir(switchboardDir, { recursive: true });
     await resetGlobalIntegrationConfig();
+    await createWorkspaceDatabase(workspaceRoot);
 
     try {
         return await run({ workspaceRoot, switchboardDir });

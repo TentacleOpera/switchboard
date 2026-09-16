@@ -41,7 +41,7 @@ export async function importRemoteMarkdownPlan(opts: {
         kanbanColumn: 'CREATED', status: 'active', complexity: 'Unknown', tags: '',
         repoScope: '', project: '', workspaceId, createdAt: now, updatedAt: now,
         lastAction: 'imported from remote', sourceType, brainSourcePath: '', mirrorPath: '',
-        routedTo: '', dispatchedAgent: '', dispatchedIde: '',
+        dispatchedAgent: '', dispatchedIde: '',
     };
     const ok = await db.insertFileDerivedPlan(record);
     if (!ok) { return null; }

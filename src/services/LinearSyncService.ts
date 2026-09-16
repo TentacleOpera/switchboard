@@ -90,16 +90,13 @@ export function resolveLinearOAuthClientId(): string {
   return LINEAR_OAUTH_CLIENT_ID;
 }
 
-const LINEAR_OAUTH_UNREGISTERED_MESSAGE =
+export const LINEAR_OAUTH_UNREGISTERED_MESSAGE =
   'Linear OAuth is not configured: no client id is available. Register a Linear OAuth '
   + 'application with actor=app and set `switchboard.linear.oauthClientId` (or the '
   + 'SWITCHBOARD_LINEAR_CLIENT_ID environment variable). The personal API key path is unaffected.';
 export const LINEAR_AUTH_URL = 'https://linear.app/oauth/authorize';
 export const LINEAR_TOKEN_HOST = 'api.linear.app';
 export const LINEAR_TOKEN_PATH = '/oauth/token';
-/** Set once this workspace has created at least one Linear `blocks` relation, so a
- *  workspace that never uses dependencies skips the reconciler's queries entirely. */
-const LINEAR_RELATIONS_TOUCHED_KEY = 'switchboard.linear.relationsTouched';
 
 export const LINEAR_OAUTH_SCOPES = ['read', 'write', 'issues:create', 'comments:create', 'app:assignable', 'app:mentionable'];
 
@@ -731,7 +728,7 @@ export class LinearSyncService {
     }
   }
 
-  private _applyProjectNameFilters(issues: LinearIssue[], config: LinearConfig): LinearIssue[] {
+  private _applyProjectNameFilters<T extends { project?: { name?: string | null } | null }>(issues: T[], config: LinearConfig): T[] {
     const includeNames = config.includeProjectNames || [];
     const excludeNames = config.excludeProjectNames || [];
 
@@ -3443,7 +3440,6 @@ export class LinearSyncService {
                 sourceType: 'linear-import',
                 brainSourcePath: '',
                 mirrorPath: '',
-                routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: '',
                 isFeature: 1,
@@ -3493,7 +3489,6 @@ export class LinearSyncService {
                 sourceType: 'linear-import',
                 brainSourcePath: '',
                 mirrorPath: '',
-                routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: ''
               } as any);
@@ -3879,12 +3874,13 @@ export class LinearSyncService {
 
   public async syncMissionsAndDependencies(workspaceId?: string): Promise<{
     milestonesCreated: number;
+    milestonesClosed: number;
     membersAssigned: number;
     membersUnassigned: number;
     relationsCreated: number;
     relationsDeleted: number;
   }> {
-    const counts = { milestonesCreated: 0, membersAssigned: 0, membersUnassigned: 0, relationsCreated: 0, relationsDeleted: 0 };
+    const counts = { milestonesCreated: 0, milestonesClosed: 0, membersAssigned: 0, membersUnassigned: 0, relationsCreated: 0, relationsDeleted: 0 };
     const config = await this.loadConfig();
     if (!config?.setupComplete || !(await this.hasApiToken())) {
       return counts;
@@ -3895,6 +3891,13 @@ export class LinearSyncService {
     if (!wsId) {
       return counts;
     }
+
+    // Provenance: the reconciler may only remove tracker objects this workspace
+    // recorded itself creating. A `blocks` link or milestone membership absent
+    // from linear_managed_artifacts was drawn by a person in Linear — it is not
+    // stale state, and deleting it is destroying someone else's work.
+    const managedMemberships = await db.getLinearManagedArtifactKeys('membership', wsId);
+    const managedRelations = await db.getLinearManagedArtifactKeys('relation', wsId);
 
     let projectId = (await this.resolveSingleIncludeProjectId(config)) || (config as any).projectId;
 
@@ -3975,24 +3978,60 @@ export class LinearSyncService {
               try {
                 await this.updateIssueMilestone(issueId, milestoneId);
                 counts.membersAssigned++;
+                const key = `${milestoneId}:${issueId}`;
+                await db.recordLinearManagedArtifact('membership', key, wsId);
+                managedMemberships.add(key);
               } catch (err) {
                 console.warn(`[LinearSyncService] Failed to assign issue ${issueId} to milestone ${milestoneId}:`, err);
               }
             }
           }
 
-          // Unassign members that left the mission
+          // Unassign members that left the mission — but only memberships WE
+          // recorded. An issue in this milestone with no provenance row was
+          // placed there by a person; it stays.
           for (const existingId of existingIssueIdsInMilestone) {
             if (!desiredMemberIssueIdSet.has(existingId)) {
+              const key = `${milestoneId}:${existingId}`;
+              if (!managedMemberships.has(key)) { continue; }
               try {
                 await this.updateIssueMilestone(existingId, null);
                 counts.membersUnassigned++;
+                await db.deleteLinearManagedArtifact('membership', key, wsId);
+                managedMemberships.delete(key);
               } catch (err) {
                 console.warn(`[LinearSyncService] Failed to unassign issue ${existingId} from milestone ${milestoneId}:`, err);
               }
             }
           }
         }
+      }
+
+      // End what we start: a mission is over when its run completed or its row
+      // was deleted. Its Linear milestone is Switchboard-created, so it goes
+      // with the mission rather than lingering live in the project. The
+      // mapping row is removed only after the remote delete lands — a failed
+      // delete keeps the mapping so the next poll retries.
+      const liveMissionIds = new Set(
+        missions.filter((m: any) => m.runState !== 'completed').map((m: any) => m.id)
+      );
+      const milestoneMappings = await db.getMissionMilestonesByWorkspace(wsId);
+      for (const mapping of milestoneMappings) {
+        if (liveMissionIds.has(mapping.missionId)) { continue; }
+        try {
+          await this.deleteProjectMilestone(mapping.milestoneId);
+        } catch (err) {
+          // A milestone already gone from Linear is cleanup complete, not a
+          // failure — drop the mapping rather than retrying a dead id forever.
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!/not found|could not find/i.test(msg)) {
+            console.warn(`[LinearSyncService] Failed to delete milestone ${mapping.milestoneId} for ended mission ${mapping.missionId}:`, err);
+            continue;
+          }
+        }
+        await db.deleteLinearManagedArtifactsByPrefix('membership', `${mapping.milestoneId}:`, wsId);
+        await db.deleteMissionMilestone(mapping.missionId);
+        counts.milestonesClosed++;
       }
     } catch (err) {
       console.warn('[LinearSyncService] Failed to sync missions to milestones:', err);
@@ -4014,12 +4053,11 @@ export class LinearSyncService {
         }
       }
 
-      // Whole-reconciler skip for the common case. Relations are only ever
-      // created by this method, so a workspace that has neither a dependency row
-      // nor a recorded creation has no relation state to reconcile — and should
-      // spend zero requests discovering that on every 60s poll.
-      const hasEverCreatedRelations = (await db.getConfig(LINEAR_RELATIONS_TOUCHED_KEY)) === '1';
-      if (desiredEdges.length === 0 && !hasEverCreatedRelations) {
+      // Whole-reconciler skip for the common case. A workspace with neither a
+      // dependency row nor a recorded relation creation has no relation state
+      // to reconcile — and should spend zero requests discovering that on every
+      // 60s poll.
+      if (desiredEdges.length === 0 && managedRelations.size === 0) {
         return counts;
       }
 
@@ -4088,7 +4126,8 @@ export class LinearSyncService {
             const created = await this.createIssueRelation(edge.blockerIssueId, edge.blockedIssueId, 'blocks');
             if (created) {
               counts.relationsCreated++;
-              await db.setConfig(LINEAR_RELATIONS_TOUCHED_KEY, '1');
+              await db.recordLinearManagedArtifact('relation', created.id, wsId);
+              managedRelations.add(created.id);
             }
           } catch (err) {
             console.warn(`[LinearSyncService] Failed to create relation ${edge.blockerIssueId} blocks ${edge.blockedIssueId}:`, err);
@@ -4096,24 +4135,27 @@ export class LinearSyncService {
         }
       }
 
-      // Remove stale relations between Switchboard-managed issues in this workspace.
-      // A relation is managed if BOTH endpoints are Switchboard-managed issues.
-      // This catches relations whose dep row was deleted — the issues are still
-      // managed (have plans) but no longer have a desired edge.
+      // Remove stale relations — but ONLY relations this workspace recorded
+      // creating (linear_managed_artifacts kind='relation'). Both endpoints
+      // being managed issues does NOT make the link ours: a person drawing a
+      // `blocks` relation between two Switchboard-synced issues in Linear is
+      // human work, and this loop must not reach it. This still catches
+      // relations whose dep row was deleted — the provenance row outlives the
+      // dep, so the stale link is found and removed.
       for (const [blockerIssueId, relList] of existingLinearBlocks.entries()) {
         for (const rel of relList) {
-          const isManagedEdge = managedIssueIds.has(rel.blockedIssueId);
-          if (isManagedEdge) {
-            const isDesired = desiredEdges.some(
-              d => d.blockerIssueId === blockerIssueId && d.blockedIssueId === rel.blockedIssueId
-            );
-            if (!isDesired) {
-              try {
-                await this.deleteIssueRelation(rel.relationId);
-                counts.relationsDeleted++;
-              } catch (err) {
-                console.warn(`[LinearSyncService] Failed to delete relation ${rel.relationId}:`, err);
-              }
+          if (!managedRelations.has(rel.relationId)) { continue; }
+          const isDesired = desiredEdges.some(
+            d => d.blockerIssueId === blockerIssueId && d.blockedIssueId === rel.blockedIssueId
+          );
+          if (!isDesired) {
+            try {
+              await this.deleteIssueRelation(rel.relationId);
+              counts.relationsDeleted++;
+              await db.deleteLinearManagedArtifact('relation', rel.relationId, wsId);
+              managedRelations.delete(rel.relationId);
+            } catch (err) {
+              console.warn(`[LinearSyncService] Failed to delete relation ${rel.relationId}:`, err);
             }
           }
         }
@@ -4127,7 +4169,107 @@ export class LinearSyncService {
 
   // ── Native App User & Agent Session Surface ──────────────────────
 
-  private _agentSessionsByIssue = new Map<string, { sessionId: string; createdAt: number }>();
+  private _agentSessionsByIssue = new Map<string, { sessionId: string; createdAt: number; checkedAt: number }>();
+
+  /**
+   * Whether the agent surface (issue assignment, mentions, agent sessions and
+   * activity) is usable on this install. It requires the OAuth app actor — a
+   * personal API key or a missing OAuth client id both mean "unavailable", and
+   * the caller should report that state instead of failing per action.
+   */
+  public async getAgentSurfaceAvailability(): Promise<{ available: boolean; reason: string | null }> {
+    if (!resolveLinearOAuthClientId()) {
+      return { available: false, reason: LINEAR_OAUTH_UNREGISTERED_MESSAGE };
+    }
+    if (!(await this.isOAuthAppActor())) {
+      return {
+        available: false,
+        reason: 'Linear agent surface requires the OAuth app actor: no OAuth session is connected (a personal API key does not enable it).'
+      };
+    }
+    return { available: true, reason: null };
+  }
+
+  /**
+   * Drop the cached agent session for an issue — call when Linear reports the
+   * session ended or the next post must land on a fresh session.
+   */
+  public invalidateAgentSession(issueId: string): void {
+    const normalizedIssueId = String(issueId || '').trim();
+    if (normalizedIssueId) {
+      this._agentSessionsByIssue.delete(normalizedIssueId);
+    }
+  }
+
+  /**
+   * Re-check a cached session against Linear: an ended/cancelled session id is
+   * dead — posts to it are dropped, not queued. Unknown state (query error)
+   * keeps the session rather than churning a new one on every transient.
+   */
+  private async _isAgentSessionLive(sessionId: string): Promise<boolean> {
+    try {
+      const result = await this.graphqlRequest(`
+        query($id: String!) {
+          agentSession(id: $id) { id endedAt }
+        }
+      `, { id: sessionId });
+      const session = result.data?.agentSession;
+      if (!session) { return false; }
+      return !session.endedAt;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Light comment read for cross-host coordination — the issue's comment
+   * thread is the only store two hosts share, so claims live there.
+   */
+  public async getIssueComments(issueId: string): Promise<Array<{ id: string; body: string; createdAt: string }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) { return []; }
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) { return []; }
+    const result = await this.graphqlRequest(`
+      query($id: String!) {
+        issue(id: $id) {
+          comments(first: 100) { nodes { id body createdAt } }
+        }
+      }
+    `, { id: normalizedIssueId });
+    const nodes = result.data?.issue?.comments?.nodes || [];
+    return nodes
+      .map((n: any) => ({
+        id: String(n?.id || ''),
+        body: String(n?.body || ''),
+        createdAt: String(n?.createdAt || '')
+      }))
+      .filter((n: { id: string }) => n.id);
+  }
+
+  /**
+   * Delete a project milestone Switchboard created — the end-of-mission
+   * cleanup. Linear milestones have no closed state; deleting detaches member
+   * issues and removes it from the project.
+   */
+  public async deleteProjectMilestone(milestoneId: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+    const normalizedMilestoneId = String(milestoneId || '').trim();
+    if (!normalizedMilestoneId) {
+      throw new Error('Linear milestone deletion requires a milestone ID.');
+    }
+    const result = await this.graphqlRequest(`
+      mutation($id: String!) {
+        projectMilestoneDelete(id: $id) { success }
+      }
+    `, { id: normalizedMilestoneId });
+    if (!result.data?.projectMilestoneDelete?.success) {
+      throw new Error(`Linear milestone deletion rejected for ${normalizedMilestoneId}.`);
+    }
+  }
 
   public async fetchAssignedIssues(): Promise<Array<{
     id: string;
@@ -4149,11 +4291,27 @@ export class LinearSyncService {
       return [];
     }
 
+    // Scope: the agent surface imports only issues inside the configured
+    // team/project mapping. An app actor assigned elsewhere in the Linear
+    // workspace is not ours to pull — no team configured means no scope, and
+    // no scope means import nothing, never "everything assigned".
+    const teamId = String(config.teamId || '').trim();
+    if (!teamId) {
+      console.warn('[LinearSyncService] fetchAssignedIssues: config has no teamId — refusing to import outside a configured scope.');
+      return [];
+    }
+    const scopedProjectId = await this.resolveSingleIncludeProjectId(config);
+    const scopeFilter = buildLinearIssueFilter(teamId, scopedProjectId);
+    const issueFilter = {
+      ...scopeFilter,
+      state: { type: { nin: ['completed', 'canceled', 'cancelled'] } }
+    };
+
     const query = `
-      query {
+      query($issueFilter: IssueFilter) {
         viewer {
           id
-          assignedIssues(filter: { state: { type: { nin: ["completed", "canceled", "cancelled"] } } }, first: 100) {
+          assignedIssues(filter: $issueFilter, first: 100) {
             nodes {
               id
               identifier
@@ -4171,9 +4329,9 @@ export class LinearSyncService {
     `;
 
     try {
-      const resp = await this.graphqlRequest(query, {});
+      const resp = await this.graphqlRequest(query, { issueFilter });
       const nodes = resp?.data?.viewer?.assignedIssues?.nodes || [];
-      return nodes.map((n: any) => ({
+      const mapped = nodes.map((n: any) => ({
         id: String(n.id || ''),
         identifier: String(n.identifier || ''),
         title: String(n.title || ''),
@@ -4184,6 +4342,10 @@ export class LinearSyncService {
         project: n.project ? { id: String(n.project.id || ''), name: String(n.project.name || '') } : undefined,
         updatedAt: String(n.updatedAt || '')
       })).filter((n: any) => n.id);
+      // Multi-include / exclude name filters the server-side filter cannot
+      // express still apply client-side — the project scope is a real bound,
+      // not a hint.
+      return this._applyProjectNameFilters(mapped, config);
     } catch (err) {
       console.warn('[LinearSyncService] fetchAssignedIssues failed:', err);
       return [];
@@ -4276,6 +4438,7 @@ export class LinearSyncService {
   public async createAgentSessionOnIssue(issueId: string): Promise<string | null> {
     const normalizedIssueId = String(issueId || '').trim();
     if (!normalizedIssueId) return null;
+    if (!(await this.isOAuthAppActor())) { return null; }
 
     try {
       const result = await this.graphqlRequest(`
@@ -4289,7 +4452,7 @@ export class LinearSyncService {
 
       const sessionId = result.data?.agentSessionCreateOnIssue?.agentSession?.id;
       if (sessionId) {
-        this._agentSessionsByIssue.set(normalizedIssueId, { sessionId, createdAt: Date.now() });
+        this._agentSessionsByIssue.set(normalizedIssueId, { sessionId, createdAt: Date.now(), checkedAt: Date.now() });
         return sessionId;
       }
       return null;
@@ -4302,6 +4465,7 @@ export class LinearSyncService {
   public async createAgentSessionOnComment(commentId: string): Promise<string | null> {
     const normalizedCommentId = String(commentId || '').trim();
     if (!normalizedCommentId) return null;
+    if (!(await this.isOAuthAppActor())) { return null; }
 
     try {
       const result = await this.graphqlRequest(`
@@ -4324,10 +4488,28 @@ export class LinearSyncService {
     const normalizedIssueId = String(issueId || '').trim();
     if (!normalizedIssueId) return null;
 
+    // Sessions exist only on the app-actor credential — never mint one under a
+    // personal API key, where "the actor" is a human.
+    if (!(await this.isOAuthAppActor())) { return null; }
+
     const existing = this._agentSessionsByIssue.get(normalizedIssueId);
-    // Keep session active for up to 2 hours
-    if (existing && Date.now() - existing.createdAt < 2 * 60 * 60 * 1000) {
-      return existing.sessionId;
+    if (existing) {
+      const age = Date.now() - existing.createdAt;
+      if (age >= 2 * 60 * 60 * 1000) {
+        // Keep session active for up to 2 hours
+        this._agentSessionsByIssue.delete(normalizedIssueId);
+      } else if (Date.now() - existing.checkedAt >= 5 * 60 * 1000) {
+        // Linear can end a session out from under us (stop signal, cancel,
+        // timeout) — re-validate periodically rather than posting into a dead
+        // session until the age cap expires.
+        if (await this._isAgentSessionLive(existing.sessionId)) {
+          existing.checkedAt = Date.now();
+          return existing.sessionId;
+        }
+        this._agentSessionsByIssue.delete(normalizedIssueId);
+      } else {
+        return existing.sessionId;
+      }
     }
     return await this.createAgentSessionOnIssue(normalizedIssueId);
   }

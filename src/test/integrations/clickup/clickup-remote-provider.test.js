@@ -98,11 +98,9 @@ async function run() {
         getPlansDir: async () => '/tmp/plans',
     });
 
-    // 1. Verify capabilities
-    assert.strictEqual(provider.capabilities.pull, true);
-    assert.strictEqual(provider.capabilities.push, true);
-    assert.strictEqual(provider.capabilities.projectContextPush, false);
-    assert.strictEqual(provider.capabilities.archive, false);
+    // Capability assertions live in src/test/provider-capability-parity-contract.test.js —
+    // one symmetric enumeration supersedes per-provider capability checks (the old
+    // block here asserted a field the interface never declared).
 
     // 2. Fetch State Deltas
     const deltasResult = await provider.fetchStateDeltas('2026-07-01T00:00:00Z');

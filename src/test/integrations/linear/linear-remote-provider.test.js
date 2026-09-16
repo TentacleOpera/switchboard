@@ -37,7 +37,15 @@ async function run() {
 
     // State deltas via the issues query.
     const state = await provider.fetchStateDeltas('2026-01-01T00:00:00.000Z');
-    assert.deepStrictEqual(state.deltas, [{ remoteId: 'ISSUE1', stateKey: 'state-coded' }], 'state delta mapped from issues query');
+    assert.deepStrictEqual(state.deltas, [{
+        remoteId: 'ISSUE1',
+        stateKey: 'state-coded',
+        parentRemoteId: '',
+        isFeatureCandidate: false,
+        updatedAt: '2026-01-02T00:00:00.000Z',
+        description: undefined,
+        priority: null
+    }], 'state delta mapped from issues query');
     assert.strictEqual(state.nextCursor, '2026-01-02T00:00:00.000Z', 'state cursor = max updatedAt');
     assert.strictEqual(provider.stateKeyToColumn('state-coded'), 'CODER CODED', 'reverse state→column map');
     assert.strictEqual(provider.stateKeyToColumn('nope'), undefined, 'unknown state → undefined');
@@ -57,9 +65,8 @@ async function run() {
     // refreshLocalPlanFromRemote is a no-op for Linear (preserves existing behavior).
     await provider.refreshLocalPlanFromRemote('ISSUE1');
 
-    // Capabilities check
-    assert.strictEqual(provider.capabilities.agentSurface, true, 'Linear declares agentSurface capability');
-    assert.strictEqual(provider.capabilities.agentSessions, true, 'Linear declares agentSessions capability');
+    // Capability assertions live in src/test/provider-capability-parity-contract.test.js —
+    // one symmetric enumeration supersedes per-provider capability checks.
 
     // Assigned issues poll test
     const assignedPlans = [];
@@ -68,9 +75,22 @@ async function run() {
             return assignedPlans.find(p => p.linearIssueId === issueId) || null;
         }
     };
+    // The claim store is the issue's comment thread — model it per issue so a
+    // foreign host's `[sb-claim]` comment can be exercised.
+    const commentsByIssue = new Map();
     const linearAppMock = {
+        isOAuthAppActor: async () => true,
+        invalidateAgentSession: () => {},
+        getIssueComments: async (issueId) => (commentsByIssue.get(issueId) || []).slice(),
+        postManagedComment: async (issueId, body) => {
+            const list = commentsByIssue.get(issueId) || [];
+            list.push({ id: `c-${issueId}-${list.length}`, body: stampMarker(body), createdAt: '2026-01-02T00:02:00.000Z' });
+            commentsByIssue.set(issueId, list);
+            return { success: true };
+        },
         fetchAssignedIssues: async () => [
-            { id: 'ISSUE_ASSIGNED', identifier: 'ENG-101', title: 'Assigned Task' }
+            { id: 'ISSUE_ASSIGNED', identifier: 'ENG-101', title: 'Assigned Task' },
+            { id: 'ISSUE_FOREIGN', identifier: 'ENG-102', title: 'Claimed elsewhere' }
         ],
         fetchMentionNotifications: async () => [
             {
@@ -118,10 +138,19 @@ async function run() {
         return plan;
     };
 
-    // 1. Poll assigned issues
+    // A claim written by a different host — the second host must not import it.
+    commentsByIssue.set('ISSUE_FOREIGN', [
+        { id: 'c-foreign', body: stampMarker('[sb-claim] host=other-host — this host is importing the issue as a board plan.'), createdAt: '2026-01-02T00:01:30.000Z' }
+    ]);
+
+    // 1. Poll assigned issues — ours imported, the foreign-claimed one skipped.
     await appProvider.pollAssignedIssues(mockDb, 'ws-1');
     assert.strictEqual(assignedPlans.length, 1);
     assert.strictEqual(assignedPlans[0].linearIssueId, 'ISSUE_ASSIGNED');
+    assert.ok(
+        (commentsByIssue.get('ISSUE_ASSIGNED') || []).some(c => c.body.includes('[sb-claim]')),
+        'import left a claim comment on the issue'
+    );
 
     // 2. Poll mentions and relay to seat
     await appProvider.pollMentionsAndRelay(mockDb, 'ws-1');
@@ -132,13 +161,14 @@ async function run() {
     assert.match(promptDeliveries[0].data, /Please check this edge case/);
     assert.strictEqual(archivedNotifs.includes('notif-1'), true, 'Notification archived after delivery');
 
-    // 3. Post agent activity
+    // 3. Post agent activity — the lifecycle emits above already posted
+    // activities (import + relay); assert the explicit call lands last.
     const activityOk = await appProvider.postAgentActivity('ISSUE_ASSIGNED', 'Started implementation', true);
     assert.strictEqual(activityOk, true);
-    assert.strictEqual(postedActivities.length, 1);
-    assert.strictEqual(postedActivities[0].sessionId, 'session-ISSUE_ASSIGNED');
-    assert.strictEqual(postedActivities[0].content, 'Started implementation');
-    assert.strictEqual(postedActivities[0].ephemeral, true);
+    const lastActivity = postedActivities[postedActivities.length - 1];
+    assert.strictEqual(lastActivity.sessionId, 'session-ISSUE_ASSIGNED');
+    assert.strictEqual(lastActivity.content, 'Started implementation');
+    assert.strictEqual(lastActivity.ephemeral, true);
 
     console.log('linear-remote-provider tests passed');
 }

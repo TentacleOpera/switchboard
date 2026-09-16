@@ -39,7 +39,16 @@ const LIMITER_MS = 350;       // Notion ~3 req/sec
 
 export class NotionRemoteProvider implements RemoteProvider {
     public readonly kind = 'notion' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, archive: true, missions: false };
+    public readonly capabilities: RemoteProviderCapabilities = {
+        pullState: true,
+        pullComments: true,
+        push: true,
+        archive: true,
+        boardPush: true,       // NotionBackupService.backupToNotion
+        boardRestore: true,    // NotionBackupService.restoreFromNotion — the only restore that exists
+        automation: false,     // no NotionAutomationService
+        missions: false,
+    };
     private _deps: NotionRemoteProviderDeps;
     private _setup: NotionRemoteSetup | null = null;
     private _botId = '';

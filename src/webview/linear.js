@@ -34,7 +34,9 @@
     // ── State variables ──────────────────────────────────────────────────────
     let remoteControlActive = false;
     let _remoteHealthTimer = null;
-    let _remoteCapabilities = { pull: true, push: true };
+    // No defaults — an absent capability reads as "not offered", never as
+    // "enabled by fallback". The host sends the provider's real declaration.
+    let _remoteCapabilities = {};
     let _lastRemoteConfig = null;
     let _lastLinearConfig = null;
     let _lastSkillText = '';
@@ -108,6 +110,41 @@
         }
     }
 
+    // Capability gating — same contract as connections.js applyRemoteProviderUi:
+    // no toggle offers a capability the provider lacks. Flag names are
+    // RemoteProviderCapabilities — pullState/pullComments replaced `pull`.
+    function applyLinearProviderUi() {
+        const caps = _remoteCapabilities || {};
+        const pushInput = document.getElementById('linear-push');
+        const pushLabel = document.getElementById('linear-push-label');
+        const modeFull = document.getElementById('linear-mode-full');
+        const modeFullLabel = modeFull ? modeFull.closest('label') : null;
+        const modeQueue = document.getElementById('linear-mode-queue');
+        const modeQueueLabel = modeQueue ? modeQueue.closest('label') : null;
+        const commentsInput = document.getElementById('linear-comments');
+        const commentsLabel = document.getElementById('linear-comments-label');
+        if (pushInput && pushLabel) {
+            pushInput.disabled = caps.push !== true;
+            pushLabel.style.opacity = caps.push === true ? '1' : '0.5';
+            pushLabel.style.pointerEvents = caps.push === true ? 'auto' : 'none';
+        }
+        if (modeFull && modeFullLabel) {
+            modeFull.disabled = caps.pullState !== true;
+            modeFullLabel.style.opacity = caps.pullState === true ? '1' : '0.5';
+            modeFullLabel.style.pointerEvents = caps.pullState === true ? 'auto' : 'none';
+        }
+        if (modeQueue && modeQueueLabel) {
+            modeQueue.disabled = caps.pullState !== true;
+            modeQueueLabel.style.opacity = caps.pullState === true ? '1' : '0.5';
+            modeQueueLabel.style.pointerEvents = caps.pullState === true ? 'auto' : 'none';
+        }
+        if (commentsInput && commentsLabel) {
+            commentsInput.disabled = caps.pullComments !== true;
+            commentsLabel.style.opacity = caps.pullComments === true ? '1' : '0.5';
+            commentsLabel.style.pointerEvents = caps.pullComments === true ? 'auto' : 'none';
+        }
+    }
+
     // ── Render Remote Config & Board List ────────────────────────────────────
     function renderRemoteConfig(config, payload) {
         payload = payload || {};
@@ -175,6 +212,7 @@
 
         remoteControlActive = payload.active === true;
         applyRemoteControlButtonState();
+        applyLinearProviderUi();
         requestLinearAgentSkill();
     }
 
@@ -291,6 +329,27 @@
             }
             if (disconnectBtn) { disconnectBtn.style.display = 'none'; }
             if (tokenInputRow) { tokenInputRow.style.display = 'none'; }
+        }
+
+        // Agent-surface gate — applied AFTER the badge branches so it wins:
+        // when no OAuth client is registered the app actor cannot exist on
+        // this install, so report the surface as unavailable and hide the
+        // affordances that would each fail on their own. The personal API key
+        // path is unaffected.
+        const surface = msg.linearAgentSurface;
+        const surfaceUnavailable = surface && surface.available === false && !isOAuth;
+        const codePasteBtn = document.getElementById('btn-toggle-code-paste');
+        if (surfaceUnavailable) {
+            if (oauthConnectBtn) { oauthConnectBtn.style.display = 'none'; }
+            if (codePasteBtn) { codePasteBtn.style.display = 'none'; }
+            const statusEl = document.getElementById('linear-auth-status');
+            if (statusEl && surface.reason) { statusEl.textContent = surface.reason; }
+            if (desc) {
+                desc.textContent = surface.reason
+                    || 'The Linear agent surface (App Actor: issue assignment, @mentions, agent sessions) is unavailable on this install. Issue sync via a personal API key still works.';
+            }
+        } else if (codePasteBtn) {
+            codePasteBtn.style.display = '';
         }
 
         if (adminInfo) {

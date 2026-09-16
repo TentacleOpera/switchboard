@@ -224,7 +224,9 @@ async function testSetupAndSyncFallback() {
                 enabled: true,
                 triggerLabel: 'bug',
                 triggerStates: ['state-started'],
+                destination: { kind: 'column', column: 'CREATED' },
                 targetColumn: 'CREATED',
+                targetTeam: undefined,
                 finalColumn: 'COMPLETED',
                 writeBackOnComplete: true
             }]);
@@ -259,17 +261,23 @@ async function testSetupAndSyncFallback() {
                 ]
             });
 
-            await service.saveConfig(baseConfig());
+            await service.saveConfig(baseConfig({ includeProjectNames: [] }));
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             await db.createIfMissing();
-            await db.setWorkspaceId('workspace-1');
+            // Plans must be seeded under the workspace id the service resolves —
+            // getWorkspaceId() prefers the committed canonical id over the
+            // config row setWorkspaceId writes, so hardcoding 'workspace-1'
+            // leaves updateLinearIssueIdByPlanFile matching nothing.
+            const workspaceId = (await db.getWorkspaceId()) || 'workspace-1';
+            await db.setWorkspaceId(workspaceId);
 
             await writeText(path.join(workspaceRoot, 'plan.md'), '# Create Linear issue\n\n## Goal\n- Sync actual markdown.\n');
             await db.upsertPlans([createPlanRecord({
                 sessionId: 'session-create',
                 topic: 'Create Linear issue',
                 planFile: 'plan.md',
-                complexity: '9'
+                complexity: '9',
+                workspaceId
             })]);
             http.queueJson(200, { data: { issueCreate: { success: true, issue: { id: 'issue-created', identifier: 'ENG-1' } } } });
             await service.syncPlan({
@@ -304,7 +312,8 @@ async function testSetupAndSyncFallback() {
                 sessionId: 'session-oversized',
                 topic: 'Oversized issue',
                 planFile: oversizedPlanPath,
-                complexity: '7'
+                complexity: '7',
+                workspaceId
             })]);
             http.queueJson(200, { data: { issueCreate: { success: true, issue: { id: 'issue-oversized', identifier: 'ENG-OVERSIZED' } } } });
             await service.syncPlan({
@@ -339,7 +348,8 @@ async function testSetupAndSyncFallback() {
             await db.upsertPlans([createPlanRecord({
                 sessionId: 'session-recreate',
                 topic: 'Recreated issue',
-                planFile: 'recreate-plan.md'
+                planFile: 'recreate-plan.md',
+                workspaceId
             })]);
             http.queueJson(200, { data: { issueUpdate: { success: false } } });
             http.queueJson(200, { data: { issueCreate: { success: true, issue: { id: 'issue-recreated-readable', identifier: 'ENG-2A' } } } });
@@ -367,7 +377,8 @@ async function testSetupAndSyncFallback() {
             await db.upsertPlans([createPlanRecord({
                 sessionId: 'session-update',
                 topic: 'Fallback issue',
-                planFile: 'missing-plan.md'
+                planFile: 'missing-plan.md',
+                workspaceId
             })]);
             http.queueJson(200, { data: { issueUpdate: { success: false } } });
             http.queueJson(200, { data: { issueCreate: { success: true, issue: { id: 'issue-recreated', identifier: 'ENG-2B' } } } });
@@ -704,10 +715,9 @@ async function testNativeQueryAndMutationHelpers() {
             );
 
             http.queueJson(200, { data: { commentCreate: { success: false } } });
-            await assert.rejects(
-                () => service.addIssueComment('issue-direct', 'Will fail'),
-                /rejected the requested comment/
-            );
+            const failedComment = await service.addIssueComment('issue-direct', 'Will fail');
+            assert.strictEqual(failedComment.success, false);
+            assert.match(failedComment.error || '', /rejected the comment/);
 
             http.queueJson(200, { data: { issueUpdate: { success: false } } });
             await assert.rejects(
@@ -781,9 +791,12 @@ async function testDetailQueryHelpers() {
                 id: 'comment-1',
                 body: 'Looks good',
                 user: {
+                    id: undefined,
                     name: 'Pat',
                     email: 'pat@example.com'
                 },
+                mentions: [],
+                parentId: null,
                 createdAt: '2026-04-02T12:00:00.000Z'
             }]);
 

@@ -150,7 +150,7 @@ suite('NotionBackupService', () => {
             sourceType: 'local',
             brainSourcePath: '',
             mirrorPath: '',
-            routedTo: '',
+            ownerSeat: '',
             dispatchedAgent: '',
             dispatchedIde: '',
             clickupTaskId: '',
@@ -200,7 +200,7 @@ suite('NotionBackupService', () => {
             sourceType: 'local',
             brainSourcePath: '',
             mirrorPath: '',
-            routedTo: 'lead',
+            ownerSeat: 'lead',
             dispatchedAgent: 'claude',
             dispatchedIde: 'vscode',
             clickupTaskId: '',
@@ -234,7 +234,7 @@ suite('NotionBackupService', () => {
             repoScope: '', workspaceId: 'test-ws-id',
             createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
             lastAction: '', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
-            routedTo: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
+            ownerSeat: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
         };
         const plan2: KanbanPlanRecord = {
             planId: 'plan-004', sessionId: 'sess-004', topic: 'P2', planFile: '',
@@ -242,7 +242,7 @@ suite('NotionBackupService', () => {
             repoScope: '', workspaceId: 'test-ws-id',
             createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
             lastAction: '', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
-            routedTo: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
+            ownerSeat: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
         };
         await kanbanDb.upsertPlans([plan1, plan2]);
 
@@ -279,7 +279,7 @@ suite('NotionBackupService', () => {
             repoScope: '', workspaceId: 'test-ws-id',
             createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
             lastAction: '', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
-            routedTo: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
+            ownerSeat: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
         };
         await kanbanDb.upsertPlans([plan]);
 
@@ -396,7 +396,7 @@ suite('NotionBackupService', () => {
             repoScope: '', workspaceId: 'test-ws-id',
             createdAt: oldDate, updatedAt: newDate,
             lastAction: '', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
-            routedTo: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
+            ownerSeat: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
         };
         await kanbanDb.upsertPlans([localPlan]);
 
@@ -458,7 +458,7 @@ suite('NotionBackupService', () => {
             lastAction: '', sourceType: 'local',
             brainSourcePath: 'brain/plans/path.md',
             mirrorPath: 'mirror/path.md',
-            routedTo: 'lead',
+            ownerSeat: 'lead',
             dispatchedAgent: 'claude',
             dispatchedIde: 'vscode',
             clickupTaskId: '', linearIssueId: ''
@@ -509,7 +509,7 @@ suite('NotionBackupService', () => {
         assert.strictEqual(restored.planFile, '.switchboard/plans/path.md');
         assert.strictEqual(restored.brainSourcePath, 'brain/plans/path.md');
         assert.strictEqual(restored.mirrorPath, 'mirror/path.md');
-        assert.strictEqual(restored.routedTo, 'lead');
+        assert.strictEqual(restored.ownerSeat, 'lead');
         assert.strictEqual(restored.dispatchedAgent, 'claude');
         assert.strictEqual(restored.dispatchedIde, 'vscode');
         // Column should be updated via updateColumn

@@ -50,7 +50,9 @@
     // =========================================================================
     let remoteControlActive = false;
     let _remoteHealthTimer = null;
-    let _remoteCapabilities = { pull: true, push: true };
+    // No defaults — an absent capability reads as "not offered", never as
+    // "enabled by fallback". The host sends the provider's real declaration.
+    let _remoteCapabilities = {};
     // Last config the host sent. `setRemoteConfig` REPLACES the stored object
     // (RemoteControlService.setConfig re-derives every field, so a missing `boards`
     // becomes []), so saves merge over this. The full form is present now and
@@ -145,29 +147,39 @@
         }
 
         // Capability gating: a provider that cannot push must not offer a push
-        // toggle that silently does nothing (PRD contract #6).
-        const caps = _remoteCapabilities || { pull: true, push: true };
+        // toggle that silently does nothing (PRD contract #6). Flag names are
+        // RemoteProviderCapabilities — pullState/pullComments replaced `pull`.
+        const caps = _remoteCapabilities || {};
         const pushLabel = document.getElementById('remote-push-label');
         const pushInput = document.getElementById('remote-push');
         const modeFull = document.getElementById('remote-mode-full');
         const modeFullLabel = modeFull ? modeFull.closest('label') : null;
         const modeQueue = document.getElementById('remote-mode-queue');
         const modeQueueLabel = modeQueue ? modeQueue.closest('label') : null;
+        const commentsLabel = document.getElementById('remote-comments-label');
+        const commentsInput = document.getElementById('remote-comments');
         if (pushInput && pushLabel) {
-            pushInput.disabled = !caps.push;
-            pushLabel.style.opacity = caps.push ? '1' : '0.5';
-            pushLabel.style.pointerEvents = caps.push ? 'auto' : 'none';
+            pushInput.disabled = caps.push !== true;
+            pushLabel.style.opacity = caps.push === true ? '1' : '0.5';
+            pushLabel.style.pointerEvents = caps.push === true ? 'auto' : 'none';
         }
         if (modeFull && modeFullLabel) {
-            modeFull.disabled = !caps.pull;
-            modeFullLabel.style.opacity = caps.pull ? '1' : '0.5';
-            modeFullLabel.style.pointerEvents = caps.pull ? 'auto' : 'none';
+            modeFull.disabled = caps.pullState !== true;
+            modeFullLabel.style.opacity = caps.pullState === true ? '1' : '0.5';
+            modeFullLabel.style.pointerEvents = caps.pullState === true ? 'auto' : 'none';
         }
         // Queue mode also requires pull — staging needs to read the remote board.
         if (modeQueue && modeQueueLabel) {
-            modeQueue.disabled = !caps.pull;
-            modeQueueLabel.style.opacity = caps.pull ? '1' : '0.5';
-            modeQueueLabel.style.pointerEvents = caps.pull ? 'auto' : 'none';
+            modeQueue.disabled = caps.pullState !== true;
+            modeQueueLabel.style.opacity = caps.pullState === true ? '1' : '0.5';
+            modeQueueLabel.style.pointerEvents = caps.pullState === true ? 'auto' : 'none';
+        }
+        // A provider with no comment bus must not offer a comments toggle that
+        // polls nothing (e.g. ClickUp — pullComments: false).
+        if (commentsInput && commentsLabel) {
+            commentsInput.disabled = caps.pullComments !== true;
+            commentsLabel.style.opacity = caps.pullComments === true ? '1' : '0.5';
+            commentsLabel.style.pointerEvents = caps.pullComments === true ? 'auto' : 'none';
         }
     }
 

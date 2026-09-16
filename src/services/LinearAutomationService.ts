@@ -754,8 +754,19 @@ export class LinearAutomationService {
                         continue;
                     }
                 } else if (rule.destination?.kind === 'team' || rule.targetTeam) {
+                    // Completion is the rule's own `completionColumns`, not a
+                    // hardcoded column pair. A team-destination rule snapshot
+                    // that predates the field has no definition of "done" —
+                    // say so instead of guessing at column ids.
+                    const completionColumns = Array.isArray(rule.completionColumns)
+                        ? rule.completionColumns.map((c) => String(c || '').trim().toUpperCase()).filter(Boolean)
+                        : [];
+                    if (completionColumns.length === 0) {
+                        console.warn(`[LinearAutomation] Rule '${rule.name}' targets a team but defines no completionColumns — write-back for issue ${plan.linearIssueId} skipped until the rule names its done column(s).`);
+                        continue;
+                    }
                     const col = String(plan.kanbanColumn || '').trim().toUpperCase();
-                    if (col !== 'DONE' && col !== 'COMPLETED') {
+                    if (!completionColumns.includes(col)) {
                         continue;
                     }
                 }

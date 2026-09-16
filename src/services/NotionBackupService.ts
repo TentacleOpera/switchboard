@@ -137,7 +137,6 @@ export class NotionBackupService {
                 plan.planFile = local.planFile;
                 plan.brainSourcePath = local.brainSourcePath;
                 plan.mirrorPath = local.mirrorPath;
-                plan.routedTo = local.routedTo;
                 plan.dispatchedAgent = local.dispatchedAgent;
                 plan.dispatchedIde = local.dispatchedIde;
                 // Track column change to update separately
@@ -621,7 +620,6 @@ export class NotionBackupService {
                 sourceType: getSelect(p['Source Type']) as KanbanPlanRecord['sourceType'],
                 brainSourcePath: '',
                 mirrorPath: '',
-                routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: '',
                 clickupTaskId: getRichText(p['ClickUp Task ID']),

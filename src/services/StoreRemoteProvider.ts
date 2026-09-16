@@ -83,14 +83,15 @@ export function ensurePlanInboxTable(db: KanbanDatabase): void {
 export class StoreRemoteProvider implements RemoteProvider {
     readonly kind = 'store' as any;
     readonly capabilities: RemoteProviderCapabilities = {
-        canPushState: false,
-        canPushContent: false,
-        canPostComments: false,
-        canArchive: false,
-        canFetchComments: false,
-        canReconcileDeletes: false,
-        descriptionFetchIsInline: true,
-    } as any;
+        pullState: true,        // real pull — the plan_inbox table IS the source
+        pullComments: false,    // the queue is an inbox, not a two-way channel
+        push: false,
+        archive: false,
+        boardPush: false,
+        boardRestore: false,
+        automation: false,
+        missions: false,
+    };
 
     private _db: KanbanDatabase;
     private _workspaceRoot: string;

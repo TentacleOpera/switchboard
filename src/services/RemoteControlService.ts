@@ -145,7 +145,7 @@ interface RemoteControlDeps {
     /** Credential source label for receipts (e.g. 'linear', 'notion', 'store'). */
     credentialSource?: string;
     /**
-     * Stage a card into the session queue (STAGING column, next queue_position).
+     * Stage a card into the session queue (STAGING column, next column_order).
      * Called in `queue` mode instead of `onColumnMove`. Returns the position
      * assigned, or -1 on failure. Optional — absent in test harnesses.
      */
@@ -705,6 +705,12 @@ export class RemoteControlService {
                 if (!plan) { continue; }
                 byRemoteId.set(d.remoteId, plan);
                 this._log(`Imported new ${provider.kind} plan ${d.remoteId} → ${plan.planFile}.`);
+                // Agent-surface narration of the import lifecycle — no-ops on
+                // providers without the surface.
+                provider.postAgentActivity?.(
+                    d.remoteId,
+                    'Switchboard imported this issue as a board plan.'
+                ).catch?.(e => this._log(`Import activity failed for ${d.remoteId}: ${e instanceof Error ? e.message : String(e)}`));
             }
             // Mirror feature structure changes (parent/child links) BEFORE column dispatch so
             // that a column cascade on a feature reaches its now-linked subtasks.
@@ -795,7 +801,7 @@ export class RemoteControlService {
 
             // ── Queue mode: stage instead of dispatch ──────────────────────
             // A delta resolving to a coding column stages the card into the
-            // session queue (STAGING, next queue_position) and does NOT call
+            // session queue (STAGING, next column_order) and does NOT call
             // onColumnMove. The lead walks staged cards one at a time via
             // subtask 1's queue/next. No agent is woken — staging is
             // mechanical, and no judgement belongs in the correctness path of
@@ -823,6 +829,12 @@ export class RemoteControlService {
                         remoteId,
                         `Switchboard received this status change and staged it as position ${position} in the session queue. A coding lead will pick it up in order.`
                     ).catch(e => this._log(`Stage ack comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
+                    // Agent-surface narration: same lifecycle event, on the
+                    // Linear agent session instead of the comment thread.
+                    provider.postAgentActivity?.(
+                        remoteId,
+                        `Switchboard staged this plan as position ${position} in the session queue (target column ${targetColumn}).`
+                    ).catch?.(e => this._log(`Stage activity failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
                     this._stagedThisCycle = true;
                     this._stagedPlanIdsThisCycle.push(plan.planId);
                 } else {
@@ -868,6 +880,12 @@ export class RemoteControlService {
                     remoteId,
                     receipt
                 ).catch(e => this._log(`Dispatch ack comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
+                // Agent-surface narration: the dispatch itself, visible on the
+                // issue's Linear agent session — not just the comment thread.
+                provider.postAgentActivity?.(
+                    remoteId,
+                    `Switchboard dispatched this plan to a local agent (column ${targetColumn}).`
+                ).catch?.(e => this._log(`Dispatch activity failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
             }
         } catch (e) {
             this._log(`onColumnMove failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`);

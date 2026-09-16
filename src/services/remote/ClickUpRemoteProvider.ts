@@ -20,7 +20,16 @@ interface ClickUpRemoteProviderDeps {
 
 export class ClickUpRemoteProvider implements RemoteProvider {
     public readonly kind = 'clickup' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, archive: false, missions: false };
+    public readonly capabilities: RemoteProviderCapabilities = {
+        pullState: true,
+        pullComments: false,   // comment bus never built — fetchCommentDeltas below is a stub
+        push: true,
+        archive: false,        // ClickUp has close/delete but no true archive — platform limitation
+        boardPush: true,       // syncPlan carries columns + subtask projection
+        boardRestore: false,   // no restoreFrom* orchestration — .switchboard/plans/clickup-board-restore.md
+        automation: true,      // ClickUpAutomationService
+        missions: false,
+    };
     private _clickup: ClickUpSyncService;
     private _deps: ClickUpRemoteProviderDeps;
     private _listIdToColumn: Record<string, string> = {};

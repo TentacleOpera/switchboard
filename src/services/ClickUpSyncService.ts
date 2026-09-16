@@ -3356,7 +3356,6 @@ export class ClickUpSyncService {
                 sourceType: 'clickup-import',
                 brainSourcePath: '',
                 mirrorPath: '',
-                routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: '',
                 isFeature: 1,
@@ -3412,7 +3411,6 @@ export class ClickUpSyncService {
                 sourceType: 'clickup-import',
                 brainSourcePath: '',
                 mirrorPath: '',
-                routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: '',
                 priority: priorityNum
