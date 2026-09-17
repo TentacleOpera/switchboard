@@ -89,8 +89,10 @@ function run() {
         const body = extractMethodBody(taskViewerSource, 'dispatchCustomPromptToRole');
         assert.match(body, /_resolveAgentTerminalForPlan\(\s*role,\s*resolvedWorkspaceRoot,\s*undefined\s*\)/,
             'must pass 3 args to _resolveAgentTerminalForPlan (no allowPtyFleet).');
-        assert.match(body, /_dispatchExecuteMessage\(\s*resolvedWorkspaceRoot,\s*targetAgent,\s*prompt,\s*\{\},\s*'sidebar'\s*\)/,
-            'must pass 5 args to _dispatchExecuteMessage (no allowPtyFleet).');
+        // The call now also passes the optional delivery/ptyOnly params — the
+        // pin is sender 'sidebar', promptComposed false, and no allowPtyFleet.
+        assert.match(body, /_dispatchExecuteMessage\(\s*resolvedWorkspaceRoot,\s*targetAgent,\s*prompt,\s*\{\},\s*'sidebar',\s*false/,
+            'must call _dispatchExecuteMessage with sender sidebar and promptComposed false (no allowPtyFleet).');
         assert.match(body, /_isLikelyPtyDispatchTarget\(\s*targetAgent\s*\)/,
             'must guard the focus call with _isLikelyPtyDispatchTarget(targetAgent) (1 arg).');
     });

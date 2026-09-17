@@ -48,6 +48,52 @@ function run() {
     const provider = fs.readFileSync(providerPath, 'utf8');
     const html = fs.readFileSync(kanbanHtmlPath, 'utf8');
 
+    // ── 0. _advanceCards: the shared persist → confirm → dispatch operation ────
+    // Since the advance-affordance refactor every arm delegates the move half to
+    // _advanceCards; the confirm posts and the outcome check live inside it. The
+    // per-arm assertions below therefore pin `_advanceCards(` BEFORE each arm's
+    // own dispatch markers, and this section pins the internal ordering.
+    const advanceCards = sliceBetween(
+        provider,
+        'private async _advanceCards(',
+        'private _isColumnBefore(',
+        '_advanceCards'
+    );
+    assertOrder(
+        advanceCards,
+        "type: 'moveCards'",
+        "'switchboard.triggerAgentFromKanban'",
+        '_advanceCards (single dispatch)'
+    );
+    assertOrder(
+        advanceCards,
+        "type: 'moveCards'",
+        "'switchboard.triggerBatchAgentFromKanban'",
+        '_advanceCards (batch dispatch)'
+    );
+    assert.ok(
+        advanceCards.includes("type: 'moveCardsFailed'"),
+        '_advanceCards must post moveCardsFailed for writes that returned falsy — a hopeful ' +
+        'echo that is never corrected leaves the card lying about where it is.'
+    );
+    assert.ok(
+        /const outcome = await this\.moveCardToColumnWithReason\(/.test(advanceCards) &&
+        /if \(outcome\.ok\)/.test(advanceCards),
+        "_advanceCards must check the move's return value, not discard it."
+    );
+    assert.ok(
+        /if \(outcome\.ok\) \{[\s\S]*?dispatchIds\.push\(sid\)/.test(advanceCards),
+        'only a card whose write succeeded may enter dispatchIds — a failed write must not dispatch.'
+    );
+    // The no-coding-agent guard sits ABOVE the persist loop inside the CODED_AUTO
+    // branch — it aborts the whole operation and must not leave cards half-moved.
+    assertOrder(
+        advanceCards,
+        "showErrorMessage('No coding agent is currently enabled",
+        'moveCardToColumnWithReason',
+        '_advanceCards (no-coding-agent early return)'
+    );
+
     // ── 1. triggerAction: persist → confirm → dispatch ────────────────────────
     const triggerAction = sliceBetween(
         provider,
@@ -57,30 +103,26 @@ function run() {
     );
     assertOrder(
         triggerAction,
-        "type: 'moveCards'",
+        'await this._advanceCards(',
         'dispatchConfiguredKanbanColumnAction',
         'triggerAction (custom-user branch)'
     );
     assertOrder(
         triggerAction,
-        "type: 'moveCards'",
+        'await this._advanceCards(',
         "'switchboard.triggerAgentFromKanban'",
         'triggerAction (built-in CLI branch)'
     );
     assertOrder(
         triggerAction,
-        "type: 'moveCards'",
+        'await this._advanceCards(',
         '_generatePromptForColumn',
         'triggerAction (prompt fallback)'
     );
     assert.ok(
-        triggerAction.includes("type: 'moveCardsFailed'"),
-        'triggerAction must post moveCardsFailed when moveCardToColumn returns falsy — a hopeful ' +
-        'echo that is never corrected leaves the card lying about where it is.'
-    );
-    assert.ok(
-        /const ok = await this\.moveCardToColumn\(/.test(triggerAction),
-        "triggerAction must check moveCardToColumn's return value, not discard it."
+        /moveResult\.moved\.length === 0/.test(triggerAction),
+        'triggerAction must refuse the dispatch when the persist moved nothing — a failed write ' +
+        'must not reach dispatchConfiguredKanbanColumnAction or the built-in dispatch.'
     );
     assert.ok(
         triggerAction.includes('this._scheduleBoardRefresh('),
@@ -97,32 +139,22 @@ function run() {
     );
     assertOrder(
         triggerBatch,
-        "type: 'moveCards'",
+        'await this._advanceCards(',
         'dispatchConfiguredKanbanColumnAction',
         'triggerBatchAction (custom-user branch)'
     );
-    assertOrder(
-        triggerBatch,
-        "type: 'moveCards'",
-        "'switchboard.triggerBatchAgentFromKanban'",
-        'triggerBatchAction (built-in branch)'
-    );
     assert.ok(
-        triggerBatch.includes("type: 'moveCardsFailed'"),
-        'triggerBatchAction must post moveCardsFailed for cards whose write failed.'
-    );
-    assert.ok(
-        /dispatchConfiguredKanbanColumnAction\(role, dispatchIds,/.test(triggerBatch) &&
-        /'switchboard\.triggerBatchAgentFromKanban', role, dispatchIds,/.test(triggerBatch),
-        'triggerBatchAction must dispatch the persisted ids (dispatchIds), not the raw sessionIds — ' +
+        /const dispatchIds = result\.moved\.map\(m => m\.id\)/.test(triggerBatch),
+        'triggerBatchAction must dispatch the persisted ids (result.moved), not the raw sessionIds — ' +
         'a card whose write failed must not be dispatched.'
     );
     assert.ok(
-        /let dispatchIds: string\[\] = Array\.isArray\(sessionIds\) \? \[\.\.\.sessionIds\] : \[\];/.test(triggerBatch),
-        'triggerBatchAction must seed dispatchIds from sessionIds so an unresolved workspaceRoot skips ' +
-        'only the persist loop and still dispatches. Nesting the dispatch inside the workspaceRoot ' +
-        'guard turns that path into a silent no-op.'
+        /dispatchConfiguredKanbanColumnAction\(role, dispatchIds,/.test(triggerBatch),
+        'triggerBatchAction custom-user dispatch must consume the persisted dispatchIds.'
     );
+    // The built-in dispatch moved inside _advanceCards (pinned in section 0). The
+    // arm's own triggerBatchAgentFromKanban call is the no-workspaceRoot branch
+    // only — nothing persists there, so no confirm is expected on that path.
     assert.ok(
         triggerBatch.includes('this._scheduleBoardRefresh('),
         'triggerBatchAction must keep its trailing _scheduleBoardRefresh as the slow-path reconciler.'
@@ -137,33 +169,24 @@ function run() {
     );
     assertOrder(
         promptOnDrop,
-        "type: 'moveCards'",
+        'await this._advanceCards(',
         'dispatchConfiguredKanbanColumnAction',
         'promptOnDrop (custom-user / prompt-mode branch)'
     );
     assertOrder(
         promptOnDrop,
-        "type: 'moveCards'",
+        'await this._advanceCards(',
         '_generatePromptForColumn',
         'promptOnDrop (routing + general branches)'
     );
     assertOrder(
         promptOnDrop,
-        "type: 'moveCards'",
+        'await this._advanceCards(',
         'clipboard.writeText',
         'promptOnDrop (routing + general branches)'
     );
-    assert.ok(
-        promptOnDrop.includes("type: 'moveCardsFailed'"),
-        'promptOnDrop must post moveCardsFailed for cards whose write failed.'
-    );
-    assertOrder(
-        promptOnDrop,
-        "showErrorMessage('No coding agent is currently enabled",
-        'const targetCol = this._targetColumnForDispatchRole(',
-        'The no-coding-agent early return must stay ABOVE the persist loop — it aborts the whole ' +
-        'operation and must not leave cards half-moved.'
-    );
+    // moveCardsFailed and the no-coding-agent early return moved inside
+    // _advanceCards — both pinned in section 0 above.
 
     // ── 4. The 350ms drop-dispatch timers are gone; completePlan's survives ───
     const timerHits = html.match(/\}, 350\)/g) || [];

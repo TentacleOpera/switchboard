@@ -55,7 +55,7 @@ async function runTests() {
                 {
                     planId: 'plan-123',
                     kanbanColumn: 'LEAD CODED',
-                    dispatchedTerminal: 'Coding',
+                    ownerSeat: 'Coding',
                     completedAt: null,
                 }
             ]
@@ -76,7 +76,7 @@ async function runTests() {
                 {
                     planId: 'plan-review-1',
                     kanbanColumn: 'CODE REVIEWED',
-                    dispatchedTerminal: 'reviewer-1',
+                    ownerSeat: 'reviewer-1',
                     completedAt: null,
                 }
             ]

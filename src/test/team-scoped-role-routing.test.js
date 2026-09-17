@@ -256,9 +256,11 @@ async function item1() {
 async function item2() {
     console.log('\n── Item 2: plausibleOriginTerminal (origin filter) ──');
 
-    await test('dispatched_terminal beats dispatched_agent', () => {
+    await test('owner_seat beats dispatched_agent', () => {
+        // plans.dispatched_terminal moved to plan_runtime_state — the board
+        // record now carries the seat stamp as ownerSeat.
         assert.strictEqual(
-            plausibleOriginTerminal({ dispatchedTerminal: 'lead-1-coder-1', dispatchedAgent: 'something-else' }),
+            plausibleOriginTerminal({ ownerSeat: 'lead-1-coder-1', dispatchedAgent: 'something-else' }),
             'lead-1-coder-1'
         );
     });
@@ -394,7 +396,7 @@ async function item4() {
                 getPlanByPlanId: async () => opts.record || {
                     planId: 'plan-1', sessionId: 'plan-1', topic: 'Test',
                     kanbanColumn: 'CODER CODED', complexity: 5,
-                    dispatchedAgent: '', dispatchedTerminal: '', dispatchedIde: '',
+                    dispatchedAgent: '', ownerSeat: '', dispatchedIde: '',
                 },
             }),
             kanbanVerb: async (verb, payload) => {
@@ -410,7 +412,7 @@ async function item4() {
             // check cannot tell that apart from "not supplied" and silently
             // reinstalls the default gate, so the unwired case never runs.
             resolveKanbanDispatch: !('resolveKanbanDispatch' in opts)
-                ? async () => ({ role: 'reviewer', cliTriggersEnabled: true, dragDropMode: null, source: null })
+                ? async () => ({ role: 'reviewer', boardMoveCliTriggersEnabled: true, dragDropMode: null, source: null })
                 : opts.resolveKanbanDispatch,
             resolveTeamRoleTerminal: !('resolveTeamRoleTerminal' in opts)
                 ? async (_ws, origin, _role) => {
@@ -439,7 +441,7 @@ async function item4() {
         const { server, triggerActionCalls } = makeServer({
             record: { planId: 'plan-1', sessionId: 'plan-1', topic: 'Test',
                       kanbanColumn: 'CODER CODED', complexity: 5,
-                      dispatchedAgent: 'unknown', dispatchedTerminal: '', dispatchedIde: '' },
+                      dispatchedAgent: 'unknown', ownerSeat: '', dispatchedIde: '' },
         });
         const outcome = await server.performKanbanDispatch('/ws', 'plan-1', 'CODE REVIEWED');
         assert.strictEqual(triggerActionCalls.length, 1, 'triggerAction must still be called even with no origin');
@@ -472,22 +474,22 @@ async function item4() {
             'teamRouting must name the role-unavailable fallback (audit item 13)');
     });
 
-    await test('dispatched_terminal in record is used as origin when from is omitted', async () => {
+    await test('owner_seat in record is used as origin when from is omitted', async () => {
         const { server, triggerActionCalls } = makeServer({
             record: { planId: 'plan-1', sessionId: 'plan-1', topic: 'Test',
                       kanbanColumn: 'CODER CODED', complexity: 5,
-                      dispatchedAgent: 'unknown', dispatchedTerminal: 'lead-1', dispatchedIde: '' },
+                      dispatchedAgent: 'unknown', ownerSeat: 'lead-1', dispatchedIde: '' },
         });
         const outcome = await server.performKanbanDispatch('/ws', 'plan-1', 'CODE REVIEWED');
         assert.strictEqual(triggerActionCalls[0].targetTerminalOverride, 'Coding-reviewer',
-            'dispatched_terminal in the record must be used as the origin when from is omitted');
+            'owner_seat in the record must be used as the origin when from is omitted');
         assert.ok(outcome.payload.teamRouting.includes('lead-1'),
             'teamRouting must name the origin resolved from the record');
     });
 
-    await test('explicit from beats a CONFLICTING recorded dispatched_terminal at the call site', async () => {
+    await test('explicit from beats a CONFLICTING recorded owner_seat at the call site', async () => {
         // Plan Verification item 2: "Assert explicit from beats a conflicting
-        // recorded value at the call site." The record carries dispatched_terminal
+        // recorded value at the call site." The record carries owner_seat
         // lead-2 (a valid, non-filtered origin that the stub resolves to
         // Backend-reviewer), but the caller supplies from=lead-1. The call site
         // must prefer `from` over the recorded value — so the override is
@@ -496,7 +498,7 @@ async function item4() {
         const { server, triggerActionCalls } = makeServer({
             record: { planId: 'plan-1', sessionId: 'plan-1', topic: 'Test',
                       kanbanColumn: 'CODER CODED', complexity: 5,
-                      dispatchedAgent: 'unknown', dispatchedTerminal: 'lead-2', dispatchedIde: '' },
+                      dispatchedAgent: 'unknown', ownerSeat: 'lead-2', dispatchedIde: '' },
         });
         const outcome = await server.performKanbanDispatch('/ws', 'plan-1', 'CODE REVIEWED', { originTerminal: 'lead-1' });
         assert.strictEqual(triggerActionCalls[0].targetTerminalOverride, 'Coding-reviewer',
@@ -627,7 +629,7 @@ async function item6() {
                 if (verb === 'triggerAction') triggerActionCalls.push(payload);
                 return { success: true };
             },
-            resolveKanbanDispatch: async () => ({ role: 'reviewer', cliTriggersEnabled: true, dragDropMode: null, source: null }),
+            resolveKanbanDispatch: async () => ({ role: 'reviewer', boardMoveCliTriggersEnabled: true, dragDropMode: null, source: null }),
             resolveTeamRoleTerminal: async () => null,  // no teams => null
         });
         const outcome = await server.performKanbanDispatch('/ws', 'p', 'CODE REVIEWED', { originTerminal: 'nobody' });

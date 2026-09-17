@@ -97,7 +97,7 @@ function buildHeadlessProvider(tmpRoot, seamOpts = {}) {
     provider._sessionLogs = new Map();
     provider._columnDragDropModes = {};
     provider._showingBacklog = false;
-    provider._cliTriggersEnabled = true;
+    provider._boardMoveCliTriggersEnabled = true;
 
     const scopedSettings = new Map();
     const roleConfigs = new Map();

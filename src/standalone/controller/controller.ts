@@ -717,7 +717,7 @@ async function evaluateCondition(row: MatrixRow, subject: Subject, ctx: Diagnose
  * recorded.
  */
 async function diagnoseJudgement(subject: Subject, rows: MatrixRow[], ctx: DiagnoseContext): Promise<Diagnosis | null> {
-    const judgementRows = rows.filter(r => r.condition.kind === 'judgement' && rowEnabled(r));
+    const judgementRows = rows.filter(r => r.condition.kind === 'judgement' && rowEnabled(r, ctx.caps));
     if (judgementRows.length === 0) { return null; }
 
     const unknownRow = judgementRows.find(r => r.id === 'unknown');

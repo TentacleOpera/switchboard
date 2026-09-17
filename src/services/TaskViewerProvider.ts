@@ -308,7 +308,7 @@ type ConfiguredKanbanDispatchOptions = {
     /** Skip column rollback on dispatch failure. Used by kanban drag-dispatch which persists the column move independently and handles the fallback prompt. */
     persistColumnOnError?: boolean;
     /**
-     * Bypass the CLI-triggers gate (KanbanProvider `_cliTriggersEnabled`). That gate
+     * Bypass the CLI-triggers gate (KanbanProvider `_boardMoveCliTriggersEnabled`). That gate
      * exists to stop an ACCIDENTAL drag-drop from auto-dispatching; it must still
      * apply to a browser drag-drop, which is the same accident on a different surface.
      *
@@ -3319,7 +3319,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /** Non-role keys that must be migrated alongside role configs. */
     private static readonly _MIGRATABLE_NON_ROLE_KEYS = [
-        'kanban.cliTriggersEnabled',
+        'kanban.boardMoveCliTriggersEnabled',
         'kanban.dynamicComplexityRoutingEnabled',
         'kanban.columnDragDropModes',
         'kanban.routingMapConfig',
@@ -4764,7 +4764,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (!this._kanbanProvider) {
                     // No provider yet — report gates closed so /kanban/dispatch fails
                     // loudly instead of firing a verb into nothing.
-                    return { role: null, cliTriggersEnabled: false, dragDropMode: null, source: null };
+                    return { role: null, boardMoveCliTriggersEnabled: false, dragDropMode: null, source: null };
                 }
                 return this._kanbanProvider.resolveDispatchForApi(wsRoot, targetColumn);
             },
@@ -15097,11 +15097,13 @@ Each plan file must include:
                         // success:true on BOTH branches — the clipboard fallback is a
                         // designed outcome, and success:false would make LocalApiServer
                         // answer 502 and transport.js paint a red toast for an action
-                        // that worked.
+                        // that worked. `delivery` carries the third outcome instead:
+                        // 'not-delivered' is not 'delivered', and surfaces render it.
                         return {
                             success: true,
                             type: 'dispatchProjectManager',
                             delivered: result.delivered,
+                            delivery: result.delivered ? 'delivered' : 'not-delivered',
                             message: result.message,
                             // Only on the fallback branch: transport.js copies `prompt`
                             // UNCONDITIONALLY (transport.js), so returning it on a
@@ -21823,10 +21825,16 @@ Each plan file must include:
         try {
             await this._getSessionLog(resolvedWorkspaceRoot).updateRunSheet(sessionId, (runSheet: any) => {
                 if (!runSheet.events) runSheet.events = [];
-                // Avoid duplicate events if workflow and action haven't actually changed
+                // Avoid duplicate events if workflow and action haven't actually changed.
+                // Dedupe is against the last event FOR THIS WORKFLOW, not the sheet's
+                // global last — an interleaved event from another workflow used to
+                // reset the check and let a second identical transition row through.
                 const action = isStop ? 'stop' : 'start';
-                const lastEvent = runSheet.events[runSheet.events.length - 1];
-                if (lastEvent && lastEvent.workflow === workflow && lastEvent.action === action) {
+                let lastEvent: any;
+                for (let i = runSheet.events.length - 1; i >= 0; i--) {
+                    if (runSheet.events[i].workflow === workflow) { lastEvent = runSheet.events[i]; break; }
+                }
+                if (lastEvent && lastEvent.action === action) {
                     // If it's a stop, we might update the outcome if it changed
                     if (isStop && outcome && lastEvent.outcome !== outcome) {
                         lastEvent.outcome = outcome;

@@ -527,7 +527,7 @@ interface LocalApiServerOptions {
      */
     resolveKanbanDispatch?: (workspaceRoot: string, targetColumn: string) => Promise<{
         role: string | null;
-        cliTriggersEnabled: boolean;
+        boardMoveCliTriggersEnabled: boolean;
         dragDropMode: string | null;
         source: string | null;
     }>;
@@ -1275,7 +1275,7 @@ export class LocalApiServer {
     // client supplies `since`/`deadline` query params — this map is the
     // fallback for a bare probe and the source of the seat name mid-delivery.
     private static readonly DEFAULT_LIVENESS_WINDOW_MS = 90 * 1000;
-    private _ackedDispatchState: Map<string, { since: string | null; deadline: number; seat: string | null }> = new Map();
+    private _ackedDispatchState: Map<string, { since: string | null; eventBaseline: number; deadline: number; seat: string | null; failed?: string }> = new Map();
     private _seatsAtRest: Map<string, { planId?: string; at: number }> = new Map();
 
     public markSeatAtRest(workspaceRoot: string, seat: string, planId?: string): void {
@@ -3166,11 +3166,18 @@ export class LocalApiServer {
     }
 
     /**
-     * POST /kanban/advance — advance one or more cards to their next column/stage.
+     * POST /kanban/advance — MOVE one or more cards to their next column/stage.
      * Advance = the board's own gesture: send the card and the column it is IN.
-     * The backend resolves the next stage (_advanceCards), applies complexity
-     * banding where it belongs (leaving PLAN REVIEWED / STAGING), and honours the
-     * CLI-triggers gate. This route adds no routing logic of its own — by design.
+     * The backend resolves the next stage (_advanceCards via promptSelected,
+     * which passes dispatch:false on every built-in path) and applies
+     * complexity banding where it belongs (leaving PLAN REVIEWED / STAGING).
+     * This route adds no routing logic of its own — by design.
+     *
+     * This route NEVER fires a CLI trigger, regardless of the
+     * kanban.boardMoveCliTriggersEnabled setting: it is move-only by
+     * construction, not gate-honouring. Callers that want an agent dispatched
+     * use POST /kanban/dispatch (explicit dispatch, bypasses the move-gesture
+     * gate by contract) — never this route.
      *
      * Body: { planIds?: string[], planId?: string, plan?: string, workspaceRoot?: string }
      * Response: { success: true, moved: Array<{ from: string, column?: string, count: number, error?: string }>, count: number }
@@ -3322,15 +3329,29 @@ export class LocalApiServer {
             //    the advisory owner unconditionally — no claim, no refusal.
             const ownerSinceBefore = record.ownerSince ?? null;
             await db.clearCompletedAt?.(record.planId);
+            // Delivery evidence is the append-only `dispatched` plan event, scoped
+            // to THIS attempt by its AUTOINCREMENT event_id baseline. `owner_since`
+            // is display metadata a column move is entitled to clear — on hosts
+            // whose arm moved after stamping, it was already NULL when this check
+            // ran, which is what made delivered dispatches report 502.
+            const dispatchBaseline = (await db.getLatestDispatchOutcomeByPlanId?.(record.planId))?.eventId ?? 0;
             await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal, skipClear: !!dispatchOptions?.skipClear, clearBeforePrompt: dispatchOptions?.clearBeforePrompt }, workspaceRoot);
 
             // 5. Verify against the DB — report what happened, not what was requested.
             const after: any = await db.getPlanByPlanId(record.planId);
             const column = after?.kanbanColumn ?? record.kanbanColumn;
             const moved = column === targetColumn;
-            const dispatchObserved = !!after?.ownerSince && after.ownerSince !== ownerSinceBefore;
+            const outcome = await db.getLatestDispatchOutcomeByPlanId?.(record.planId);
+            const freshOutcome = !!outcome && outcome.eventId > dispatchBaseline;
+            const dispatchObserved = freshOutcome && outcome!.eventType === 'dispatched';
+            const dispatchRejected = freshOutcome && outcome!.eventType === 'dispatch_rejected';
             const dispatched = isPromptMode ? moved : dispatchObserved;
             const success = moved && dispatched;
+            // One vocabulary with the acked and raw-verb paths: this path has
+            // already awaited delivery, so 'sent' (in-flight) is unreachable here.
+            const delivery = dispatched
+                ? 'delivered'
+                : 'not-delivered';
             if (success) {
                 const targetTerm = teamOverride || after?.ownerSeat || record?.ownerSeat;
                 if (targetTerm) {
@@ -3350,13 +3371,16 @@ export class LocalApiServer {
                     column,
                     moved,
                     dispatched,
+                    delivery,
                     dispatchedAgent: after?.dispatchedAgent || null,
                     ownerSince: after?.ownerSince || null,
                     ...(teamRouting ? { teamRouting } : {}),
                     ...(success ? {} : {
                         error: !moved
                             ? `Card did not land in '${targetColumn}' (currently '${column}')`
-                            : 'Move persisted but no dispatch was recorded (owner_since unchanged) — check the terminal agent'
+                            : dispatchRejected && outcome!.error
+                                ? `Delivery rejected: ${outcome!.error}`
+                                : 'Move persisted but no dispatch was recorded (no new dispatched event) — the prompt may have been copied to the clipboard instead of a live seat'
                     })
                 }
             };
@@ -3385,7 +3409,7 @@ export class LocalApiServer {
         dispatchOptions: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean; skipClear?: boolean; clearBeforePrompt?: boolean } | undefined
     ): Promise<
         | { ok: true; ctx: {
-            record: any; sessionId: string; targetColumn: string; gate: { role: string | null; cliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
+            record: any; sessionId: string; targetColumn: string; gate: { role: string | null; boardMoveCliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
             isPromptMode: boolean; teamOverride: string | undefined; teamRouting: string | undefined; routing: string | undefined; kanbanVerb: any; db: any;
         } }
         | { ok: false; status: number; payload: any }
@@ -3432,9 +3456,10 @@ export class LocalApiServer {
         }
 
         // 3. Pre-flight the gates the arm breaks silently on — fail loudly instead.
-        //    (CLI-triggers is NOT checked: that setting gates webview drag-drop
-        //    auto-dispatch; an explicit API dispatch bypasses it via bypassTriggerGate.)
-        let gate: { role: string | null; cliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
+        //    (kanban.boardMoveCliTriggersEnabled is NOT checked: that setting gates
+        //    board move gestures only; an explicit API dispatch bypasses it via
+        //    bypassTriggerGate.)
+        let gate: { role: string | null; boardMoveCliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
         if (this._options.resolveKanbanDispatch) {
             gate = await this._options.resolveKanbanDispatch(workspaceRoot, targetColumn);
             if (!gate.role) {
@@ -3537,10 +3562,15 @@ export class LocalApiServer {
             if (!pre.ok) {
                 return { status: pre.status, payload: pre.payload };
             }
-            const { record, sessionId, targetColumn, gate, teamOverride, routing, teamRouting, kanbanVerb } = pre.ctx;
+            const { record, sessionId, targetColumn, gate, isPromptMode, teamOverride, routing, teamRouting, kanbanVerb, db } = pre.ctx;
             const dispatchedAtBefore = record.ownerSince ?? null;
             const planId = record.planId;
             const seat = teamOverride || null;
+            // Delivery evidence is the append-only `dispatched`/`dispatch_rejected`
+            // plan event scoped by event_id — `owner_since` is display metadata a
+            // column move can erase, so it cannot prove delivery (and on hosts whose
+            // arm stamped-then-moved it was already NULL by the first poll).
+            const eventBaseline = (await db.getLatestDispatchOutcomeByPlanId?.(planId))?.eventId ?? 0;
 
             // Drop entries whose deadline has passed. Entries are otherwise
             // removed only by a poll that reaches `dispatched`/`unknown`, so a
@@ -3558,6 +3588,7 @@ export class LocalApiServer {
             // entry is present and the deadline has not passed.
             this._ackedDispatchState.set(planId, {
                 since: dispatchedAtBefore,
+                eventBaseline,
                 deadline: Date.now() + DISPATCH_STATE_DEADLINE_MS,
                 seat
             });
@@ -3570,12 +3601,40 @@ export class LocalApiServer {
             // first action (a DB write, milliseconds); the prompt delivery is the
             // slow part this whole split exists to hide from the UI.
             const delivery = kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal, skipClear: !!dispatchOptions?.skipClear, clearBeforePrompt: dispatchOptions?.clearBeforePrompt }, workspaceRoot);
-            // Retain the promise so a rejection is recorded, never unhandled. A
-            // rejection (e.g. terminal closed mid-chunk) leaves ownerSince
-            // unchanged, so the poll times out to `unknown` at the deadline — the
-            // surface does not spin forever.
-            void delivery.catch((err: unknown) => {
+            // Record a delivery failure where the poll can see it — the in-memory
+            // entry AND a durable `dispatch_rejected` event — so the state endpoint
+            // answers 'not-delivered' with the reason instead of timing out to
+            // 'unknown' 60 s later while the error scrolls off a mosh session.
+            // `unknown` means "no signal", not "we had the error and dropped it".
+            const recordDeliveryFailure = (error: string) => {
+                const entry = this._ackedDispatchState.get(planId);
+                if (entry) { entry.failed = error; }
+                void Promise.resolve(
+                    db.appendPlanEventByPlanId?.(planId, {
+                        eventType: 'dispatch_rejected',
+                        action: 'reject',
+                        payload: JSON.stringify({ error, seat: seat || '' }),
+                    })
+                ).catch((e: unknown) => console.warn('[LocalApiServer] dispatch_rejected event append failed:', e));
+            };
+            void delivery.then(async (result: any) => {
+                if (result && result.success === false) {
+                    recordDeliveryFailure(String(result.error || 'delivery failed'));
+                    return;
+                }
+                // A resolved-but-unevidenced delivery (no new dispatched event)
+                // means the arm completed without reaching a seat — e.g. the
+                // clipboard fallback. Prompt-mode columns deliver via clipboard
+                // by configuration, so only terminal-mode misses are rejections.
+                if (!isPromptMode) {
+                    const outcome = await db.getLatestDispatchOutcomeByPlanId?.(planId);
+                    if (!outcome || outcome.eventId <= eventBaseline) {
+                        recordDeliveryFailure('delivery completed but no dispatch was recorded — the prompt may have been copied to the clipboard instead of a live seat');
+                    }
+                }
+            }).catch((err: unknown) => {
                 console.error('[LocalApiServer] acked dispatch delivery error:', err);
+                recordDeliveryFailure(err instanceof Error ? err.message : String(err));
             });
 
             return {
@@ -3583,6 +3642,7 @@ export class LocalApiServer {
                 payload: {
                     success: true,
                     phase: 'dispatching',
+                    delivery: 'sent',
                     planId,
                     sessionId,
                     topic: record.topic,
@@ -3590,6 +3650,7 @@ export class LocalApiServer {
                     role: gate?.role ?? null,
                     seat,
                     dispatchedAtBefore,
+                    dispatchEventBaseline: eventBaseline,
                     deadline: Date.now() + DISPATCH_STATE_DEADLINE_MS,
                     ...(routing ? { routing } : {}),
                     ...(teamRouting ? { teamRouting } : {})
@@ -3605,21 +3666,30 @@ export class LocalApiServer {
     }
 
     /**
-     * GET /kanban/dispatch/state?planId=…&since=…&deadline=…&workspaceRoot=…
+     * GET /kanban/dispatch/state?planId=…&eventSince=…&deadline=…&workspaceRoot=…
      * Auth-gated read of an in-flight acked dispatch's delivery phase. Answers
-     * from persisted state (`owner_since` advancing past the client-supplied
-     * `since` baseline) plus a 60s `deadline`; falls back to the in-memory
-     * `_ackedDispatchState` map when the client omits the baseline (e.g. a bare
-     * probe), so a reconnecting phone that lost its in-memory poll can resume.
+     * from the append-only dispatch-outcome event in `plan_events` — a
+     * `dispatched` or `dispatch_rejected` row with `event_id` greater than the
+     * client-supplied `eventSince` baseline (or the in-memory entry's) is this
+     * attempt's evidence; a previous attempt's row never matches. `owner_since`
+     * is display metadata a column move may erase and is no longer consulted
+     * for the verdict; the legacy `since` param is still honoured for a client
+     * that only has the old baseline. The in-memory `_ackedDispatchState` map
+     * supplies the baseline for a bare probe so a reconnecting phone that lost
+     * its in-memory poll can resume.
      *
-     * States:
-     *   delivering — ownerSince unchanged from `since` and the deadline not passed.
-     *   dispatched — ownerSince advanced; carries dispatchedAgent/ownerSince/seat.
-     *   unknown    — deadline passed without an advance; reuses the synchronous
-     *                502 wording so the operator sees one vocabulary in both paths.
-     *                This is a UI timeout, NOT a delivery verdict: a slow prompt
-     *                may still be pasting. The wording must not imply the dispatch
-     *                failed, only that delivery could not be confirmed in time.
+     * States (one vocabulary with the sync and raw-verb paths):
+     *   sent          — no fresh outcome event and the deadline not passed;
+     *                   delivery is still in flight.
+     *   delivered     — a fresh `dispatched` event; carries agent/seat/stamp.
+     *   not-delivered — a fresh `dispatch_rejected` event, or the retained
+     *                   delivery promise already reported failure; carries the
+     *                   reason.
+     *   unknown       — deadline passed with no signal. This is a UI timeout,
+     *                   NOT a delivery verdict: a slow prompt may still be
+     *                   pasting. The wording must not imply the dispatch
+     *                   failed, only that delivery could not be confirmed in
+     *                   time.
      */
     private async _handleKanbanDispatchState(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -3652,31 +3722,87 @@ export class LocalApiServer {
             // (stateless, survives a server restart); the in-memory map is the
             // fallback for a bare probe and the source of the seat name.
             const sinceParam = url.searchParams.get('since');
+            const eventSinceParam = url.searchParams.get('eventSince');
             const deadlineParam = url.searchParams.get('deadline');
             const memEntry = this._ackedDispatchState.get(planId);
             const since = sinceParam !== null ? (sinceParam || null) : (memEntry?.since ?? null);
+            const eventBaseline = eventSinceParam !== null
+                ? Number(eventSinceParam || 0)
+                : (memEntry?.eventBaseline ?? null);
             const deadline = deadlineParam !== null ? Number(deadlineParam) : (memEntry?.deadline ?? 0);
             // Only the ack-time team-scoped override is a seat name for a
             // delivery still in flight. `record.ownerSeat` is the
             // PRE-move value here, so on a re-dispatch it names the PREVIOUS
-            // run's terminal — reported as `delivering`'s seat it is a
-            // confident wrong answer. The `dispatched` branch below reads it
-            // only once `owner_since` has advanced, when it is current.
+            // run's terminal — reported as `sent`'s seat it is a
+            // confident wrong answer. The `delivered` branch below reads the
+            // seat off the fresh event, when it is current.
             const seat = memEntry?.seat ?? null;
 
-            const currentAt = record.ownerSince ?? null;
-            const advanced = !!currentAt && currentAt !== since;
-            if (advanced) {
-                // Delivery confirmed — clear the in-flight entry.
+            // Attempt-scoped evidence: a dispatch-outcome event newer than the
+            // baseline. When the baseline is unknown (a bare probe with no
+            // in-memory entry and no client param) NO event may be matched —
+            // an older row would be the previous attempt's evidence.
+            if (eventBaseline !== null && Number.isFinite(eventBaseline)) {
+                const outcome = await db.getLatestDispatchOutcomeByPlanId?.(planId);
+                if (outcome && outcome.eventId > eventBaseline) {
+                    this._ackedDispatchState.delete(planId);
+                    if (outcome.eventType === 'dispatch_rejected') {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            success: true,
+                            state: 'not-delivered',
+                            delivery: 'not-delivered',
+                            planId,
+                            seat: outcome.seat || seat,
+                            error: outcome.error || 'Delivery failed'
+                        }));
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: true,
+                        state: 'delivered',
+                        delivery: 'delivered',
+                        planId,
+                        dispatchedAgent: outcome.agent || record.dispatchedAgent || null,
+                        dispatchedAt: outcome.timestamp,
+                        seat: outcome.seat || record.ownerSeat || seat
+                    }));
+                    return;
+                }
+            } else {
+                // Legacy baseline: a client that only knows the old `since`
+                // (ownerSince) contract. Display metadata — kept for compat,
+                // never the evidence path.
+                const currentAt = record.ownerSince ?? null;
+                if (currentAt && currentAt !== since) {
+                    this._ackedDispatchState.delete(planId);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: true,
+                        state: 'delivered',
+                        delivery: 'delivered',
+                        planId,
+                        dispatchedAgent: record.dispatchedAgent || null,
+                        dispatchedAt: currentAt,
+                        seat: record.ownerSeat || seat
+                    }));
+                    return;
+                }
+            }
+            // The retained delivery promise reported failure before its durable
+            // event landed (the append is fire-and-forget — answer from the
+            // in-memory flag in the race window).
+            if (memEntry?.failed) {
                 this._ackedDispatchState.delete(planId);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     success: true,
-                    state: 'dispatched',
+                    state: 'not-delivered',
+                    delivery: 'not-delivered',
                     planId,
-                    dispatchedAgent: record.dispatchedAgent || null,
-                    dispatchedAt: currentAt,
-                    seat: record.ownerSeat || seat
+                    seat,
+                    error: memEntry.failed
                 }));
                 return;
             }
@@ -3684,7 +3810,8 @@ export class LocalApiServer {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     success: true,
-                    state: 'delivering',
+                    state: 'sent',
+                    delivery: 'sent',
                     planId,
                     seat
                 }));
@@ -3696,8 +3823,9 @@ export class LocalApiServer {
             res.end(JSON.stringify({
                 success: true,
                 state: 'unknown',
+                delivery: 'unknown',
                 planId,
-                error: 'Move persisted but no dispatch was recorded (ownerSince unchanged) — delivery status uncertain; the prompt may still be pasting. Check the terminal agent.'
+                error: 'Move persisted but no dispatch was recorded — delivery status uncertain; the prompt may still be pasting. Check the terminal agent.'
             }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanDispatchState error:', err);
@@ -8221,9 +8349,54 @@ export class LocalApiServer {
             // dispatch a DIFFERENT action than the one the allowlist checked.
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
-            delete body.bypassTriggerGate;
+            // `bypassTriggerGate` is NOT stripped on this route: an explicit
+            // verb-route dispatch is an operator command, not a board gesture,
+            // and POST /kanban/dispatch already grants the same authenticated
+            // caller the identical capability. The strips on the planning /
+            // tickets / taskViewer verb routes stay — the flag is meaningless
+            // to those providers' verbs. This handler serves three prefixes —
+            // /kanban/verb/*, /mission-control/verb/*, /agent-control/verb/* —
+            // so the removal un-strips all three. A board drag never sends the
+            // flag, so board semantics are unchanged for callers that omit it.
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
-            const result = await kanbanVerb(verb, body, workspaceRoot, source);
+
+            // For the dispatch verb, capture the append-only event baseline
+            // BEFORE firing so the response can carry the same outcome
+            // vocabulary as /kanban/dispatch instead of a hollow {success:true}.
+            let dispatchDb: any = null;
+            let dispatchPlanId: string | null = null;
+            let dispatchBaseline = 0;
+            if (verb === 'triggerAction') {
+                try {
+                    dispatchDb = await this._options.getKanbanDatabase?.(workspaceRoot || '');
+                    const sid = String(body?.sessionId || body?.plan || '').trim();
+                    const rec = sid && dispatchDb
+                        ? (await dispatchDb.getPlanByPlanId(sid) || await dispatchDb.getPlanBySessionId(sid))
+                        : null;
+                    dispatchPlanId = rec?.planId ?? null;
+                    if (dispatchPlanId) {
+                        dispatchBaseline = (await dispatchDb.getLatestDispatchOutcomeByPlanId?.(dispatchPlanId))?.eventId ?? 0;
+                    }
+                } catch { /* outcome annotation is best-effort; the verb still runs */ }
+            }
+            let result = await kanbanVerb(verb, body, workspaceRoot, source);
+            if (verb === 'triggerAction' && dispatchPlanId && dispatchDb) {
+                try {
+                    const outcome = await dispatchDb.getLatestDispatchOutcomeByPlanId?.(dispatchPlanId);
+                    const fresh = !!outcome && outcome.eventId > dispatchBaseline;
+                    const delivered = fresh && outcome!.eventType === 'dispatched';
+                    const rejected = fresh && outcome!.eventType === 'dispatch_rejected';
+                    const base = (result && typeof result === 'object') ? result : { success: true };
+                    result = {
+                        ...base,
+                        dispatched: delivered,
+                        delivery: delivered
+                            ? 'delivered'
+                            : 'not-delivered',
+                        ...(rejected && outcome!.error && !base.error ? { error: outcome!.error } : {})
+                    };
+                } catch { /* annotation failed — return the verb's result as-is */ }
+            }
             const ok = !result || result.success !== false;
             res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result ?? { success: true }));

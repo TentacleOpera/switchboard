@@ -69,7 +69,7 @@ function makeProvider(fields) {
     kp._workspaceOverrideEnabled = false;
     kp._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     kp._routingMapConfig = null;
-    kp._cliTriggersEnabled = true;
+    kp._boardMoveCliTriggersEnabled = true;
     kp._columnDragDropModes = {};
     kp._autobanState = null;
     kp._showingBacklog = false;
@@ -110,10 +110,10 @@ async function main() {
     await test('ForScope helpers: undefined scope returns the CACHED singleton values (byte-identical fallback)', () => {
         const routing = { lead: [9], coder: [5], intern: [1] };
         const modes = { CODED: 'prompt' };
-        const kp = makeProvider({ _routingMapConfig: routing, _cliTriggersEnabled: false, _columnDragDropModes: modes });
+        const kp = makeProvider({ _routingMapConfig: routing, _boardMoveCliTriggersEnabled: false, _columnDragDropModes: modes });
         kp._getScopedSetting = () => { throw new Error('must not hit the scoped accessor for undefined scope'); };
         assert.strictEqual(kp._routingMapForScope(undefined), routing, 'identity, not a re-read');
-        assert.strictEqual(kp._cliTriggersForScope(undefined), false);
+        assert.strictEqual(kp._boardMoveCliTriggersForScope(undefined), false);
         const eff = kp._columnDragDropModesForScope(undefined, [{ id: 'CODED', dragDropMode: 'cli' }]);
         assert.strictEqual(eff.CODED, 'prompt');
     });
@@ -122,12 +122,16 @@ async function main() {
         const calls = [];
         const kp = makeProvider();
         kp._getScopedSetting = (key, def, initiator) => { calls.push([key, def, initiator]); return def; };
+        // The board-move gate routes through its tagged/migrating resolver, not
+        // _getScopedSetting — assert the initiator passes through raw there.
+        const resolverCalls = [];
+        kp._resolveBoardMoveCliTriggers = (initiator) => { resolverCalls.push(initiator); return { value: true, source: 'stub' }; };
         kp._routingMapForScope('Y');
-        kp._cliTriggersForScope(null);
+        kp._boardMoveCliTriggersForScope(null);
         kp._columnDragDropModesForScope('__unassigned__', []);
         assert.deepStrictEqual(calls[0], ['kanban.routingMapConfig', null, 'Y']);
-        assert.deepStrictEqual(calls[1], ['kanban.cliTriggersEnabled', true, null], 'null passes through raw — pre-resolving it would collapse into the singleton');
-        assert.deepStrictEqual(calls[2], ['kanban.columnDragDropModes', {}, '__unassigned__']);
+        assert.deepStrictEqual(resolverCalls, [null], 'null passes through raw — pre-resolving it would collapse into the singleton');
+        assert.deepStrictEqual(calls[1], ['kanban.columnDragDropModes', {}, '__unassigned__']);
     });
 
     await test('resolveRoutedRole: no initiator → cached map; initiator → scoped map', () => {

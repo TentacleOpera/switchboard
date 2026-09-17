@@ -1145,7 +1145,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     const { enabled, surface, ...rest } = msg;
                     server.broadcastWs('cliTriggersState', (scope: string | null | undefined) => ({
                         ...rest,
-                        enabled: kanbanProvider._cliTriggersForScope(scope),
+                        enabled: kanbanProvider._boardMoveCliTriggersForScope(scope),
                     }), surface);
                 } else {
                     server.broadcastWs(msg.type, msg, msg.surface);
@@ -3333,8 +3333,8 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // Deferred to here because the move needs the resolved
                     // records and targetColumn; before the reconciliation this
                     // gate ran before record resolution and refused outright.
-                    const cliTriggersEnabled = kanbanProvider._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
-                    if (!cliTriggersEnabled && !payload?.bypassTriggerGate) {
+                    const boardMoveCliTriggers = kanbanProvider._resolveBoardMoveCliTriggers();
+                    if (!boardMoveCliTriggers.value && !payload?.bypassTriggerGate) {
                         const gateMovedIds = records.map((r: any) => r.sessionId || r.planId).filter(Boolean);
                         if (targetColumn && gateMovedIds.length > 0) {
                             const moveFrom = sourceColumn || records[0]?.kanbanColumn;
@@ -3343,9 +3343,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 server.broadcastWs('moveCards', { sessionIds: gateMovedIds, targetColumn }, SURFACES.kanban);
                             }
                             schedulePushFullState();
-                            return { success: true, targetColumn, dispatched: false };
+                            return { success: true, targetColumn, dispatched: false, delivery: 'not-delivered' };
                         }
-                        return { success: false, error: 'CLI triggers are disabled' };
+                        return { success: false, error: 'CLI triggers are disabled', delivery: 'not-delivered' };
                     }
 
                     // getWorktrees() takes no arguments — it already filters status='active'
@@ -3402,6 +3402,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             ];
                             return {
                                 success: false,
+                                delivery: 'not-delivered',
                                 error: `No live terminal named '${overrideName}'. Live seats: ${liveNames.join(', ') || '(none)'}`,
                             };
                         }
@@ -3467,7 +3468,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 tmuxTerminal = newHandle;
                                 tmuxPaneRecord = { friendlyName: newHandle.name, paneId: newHandle.paneId, role: targetRole };
                             } catch (err) {
-                                return { success: false, error: `Failed to create tmux pane: ${err instanceof Error ? err.message : String(err)}` };
+                                return { success: false, delivery: 'not-delivered', error: `Failed to create tmux pane: ${err instanceof Error ? err.message : String(err)}` };
                             }
                         } else {
                             terminal = await ptyFleetService.create(targetRole, overrideName, matchedWtPath || root, matchedWtPath);
@@ -3499,6 +3500,22 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         cappedOut = skipped;
                     }
 
+                    // Move FIRST, then deliver — the same ordering the extension's
+                    // triggerAction arm uses (the move persists before dispatch). The
+                    // column-move UPDATE clears `owner_since`; run AFTER delivery it
+                    // erased the dispatch stamp this arm had just written, which is
+                    // what made delivered dispatches verify as failed. `records` is
+                    // post-cap here — the cap decides what moves, not only what the
+                    // prompt names.
+                    const movedSessionIds = records.map((r: any) => r.sessionId || r.planId).filter(Boolean);
+                    if (targetColumn && movedSessionIds.length > 0) {
+                        const moveFrom = sourceColumn || records[0]?.kanbanColumn;
+                        if (moveFrom && moveFrom !== targetColumn) {
+                            await moveSessionsToColumn(movedSessionIds, targetColumn);
+                            server.broadcastWs('moveCards', { sessionIds: movedSessionIds, targetColumn }, SURFACES.kanban);
+                        }
+                    }
+
                     const analysisScope = payload.analysisScope !== undefined
                         ? payload.analysisScope
                         : kanbanProvider.getProjectFilter();
@@ -3528,10 +3545,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // path. Report it instead of rejecting out of the verb handler.
                         return {
                             success: false,
+                            delivery: 'not-delivered',
                             error: promptErr instanceof Error ? promptErr.message : String(promptErr)
                         };
                     }
-                    if (!prompt) { return { success: false, error: 'Failed to build dispatch prompt' }; }
+                    if (!prompt) { return { success: false, delivery: 'not-delivered', error: 'Failed to build dispatch prompt' }; }
 
                     // tmux delivery branch — when resolution landed on a tmux pane
                     // (no PTY terminal), deliver via sendPromptToTmux and stamp
@@ -3553,6 +3571,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             tmuxFleetService?.dropStale(tmuxTerminal.paneId);
                             return {
                                 success: false,
+                                delivery: 'not-delivered',
                                 error: `tmux pane '${tmuxPaneRecord.friendlyName}' not reachable: ${err instanceof Error ? err.message : String(err)}`,
                                 terminalName: tmuxPaneRecord.friendlyName,
                             };
@@ -3572,17 +3591,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 console.warn('[bootstrap] Failed to update dispatch info (tmux):', err);
                             }
                         }
-                        const movedSessionIds = records.map((r: any) => r.sessionId || r.planId).filter(Boolean);
-                        if (targetColumn && movedSessionIds.length > 0) {
-                            const moveFrom = sourceColumn || records[0]?.kanbanColumn;
-                            if (moveFrom && moveFrom !== targetColumn) {
-                                await moveSessionsToColumn(movedSessionIds, targetColumn);
-                                server.broadcastWs('moveCards', { sessionIds: movedSessionIds, targetColumn }, SURFACES.kanban);
-                            }
-                        }
                         server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${tmuxPaneRecord.friendlyName} (tmux).`, isError: false }, SURFACES.common);
                         return {
                             success: true,
+                            delivery: 'delivered',
                             targetColumn,
                             terminalName: tmuxPaneRecord.friendlyName,
                             transport: 'tmux',
@@ -3624,6 +3636,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (deliveryReceipt && deliveryReceipt.success === false) {
                         return {
                             success: false,
+                            delivery: 'not-delivered',
                             error: deliveryReceipt.error || `Dispatch to '${terminal.friendlyName}' failed`,
                             terminalName: terminal.friendlyName,
                             ...(deliveryReceipt.deliveryReason ? { deliveryReason: deliveryReceipt.deliveryReason } : {}),
@@ -3636,6 +3649,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (deliveryReceipt?.readiness?.reason === 'exit') {
                         return {
                             success: false,
+                            delivery: 'not-delivered',
                             error: `Terminal '${terminal.friendlyName}' exited during boot — prompt was not delivered`,
                             terminalName: terminal.friendlyName,
                             deliveryReason: 'exit',
@@ -3662,14 +3676,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         }
                     }
 
-                    const movedSessionIds = records.map((r: any) => r.sessionId || r.planId).filter(Boolean);
-                    if (targetColumn && movedSessionIds.length > 0) {
-                        const moveFrom = sourceColumn || records[0]?.kanbanColumn;
-                        if (moveFrom && moveFrom !== targetColumn) {
-                            await moveSessionsToColumn(movedSessionIds, targetColumn);
-                            server.broadcastWs('moveCards', { sessionIds: movedSessionIds, targetColumn }, SURFACES.kanban);
-                        }
-                    }
                     if (cappedOut.length > 0) {
                         server.broadcastWs('moveCardsFailed', {
                             failures: cappedOut
@@ -3685,6 +3691,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${terminal.friendlyName}.${stayed}`, isError: false }, SURFACES.common);
                     return {
                         success: true,
+                        delivery: 'delivered',
                         targetColumn,
                         terminalName: terminal.friendlyName,
                         // Change 6: thread the delivery reason so POST /kanban/dispatch
@@ -5024,7 +5031,7 @@ Each plan file must include:
         },
         resolveKanbanDispatch: async (wsRoot: string, targetColumn: string) => {
             if (!kanbanProvider) {
-                return { role: null, cliTriggersEnabled: false, dragDropMode: null, source: null };
+                return { role: null, boardMoveCliTriggersEnabled: false, dragDropMode: null, source: null };
             }
             return kanbanProvider.resolveDispatchForApi(wsRoot, targetColumn);
         },

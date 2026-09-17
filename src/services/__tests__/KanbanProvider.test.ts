@@ -742,9 +742,9 @@ Manual verification steps:
             return execStub;
         };
 
-        test('cliTriggersEnabled=false: CODED_AUTO moves the card and does NOT dispatch', async () => {
+        test('boardMoveCliTriggersEnabled=false: CODED_AUTO moves the card and does NOT dispatch', async () => {
             wireAdvance('CREATED');
-            (provider as any)._cliTriggersEnabled = false;
+            (provider as any)._boardMoveCliTriggersEnabled = false;
 
             const result = await (provider as any)._advanceCards(workspaceRoot, [sessionId], { target: 'CODED_AUTO' });
 
@@ -754,9 +754,9 @@ Manual verification steps:
             assert.ok(result.moved[0].targetColumn !== 'CODED_AUTO', 'persisted column must be a real coder column, not the synthetic CODED_AUTO string');
         });
 
-        test('cliTriggersEnabled=true: CODED_AUTO moves the card AND dispatches', async () => {
+        test('boardMoveCliTriggersEnabled=true: CODED_AUTO moves the card AND dispatches', async () => {
             const execStub = wireAdvance('CREATED');
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
 
             const result = await (provider as any)._advanceCards(workspaceRoot, [sessionId], { target: 'CODED_AUTO' });
 
@@ -766,9 +766,9 @@ Manual verification steps:
             assert.ok(execStub.calledWith('switchboard.triggerAgentFromKanban'), 'dispatch should go through triggerAgentFromKanban');
         });
 
-        test('bypassTriggerGate=true dispatches even when cliTriggersEnabled=false', async () => {
+        test('bypassTriggerGate=true dispatches even when boardMoveCliTriggersEnabled=false', async () => {
             const execStub = wireAdvance('CREATED');
-            (provider as any)._cliTriggersEnabled = false;
+            (provider as any)._boardMoveCliTriggersEnabled = false;
 
             const result = await (provider as any)._advanceCards(workspaceRoot, [sessionId], { target: 'CODED_AUTO', bypassTriggerGate: true });
 
@@ -778,7 +778,7 @@ Manual verification steps:
 
         test('backward CODE REVIEWED → coder column moves but does NOT dispatch (triggers on)', async () => {
             const execStub = wireAdvance('CODE REVIEWED');
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
 
             const result = await (provider as any)._advanceCards(workspaceRoot, [sessionId], { target: 'CODED_AUTO' });
 
@@ -833,7 +833,7 @@ Manual verification steps:
 
         test('specific target: forward move dispatches with triggers on', async () => {
             const { execStub } = wireMove([card('p1', 'CREATED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
 
             const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'CODER CODED' });
 
@@ -845,7 +845,7 @@ Manual verification steps:
 
         test('dispatch:false moves the card and NEVER dispatches (the moveCardForward trap)', async () => {
             const { execStub } = wireMove([card('p1', 'CREATED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
 
             const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'CODER CODED', dispatch: false });
 
@@ -857,7 +857,7 @@ Manual verification steps:
 
         test('specific target: backward move records backward and does not dispatch', async () => {
             const { execStub, recordRunSheet } = wireMove([card('p1', 'CODE REVIEWED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
 
             const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'CODER CODED' });
 
@@ -870,7 +870,7 @@ Manual verification steps:
 
         test('target undefined resolves the next pipeline stage from sourceColumn', async () => {
             const { execStub } = wireMove([card('p1', 'CREATED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
             sandbox.stub(provider as any, '_getNextColumnId').resolves('PLAN REVIEWED');
 
             const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { sourceColumn: 'CREATED' });
@@ -893,7 +893,7 @@ Manual verification steps:
 
         test('dispatchRole option is honoured over _columnToRole (custom column)', async () => {
             const { execStub } = wireMove([card('p1', 'CREATED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
 
             // 'QA LANE' has no _columnToRole mapping; the caller-resolved
             // spec.role must reach the trigger call.
@@ -905,7 +905,7 @@ Manual verification steps:
 
         test('specific target: partial failure moves the rest and reports only the failed card', async () => {
             const { postMessage } = wireMove([card('p1', 'CREATED'), card('p2', 'CREATED')]);
-            (provider as any)._cliTriggersEnabled = false;
+            (provider as any)._boardMoveCliTriggersEnabled = false;
             (provider as any).moveCardToColumnWithReason.restore?.();
             sandbox.stub(provider as any, 'moveCardToColumnWithReason')
                 .callsFake((_r: any, sid: any) => Promise.resolve(
@@ -923,7 +923,7 @@ Manual verification steps:
 
         test('moveCardForward arm: moves and does NOT dispatch even with triggers on', async () => {
             const { execStub, postMessage } = wireMove([card('p1', 'CREATED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
 
             const result = await (provider as any)._handleMessage({
                 type: 'moveCardForward', sessionIds: ['p1'], targetColumn: 'CODER CODED', workspaceRoot
@@ -936,7 +936,7 @@ Manual verification steps:
 
         test('moveCardBackwards arm: moves and does NOT dispatch', async () => {
             const { execStub } = wireMove([card('p1', 'CODE REVIEWED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
 
             const result = await (provider as any)._handleMessage({
                 type: 'moveCardBackwards', sessionIds: ['p1'], targetColumn: 'CODER CODED', workspaceRoot
@@ -948,7 +948,7 @@ Manual verification steps:
 
         test('triggerBatchAction arm: bypassTriggerGate dispatches with triggers off', async () => {
             const { execStub } = wireMove([card('p1', 'PLAN REVIEWED'), card('p2', 'PLAN REVIEWED')]);
-            (provider as any)._cliTriggersEnabled = false;
+            (provider as any)._boardMoveCliTriggersEnabled = false;
             // Feature-refusal pre-scan reads the db; give it an empty one.
             sandbox.stub(provider as any, '_getKanbanDb').returns({
                 ensureReady: sandbox.stub().resolves(true),
@@ -969,7 +969,7 @@ Manual verification steps:
 
         test('moveSelected arm (PLAN REVIEWED): routes through _advanceCards CODED_AUTO', async () => {
             wireMove([card('p1', 'PLAN REVIEWED'), card('p2', 'PLAN REVIEWED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
             sandbox.stub(provider as any, '_filterUnknownComplexitySessions').callsFake((ids: any) => ({ filtered: ids, skippedCount: 0 }));
             const advanceSpy = sandbox.spy(provider as any, '_advanceCards');
             sandbox.stub(provider as any, '_partitionByComplexityRoute').resolves(
@@ -989,7 +989,7 @@ Manual verification steps:
 
         test('moveAll arm (general column): routes through _advanceCards and dispatches with triggers on', async () => {
             const { execStub } = wireMove([card('p1', 'CREATED'), card('p2', 'CREATED')]);
-            (provider as any)._cliTriggersEnabled = true;
+            (provider as any)._boardMoveCliTriggersEnabled = true;
             const advanceSpy = sandbox.spy(provider as any, '_advanceCards');
             // LEAD CODED keeps this out of the planner-distribution path, which
             // owns its own fan-out and is allowlisted separately.
@@ -1007,7 +1007,7 @@ Manual verification steps:
 
         test('CLI triggers off: every move affordance moves without dispatching', async () => {
             const { execStub, postMessage } = wireMove([card('p1', 'CREATED'), card('p2', 'CREATED')]);
-            (provider as any)._cliTriggersEnabled = false;
+            (provider as any)._boardMoveCliTriggersEnabled = false;
             sandbox.stub(provider as any, '_getNextColumnId').resolves('LEAD CODED');
             sandbox.stub(provider as any, '_resolveKanbanDispatchSpec').resolves(null);
             sandbox.stub(provider as any, '_getKanbanDb').returns({

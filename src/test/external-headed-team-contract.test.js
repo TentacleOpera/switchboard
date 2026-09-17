@@ -83,39 +83,43 @@ function makeMockDb(initialState = {}) {
             db,
             headName: 'Antigravity-Lead',
             children: [{ friendlyName: 'Antigravity-Lead-coder-1' }, { friendlyName: 'Antigravity-Lead-coder-2' }],
+            // An operator-authored team prompt is what installs the team-scoped
+            // row — system protocol (incl. the head instructions) is composed
+            // at delivery by selectOrders and persists no row.
+            prompt: 'You lead this team. Pull next card.',
             headPrompt: 'You lead this team. Pull next card.',
             externalHead: true,
         });
 
         assert.ok(result.ok, 'wireSpawnedTeam should succeed');
         const orders = await db.getConfigJson('terminals.standingOrders', []);
-        assert.ok(orders.length > 0, 'Standing orders should be installed');
+        assert.ok(orders.length > 0, 'An authored team prompt installs the team-scoped order');
         const headOrder = orders.find(o => o.scope === 'team-head');
         assert.strictEqual(headOrder, undefined, 'No team-head scoped order should be installed for external head');
     });
 
     await test('2. The callback instruction points to .switchboard/teams/<teamId>/reports/', async () => {
-        const db = makeMockDb();
         const headName = 'Antigravity-Lead';
         const expectedTeamId = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');
 
-        await wireSpawnedTeam({
-            db,
-            headName,
-            children: [{ friendlyName: 'worker-1' }],
-            externalHead: true,
-        });
-
-        const orders = await db.getConfigJson('terminals.standingOrders', []);
-        const teamOrder = orders.find(o => o.scope === 'team');
-        assert.ok(teamOrder, 'Team-scoped standing order must exist');
+        // The callback instruction is no longer a persisted standing order —
+        // wireSpawnedTeam only writes rows for operator-authored prompts now.
+        // It is composed at delivery from the fragment library
+        // (external-member-callback), so the contract is pinned on the
+        // fragment body: it must still name the reports dir and filename
+        // pattern for the spawned team's id.
+        const fragment = getStandingOrderFragment(STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback);
+        assert.ok(fragment, 'external-member-callback fragment must exist');
+        const body = typeof fragment.body === 'function'
+            ? fragment.body({ teamId: expectedTeamId, headName, inTeam: true, isHead: false, externalHead: true })
+            : '';
         assert.ok(
-            teamOrder.instruction.includes(`.switchboard/teams/${expectedTeamId}/reports/`),
-            `Instruction must contain reports directory path: ${teamOrder.instruction}`
+            body.includes(`.switchboard/teams/${expectedTeamId}/reports/`),
+            `Callback instruction must contain reports directory path: ${body.slice(0, 200)}`
         );
         assert.ok(
-            teamOrder.instruction.includes('report-<UTC-compact>-<kind>-<5 digits>.md'),
-            'Instruction must name report filename pattern'
+            body.includes('report-<UTC-compact>-<kind>-<5 digits>.md'),
+            'Callback instruction must name report filename pattern'
         );
     });
 
@@ -202,11 +206,18 @@ function makeMockDb(initialState = {}) {
             complexity: 5,
         };
 
+        // The dispatch verify reads the append-only plan_events row, not
+        // owner_since — the mock kanbanVerb simulates the real arm's
+        // `dispatched` event append by bumping this counter.
+        let dispatchEventSeq = 0;
         const mockKanbanDb = {
             getWorkspaceId: async () => 'ws-1',
             getDominantWorkspaceId: async () => 'ws-1',
             getBoard: async () => [planInDb],
             getPlanByPlanId: async () => planInDb,
+            getLatestDispatchOutcomeByPlanId: async () => dispatchEventSeq > 0
+                ? { eventId: dispatchEventSeq, eventType: 'dispatched', timestamp: '', seat: '', agent: '', ide: '', error: '' }
+                : null,
         };
 
         let lastTriggerAction = null;
@@ -231,7 +242,7 @@ function makeMockDb(initialState = {}) {
             resolveAutoDispatchColumn: async () => ({ targetColumn: 'CODER CODED', reason: 'complexity 5' }),
             resolveKanbanDispatch: async () => ({
                 role: 'coder',
-                cliTriggersEnabled: true,
+                boardMoveCliTriggersEnabled: true,
                 dragDropMode: 'terminal',
                 source: null,
             }),
@@ -245,6 +256,7 @@ function makeMockDb(initialState = {}) {
                     planInDb.kanbanColumn = payload.targetColumn;
                     planInDb.ownerSince = new Date().toISOString();
                     planInDb.ownerSeat = payload.targetTerminalOverride || 'worker-coder-1';
+                    dispatchEventSeq++;
                     return { success: true };
                 }
                 return { success: true };
@@ -294,6 +306,7 @@ function makeMockDb(initialState = {}) {
             ownerSince: null, columnOrder: 1, complexity: 5,
         };
         let lastTriggerAction = null;
+        let dispatchEventSeq = 0;
         const server = new LocalApiServer({
             workspaceRoot: WS,
             getAuthToken: async () => '',
@@ -303,13 +316,16 @@ function makeMockDb(initialState = {}) {
                 getDominantWorkspaceId: async () => 'ws-1',
                 getBoard: async () => [planInDb],
                 getPlanByPlanId: async () => planInDb,
+                getLatestDispatchOutcomeByPlanId: async () => dispatchEventSeq > 0
+                    ? { eventId: dispatchEventSeq, eventType: 'dispatched', timestamp: '', seat: '', agent: '', ide: '', error: '' }
+                    : null,
             }),
             // Stale snapshot: the head terminal is live but not listed yet.
             getRegisteredTerminals: () => ['TerminalLead-coder-1'],
             resolveTeamMembers: async (_ws, headName) =>
                 headName === 'TerminalLead' ? ['TerminalLead', 'TerminalLead-coder-1'] : null,
             resolveAutoDispatchColumn: async () => ({ targetColumn: 'CODER CODED', reason: 'complexity 5' }),
-            resolveKanbanDispatch: async () => ({ role: 'coder', cliTriggersEnabled: true, dragDropMode: 'terminal', source: null }),
+            resolveKanbanDispatch: async () => ({ role: 'coder', boardMoveCliTriggersEnabled: true, dragDropMode: 'terminal', source: null }),
             resolveTeamRoleTerminal: async () => 'TerminalLead-coder-1',
             kanbanVerb: async (verb, payload) => {
                 if (verb === 'triggerAction') {
@@ -317,6 +333,7 @@ function makeMockDb(initialState = {}) {
                     planInDb.kanbanColumn = payload.targetColumn;
                     planInDb.ownerSince = new Date().toISOString();
                     planInDb.ownerSeat = payload.targetTerminalOverride || 'TerminalLead-coder-1';
+                    dispatchEventSeq++;
                 }
                 return { success: true };
             },
@@ -341,6 +358,7 @@ function makeMockDb(initialState = {}) {
             ownerSince: null, columnOrder: 1, complexity: 9,
         };
         let triggered = false;
+        let dispatchEventSeq = 0;
         const server = new LocalApiServer({
             workspaceRoot: WS,
             getAuthToken: async () => '',
@@ -350,12 +368,15 @@ function makeMockDb(initialState = {}) {
                 getDominantWorkspaceId: async () => 'ws-1',
                 getBoard: async () => [planInDb],
                 getPlanByPlanId: async () => planInDb,
+                getLatestDispatchOutcomeByPlanId: async () => dispatchEventSeq > 0
+                    ? { eventId: dispatchEventSeq, eventType: 'dispatched', timestamp: '', seat: '', agent: '', ide: '', error: '' }
+                    : null,
             }),
             getRegisteredTerminals: () => ['ExternalLead-coder-1'],
             resolveTeamMembers: async (_ws, headName) =>
                 headName === 'ExternalLead' ? ['ExternalLead-coder-1'] : null,
             resolveAutoDispatchColumn: async () => ({ targetColumn: 'LEAD CODED', reason: 'complexity 9' }),
-            resolveKanbanDispatch: async () => ({ role: 'lead', cliTriggersEnabled: true, dragDropMode: 'terminal', source: null }),
+            resolveKanbanDispatch: async () => ({ role: 'lead', boardMoveCliTriggersEnabled: true, dragDropMode: 'terminal', source: null }),
             // No `lead` seat on this team.
             resolveTeamRoleTerminal: async (_ws, _origin, role) => (role === 'lead' ? null : 'ExternalLead-coder-1'),
             kanbanVerb: async (verb, payload) => {
@@ -364,6 +385,7 @@ function makeMockDb(initialState = {}) {
                     planInDb.kanbanColumn = payload.targetColumn;
                     planInDb.ownerSince = new Date().toISOString();
                     planInDb.ownerSeat = payload.targetTerminalOverride || 'workspace-lead';
+                    dispatchEventSeq++;
                 }
                 return { success: true };
             },
@@ -429,10 +451,14 @@ function makeMockDb(initialState = {}) {
         const body = src.slice(start, src.indexOf('writeFile(filePath', start));
         assert.ok(body.includes('Never move a card backwards to an earlier pipeline stage'),
             'the external head prompt must prohibit backwards movement');
-        assert.ok(body.includes('your only card action is the POST /kanban/dispatch'),
+        assert.ok(/[Yy]our ONLY card action is the POST \/kanban\/dispatch/.test(body),
             'the external head prompt must name /kanban/dispatch as the one permitted card action');
-        assert.ok(!/advance cards|Advancing/.test(body),
-            'the external head prompt must not tell the head to "advance" cards');
+        // The prompt now PROHIBITS advancing ("You do not advance any card.",
+        // "Advancing a card you were not given a reviewer for puts it in a
+        // column no one is watching") — so the pin is the old imperative
+        // phrase, not the word itself.
+        assert.ok(!/\badvance cards\b|\bAdvancing & Review\b/.test(body),
+            'the external head prompt must not instruct the head to "advance cards"');
     });
 
     console.log(`\nExternal-Headed Team contract tests: ${passed} passed, ${failed} failed`);

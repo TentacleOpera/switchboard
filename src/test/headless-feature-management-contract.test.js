@@ -474,7 +474,21 @@ async function main() {
             assert.ok(!branch.includes(dead),
                 `automation gate still names ${dead}, which no longer exists in kanban.html`);
         }
-        assert.ok(branch.includes('#btn-autoban'), 'automation gate must still hide the kanban toolbar cluster');
+        // The automation gate carries NO kanban selectors any more — each was
+        // audited against its real backing capability and none belonged to
+        // `automation`. #btn-cli-triggers in particular is a board-SETTING
+        // control (kanban.boardMoveCliTriggersEnabled), not an automation
+        // service: hiding it on a host with automation:false made the only
+        // control that un-silences board drag/move dispatch unreachable there.
+        // This assertion is the ratchet — it checks the injected mechanism (a
+        // display:none style block), not the comment text, so an audit comment
+        // naming the selectors does not trip it. A selector that re-enters the
+        // automation branch must justify its backing capability in the comment.
+        const styleBlock = branch.match(/style\.textContent\s*=\s*`([\s\S]*?)`/);
+        assert.ok(!styleBlock || !/host-automation-false/.test(styleBlock[1]),
+            'the automation branch must inject no host-automation-false selectors — it keeps only the body class');
+        assert.ok(branch.includes("classList.add('host-automation-false')"),
+            'the automation branch must still add the host-automation-false body class');
         // And the markup really is gone from the board.
         for (const dead of ['data-tab="automation"', 'id="automation-tab-content"', 'id="automation-panel-root"']) {
             assert.ok(!kanbanHtml.includes(dead), `kanban.html still contains ${dead}`);

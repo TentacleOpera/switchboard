@@ -702,28 +702,26 @@
                 document.head.appendChild(style);
             }
 
-            // automation: the toolbar cluster only. The three kanban selectors that
-            // used to be here — [data-tab="automation"], #automation-tab-content,
-            // #automation-panel-root — named markup that no longer exists: the tab
-            // moved to the Mission Control PANEL. A panel is gated by the manifest
-            // (`getPanelsManifest` → PanelAvailability.missionControl), not by a CSS
-            // rule in a sibling document, so re-pointing these at panel internals
-            // would be a hand-listed selector set over a surface this file cannot see.
+            // automation: no selector list — the flag still feeds the body class
+            // and the Mission Control manifest gate, but every selector that
+            // used to hide under `host-automation-false` was audited against its
+            // real backing capability and none belonged to `automation`:
+            //   #btn-cli-triggers        — a board SETTING control
+            //     (kanban.boardMoveCliTriggersEnabled via toggleCliTriggers →
+            //     the scoped store); not an automation service. Hiding it on
+            //     standalone made the only control that un-silences board
+            //     drag/move dispatch unreachable on the primary host.
+            //   #btn-remote-control      — RemoteControlService is wired in
+            //     bootstrap.ts; remote control is an appliance feature.
+            //   [data-action=julesSelected] — julesSelected is allowlisted and
+            //     dispatches through the same seat machinery; it warns loudly
+            //     when Jules is disabled in setup.
+            //   #btn-build-* (project.html) — invokeConstitutionBuilder/Updater
+            //     are PLANNING_VERBS served by the standalone planning route.
+            // Removing the list keeps the cap for what it actually gates (the
+            // Mission Control panel manifest) without hiding working controls.
             if (caps.automation === false) {
                 document.body.classList.add('host-automation-false');
-                const style = document.createElement('style');
-                style.textContent = `
-.host-automation-false #btn-cli-triggers,
-.host-automation-false #btn-remote-control,
-.host-automation-false button[data-action="julesSelected"],
-.host-automation-false #btn-build-via-planner,
-.host-automation-false #btn-update-via-planner,
-.host-automation-false #btn-build-system,
-.host-automation-false #btn-build-prd-via-planner {
-    display: none !important;
-}
-`;
-                document.head.appendChild(style);
             }
 
             // mission-control / mcpTerminals: the body class is the contract; the selector

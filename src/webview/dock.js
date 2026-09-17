@@ -352,10 +352,25 @@
                     renderControlEntry('assistant', 'No starred cards on the board.', null, null);
                     return;
                 }
-                const r = await agentFetch('/kanban/advance', { planIds: starred.map(c => c.planId || c.sessionId) });
-                renderControlEntry('assistant', r.ok
-                    ? 'Advanced ' + starred.length + ' starred card(s).'
-                    : 'Advance failed: ' + r.error, null, [{ type: 'advance', result: r.body }]);
+                // Explicit dispatch, not a board move: blocking /kanban/dispatch
+                // verifies delivery (append-only dispatched event) before it
+                // answers, and bypasses the board-move triggers gate by
+                // contract. One request per card — each card gets its own
+                // outcome line, not one averaged verdict.
+                const results = [];
+                for (const c of starred) {
+                    const id = c.planId || c.sessionId;
+                    const r = await agentFetch('/kanban/dispatch', { plan: id });
+                    results.push({ id, topic: c.topic || c.planId || id, ok: r.ok, body: r.body, error: r.error });
+                }
+                const delivered = results.filter(r => r.ok && r.body?.delivery === 'delivered');
+                const lines = results.map(r => r.ok
+                    ? `${r.topic}: ${r.body?.delivery || 'dispatched'}${r.body?.dispatchedAgent ? ' → ' + r.body.dispatchedAgent : ''}`
+                    : `${r.topic}: FAILED — ${r.error}`);
+                const summary = delivered.length === results.length
+                    ? `Dispatched ${delivered.length} starred card(s).`
+                    : `Dispatched ${delivered.length}/${results.length} — ${results.length - delivered.length} not delivered or refused.`;
+                renderControlEntry('assistant', summary + '\n' + lines.join('\n'), null, [{ type: 'dispatch', result: results }]);
             } else if (id === 'refresh-board') {
                 await refreshAgentBoard();
                 renderControlEntry('assistant', 'Board refreshed — ' + agentBoardCache.length + ' card(s).', null, null);

@@ -146,11 +146,12 @@
         body.theme-claudify .btn-add-plan.flash img {
             filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(560%) hue-rotate(330deg) brightness(108%) contrast(87%);
         }
-        /* Off states stay greyed-out (no teal to recolor) */
+        /* Off states stay greyed-out (no teal to recolor) — brightness raised to
+           match the legible is-off restyle below; desaturation is the signal. */
         body.theme-claudify .strip-icon-btn.is-off img,
         body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-off img,
         body.theme-claudify .complexity-routing-btn.is-off img {
-            filter: grayscale(1) brightness(0.7);
+            filter: grayscale(1) brightness(0.9);
         }
 
         /* ── Colour kanban icons opt-in (switchboard.theme.colourKanbanIcons) ──
@@ -193,7 +194,7 @@
         body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-off img,
         body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-off img,
         body.theme-claudify.kanban-icons-colour .complexity-routing-btn.is-off img {
-            filter: grayscale(1) brightness(0.7);
+            filter: grayscale(1) brightness(0.9);
         }
 
         /* Claudify: kanban cards = an exact copy of implementation.html's .secondary-btn
@@ -419,11 +420,16 @@
         .kanban-sub-bar .strip-icon-btn.is-active img {
             filter: brightness(1.2);
         }
+        /* is-off = a toggle in its OFF state, not a disabled control: it must
+           stay legible enough to identify at a glance while still reading as
+           off. The off signal is the desaturation + dim; opacity stays high so
+           the glyph is readable. (btn-collapse-coders uses inverted polarity —
+           is-off there means collapse ON — so this must never look disabled.) */
         .kanban-sub-bar .strip-icon-btn.is-off {
-            opacity: 0.5;
+            opacity: 0.85;
         }
         .kanban-sub-bar .strip-icon-btn.is-off img {
-            filter: grayscale(0.5) brightness(0.7);
+            filter: grayscale(0.8) brightness(0.9);
         }
         .kanban-sub-bar .strip-icon-btn.is-paused {
             border-color: transparent;
@@ -2453,8 +2459,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <div style="flex: 1;"></div>
 
             <!-- Right Side: Automation and view controls -->
-            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
-                <img src="{{ICON_CLI_TRIGGERS}}" alt="CLI Triggers">
+            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Board-move CLI triggers (kanban.boardMoveCliTriggersEnabled)&#10;&#10;ON: dragging/moving a card dispatches its agent&#10;OFF: board moves stay quiet — cards move, no agent fires&#10;&#10;Explicit dispatch (command surface, /kanban/dispatch) always fires either way.">
+                <img src="{{ICON_CLI_TRIGGERS}}" alt="Board-Move CLI Triggers">
             </button>
             <button class="strip-icon-btn is-off" id="btn-feature-ultracode" data-tooltip="Feature workflow: prepend ultracode directive to feature prompts">
                 <img src="{{ICON_ULTRACODE}}" alt="Ultracode">
@@ -3789,13 +3795,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         /** Show a transient message in the kanban sub-bar status area (#status-message). */
-        function showStatusBarMessage(text, { isError = false } = {}) {
+        function showStatusBarMessage(text, { isError = false, warn = false } = {}) {
             const statusEl = document.getElementById('status-message');
             if (!statusEl) return;
             statusEl.textContent = text;
             statusEl.style.color = isError
                 ? 'var(--vscode-errorForeground, #ff6b6b)'
-                : 'var(--accent-teal)';
+                : (warn ? 'rgba(255, 165, 0, 1)' : 'var(--accent-teal)');
             statusEl.style.display = 'inline-block';
             statusEl.classList.remove('flashing');
             void statusEl.offsetWidth; // restart animation
@@ -4373,10 +4379,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // at render time it always reports zero).
                     const suppressPipeline = (isCreated && showingBacklog);
                     const pipelineButtons = suppressPipeline ? '' : `
-                        <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
+                        <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (dispatches agents if board-move triggers are on)">
                             <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
                         </button>
-                        <button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage">
+                        <button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage (dispatches agents if board-move triggers are on)">
                             <img src="${ICON_MOVE_ALL}" alt="Move All">
                         </button>
                         <button class="column-icon-btn" data-action="promptSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Copy prompt for selected plans and advance to next stage">
@@ -5128,11 +5134,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             moveAllBtn.appendChild(capSpan);
                         }
                         capSpan.textContent = moveAllLabel;
-                        moveAllBtn.dataset.tooltip = `Move all plans in this column to next stage (cap: ${cap} for team head)`;
+                        moveAllBtn.dataset.tooltip = `Move all plans in this column to next stage (cap: ${cap} for team head; dispatches agents if board-move triggers are on)`;
                     } else {
                         moveAllBtn.classList.remove('column-icon-btn-labeled');
                         if (capSpan) capSpan.remove();
-                        moveAllBtn.dataset.tooltip = 'Move all plans in this column to next stage';
+                        moveAllBtn.dataset.tooltip = 'Move all plans in this column to next stage (dispatches agents if board-move triggers are on)';
                     }
                 }
 
@@ -5151,11 +5157,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             moveSelectedBtn.appendChild(capSpan);
                         }
                         capSpan.textContent = moveSelectedLabel;
-                        moveSelectedBtn.dataset.tooltip = `Move selected plans to next stage (cap: ${cap} for team head; triggers CLI if enabled)`;
+                        moveSelectedBtn.dataset.tooltip = `Move selected plans to next stage (cap: ${cap} for team head; dispatches agents if board-move triggers are on)`;
                     } else {
                         moveSelectedBtn.classList.remove('column-icon-btn-labeled');
                         if (capSpan) capSpan.remove();
-                        moveSelectedBtn.dataset.tooltip = 'Move selected plans to next stage (triggers CLI if enabled)';
+                        moveSelectedBtn.dataset.tooltip = 'Move selected plans to next stage (dispatches agents if board-move triggers are on)';
                     }
                 }
             });
@@ -7260,11 +7266,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // MessageEvent. In the editor webview the provider's return value is
                     // discarded and the operator gets a VS Code toast instead — that
                     // asymmetry is by design, not a gap.
-                    // Both branches are successes. `delivered:false` means the prompt was
-                    // copied (transport.js already wrote it from the `prompt` field).
+                    // `delivery: 'not-delivered'` is the clipboard fallback — a real
+                    // third outcome, rendered amber, not a success and not a failure.
+                    // `delivered:false` means the prompt was copied (transport.js
+                    // already wrote it from the `prompt` field).
                     showStatusBarMessage(msg.message || (msg.delivered
                         ? 'Manage prompt sent to Project Manager terminal.'
-                        : 'Manage prompt copied — paste it into your agent chat.'), { isError: false });
+                        : 'Manage prompt copied — paste it into your agent chat.'),
+                        { isError: false, warn: msg.delivery === 'not-delivered' });
                     break;
                 }
                 case 'switchToTab': {

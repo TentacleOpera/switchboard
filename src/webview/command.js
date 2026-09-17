@@ -88,14 +88,19 @@
     let dispatchStarredOnly = false;
     let moveStarredOnly = false;
 
-    // In-flight two-phase dispatch poll state. The command surface POSTs
-    // /kanban/dispatch with { ack: true } and gets an ack the moment the
-    // dispatch is committed (gate pre-flighted, move+delivery fired) — well
-    // under a second — then polls /kanban/dispatch/state for prompt delivery.
-    // The button re-enables after the ACK, not after the paced paste. Cancelled
-    // on view switch, card change, and a new dispatch so no stale poll settles a
-    // chip for a card the operator is no longer looking at.
-    let activeDispatchPoll = null; // { planId, since, deadline, timer, stopped }
+    // In-flight two-phase dispatch poll state — one entry per dispatched card.
+    // The command surface POSTs /kanban/dispatch with { ack: true } and gets an
+    // ack the moment the dispatch is committed (gate pre-flighted, move+delivery
+    // fired) — well under a second — then polls /kanban/dispatch/state for
+    // prompt delivery. The button re-enables after the ACK, not after the paced
+    // paste. All polls cancel together on view switch, card change, and a new
+    // dispatch so no stale poll settles a chip for a card the operator is no
+    // longer looking at.
+    const activeDispatchPolls = new Map(); // planId -> { planId, eventSince, deadline, timer, stopped }
+    // Aggregate for the current dispatch round — the chip reports per-card
+    // outcomes ("dispatched 3/5; 2 refused"), never a single-card verdict for
+    // a multi-card gesture.
+    let dispatchRound = null; // { total, pending, settled: Map<planId, {state, label}> }
 
     // Feature Subtask Counts Cache
     const featureSubtaskCounts = new Map();
@@ -213,6 +218,7 @@
     const dispatchCardsList = document.getElementById('dispatch-cards-list');
     const dispatchStarToggle = document.getElementById('dispatch-star-toggle');
     const dispatchStatusChip = document.getElementById('dispatch-status-chip');
+    const dispatchTriggerState = document.getElementById('dispatch-trigger-state');
     const btnDispatchView = document.getElementById('btn-dispatch-view');
     const btnDispatch = document.getElementById('btn-dispatch');
 
@@ -288,6 +294,7 @@
         setupEventHandlers();
         window.addEventListener('message', handleIncomingMessage);
         refreshAllData();
+        void refreshDispatchTriggerState();
     }
 
     function handleIncomingMessage(event) {
@@ -355,9 +362,13 @@
                 closeTerminalViewer();
             }
 
-            // Leaving the dispatch view cancels its in-flight delivery poll so a
+            // Leaving the dispatch view cancels its in-flight delivery polls so a
             // stale poll never settles a chip the operator can no longer see.
             cancelDispatchPoll();
+
+            // Entering the dispatch view re-reads the gate state — it can have
+            // been toggled on the board surface since the last visit.
+            if (viewName === 'dispatch') { void refreshDispatchTriggerState(); }
 
             // Update nav buttons active states
             phoneNavBtns.forEach(btn => {
@@ -1720,84 +1731,112 @@
 
     // ── 5. Actions Execution ───────────────────────────────────────────
 
-    // Cancel any in-flight dispatch poll. Called on view switch, card change,
+    // Cancel every in-flight dispatch poll. Called on view switch, card change,
     // and before starting a new dispatch, so a stale poll never settles a chip
     // for a card the operator is no longer looking at. Leaves the chip as-is —
     // the caller decides what to show next.
     function cancelDispatchPoll() {
-        if (activeDispatchPoll) {
-            activeDispatchPoll.stopped = true;
-            if (activeDispatchPoll.timer) {
-                clearTimeout(activeDispatchPoll.timer);
-            }
-            activeDispatchPoll = null;
+        for (const poll of activeDispatchPolls.values()) {
+            poll.stopped = true;
+            if (poll.timer) { clearTimeout(poll.timer); }
+        }
+        activeDispatchPolls.clear();
+    }
+
+    // Fold the per-card poll outcomes into the single status chip. Each entry
+    // is { state, label }; the chip reports counts, never one card's verdict
+    // for a multi-card dispatch.
+    function updateDispatchChip() {
+        if (!dispatchRound) return;
+        const { total, settled } = dispatchRound;
+        const pending = total - settled.size;
+        const counts = { delivered: 0, 'not-delivered': 0, refused: 0, unknown: 0 };
+        for (const r of settled.values()) { counts[r.state] = (counts[r.state] || 0) + 1; }
+        if (pending > 0) {
+            dispatchStatusChip.textContent = `Dispatching — ${settled.size}/${total} settled${counts.refused ? `, ${counts.refused} refused` : ''}`;
+            dispatchStatusChip.className = 'status-chip pending';
+            return;
+        }
+        const parts = [];
+        if (counts.delivered) parts.push(`${counts.delivered} delivered`);
+        if (counts['not-delivered']) parts.push(`${counts['not-delivered']} not delivered`);
+        if (counts.refused) parts.push(`${counts.refused} refused`);
+        if (counts.unknown) parts.push(`${counts.unknown} uncertain`);
+        dispatchStatusChip.textContent = `Dispatched ${counts.delivered}/${total}` + (parts.length > 1 ? ` — ${parts.join(', ')}` : '');
+        dispatchStatusChip.className = counts.delivered === total
+            ? 'status-chip success'
+            : (counts.delivered === 0 ? 'status-chip error' : 'status-chip unknown');
+    }
+
+    function settleDispatchPoll(planId, state, label) {
+        activeDispatchPolls.delete(planId);
+        if (dispatchRound) {
+            dispatchRound.settled.set(planId, { state, label });
+            updateDispatchChip();
+        }
+        if (activeDispatchPolls.size === 0) {
+            selectedDispatchCardIds.clear();
+            renderDispatchView();
         }
     }
 
-    // Poll /kanban/dispatch/state for the second phase (prompt delivery) of an
+    // Poll /kanban/dispatch/state for the second phase (prompt delivery) of one
     // acked dispatch. 1s interval, capped at the server-supplied deadline (60s).
-    // Settles the chip to success (delivered) or unknown (deadline passed) and
-    // stops itself. No-op if the poll was cancelled or superseded.
-    function pollDispatchDelivery(planId, since, deadline) {
-        cancelDispatchPoll();
-        const poll = { planId, since, deadline, timer: null, stopped: false };
-        activeDispatchPoll = poll;
+    // States are the shared vocabulary: sent (in flight) / delivered /
+    // not-delivered (with reason) / unknown (UI timeout — NOT a delivery
+    // verdict; the prompt may still be pasting). Per-card — a multi-card
+    // dispatch runs one poll per planId.
+    function pollDispatchDelivery(planId, eventSince, deadline) {
+        const poll = { planId, eventSince, deadline, timer: null, stopped: false };
+        activeDispatchPolls.set(planId, poll);
         const DISPATCH_POLL_INTERVAL_MS = 1000;
 
         const tick = async () => {
             if (poll.stopped) return;
-            // Deadline passed — settle to unknown and stop. The wording matches
-            // the synchronous 502 vocabulary; "unknown" is a UI timeout, not a
-            // delivery verdict (the prompt may still be pasting).
             if (Date.now() >= deadline) {
-                if (activeDispatchPoll === poll) {
-                    dispatchStatusChip.textContent = 'Delivery status uncertain — the prompt may still be pasting. Check the terminal agent.';
-                    dispatchStatusChip.className = 'status-chip unknown';
-                    activeDispatchPoll = null;
+                if (activeDispatchPolls.get(planId) === poll) {
+                    settleDispatchPoll(planId, 'unknown', 'Delivery status uncertain — the prompt may still be pasting. Check the terminal agent.');
                 }
                 return;
             }
             try {
                 const params = new URLSearchParams({
                     planId,
-                    since: since === null ? '' : String(since),
                     deadline: String(deadline)
                 });
+                // eventSince is the append-only event baseline — the evidence the
+                // state endpoint scopes the verdict to. `since` is the legacy
+                // ownerSince contract, kept only when the server sent no baseline.
+                if (typeof eventSince === 'number') {
+                    params.set('eventSince', String(eventSince));
+                } else {
+                    params.set('since', '');
+                }
                 if (currentWorkspaceRoot) params.set('workspaceRoot', currentWorkspaceRoot);
                 const res = await fetch(`/kanban/dispatch/state?${params.toString()}`);
                 const result = await res.json().catch(() => null);
-                if (poll.stopped || activeDispatchPoll !== poll) return;
+                if (poll.stopped || activeDispatchPolls.get(planId) !== poll) return;
                 if (!res.ok || !result) {
-                    // Transient poll error — keep the pending chip and retry.
+                    // Transient poll error — keep the pending entry and retry.
                     poll.timer = setTimeout(tick, DISPATCH_POLL_INTERVAL_MS);
                     return;
                 }
-                if (result.state === 'dispatched') {
-                    activeDispatchPoll = null;
-                    // `seat` is the receiving terminal's name; `dispatchedAgent`
-                    // can be 'unknown', an IDE-shaped string or a bare role
-                    // word, so prefer the seat.
-                    dispatchStatusChip.textContent = `Dispatched to ${result.seat || result.dispatchedAgent || 'agent'}`;
-                    dispatchStatusChip.className = 'status-chip success';
-                    renderDispatchView();
+                if (result.state === 'delivered') {
+                    settleDispatchPoll(planId, 'delivered', result.seat || result.dispatchedAgent || 'agent');
+                    return;
+                }
+                if (result.state === 'not-delivered') {
+                    settleDispatchPoll(planId, 'not-delivered', result.error || 'delivery failed');
                     return;
                 }
                 if (result.state === 'unknown') {
-                    activeDispatchPoll = null;
-                    dispatchStatusChip.textContent = result.error || 'Delivery status uncertain — the prompt may still be pasting. Check the terminal agent.';
-                    dispatchStatusChip.className = 'status-chip unknown';
+                    settleDispatchPoll(planId, 'unknown', result.error || 'Delivery status uncertain — the prompt may still be pasting. Check the terminal agent.');
                     return;
                 }
-                // 'delivering' — poll again. Upgrade the chip the first time the
-                // server can name the receiving seat (the ack could not when
-                // routing had no origin terminal).
-                if (result.seat) {
-                    dispatchStatusChip.textContent = `Dispatched — ${result.seat} is receiving the prompt`;
-                    dispatchStatusChip.className = 'status-chip pending';
-                }
+                // 'sent' — delivery still in flight; poll again.
                 poll.timer = setTimeout(tick, DISPATCH_POLL_INTERVAL_MS);
             } catch {
-                if (poll.stopped || activeDispatchPoll !== poll) return;
+                if (poll.stopped || activeDispatchPolls.get(planId) !== poll) return;
                 poll.timer = setTimeout(tick, DISPATCH_POLL_INTERVAL_MS);
             }
         };
@@ -1805,64 +1844,90 @@
         poll.timer = setTimeout(tick, 0);
     }
 
+    // Read the board-move trigger setting for the indicator. This is an
+    // honest read of the scoped store via the kanban verb route — the
+    // getSetting verb resolves `kanban.*` keys through the provider's tiered
+    // resolver (with legacy-key migration), never through the prompts prefix.
+    async function refreshDispatchTriggerState() {
+        if (!dispatchTriggerState) return;
+        try {
+            const res = await fetch('/kanban/verb/getSetting', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'kanban.boardMoveCliTriggersEnabled' })
+            });
+            const result = await res.json().catch(() => null);
+            if (!res.ok || !result || result.success === false) {
+                dispatchTriggerState.textContent = 'board-move triggers: ?';
+                dispatchTriggerState.title = 'Could not read kanban.boardMoveCliTriggersEnabled — ' + (result?.error || `HTTP ${res.status}`);
+                return;
+            }
+            const on = result.value === true;
+            dispatchTriggerState.textContent = `board-move triggers: ${on ? 'on' : 'off'}`;
+            dispatchTriggerState.title = `kanban.boardMoveCliTriggersEnabled = ${on}` +
+                (result.source ? ` (${result.source})` : '') +
+                ' — gates board drag/move gestures only; DISPATCH always fires.';
+        } catch {
+            dispatchTriggerState.textContent = 'board-move triggers: ?';
+            dispatchTriggerState.title = 'kanban.boardMoveCliTriggersEnabled unreadable (offline)';
+        }
+    }
+
     async function executeDispatch() {
         if (selectedDispatchCardIds.size === 0) return;
 
-        // A new dispatch supersedes any in-flight poll for a previous card.
+        // A new dispatch supersedes every in-flight poll from a previous round.
         cancelDispatchPoll();
 
-        // Apply immediate optimistic state (< 100ms)
-        dispatchStatusChip.textContent = 'Advancing card(s)...';
+        const planIds = [...selectedDispatchCardIds];
+        dispatchRound = { total: planIds.length, settled: new Map() };
+        dispatchStatusChip.textContent = planIds.length === 1 ? 'Dispatching card...' : `Dispatching ${planIds.length} cards...`;
         dispatchStatusChip.className = 'status-chip pending';
         btnDispatch.disabled = true;
 
-        const planIds = [...selectedDispatchCardIds];
-        try {
-            const res = await fetch('/kanban/advance', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    planIds,
-                    workspaceRoot: currentWorkspaceRoot
-                })
-            });
-
-            const result = await res.json().catch(() => null);
-            const legs = Array.isArray(result?.moved) ? result.moved : [];
-            // A leg with count 0 did NOT advance — the card was already in the final
-            // stage, or the verb refused. Never let one read as a move.
-            const advanced = legs.reduce((n, l) => n + (l.count || 0), 0);
-            const stalled = legs.filter(l => !l.count);
-            if (res.ok && result?.success) {
-                // Always say how many, so a batch never reads like a single-card advance.
-                dispatchStatusChip.textContent = legs.length === 1 && legs[0].count === 1
-                    ? `Advanced ${legs[0].from} → ${legs[0].column || 'next stage'}`
-                    : `Advanced ${advanced} cards — ` +
-                      legs.map(l => `${l.count} from ${l.from} → ${l.column}`).join(', ');
-                dispatchStatusChip.className = 'status-chip success';
-                selectedDispatchCardIds.clear();
-                renderDispatchView();
-            } else if (res.ok && stalled.length) {
-                // 207: some or none advanced. Name the columns that did not, and why.
-                const why = stalled.map(l => `${l.from}: ${l.error || 'did not advance'}`).join('; ');
-                dispatchStatusChip.textContent = advanced
-                    ? `Advanced ${advanced} of ${result.count} — ${why}`
-                    : why;
-                dispatchStatusChip.className = advanced ? 'status-chip unknown' : 'status-chip error';
-                if (advanced) {
-                    selectedDispatchCardIds.clear();
+        // One gesture is N explicit dispatches — /kanban/dispatch is single-card
+        // by contract, and per-card acks are what let the report say
+        // "dispatched 3/5; 2 refused" instead of one hollow success. No
+        // targetColumn: the endpoint complexity-routes each card itself; the
+        // source-column selector in this view is a FILTER, not a target.
+        for (const planId of planIds) {
+            try {
+                const res = await fetch('/kanban/dispatch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        plan: planId,
+                        ack: true,
+                        workspaceRoot: currentWorkspaceRoot
+                    })
+                });
+                const result = await res.json().catch(() => null);
+                if (!res.ok || !result || result.success === false) {
+                    const err = result?.error || `dispatch refused (HTTP ${res.status})`;
+                    dispatchRound.settled.set(planId, { state: 'refused', label: err });
+                    updateDispatchChip();
+                    continue;
                 }
-                renderDispatchView();
-                btnDispatch.disabled = advanced > 0;
-            } else {
-                dispatchStatusChip.textContent = result?.error || `Advance failed (HTTP ${res.status})`;
-                dispatchStatusChip.className = 'status-chip error';
-                btnDispatch.disabled = false;
+                // Acked: move committed, delivery in flight. Poll for the second
+                // phase; the event baseline scopes the verdict to THIS attempt.
+                pollDispatchDelivery(
+                    result.planId || planId,
+                    typeof result.dispatchEventBaseline === 'number' ? result.dispatchEventBaseline : null,
+                    result.deadline || (Date.now() + 60000)
+                );
+            } catch (err) {
+                dispatchRound.settled.set(planId, { state: 'refused', label: 'dispatch failed (offline)' });
+                updateDispatchChip();
             }
-        } catch (err) {
-            dispatchStatusChip.textContent = 'Advance failed (offline)';
-            dispatchStatusChip.className = 'status-chip unknown';
-            btnDispatch.disabled = false;
+        }
+        btnDispatch.disabled = false;
+        updateDispatchChip();
+        // Nothing acked — every card refused at the gate. Clear selection only
+        // when at least one dispatch is actually in flight.
+        if (activeDispatchPolls.size === 0) {
+            dispatchStatusChip.className = dispatchStatusChip.textContent.startsWith('Dispatched 0/')
+                ? 'status-chip error'
+                : dispatchStatusChip.className;
         }
     }
 
@@ -2778,10 +2843,26 @@
                     renderAgentEntryMobile('assistant', 'No starred cards on the board.', null, null);
                     return;
                 }
-                const r = await agentFetchMobile('/kanban/advance', { planIds: starred.map(c => c.planId || c.sessionId) });
-                renderAgentEntryMobile('assistant', r.ok
-                    ? 'Advanced ' + starred.length + ' starred card(s).'
-                    : 'Advance failed: ' + r.error, null, [{ type: 'advance', result: r.body }]);
+                // Explicit dispatch, not a board move: /kanban/dispatch fires the
+                // agent regardless of the board-move triggers gate, and its
+                // response is the verified outcome (move observed AND a dispatch
+                // event recorded), not the hollow {success:true} an advance or a
+                // raw verb call returns. One request per card so each card's
+                // outcome is reported, not averaged.
+                const results = [];
+                for (const c of starred) {
+                    const id = c.planId || c.sessionId;
+                    const r = await agentFetchMobile('/kanban/dispatch', { plan: id, workspaceRoot: currentWorkspaceRoot });
+                    results.push({ id, topic: c.topic || c.planId || id, ok: r.ok, body: r.body, error: r.error });
+                }
+                const delivered = results.filter(r => r.ok && r.body?.delivery === 'delivered');
+                const lines = results.map(r => r.ok
+                    ? `${r.topic}: ${r.body?.delivery || 'dispatched'}${r.body?.dispatchedAgent ? ' → ' + r.body.dispatchedAgent : ''}`
+                    : `${r.topic}: FAILED — ${r.error}`);
+                const summary = delivered.length === results.length
+                    ? `Dispatched ${delivered.length} starred card(s).`
+                    : `Dispatched ${delivered.length}/${results.length} — ${results.length - delivered.length} not delivered or refused.`;
+                renderAgentEntryMobile('assistant', summary + '\n' + lines.join('\n'), null, [{ type: 'dispatch', result: results }]);
             } else if (id === 'refresh-board') {
                 await refreshAgentBoardMobile();
                 renderAgentEntryMobile('assistant', 'Board refreshed — ' + agentBoardCache.length + ' card(s).', null, null);

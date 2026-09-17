@@ -297,7 +297,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _fsStateWatcher?: FSWatcher;
     private _refreshDebounceTimer?: NodeJS.Timeout;
     private _metadataDebounceTimers = new Map<string, NodeJS.Timeout>();
-    private _cliTriggersEnabled: boolean;
+    private _boardMoveCliTriggersEnabled: boolean;
     private _dynamicComplexityRoutingEnabled: boolean;
     /** Board view toggle: collapse the coder columns into the synthetic AUTOCODE
      *  bucket. Host-side so surfaces other than the board webview (the terminals
@@ -603,7 +603,11 @@ export class KanbanProvider implements vscode.Disposable {
             void this._drainRetiredWorktreeModeStash(this._currentWorkspaceRoot)
                 .catch(e => console.warn('[KanbanProvider] constructor: failed to drain retired worktree mode stash:', e));
         }
-        this._cliTriggersEnabled = this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
+        {
+            const t = this._resolveBoardMoveCliTriggers();
+            this._boardMoveCliTriggersEnabled = t.value;
+            console.log(`[KanbanProvider] boardMoveCliTriggersEnabled=${t.value} (source: ${t.source})`);
+        }
         this._dynamicComplexityRoutingEnabled = this._getScopedSetting<boolean>(
             'kanban.dynamicComplexityRoutingEnabled',
             true
@@ -925,6 +929,125 @@ export class KanbanProvider implements vscode.Disposable {
         return defaultValue;
     }
 
+    /**
+     * Tagged read of the board-move CLI-triggers gate, with legacy-key migration.
+     *
+     * The setting's name carries its scope: it gates kanban board move GESTURES
+     * (drag/drop, moveSelected, moveAll) and nothing else — explicit dispatch
+     * (`/kanban/dispatch`, verb-route `bypassTriggerGate`) never consults it.
+     *
+     * `_getScopedSetting` returns a bare `T` — "which store answered?" is
+     * unanswerable, which is the repo's fallback rule for a behaviour-affecting
+     * configuration read. This resolver returns `{ value, source }` where source
+     * names key AND tier (`new:project`, `new:workspace`, `new:global`,
+     * `new:db-legacy`, `legacy:<tier>`, `default`), logged by the callers that
+     * seed the cached field.
+     *
+     * Migration is lazy and self-healing — never depends on a prior migration
+     * having run. The legacy `kanban.cliTriggersEnabled` key is walked through
+     * the same tier order (project → workspace → globalState → db config); the
+     * first tier holding a parseable value supplies it AND receives the new-key
+     * write, so a board that set the old key in any tier keeps its intent under
+     * the new name. The legacy row is left in place, never rewritten — one
+     * direction, one source of truth. A present-but-corrupt value is treated as
+     * unset and logged — a corrupt config must not read as a configured one.
+     */
+    public static readonly BOARD_MOVE_CLI_TRIGGERS_KEY = 'kanban.boardMoveCliTriggersEnabled';
+    private static readonly LEGACY_CLI_TRIGGERS_KEY = 'kanban.cliTriggersEnabled';
+
+    public _resolveBoardMoveCliTriggers(initiatorProject?: string | null): { value: boolean; source: string } {
+        const NEW_KEY = KanbanProvider.BOARD_MOVE_CLI_TRIGGERS_KEY;
+        const LEGACY_KEY = KanbanProvider.LEGACY_CLI_TRIGGERS_KEY;
+        const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+        const projectTier = this._projectTier(initiatorProject);
+        let db: KanbanDatabase | null = null;
+        if (root) {
+            try {
+                const candidate = KanbanDatabase.forWorkspace(root);
+                if (candidate.isOpen()) { db = candidate; }
+            } catch { /* db-backed tiers unavailable */ }
+        }
+        // Raw per-tier read: JSON.parse here (not getConfigJsonSync) so a
+        // present-but-unparseable row is distinguishable from an absent one.
+        const parse = (raw: string | null | undefined): { present: boolean; value?: boolean; corrupt?: boolean } => {
+            if (raw === null || raw === undefined) { return { present: false }; }
+            try {
+                const v = JSON.parse(raw);
+                return typeof v === 'boolean' ? { present: true, value: v } : { present: true, corrupt: true };
+            } catch {
+                return { present: true, corrupt: true };
+            }
+        };
+        // Same tier order _getScopedSetting walks: project (when a project is
+        // selected) → workspace db config (override ON) → globalState → db
+        // config (the legacy store — same table, read again as the final tier).
+        const readKey = (key: string): { value?: boolean; corrupt?: boolean; tier?: string } => {
+            if (db && projectTier) {
+                const r = parse(db.getProjectConfigRawSync(projectTier, key));
+                if (r.present) { return { ...r, tier: 'project' }; }
+            }
+            if (db && this._workspaceOverrideEnabled) {
+                const r = parse(db.getConfigSync(key));
+                if (r.present) { return { ...r, tier: 'workspace' }; }
+            }
+            const gv = this._context?.globalState?.get<unknown>(key);
+            if (gv !== undefined) {
+                return typeof gv === 'boolean'
+                    ? { value: gv, tier: 'global' }
+                    : { corrupt: true, tier: 'global' };
+            }
+            if (db) {
+                const r = parse(db.getConfigSync(key));
+                if (r.present) { return { ...r, tier: 'db-legacy' }; }
+            }
+            return {};
+        };
+        const migrateTo = (tierName: string, v: boolean): void => {
+            try {
+                if (tierName === 'project' && db && projectTier) {
+                    void db.setProjectConfigJson(projectTier, NEW_KEY, v);
+                } else if (tierName === 'workspace' || tierName === 'db-legacy') {
+                    if (db) { void db.setConfigJson(NEW_KEY, v); }
+                } else if (tierName === 'global') {
+                    void this._context?.globalState?.update(NEW_KEY, v);
+                }
+            } catch (err) {
+                console.warn(`[KanbanProvider] ${NEW_KEY} migration write to tier '${tierName}' failed:`, err);
+            }
+        };
+
+        const found = readKey(NEW_KEY);
+        if (found.corrupt) {
+            console.warn(`[KanbanProvider] ${NEW_KEY} in tier '${found.tier}' is present but unparseable — treating as unset`);
+        }
+        if (found.value !== undefined) {
+            return { value: found.value, source: `new:${found.tier}` };
+        }
+        const legacy = readKey(LEGACY_KEY);
+        if (legacy.corrupt) {
+            console.warn(`[KanbanProvider] legacy ${LEGACY_KEY} in tier '${legacy.tier}' is present but unparseable — treating as unset`);
+        }
+        if (legacy.value !== undefined && legacy.tier) {
+            migrateTo(legacy.tier, legacy.value);
+            return { value: legacy.value, source: `legacy:${legacy.tier}` };
+        }
+        return { value: true, source: 'default' };
+    }
+
+    /**
+     * Resolve a `kanban.*` setting key for the getSetting verb. The board-move
+     * gate goes through its tagged/migrating resolver so the read answers
+     * "which tier supplied this?" too; other kanban keys read through the plain
+     * scoped store. Returns undefined when the key holds nothing.
+     */
+    public _resolveKanbanSettingKey(key: string, initiatorProject?: string | null): { value: unknown; source?: string } | undefined {
+        if (key === KanbanProvider.BOARD_MOVE_CLI_TRIGGERS_KEY) {
+            return this._resolveBoardMoveCliTriggers(initiatorProject);
+        }
+        const value = this._getScopedSetting<unknown>(key, undefined, initiatorProject);
+        return value === undefined ? undefined : { value };
+    }
+
     /** Scope-aware write. Project-ON → project_config only. Workspace-ON → db config only.
      *  Both OFF → globalState + db config mirror (verbatim _updateSetting body). */
     public async _updateScopedSetting<T>(key: string, value: T, initiatorProject?: string | null): Promise<void> {
@@ -954,7 +1077,7 @@ export class KanbanProvider implements vscode.Disposable {
     // ── Global Override: snapshot-on-toggle (plan 04) ──────────────────────
     // Any new scope-aware key must be added here OR match the switchboard.prompts. prefix.
     private static readonly SCOPE_AWARE_KEYS: string[] = [
-        'kanban.cliTriggersEnabled',
+        'kanban.boardMoveCliTriggersEnabled',
         'kanban.dynamicComplexityRoutingEnabled',
         'kanban.allowUnknownComplexityAutoMove',
         'kanban.columnDragDropModes',
@@ -1014,7 +1137,11 @@ export class KanbanProvider implements vscode.Disposable {
 
     private _reloadSettingsFromStore(): void {
         this._loadOverrideFlags();
-        this._cliTriggersEnabled = this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
+        {
+            const t = this._resolveBoardMoveCliTriggers();
+            this._boardMoveCliTriggersEnabled = t.value;
+            console.log(`[KanbanProvider] boardMoveCliTriggersEnabled=${t.value} (source: ${t.source})`);
+        }
         this._dynamicComplexityRoutingEnabled = this._getScopedSetting<boolean>(
             'kanban.dynamicComplexityRoutingEnabled',
             true
@@ -1166,8 +1293,8 @@ export class KanbanProvider implements vscode.Disposable {
         return normalized;
     }
 
-    public get cliTriggersEnabled(): boolean {
-        return this._cliTriggersEnabled;
+    public get boardMoveCliTriggersEnabled(): boolean {
+        return this._boardMoveCliTriggersEnabled;
     }
 
     public get dynamicComplexityRoutingEnabled(): boolean {
@@ -1519,7 +1646,7 @@ export class KanbanProvider implements vscode.Disposable {
             // scope. `scope` is passed raw — the accessors own the `!== undefined`
             // precedence (an explicitly-null/unassigned scope must resolve to NO
             // project tier, never inherit the singleton).
-            const cliEnabled = this._cliTriggersForScope(scope);
+            const cliEnabled = this._boardMoveCliTriggersForScope(scope);
             const routingConfig = this._routingMapForScope(scope);
 
             const cpStatus = this.getControlPlaneSelectionStatus(root);
@@ -2680,7 +2807,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'cliTriggersState',
-                enabled: this._cliTriggersForScope(scope)
+                enabled: this._boardMoveCliTriggersForScope(scope)
             }));
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
@@ -4524,7 +4651,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }));
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'cliTriggersState',
-                enabled: this._cliTriggersForScope(scope)
+                enabled: this._boardMoveCliTriggersForScope(scope)
             }));
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
@@ -4744,7 +4871,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }));
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'cliTriggersState',
-                enabled: this._cliTriggersForScope(scope)
+                enabled: this._boardMoveCliTriggersForScope(scope)
             }));
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
@@ -8849,9 +8976,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
         return this._getScopedSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null, scope);
     }
 
-    public _cliTriggersForScope(scope?: string | null): boolean {
-        if (scope === undefined) return this._cliTriggersEnabled;
-        return this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true, scope);
+    public _boardMoveCliTriggersForScope(scope?: string | null): boolean {
+        if (scope === undefined) return this._boardMoveCliTriggersEnabled;
+        return this._resolveBoardMoveCliTriggers(scope).value;
     }
 
     public _columnDragDropModesForScope(scope?: string | null, columns: any[] = []): Record<string, 'cli' | 'prompt' | 'disabled'> {
@@ -9706,7 +9833,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * only), visible-agent resolution, target-column resolution + degradation,
      * per-card forward/backward classification, per-card moveCardToColumn,
      * run-sheet recording, cascade-id collection, moveCards/moveCardsFailed
-     * pushes, the _cliTriggersEnabled gate, and the dispatch call (suppressed
+     * pushes, the _boardMoveCliTriggersEnabled gate, and the dispatch call (suppressed
      * entirely when `options.dispatch === false` — the move-only mode).
      *
      * Returns `moved[]` with a resolved `targetColumn` per card — the payload
@@ -9824,7 +9951,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // POST /kanban/dispatch). It was threaded into this operation but never
                 // read, so an explicit API dispatch onto CODED_AUTO moved the cards and
                 // then silently declined to dispatch whenever the toggle was off.
-                if (mayDispatch && (this._cliTriggersEnabled || options.bypassTriggerGate)) {
+                if (mayDispatch && (this._boardMoveCliTriggersEnabled || options.bypassTriggerGate)) {
                     if (forwardSids.length === 1) {
                         await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, forwardSids[0], undefined, workspaceRoot, undefined);
                         dispatched = true;
@@ -9878,7 +10005,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
 
         let dispatched = false;
-        if (mayDispatch && (this._cliTriggersEnabled || options.bypassTriggerGate) && dispatchIds.length > 0) {
+        if (mayDispatch && (this._boardMoveCliTriggersEnabled || options.bypassTriggerGate) && dispatchIds.length > 0) {
             const role = options.dispatchRole ?? this._columnToRole(target);
             if (role) {
                 if (dispatchIds.length === 1) {
@@ -10006,6 +10133,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             updateScopedRoleConfig: (roleName, value, initiatorProject) => this.updateScopedRoleConfig(roleName, value, initiatorProject),
             getScopedSetting: (key, defaultValue, initiatorProject) => this._getScopedSetting(key, defaultValue, initiatorProject),
             updateScopedSetting: (key, value, initiatorProject) => this._updateScopedSetting(key, value, initiatorProject),
+            resolveKanbanSetting: (key, initiatorProject) => this._resolveKanbanSettingKey(key, initiatorProject),
             remoteGetConfigPayload: (wsRoot) => this.remoteGetConfigPayload(wsRoot),
             remoteSetConfig: (wsRoot, config) => this.remoteSetConfig(wsRoot, config),
             isPtyTerminalName: (name) => (this._taskViewerProvider as any)?._isLikelyPtyDispatchTarget?.(name) ?? false,
@@ -10202,7 +10330,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
      */
     public async resolveDispatchForApi(workspaceRootIn: string, targetColumn: string): Promise<{
         role: string | null;
-        cliTriggersEnabled: boolean;
+        boardMoveCliTriggersEnabled: boolean;
         dragDropMode: string | null;
         source: string | null;
     }> {
@@ -10211,7 +10339,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const role = spec?.role || this._columnToRole(targetColumn) || null;
         return {
             role,
-            cliTriggersEnabled: this._cliTriggersEnabled,
+            boardMoveCliTriggersEnabled: this._resolveBoardMoveCliTriggers().value,
             dragDropMode: spec?.dragDropMode ?? null,
             source: spec?.source ?? null,
         };
@@ -11315,14 +11443,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // advance affordance): the card has already moved; the setting now
                 // suppresses only the dispatch. Previously this arm refused the
                 // whole drop — the move included — when the toggle was off.
-                const dispatchAllowed = this._cliTriggersEnabled || !!msg?.bypassTriggerGate;
+                const dispatchAllowed = this._boardMoveCliTriggersEnabled || !!msg?.bypassTriggerGate;
                 if (!dispatchAllowed) {
                     // With no root nothing moved and nothing can dispatch —
                     // refuse honestly rather than report a hollow success.
                     if (!workspaceRoot) { return { success: false, error: 'CLI triggers are disabled' }; }
                     this._scheduleBoardRefresh(workspaceRoot);
-                    return { success: true, role, targetColumn, dispatchable: canDispatch, dispatched: false };
+                    return { success: true, role, targetColumn, dispatchable: canDispatch, dispatched: false, delivery: 'not-delivered' };
                 }
+                // One delivery vocabulary across the dispatch surfaces: the
+                // clipboard/prompt fallbacks below are 'not-delivered', not
+                // silent success — the prompt is recoverable but no seat took it.
+                let dispatchDelivered = false;
                 if (dispatchSpec?.source === 'custom-user' && workspaceRoot && this._taskViewerProvider) {
                     // NON-TEAM-ONLY: the board enum's cli-ide/ide-ide values select
                     // IDE-clipboard (prompt) vs CLI dispatch for the NON-TEAM lead.
@@ -11368,6 +11500,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             skipClear: !!msg?.skipClear,
                             clearBeforePrompt: typeof msg?.clearBeforePrompt === 'boolean' ? msg.clearBeforePrompt : undefined,
                         });
+                        if (dispatched) { dispatchDelivered = true; }
                         if (dispatched && plannerCursorLocationKey && tvp) {
                             await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
                         }
@@ -11416,7 +11549,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                     }
                     this._scheduleBoardRefresh(workspaceRoot);
-                    return { success: true, role, targetColumn };
+                    return { success: true, role, targetColumn, dispatched: dispatchDelivered, delivery: dispatchDelivered ? 'delivered' : 'not-delivered' };
                 }
                 if (canDispatch) {
                     // NON-TEAM-ONLY: the board enum's ide-cli/ide-ide values select
@@ -11437,6 +11570,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             void this._seams().ui.showInformationMessage('Lead prompt copied to clipboard (IDE mode).');
                             await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
                             await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, undefined, true);
+                            dispatchDelivered = true;
                             if (!this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                             }
@@ -11463,6 +11597,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         // Trailing arg is the per-surface fleet discriminator — see the
                         // custom-user branch above and ConfiguredKanbanDispatchOptions.
                         const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, undefined, !!msg?.bypassTriggerGate, !!msg?.unattended, msg?.originTerminal, !!msg?.skipClear, msg?.clearBeforePrompt);
+                        if (dispatched) { dispatchDelivered = true; }
                         if (dispatched && workspaceRoot) {
                             // Advance the rotation cursor AFTER successful dispatch so a failed dispatch
                             // doesn't skip a terminal (consistent with _distributePlannerDispatch).
@@ -11535,7 +11670,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // Fires even when canDispatch is false (agent unavailable) or dispatched is false:
                 // corrects optimistic UI that already moved the card visually.
                 this._scheduleBoardRefresh(workspaceRoot ?? undefined);
-                return { success: true, role, targetColumn, dispatchable: canDispatch };
+                return { success: true, role, targetColumn, dispatchable: canDispatch, dispatched: dispatchDelivered, delivery: dispatchDelivered ? 'delivered' : 'not-delivered' };
             }
             case 'triggerBatchAction': {
                 const { sessionIds, targetColumn } = msg;
@@ -11603,7 +11738,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // refused the whole drop when the toggle was off, and ignored
                 // bypassTriggerGate entirely — the same defect _advanceCards's
                 // CODED_AUTO branch documents, still live here until now.
-                const dispatchAllowed = this._cliTriggersEnabled || !!msg?.bypassTriggerGate;
+                const dispatchAllowed = this._boardMoveCliTriggersEnabled || !!msg?.bypassTriggerGate;
 
                 if (!workspaceRoot) {
                     // Nothing to persist against — dispatch the raw ids and let
@@ -11800,10 +11935,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 return { success: true, enabled };
             }
             case 'toggleCliTriggers':
-                this._cliTriggersEnabled = !!msg.enabled;
+                this._boardMoveCliTriggersEnabled = !!msg.enabled;
                 this._markConfigDirty();
-                await this._updateScopedSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
-                return { success: true, enabled: this._cliTriggersEnabled };
+                await this._updateScopedSetting('kanban.boardMoveCliTriggersEnabled', this._boardMoveCliTriggersEnabled, msg.initiatorProject);
+                return { success: true, enabled: this._boardMoveCliTriggersEnabled };
             case 'setFeatureWorkflowMode': {
                 // New shape: { ultracode: boolean, goal: boolean, drive: boolean }
                 // Legacy shape: { mode: 'none'|'ultracode'|'goal' } — tolerated for back-compat
@@ -12330,7 +12465,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 allMovedIds.push(...cascadeIds);
                             }
                             this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
-                            if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
+                            if (dispatchSpec.dragDropMode === 'prompt' || this._boardMoveCliTriggersEnabled) {
                                 const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                                 const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, msg.sessionIds, {
                                     targetColumn: nextCol,
@@ -12352,7 +12487,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                         } else {
                             const role = this._columnToRole(nextCol);
-                            if (role === 'planner' && this._cliTriggersEnabled) {
+                            if (role === 'planner' && this._boardMoveCliTriggersEnabled) {
                                 const selectedCards = this._lastCards.filter(card =>
                                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                                 );
@@ -12460,7 +12595,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 allMovedIds.push(...cascadeIds);
                             }
                             this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
-                            if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
+                            if (dispatchSpec.dragDropMode === 'prompt' || this._boardMoveCliTriggersEnabled) {
                                 const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                                 const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
                                     targetColumn: nextCol,
@@ -12481,7 +12616,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                         } else {
                             const role = this._columnToRole(nextCol);
-                            if (role === 'planner' && this._cliTriggersEnabled) {
+                            if (role === 'planner' && this._boardMoveCliTriggersEnabled) {
                                 await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
                                 // _distributePlannerDispatch persists + posts its own targeted
                                 // moveCards echo (and moveCardsFailed for any failed write) BEFORE
@@ -13813,7 +13948,7 @@ ${FOCUS_DIRECTIVE}`;
                     }
 
                     // For sendToLead: dispatch the prompt directly to the lead coder agent
-                    // This bypasses cliTriggersEnabled intentionally — testing failure reports
+                    // This bypasses boardMoveCliTriggersEnabled intentionally — testing failure reports
                     // should always be deliverable to the lead coder.
                     if (msg.action === 'sendToLead' && this._taskViewerProvider) {
                         const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
@@ -14185,7 +14320,7 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 const { key, value } = msg;
                 if (typeof key !== 'string') return { success: false, error: 'Key is not a string' };
-                const fullKey = key.startsWith('switchboard.') ? key : `switchboard.prompts.${key}`;
+                const fullKey = key.startsWith('switchboard.') || key.startsWith('kanban.') ? key : `switchboard.prompts.${key}`;
                 if (key === 'selectedRole') {
                     await this._context.workspaceState.update(fullKey, value);
                     return { success: true };
@@ -14228,6 +14363,12 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 const { key } = msg;
                 if (typeof key !== 'string') return { success: false, error: 'Key is not a string' };
+                if (key.startsWith('kanban.')) {
+                    const resolved = this._resolveKanbanSettingKey(key, msg.initiatorProject);
+                    const value = resolved ? resolved.value : this._getScopedSetting(key, undefined, msg.initiatorProject);
+                    this.postMessage({ type: 'settingResult', key, value });
+                    return { success: true, key, value, source: resolved?.source };
+                }
                 const fullKey = key.startsWith('switchboard.') ? key : `switchboard.prompts.${key}`;
                 let value: any;
                 if (key === 'selectedRole') {

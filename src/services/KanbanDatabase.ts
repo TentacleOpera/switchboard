@@ -7091,6 +7091,25 @@ export class KanbanDatabase {
         }
     }
 
+    /** Raw (unparsed) project_config read — `null` absent, the stored string
+     *  otherwise, so a present-but-corrupt row is distinguishable from a missing
+     *  one. For resolvers that must tag or fail loudly on corrupt config rather
+     *  than collapse it into a plausible default (getProjectConfigJsonSync's job). */
+    public getProjectConfigRawSync(project: string, key: string): string | null {
+        if (!this._db) return null;
+        if (!project || project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return null;
+        const stmt = this._db.prepare(
+            'SELECT value FROM project_config WHERE project = ? AND key = ? LIMIT 1',
+            [project, key]
+        );
+        try {
+            if (!stmt.step()) return null;
+            return String(stmt.getAsObject().value ?? '');
+        } finally {
+            stmt.free();
+        }
+    }
+
     /** Async write of a project-scoped JSON setting (upsert + persist). */
     public async setProjectConfigJson(project: string, key: string, value: unknown): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
@@ -13468,6 +13487,53 @@ FROM plans
         if (!wsId) {
             wsId = await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         }
+        // A workflow lifecycle event records a state transition, not a tick: a
+        // second consecutive 'start' or 'stop' for the same workflow is a
+        // duplicate write, never history (a re-start writes its own 'start'
+        // first, so the latest action can only repeat when two transition
+        // callers race). They do race: _updateSessionRunSheet callers pass
+        // different run-sheet key forms (sessionId vs planFile), so the
+        // SessionActionLog write lock does not serialise them — each hydrates
+        // pre-append state and appends the same row. The check and the INSERT
+        // run in one synchronous stretch (single-threaded sql.js), so two
+        // racing callers cannot both pass it.
+        if (event.eventType === 'workflow_event' && (event.action === 'start' || event.action === 'stop')) {
+            if (!(await this.ensureReady()) || !this._db) { return false; }
+            const stmt = this._db.prepare(
+                `SELECT action FROM plan_events
+                 WHERE plan_id = ? AND event_type = 'workflow_event' AND workflow = ?
+                 ORDER BY event_id DESC LIMIT 1`,
+                [planId, event.workflow || '']
+            );
+            let lastAction = '';
+            try {
+                if (stmt.step()) { lastAction = String(stmt.getAsObject().action || ''); }
+            } finally {
+                stmt.free();
+            }
+            if (lastAction === event.action) { return true; }
+            try {
+                this._db.run(
+                    `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, user_id, payload, workspace_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        planId,
+                        event.eventType,
+                        event.workflow || '',
+                        event.action || '',
+                        event.timestamp || new Date().toISOString(),
+                        deviceId,
+                        userId,
+                        event.payload || '{}',
+                        wsId || null
+                    ]
+                );
+            } catch (error) {
+                console.error('[KanbanDatabase] Failed to update record (9 params): INSERT INTO plan_events —', error);
+                return false;
+            }
+            return this._persist();
+        }
         return this._persistedUpdate(
             `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, user_id, payload, workspace_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -13569,6 +13635,54 @@ FROM plans
             stmt.free();
         }
         return out;
+    }
+
+    /**
+     * Latest dispatch-outcome event for a card: `dispatched` (stamped by
+     * `updateDispatchInfoByPlanFile`, the one writer every dispatch path
+     * reaches) or `dispatch_rejected` (an acked dispatch's delivery promise
+     * failed or resolved to a failure envelope).
+     *
+     * This is the delivery-evidence read for the dispatch verifiers. It is
+     * append-only — a later column move clears `plans.owner_since` (display
+     * metadata) but cannot touch this row — and `eventId` is AUTOINCREMENT, so
+     * a caller that captured a baseline id before firing can scope the read to
+     * the current attempt: a re-dispatch never matches the previous run's
+     * event, and clock skew cannot order rows wrong.
+     */
+    public async getLatestDispatchOutcomeByPlanId(planId: string): Promise<{
+        eventId: number;
+        eventType: 'dispatched' | 'dispatch_rejected';
+        timestamp: string;
+        seat: string;
+        agent: string;
+        ide: string;
+        error: string;
+    } | null> {
+        if (!(await this.ensureReady()) || !this._db) { return null; }
+        const stmt = this._db.prepare(
+            `SELECT event_id, event_type, timestamp, payload FROM plan_events
+             WHERE plan_id = ? AND event_type IN ('dispatched', 'dispatch_rejected')
+             ORDER BY event_id DESC LIMIT 1`,
+            [planId]
+        );
+        try {
+            if (!stmt.step()) { return null; }
+            const row = stmt.getAsObject();
+            let payload: any = {};
+            try { payload = JSON.parse(String(row.payload || '{}')); } catch { /* malformed payload — fields read empty */ }
+            return {
+                eventId: Number(row.event_id) || 0,
+                eventType: String(row.event_type) === 'dispatch_rejected' ? 'dispatch_rejected' : 'dispatched',
+                timestamp: String(row.timestamp || ''),
+                seat: String(payload.seat || ''),
+                agent: String(payload.agent || ''),
+                ide: String(payload.ide || ''),
+                error: String(payload.error || ''),
+            };
+        } finally {
+            stmt.free();
+        }
     }
 
     /** @deprecated plan_events now keys by plan_id; use appendPlanEventByPlanId instead. */

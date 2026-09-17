@@ -243,7 +243,7 @@ export function loadMatrix(workspaceRoot: string): LoadedMatrix {
     if (!rows) {
         throw new Error(`controller matrix override at ${overridePath} must be an array of rows or { rows: [...] }`);
     }
-    const validated = rows.map((r: any, i: number) => validateRow(r, i, overridePath));
+    const validated: MatrixRow[] = rows.map((r: any, i: number) => validateRow(r, i, overridePath));
     validated.sort((a, b) => a.order - b.order);
     return { rows: validated, source: overridePath };
 }

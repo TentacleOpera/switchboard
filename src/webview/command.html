@@ -581,6 +581,18 @@
             background: rgba(244, 67, 54, 0.1);
         }
 
+        /* The board-move trigger gate state — read-only indicator so the
+           operator can see the setting that silences board drag/move
+           gestures without leaving this surface. */
+        .dispatch-trigger-state {
+            font-size: 10px;
+            font-family: var(--font-code);
+            color: var(--text-secondary);
+            text-align: center;
+            margin-top: 6px;
+            opacity: 0.85;
+        }
+
         /* Teams View */
         .teams-roster-list {
             display: flex;
@@ -1027,8 +1039,9 @@
                         <div id="dispatch-status-chip" class="status-chip hidden"></div>
                         <div class="action-row">
                             <button class="secondary-action-btn" id="btn-dispatch-view" disabled>VIEW</button>
-                            <button class="primary-action-btn" id="btn-dispatch" disabled>ADVANCE</button>
+                            <button class="primary-action-btn" id="btn-dispatch" disabled>DISPATCH</button>
                         </div>
+                        <div id="dispatch-trigger-state" class="dispatch-trigger-state" title="kanban.boardMoveCliTriggersEnabled — gates board drag/move gestures only; DISPATCH always fires.">board-move triggers: …</div>
                     </div>
                 </section>
 

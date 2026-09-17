@@ -35,8 +35,10 @@ const KANBAN_PROVIDER = fs.readFileSync(
 // inlined as string literals inside the `block` array literal within that method.
 const drivePrefixStart = KANBAN_PROVIDER.indexOf('_buildDrivePrefix');
 assert.ok(drivePrefixStart > 0, '_buildDrivePrefix method must exist in KanbanProvider.ts');
-const drivePrefixEnd = KANBAN_PROVIDER.indexOf('return block.join', drivePrefixStart);
-assert.ok(drivePrefixEnd > 0, '_buildDrivePrefix must have a return block.join statement');
+// The join may be wrapped (substituteCliPath(block.join('\n'))) — slice to the
+// join call either way.
+const drivePrefixEnd = KANBAN_PROVIDER.indexOf('block.join(', drivePrefixStart);
+assert.ok(drivePrefixEnd > 0, '_buildDrivePrefix must join the block array');
 const DRIVE_PREFIX_SRC = KANBAN_PROVIDER.slice(drivePrefixStart, drivePrefixEnd);
 
 let failures = 0;
@@ -84,8 +86,11 @@ test('git-verb prohibition is inlined in the drive prefix', () => {
 });
 
 test('clear-at-rest rule is inlined in the drive prefix', () => {
+    // Current wording drops "only" and names the recovery-ladder rung — the
+    // rule itself (clear at rest, not routinely between subtasks) is what is
+    // pinned.
     assert.ok(
-        /Clear a terminal only when at rest/.test(DRIVE_PREFIX_SRC),
+        /Clear a terminal when at rest/.test(DRIVE_PREFIX_SRC),
         'clear-at-rest rule is missing from the drive prefix'
     );
 });
@@ -114,9 +119,11 @@ test('§5.6 unattended rules are inlined in the drive prefix', () => {
 });
 
 test('§6 escalation ladder is in the drive prefix REVIEW line', () => {
+    // The ladder itself moved into the standing orders; the prefix keeps the
+    // two-failures trigger and points at it.
     assert.ok(
-        /Escalate after two failures on the same subtask: intern → coder → lead/.test(DRIVE_PREFIX_SRC),
-        'escalation ladder is missing from the drive prefix REVIEW line'
+        /two failures on the same subtask, follow the recovery ladder/.test(DRIVE_PREFIX_SRC),
+        'the two-failure escalation rule is missing from the drive prefix REVIEW line'
     );
 });
 

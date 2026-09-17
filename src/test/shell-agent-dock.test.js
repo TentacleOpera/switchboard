@@ -46,6 +46,7 @@ const tvpHiddenSplitTs = fs.readFileSync(path.join(__dirname, '../services/TaskV
 const ptyFleetTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyFleetService.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
 const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
+const terminalsCss = fs.readFileSync(path.join(__dirname, '../webview/terminals.css'), 'utf8');
 const transportJs = fs.readFileSync(path.join(__dirname, '../webview/transport.js'), 'utf8');
 const linearJs = fs.readFileSync(path.join(__dirname, '../webview/linear.js'), 'utf8');
 const headlessPanelHtmlTs = fs.readFileSync(path.join(__dirname, '../services/headlessPanelHtml.ts'), 'utf8');
@@ -410,9 +411,13 @@ test('dock.js Agent tab is a control surface — actions fire endpoints, never a
     assert.ok(!/function\s+sendAgentControl\b/.test(dockJs), 'sendAgentControl must be absent from dock.js — the intent box is retired');
     assert.ok(/function\s+runAgentAction\b/.test(dockJs), 'dock.js must have runAgentAction — quick actions fire mechanical endpoints');
     const actionsFn = block(dockJs, 'async function runAgentAction', '/** POST/PUT helper');
-    assert.ok(actionsFn.includes("'/kanban/advance'"), 'dispatch-starred/advance must POST /kanban/advance (the promptSelected path)');
-    assert.ok(actionsFn.includes("'/kanban/move'"), 'move-plan must POST /kanban/move (the moveCard seam)');
-    assert.ok(actionsFn.includes("'/kanban/plans/priority'"), 'star-plan must PUT /kanban/plans/priority (the _setPlanPriority path)');
+    assert.ok(actionsFn.includes("'/kanban/dispatch'"), 'dispatch-starred must POST /kanban/dispatch (explicit dispatch, verified delivery)');
+    // move-plan and star-plan are card-targeted actions: retired from the dock
+    // when the card picker was removed (controller-console redesign). Only the
+    // TARGETLESS_ACTIONS render — assert the card-targeted ids stay off the
+    // surface rather than asserting endpoints nothing calls.
+    assert.ok(!/TARGETLESS_ACTIONS[^;]*'move-plan'/.test(dockJs) && !/TARGETLESS_ACTIONS[^;]*'star-plan'/.test(dockJs),
+        'card-targeted actions (move-plan, star-plan) must stay out of TARGETLESS_ACTIONS — they have no picker on this surface');
     assert.ok(actionsFn.includes("'/kanban/board'") || dockJs.includes("'/kanban/board'"),
         'refresh-board must GET /kanban/board');
     assert.ok(actionsFn.includes("'/kanban/columns'") || dockJs.includes("'/kanban/columns'"),
@@ -734,15 +739,18 @@ test('no string-prefix test against dock- on a fleet entry (seat name is opaque)
 
 // ── kanban dock mode is still handled in terminals.js ────────────────
 
-test('kanban dock mode is handled in terminals.js and CSS in terminals.html', () => {
-    assert.ok(terminalsHtml.includes('body.is-kanban .terminals-sidebar'),
-        'terminals.html must hide .terminals-sidebar for body.is-kanban');
-    assert.ok(terminalsHtml.includes('body.is-kanban .layout-toolbar'),
-        'terminals.html must hide .layout-toolbar for body.is-kanban');
-    assert.ok(terminalsHtml.includes('body.is-kanban #empty-state'),
-        'terminals.html must hide #empty-state for body.is-kanban');
-    assert.ok(terminalsHtml.includes('body.is-kanban #pane-grid'),
-        'terminals.html must style #pane-grid for body.is-kanban');
+test('kanban dock mode is handled in terminals.js and CSS in terminals.css', () => {
+    // The chrome-hiding rules live in terminals.css (terminals.html:36 names it
+    // as their home) — asserting them against the html passed silently only
+    // while an inline <style> carried a copy.
+    assert.ok(terminalsCss.includes('body.is-kanban .terminals-sidebar'),
+        'terminals.css must hide .terminals-sidebar for body.is-kanban');
+    assert.ok(terminalsCss.includes('body.is-kanban .layout-toolbar'),
+        'terminals.css must hide .layout-toolbar for body.is-kanban');
+    assert.ok(terminalsCss.includes('body.is-kanban #empty-state'),
+        'terminals.css must hide #empty-state for body.is-kanban');
+    assert.ok(terminalsCss.includes('body.is-kanban #pane-grid'),
+        'terminals.css must style #pane-grid for body.is-kanban');
     assert.ok(terminalsHtml.includes("p.get('kanban') === '1'"),
         'terminals.html\'s body-top mode script must parse the kanban query param');
     assert.ok(terminalsJs.includes('isKanbanDock = publishedMode.kanban === true'),

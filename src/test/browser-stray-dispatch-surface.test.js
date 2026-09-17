@@ -80,9 +80,12 @@ function run() {
         const sigRegion = taskViewerSource.slice(sigIdx, sigIdx + 400);
         assert.doesNotMatch(sigRegion, /allowPtyFleet/,
             '_dispatchExecuteMessage must NOT declare an allowPtyFleet parameter.');
-        assert.match(sigRegion, /sender:\s*string\s*=\s*'sidebar',\s*promptComposed:\s*boolean\s*=\s*false\s*\)/,
-            '_dispatchExecuteMessage must end at sender + promptComposed: boolean = false — no other sixth arg, ' +
-            'and the marker must default to false so a new call site gains the seat block rather than losing it.');
+        // The signature grew optional params after promptComposed (delivery,
+        // ptyOnly) — the pin is that promptComposed keeps its `false` default
+        // and no positional routing flag (allowPtyFleet or kin) returns.
+        assert.match(sigRegion, /sender:\s*string\s*=\s*'sidebar',\s*promptComposed:\s*boolean\s*=\s*false/,
+            '_dispatchExecuteMessage must keep promptComposed: boolean = false — ' +
+            'the marker defaults false so a new call site gains the seat block rather than losing it.');
     });
 
     // 2. _missionControlApiOriginated is gone.

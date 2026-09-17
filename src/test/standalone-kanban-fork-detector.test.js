@@ -116,7 +116,7 @@ test('CLI-triggers gate exists in handlePtyVerb triggerAction', () => {
     assert.ok(
         bootstrapCode.includes("'CLI triggers are disabled'") ||
         bootstrapCode.includes('"CLI triggers are disabled"'),
-        'handlePtyVerb triggerAction must gate on kanban.cliTriggersEnabled (mirroring KanbanProvider.ts:8153)'
+        'handlePtyVerb triggerAction must gate on kanban.boardMoveCliTriggersEnabled (mirroring KanbanProvider.ts:8153)'
     );
 });
 

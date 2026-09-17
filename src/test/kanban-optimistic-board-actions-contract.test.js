@@ -130,7 +130,7 @@ function testPendingStarLedgerIsLatencyRobustAndBounded() {
         'a workspace switch must void in-flight star toggles for the previous board');
 
     // Cleared by a MATCHING updateBoard push...
-    const updateBoard = slice(KANBAN_HTML, "case 'updateBoard': {", "case 'settingResult'", 'updateBoard');
+    const updateBoard = slice(KANBAN_HTML, "case 'updateBoard': {", "case 'worktreeConfig'", 'updateBoard');
     assert.match(updateBoard, /!!card\.priorityStarred === !!pendingStars\.get\(id\)\.value/,
         'updateBoard must clear a ledger entry the server has confirmed');
     assertOrder(updateBoard, 'pendingStars.delete(id)', 'allCards = applyPendingOptimisticMoves(',

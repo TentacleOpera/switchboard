@@ -45,6 +45,12 @@ export interface KanbanServiceContext {
     updateScopedRoleConfig(roleName: string, value: any, initiatorProject?: string | null): Promise<void>;
     getScopedSetting(key: string, defaultValue?: any, initiatorProject?: string | null): any;
     updateScopedSetting(key: string, value: any, initiatorProject?: string | null): Promise<void>;
+    /**
+     * Tagged resolver for `kanban.*` keys — migration-aware and source-reporting
+     * where the key has one (e.g. the board-move triggers gate). When absent,
+     * `getSetting` falls back to an unmangled scoped read.
+     */
+    resolveKanbanSetting?(key: string, initiatorProject?: string | null): { value: unknown; source?: string } | undefined;
     remoteGetConfigPayload(workspaceRoot?: string): Promise<Record<string, any> | null>;
     remoteSetConfig(workspaceRoot: string | undefined, config: any): Promise<Record<string, any> | null>;
     /** Check if a terminal name is a PTY fleet target (no VS Code terminal to reveal). */
@@ -215,6 +221,16 @@ export class KanbanService {
         // setting outside that namespace — switchboard.terminal.tmux.enabled among
         // them — unreadable and unwritable from any UI, so a feature gated on one
         // could never be turned on. Relative keys keep their previous meaning.
+        // `kanban.*` keys live in the provider's tiered store — never under
+        // `switchboard.prompts.*`. Prefer the tagged resolver (migration-aware,
+        // source-reporting); fall back to an unmangled scoped read so the key
+        // is reachable either way.
+        if (key.startsWith('kanban.')) {
+            const resolved = this._ctx.resolveKanbanSetting?.(key, payload?.initiatorProject);
+            const value = resolved ? resolved.value : this._ctx.getScopedSetting(key, undefined, payload?.initiatorProject);
+            this._ctx.broadcaster.push({ type: 'settingResult', key, value });
+            return { success: true, key, value, source: resolved?.source };
+        }
         const fullKey = key.startsWith('switchboard.') ? key : `switchboard.prompts.${key}`;
 
         let value: any;
@@ -246,7 +262,9 @@ export class KanbanService {
         // setting outside that namespace — switchboard.terminal.tmux.enabled among
         // them — unreadable and unwritable from any UI, so a feature gated on one
         // could never be turned on. Relative keys keep their previous meaning.
-        const fullKey = key.startsWith('switchboard.') ? key : `switchboard.prompts.${key}`;
+        // `kanban.*` keys are scoped-store keys, not prompt settings — same
+        // unmangled pass-through as getSetting.
+        const fullKey = key.startsWith('switchboard.') || key.startsWith('kanban.') ? key : `switchboard.prompts.${key}`;
 
         if (key === 'selectedRole') {
             await this._ctx.workspaceStateUpdate(fullKey, value);
