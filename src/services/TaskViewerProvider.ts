@@ -10830,25 +10830,100 @@ Each plan file must include:
         node: LinearImportNode,
         createdPlanFiles: string[],
         contentPolicy: ResolvedTicketContentPolicy,
-        parentPlanFile?: string,
+        featurePlanId: string | undefined,
         parentIssue?: LinearIssue,
         projectName?: string
     ): Promise<string> {
         const createdAt = new Date().toISOString();
-        const { planFileAbsolute } = await this._createInitiatedPlan(
-            node.issue.title || this._describeLinearIssue(node.issue),
-            this._buildLinearImportPlanContent(node, parentIssue, createdAt),
-            false,
-            {
-                skipBrainPromotion: true,
-                createdAt,
-                suppressIntegrationSync: true,
-                projectName
-            }
-        );
-
+        const topic = node.issue.title || this._describeLinearIssue(node.issue);
+        const content = this._buildLinearImportPlanContent(node, parentIssue, createdAt);
+        const workspaceRoot = this._resolveWorkspaceRoot() || '';
         const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-        const planFileRelative = path.relative(this._resolveWorkspaceRoot() || '', planFileAbsolute).replace(/\\/g, '/');
+
+        // A top-level issue that HAS sub-issues is a feature, not a plan — the same
+        // shape importIssuesFromLinear produces. Everything below it is a subtask of
+        // that one feature, at any depth: Linear's nesting is flattened to one level,
+        // so an intermediate parent is a subtask too, never a second feature.
+        const isFeatureRoot = !featurePlanId && node.subtasks.length > 0;
+
+        let planFileAbsolute: string;
+        let planFileRelative: string;
+        let planId: string;
+
+        if (isFeatureRoot) {
+            // The planId is minted here rather than taken from _createInitiatedPlan,
+            // which keys a local plan by its FILE PATH. A feature's id has to survive
+            // in its own filename — that trailing uuid is how the importer recovers
+            // the id, and how a subtask's feature_id still resolves after a re-import.
+            // A path cannot go in a filename, so the feature is inserted directly.
+            planId = crypto.randomUUID();
+            planFileRelative = path.join('.switchboard', 'features', `linear_import_${node.issue.id}_${planId}.md`).replace(/\\/g, '/');
+            planFileAbsolute = path.join(workspaceRoot, planFileRelative);
+
+            await fs.promises.mkdir(path.join(workspaceRoot, '.switchboard', 'features'), { recursive: true });
+            // Insert BEFORE the write, so the watcher cannot reach the file first and
+            // mint it a second, different planId.
+            await db.insertFileDerivedPlan({
+                planId,
+                sessionId: '',
+                topic,
+                planFile: planFileRelative,
+                kanbanColumn: 'CREATED',
+                status: 'active',
+                complexity: 'Unknown',
+                tags: '',
+                repoScope: '',
+                workspaceId,
+                createdAt,
+                updatedAt: createdAt,
+                lastAction: '',
+                sourceType: 'linear-import',
+                brainSourcePath: '',
+                mirrorPath: '',
+                dispatchedAgent: '',
+                dispatchedIde: '',
+                isFeature: 1,
+                featureId: ''
+            } as any);
+            await db.updateFeatureStatus(planId, 1, '');
+            GlobalPlanWatcherService.registerPendingCreation(planFileAbsolute);
+            await fs.promises.writeFile(planFileAbsolute, content, 'utf8');
+
+            if (projectName) {
+                const assigned = await db.assignPlansToProject([planFileRelative], projectName, workspaceId);
+                if (!assigned) {
+                    console.warn(`[TaskViewerProvider] Linear import: assignPlansToProject returned false for feature ${planFileRelative}, project "${projectName}".`);
+                }
+            }
+        } else {
+            const created = await this._createInitiatedPlan(
+                topic,
+                content,
+                false,
+                {
+                    skipBrainPromotion: true,
+                    createdAt,
+                    suppressIntegrationSync: true,
+                    projectName
+                }
+            );
+            planFileAbsolute = created.planFileAbsolute;
+            planFileRelative = path.relative(workspaceRoot, planFileAbsolute).replace(/\\/g, '/');
+            planId = (await db.getPlanByPlanFile(planFileRelative, workspaceId))?.planId || '';
+
+            if (featurePlanId) {
+                // A sub-issue whose parent row could not be resolved must say so. Left
+                // silent it imports as a loose plan that merely looks standalone.
+                if (!planId) {
+                    console.warn(`[TaskViewerProvider] Linear import: no plan row for ${planFileRelative} — sub-issue ${node.issue.identifier || node.issue.id} could NOT be linked to feature ${featurePlanId}.`);
+                } else {
+                    const linkOutcome = await db.updateFeatureStatus(planId, 0, featurePlanId);
+                    if (linkOutcome !== 'applied') {
+                        console.warn(`[TaskViewerProvider] Linear import: linking ${planFileRelative} to feature ${featurePlanId} returned '${linkOutcome}'.`);
+                    }
+                }
+            }
+        }
         await linearService.setIssueIdForPlan(planFileRelative, node.issue.id);
         const linked = await db.updateLinearIssueIdByPlanFile(planFileAbsolute, workspaceId, node.issue.id);
         if (!linked) {
@@ -10875,6 +10950,10 @@ Each plan file must include:
         );
 
         createdPlanFiles.push(planFileRelative);
+        // Every descendant links to the ONE feature at the top of this tree, not to
+        // its immediate parent — Linear's nesting is flattened to a single level, so
+        // `childFeaturePlanId` is carried down unchanged once it is set.
+        const childFeaturePlanId = isFeatureRoot ? planId : featurePlanId;
         for (const child of node.subtasks) {
             await this._createImportedLinearPlan(
                 db,
@@ -10882,7 +10961,7 @@ Each plan file must include:
                 child,
                 createdPlanFiles,
                 contentPolicy,
-                planFileRelative,
+                childFeaturePlanId,
                 node.issue,
                 projectName
             );
@@ -11003,7 +11082,7 @@ Each plan file must include:
             rootNode,
             importedPlanFiles,
             contentPolicy,
-            undefined,
+            undefined,   // featurePlanId — the root of the tree has no feature above it
             undefined,
             projectFilter || undefined
         );

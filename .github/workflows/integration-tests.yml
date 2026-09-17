@@ -606,6 +606,15 @@ jobs:
       - name: Linear per-project seed contract (destination mapping, cursor, rate limits)
         run: npm run test:contract:linear-seed
 
+      # Two Linear importers write to one board, and they disagreed: the bulk
+      # importer built parent->feature/child->subtask, while the single-issue one
+      # threaded a parentPlanFile nothing read (its consumer was removed in
+      # b28edff8) and imported every sub-issue flat and unparented. Behavioural,
+      # not source level — the argument was still being passed, so a grep saw
+      # linking that was not happening.
+      - name: Linear single-issue import feature shape (parent -> feature, sub-issues -> subtasks)
+        run: npm run test:contract:linear-import-feature-shape
+
       # The Notion plans-database schema. Board push/restore were removed, but
       # the plans-database projection is KEPT because setupRemoteControl is
       # built on it — so every property name it writes ('Kanban Column',

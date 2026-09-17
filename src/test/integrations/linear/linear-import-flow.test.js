@@ -290,10 +290,17 @@ async function run() {
         /await this\._createInitiatedPlan\([\s\S]*?suppressIntegrationSync: true[\s\S]*?await linearService\.setIssueIdForPlan\(planFileRelative, node\.issue\.id\);[\s\S]*?await db\.updateLinearIssueIdByPlanFile\(planFileAbsolute, workspaceId, node\.issue\.id\);/s,
         'Expected imported Linear plans to link both the sync map and DB before follow-up sync runs.'
     );
+    // Imported sub-issues link to their feature through `feature_id` — the same
+    // mechanism importIssuesFromLinear uses, so one board does not get two answers.
+    // This replaces an assertion on `db.updateDependenciesByPlanFile(...)`, a method
+    // removed in b28edff8 and never replaced; while it was missing, every sub-issue
+    // imported through linearImportTask landed flat and unparented. The BEHAVIOUR is
+    // covered by `npm run test:contract:linear-import-feature-shape`; this only pins
+    // that the single-issue importer still links at all.
     assert.match(
         providerSource,
-        /await db\.updateDependenciesByPlanFile\(planFileAbsolute, workspaceId, parentPlan\.planFile\);/s,
-        'Expected imported Linear subtasks to link back to their parent session through existing dependency metadata.'
+        /updateFeatureStatus\(planId, 0, featurePlanId\)/s,
+        'Expected imported Linear sub-issues to be linked to their feature via feature_id.'
     );
     assert.match(
         providerSource,
