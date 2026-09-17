@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { KanbanDatabase } from './KanbanDatabase';
 import { bootstrapTeamReportsDirectory } from './ScheduledJobsService';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 /**
  * Board-side store for the Agent-panel controller
@@ -336,6 +337,29 @@ export class ControllerBoardStore {
         // Config is writable by any authenticated client (the panel edits it),
         // so it is NOT lease-gated — the lease gates controller STATE, not the
         // operator's rules.
+        //
+        // MEMBERSHIP is validated at save (plan: the-agent-panel-becomes-a-
+        // standing-controller, change 11): a tier naming a provider that has no
+        // `agentControlProviders` row is REFUSED with a reason here, not dropped
+        // silently at 3am when the controller tries to resolve it.
+        const cfg = (value && typeof value === 'object') ? value as { tiers?: unknown; supervisorSeat?: unknown; globalCeilingPerDay?: unknown } : {};
+        const list = Array.isArray(cfg.tiers) ? cfg.tiers : [];
+        if (list.length) {
+            let rows: Record<string, unknown>;
+            try {
+                rows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, unknown>>('agentControlProviders')) || {};
+            } catch (e) {
+                return { success: false, reason: `agentControlProviders unreadable: ${e instanceof Error ? e.message : String(e)}` };
+            }
+            for (let i = 0; i < list.length; i++) {
+                const t = (list[i] && typeof list[i] === 'object') ? list[i] as { providerId?: unknown } : {};
+                const providerId = String(t.providerId || '').trim();
+                if (!providerId) { return { success: false, reason: `tier ${i} has no providerId` }; }
+                if (!Object.prototype.hasOwnProperty.call(rows, providerId)) {
+                    return { success: false, reason: `tier '${providerId}' names no configured provider — there is no '${providerId}' row in agentControlProviders` };
+                }
+            }
+        }
         return this._writeJson(workspaceRoot, CONTROLLER_JUDGEMENT_KEY, value);
     }
 
@@ -699,9 +723,35 @@ function validateMatrixRows(rows: any[]): string | null {
         if (row.judge !== 'mechanical' && row.judge !== 'model') { return `matrix row '${row.id}' has an unknown judge '${row.judge}'`; }
         if (!row.condition || typeof row.condition.kind !== 'string') { return `matrix row '${row.id}' has no condition.kind`; }
         if (!Array.isArray(row.requires)) { return `matrix row '${row.id}' has a non-array 'requires'`; }
+        // MEMBERSHIP, not just shape (plan: the-agent-panel-becomes-a-standing-
+        // controller, change 11). An unknown remediation falls through the
+        // controller's apply switch and is silently ignored at wake time — the
+        // exact 3am behaviour this clause forbids — so it is REFUSED here with a
+        // reason. `requires` is checked the same way: an unknown capability
+        // would make the row's precondition unsatisfiable without saying so.
+        if (!KNOWN_REMEDIATIONS.includes(String(row.remediation))) {
+            return `matrix row '${row.id}' names an unknown remediation verb '${String(row.remediation)}'`;
+        }
+        for (const cap of row.requires) {
+            if (!KNOWN_CAPABILITIES.includes(String(cap))) {
+                return `matrix row '${row.id}' requires an unknown capability '${String(cap)}'`;
+            }
+        }
     }
     return null;
 }
+
+/**
+ * The closed sets a matrix override is checked against, mirrored from
+ * `src/standalone/controller/matrix.ts` (the controller's own loader remains
+ * the authority; this mirror is what lets the BOARD refuse an edit at save
+ * time instead of writing a row the controller will silently drop).
+ */
+const KNOWN_REMEDIATIONS = [
+    'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
+    'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
+];
+const KNOWN_CAPABILITIES = ['mechanical', 'model', 'supervisor', 'two-providers'];
 
 /** Parse JSON, returning `null` for a corrupt value (never throwing). */
 function safeParse(raw: string): any | null {
