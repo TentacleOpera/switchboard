@@ -213,6 +213,8 @@ export interface KanbanPlanRecord {
      * NULL rather than reading it as conflict-free.
      */
     analysisFileSet?: string[] | null;
+    /** `"<mtimeMs>:<size>"` of the plan file when `analysisFileSet` was written. */
+    analysisSourceStamp?: string | null;
 }
 
 export interface ImportedDocEntry {
@@ -428,7 +430,16 @@ CREATE TABLE IF NOT EXISTS plans (
     -- file overlap with zero file I/O at filter time. NULL = never analysed, which
     -- is NOT "touches nothing" — the resolver excludes it rather than treating an
     -- unknown set as conflict-free. Added by schema reconciliation on next open.
-    analysis_file_set TEXT DEFAULT NULL
+    analysis_file_set TEXT DEFAULT NULL,
+    -- analysis_source_stamp: "<mtimeMs>:<size>" of the plan FILE as it stood when
+    -- analysis_file_set was written. Staleness is "the plan file changed since the
+    -- write set was extracted", answered with one stat() — NOT by re-deriving a file
+    -- set from the prose. A re-derivation cannot match: the persisted set is the
+    -- agent's judgement about what a plan WRITES, and any regex over the same prose
+    -- also collects what it merely CITES, so the two never agree and every analysed
+    -- card would be permanently stale. NULL = no stamp = stale (excluded), which is
+    -- the safe direction and self-heals on the next analysis run.
+    analysis_source_stamp TEXT DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS plan_runtime_state (
     plan_id             TEXT NOT NULL,
@@ -1798,7 +1809,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id, column_entered_at, completed_at,
                        priority_starred, column_order, map_fingerprint, priority,
-                       owner_seat, owner_since, analysis_file_set`;
+                       owner_seat, owner_since, analysis_file_set, analysis_source_stamp`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -15469,7 +15480,12 @@ FROM plans
                     // Absent from SELECT lists that predate the column → undefined → null
                     // ("never analysed"). A stored '[]' parses to [] ("touches nothing") —
                     // the two must not collapse, which is why null is preserved.
-                    analysisFileSet: this._parseAnalysisFileSet(row.analysis_file_set)
+                    analysisFileSet: this._parseAnalysisFileSet(row.analysis_file_set),
+                    // Absent from SELECT lists that predate the column → undefined → null
+                    // ("no stamp"), which the sendable resolver treats as stale.
+                    analysisSourceStamp: row.analysis_source_stamp !== null && row.analysis_source_stamp !== undefined && String(row.analysis_source_stamp) !== ''
+                        ? String(row.analysis_source_stamp)
+                        : null
                 });
             }
         } finally {
@@ -15935,15 +15951,66 @@ FROM plans
      * Both are meaningful and the filter distinguishes them, so neither is coerced
      * into the other.
      */
-    public async setAnalysisFileSet(planId: string, fileSet: string[] | null): Promise<boolean> {
+    public async setAnalysisFileSet(
+        planId: string,
+        fileSet: string[] | null,
+        observed?: { sourceMtimeMs?: unknown; sourceSize?: unknown }
+    ): Promise<boolean> {
         if (!planId) return false;
+        // ensureReady BEFORE the stamp lookup: `_currentPlanFile` reads `this._db`
+        // directly and would silently answer null on a not-yet-open store, writing
+        // a file set with no stamp — permanently stale. `_persistedUpdate` readies
+        // the store too, but only after the stamp has already been decided.
+        if (!(await this.ensureReady()) || !this._db) return false;
         const payload = fileSet === null || fileSet === undefined
             ? null
             : JSON.stringify(Array.from(new Set(fileSet.map((f) => String(f)))).sort());
+        // Stamp the plan file as it stands at write time, so staleness is a stat()
+        // rather than a re-derivation of the write set from prose (which can never
+        // match the agent's judgement set — see the column comment).
+        //
+        // `observed` is OPTIONAL and, when supplied, is the stamp the extractor saw
+        // when it READ the file. A mismatch means the file changed between the read
+        // and this write: the set describes content that is no longer there, so the
+        // stamp is cleared and the card stays stale — never stamped fresh against
+        // content it was not extracted from.
+        let stamp: string | null = null;
+        if (payload !== null) {
+            const workspaceId = await this.getWorkspaceId() || await this.getDominantWorkspaceId() || '';
+            const planFile = await this._currentPlanFile(planId, workspaceId);
+            if (planFile) {
+                try {
+                    const st = fs.statSync(this._planFilePath(planFile));
+                    const claimedMtime = Number(observed?.sourceMtimeMs);
+                    const claimedSize = Number(observed?.sourceSize);
+                    const mtimeMismatch = Number.isFinite(claimedMtime) && claimedMtime > 0
+                        && claimedMtime !== Math.round(st.mtimeMs);
+                    const sizeMismatch = Number.isFinite(claimedSize) && claimedSize !== st.size;
+                    if (!mtimeMismatch && !sizeMismatch) {
+                        stamp = `${Math.round(st.mtimeMs)}:${st.size}`;
+                    }
+                } catch { /* unreadable plan file → no stamp → stale, the safe direction */ }
+            }
+        }
         return this._persistedUpdate(
-            'UPDATE plans SET analysis_file_set = ?, updated_at = ? WHERE plan_id = ?',
-            [payload, new Date().toISOString(), planId]
+            'UPDATE plans SET analysis_file_set = ?, analysis_source_stamp = ?, updated_at = ? WHERE plan_id = ?',
+            [payload, stamp, new Date().toISOString(), planId]
         );
+    }
+
+    /** The stamp recorded beside `analysis_file_set`, or null when none was written. */
+    public async getAnalysisSourceStamp(planId: string): Promise<string | null> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return null;
+        const stmt = this._db.prepare('SELECT analysis_source_stamp FROM plans WHERE plan_id = ?', [planId]);
+        try {
+            if (stmt.step()) {
+                const v = stmt.getAsObject().analysis_source_stamp;
+                return v !== null && v !== undefined && String(v) !== '' ? String(v) : null;
+            }
+        } finally {
+            stmt.free();
+        }
+        return null;
     }
 
     public async getAnalysisFileSet(planId: string): Promise<string[] | null> {

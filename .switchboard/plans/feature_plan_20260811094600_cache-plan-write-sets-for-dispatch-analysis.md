@@ -240,3 +240,12 @@ Landed. The plan's `V61` and "head is V67" references were stale — the schema 
 6. **Tests.** New `src/test/dispatch-writeset-cache-contract.test.js`: both schema paths, every miss reason, empty-set-is-a-hit, the read→POST interlock, stat-failed skip, route registration + standalone non-fork, and the four protocol-text assertions.
 
 Not executed this run: compilation and the suite (skipped per dispatch directive). Syntax verified by parsing all three edited sources with the TypeScript parser (0 diagnostics) and `node --check` on the test file; the bundle body hashes to its declared `contentHash`.
+
+## Review Findings
+
+Reviewed 2026-09-18. The cache itself is sound: `getPlanWriteSets` owns the whole invalidation rule server-side with typed miss reasons, every ambiguous case resolves to a miss, `[]` is a hit distinct from a missing row, `PLAN_WRITE_SET_EXTRACTOR_VERSION` is a single exported lever, and the read→POST stamp interlock the plan did not ask for is the right addition. **MAJOR, fixed:** `src/test/dispatch-writeset-cache-contract.test.js` — the entire `### Automated` section of this plan — had no `package.json` script and no CI step, so every assertion in it was decorative; it is now `test:contract:dispatch-writeset-cache` and runs in `integration-tests.yml`. **MAJOR, fixed:** its migration assertion pinned `=== 82` and the schema head has since moved to V83, so the suite was red the moment it was wired; loosened to `>= 82` while keeping the table-presence check that is the actual point. The plan's "pre-move staleness re-check" was correctly retired with the card move it guarded (the durable-graph subtask), and the equivalent protection now lives in that subtask's source stamp. Validation: `compile-tests` clean, 22/0 on this suite over repeated runs, and the adjacent DB/board suites green.
+
+## Deferred Findings
+
+- NIT — `src/services/KanbanDatabase.ts:16060` (`getPlanWriteSets`): a row whose `workspace_id` differs from the current workspace is reported as `no-row`; a distinct `workspace-changed` reason would be more diagnosable, which is the stated purpose of the typed reasons.
+- NIT — the cache and the durable graph now each carry their own copy of "has this plan file changed" (`plan_write_sets.source_mtime_ms`/`source_size` and `plans.analysis_source_stamp`). They agree today; a future edit to one is not caught by the other.

@@ -1987,6 +1987,19 @@ jobs:
       - name: Pop-time dependency gate contract
         run: npm run test:contract:dependency-gate
 
+      # The dispatch-analysis write-set cache. Wired during review: the suite
+      # existed as a file with no package.json script and no CI step, so the
+      # extractor_version lever, the read-to-POST stamp interlock and every
+      # miss reason could have been deleted while the board stayed green.
+      - name: Dispatch-analysis write-set cache contract
+        run: npm run test:contract:dispatch-writeset-cache
+
+      # The durable dependency graph and the sendable-batch filter. Wired during
+      # review for the same reason: this suite is the ONLY gate on "a stale or
+      # unanalysed card is never offered as sendable", and it was uninvoked.
+      - name: Sendable batch + durable graph contract
+        run: npm run test:contract:sendable-batch
+
       - name: Dispatch preparation curtain + UFO asset contract
         run: npm run test:contract:dispatch-curtain
 

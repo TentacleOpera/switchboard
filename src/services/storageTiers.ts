@@ -95,6 +95,9 @@ export const SHARED_PLAN_COLUMNS = [
     // that opens the store must see the same file sets, or the sendable filter
     // answers differently per machine.
     'analysis_file_set',
+    // The stamp of the plan file the file set was extracted from. Shared for the
+    // same reason as the set itself: staleness must read the same on every machine.
+    'analysis_source_stamp',
 ] as const;
 
 export type SharedPlanColumn = typeof SHARED_PLAN_COLUMNS[number];

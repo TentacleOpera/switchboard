@@ -93,7 +93,7 @@ Webview: `src/webview/kanban.html` (inline JS). Provider: `src/services/KanbanPr
 | `dispatchAnalyze` | kanban.html | ~11045 | Analyze Planned plans for parallel dispatch. |
 | `stageForQueue` / `reorderQueue` / `runQueue` | kanban.html | ~11249 / ~11270 / ~11283 | STAGING queue staging/reorder/run. `stageForQueue` is posted by a drag-and-drop INTO the STAGING column (and by remote intake); it assigns `queue_position`, refuses subtasks, and arms the queue stall watch. |
 | `importFromClipboard` | kanban.html | ~11354 | Import plans from clipboard. |
-| `copyDispatchPromptSelected` | kanban.html | ~11357 | Copy dispatch prompt for selected. |
+| `toggleSendableFilter` | kanban.html | ~4646 | Toggle the Planned column's sendable-batch filter. A pure view over the last `updateBoard`'s `sendablePlanIds` — no host round-trip. (Replaced `copyDispatchPromptSelected`, removed when Analyze stopped moving cards.) |
 | `codeMapConfirm` / `codeMapSelected` | kanban.html | ~11418 / ~11431 | Code-map confirm/select. |
 | `getDbPath` / `testingFailed` | kanban.html | ~11456 / ~11461 | DB path get / testing-failed signal. |
 | `addCoderTerminal` / `focusTerminal` | kanban.html | ~11550 / ~11572 | Add coder terminal / focus terminal. |

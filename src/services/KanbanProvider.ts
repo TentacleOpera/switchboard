@@ -176,6 +176,8 @@ export interface KanbanCard {
     // analysed — distinct from [] ("touches nothing"). Carried so the filter can
     // be a view of the backend's resolver rather than recomputing overlap itself.
     analysisFileSet?: string[] | null;
+    /** `"<mtimeMs>:<size>"` of the plan file when `analysisFileSet` was written. */
+    analysisSourceStamp?: string | null;
 }
 
 // Activity-light window default. A card is `working` while owner_since is set and
@@ -2513,6 +2515,7 @@ export class KanbanProvider implements vscode.Disposable {
                 completedAt: row.completedAt ?? null,
                 mapFingerprint: row.mapFingerprint ?? null,
                 analysisFileSet: row.analysisFileSet ?? null,
+                analysisSourceStamp: row.analysisSourceStamp ?? null,
             };
         });
 
@@ -2537,6 +2540,7 @@ export class KanbanProvider implements vscode.Disposable {
             completedAt: rec.completedAt ?? null,
             mapFingerprint: rec.mapFingerprint ?? null,
             analysisFileSet: rec.analysisFileSet ?? null,
+            analysisSourceStamp: rec.analysisSourceStamp ?? null,
         })));
 
         return cards;
@@ -2586,12 +2590,16 @@ export class KanbanProvider implements vscode.Disposable {
                 ? await (db as any).getOrderByMode(workspaceId)
                 : 'manual';
             // Real fs, not the stateFs bridge — plan files live in the workspace.
+            // A stat(), never a read: this runs on every board refresh, and reading
+            // N plan files on the board's hot path is exactly the kind of synchronous
+            // I/O that starves the board on a Pi.
             const nodeFs: typeof import('fs') = require('fs');
-            const readPlanFile = (planFile: string): string | null => {
+            const statPlanFile = (planFile: string): { mtimeMs: number; size: number } | null => {
                 if (!planFile) return null;
                 try {
                     const abs = path.isAbsolute(planFile) ? planFile : path.join(workspaceRoot, planFile);
-                    return nodeFs.readFileSync(abs, 'utf8');
+                    const st = nodeFs.statSync(abs);
+                    return { mtimeMs: st.mtimeMs, size: st.size };
                 } catch {
                     return null;
                 }
@@ -2599,7 +2607,7 @@ export class KanbanProvider implements vscode.Disposable {
             return await resolveSendableBatch(
                 planned as any,
                 deps as any,
-                { column: 'PLAN REVIEWED', mode, readPlanFile }
+                { column: 'PLAN REVIEWED', mode, statPlanFile }
             );
         } catch (err) {
             console.warn('[KanbanProvider] sendable-batch resolution failed; the filter will show nothing rather than a guess:', err);
@@ -6861,10 +6869,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // threaded as a new positional through triggerBatchAgentFromKanban — the
             // seventh positional is analysisScope and a misplaced value lands in
             // targetTerminalOverride. The skill's step 4a reads this exact line.
+            // Read through normalizeFeatureWorktreeMode, the same coercion the board's
+            // own radio uses (`worktree-strategy-control-contract` forbids a raw read
+            // for exactly this reason). Two readers of one config key that coerce
+            // legacy values differently is how the prompt comes to say 'none' while
+            // the board shows 'per-feature' — and then the pass offers a topology
+            // that is already on.
             const worktreeModeLine = buildFeatureWorktreeModeLine(
-                typeof analysisDb?.getConfig === 'function'
-                    ? await analysisDb.getConfig('feature_worktree_mode')
-                    : undefined
+                normalizeFeatureWorktreeMode(
+                    typeof analysisDb?.getConfig === 'function'
+                        ? await analysisDb.getConfig('feature_worktree_mode')
+                        : undefined
+                )
             );
             const analysisResolved = await resolveProtocolSet(['dispatch-analysis'], workspaceRoot, analysisDb || undefined);
             const analysisRef = renderPlannerWorkflowRef('dispatch-analysis', analysisResolved);

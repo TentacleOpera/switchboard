@@ -25,10 +25,10 @@ Rework the dispatch-analysis pass end to end: how it models staged-ness, how it 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Dispatch-Analysis Reads the Per-Column Board Mirror Instead of Pulling the Whole Board as JSON](../plans/feature_plan_20260810173147_dispatch-analysis-reads-the-board-mirror-not-a-full-json-board-dump.md) — **LEAD CODED** — ID: a0fd641d-7b2d-4d7c-a474-f4352afadf81
-- [ ] [Cache plan write-sets in kanban.db so dispatch-analysis stops re-reading the whole backlog](../plans/feature_plan_20260811094600_cache-plan-write-sets-for-dispatch-analysis.md) — **LEAD CODED** — ID: c7750989-c3ca-48fc-b42b-0574bd8ff7ba
-- [ ] [Dispatch analysis should recommend (and be able to create) per-feature worktrees when candidates are too entangled](../plans/feature_plan_20260811143000_dispatch-analysis-worktree-recommendation.md) — **LEAD CODED** — ID: 19ea4704-27e9-4011-a0a5-e24c39a13bb4
-- [ ] [Analysis writes a durable dependency graph, and the column filters to the batch that can go now](../plans/analysis-writes-a-durable-graph-and-the-column-filters-to-what-can-go-now.md) — **LEAD CODED** — ID: d2e20f6d-beaa-4f02-a2af-dadf75f92102
+- [ ] [Dispatch-Analysis Reads the Per-Column Board Mirror Instead of Pulling the Whole Board as JSON](../plans/feature_plan_20260810173147_dispatch-analysis-reads-the-board-mirror-not-a-full-json-board-dump.md) — **CODE REVIEWED** — ID: a0fd641d-7b2d-4d7c-a474-f4352afadf81
+- [ ] [Cache plan write-sets in kanban.db so dispatch-analysis stops re-reading the whole backlog](../plans/feature_plan_20260811094600_cache-plan-write-sets-for-dispatch-analysis.md) — **CODE REVIEWED** — ID: c7750989-c3ca-48fc-b42b-0574bd8ff7ba
+- [ ] [Dispatch analysis should recommend (and be able to create) per-feature worktrees when candidates are too entangled](../plans/feature_plan_20260811143000_dispatch-analysis-worktree-recommendation.md) — **CODE REVIEWED** — ID: 19ea4704-27e9-4011-a0a5-e24c39a13bb4
+- [ ] [Analysis writes a durable dependency graph, and the column filters to the batch that can go now](../plans/analysis-writes-a-durable-graph-and-the-column-filters-to-what-can-go-now.md) — **CODE REVIEWED** — ID: d2e20f6d-beaa-4f02-a2af-dadf75f92102
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -59,3 +59,15 @@ Rework the dispatch-analysis pass end to end: how it models staged-ness, how it 
 **Line numbers across all four plans were re-verified against HEAD** and corrected. `kanban.html` and `terminals.js` moved by several hundred to ~2,400 lines during panel extraction; `KanbanProvider.ts` by ~250. Treat the numbers as anchors and grep the named symbol first.
 
 **Generated mirrors:** edit `.agents/skills/dispatch-analysis/SKILL.md` only. The `.claude/skills/` copy is generated and `npm run mirror:check` is a CI gate.
+
+## Review Findings
+
+Reviewed 2026-09-18 as one delivery unit. The feature's goal is achieved: the pass reads one column instead of the whole board, caches write sets in `kanban.db` behind an `extractor_version` lever and a read→write stamp interlock, offers per-feature worktrees through a real `POST /worktree/feature` that delegates to a single provider method wired in both composition roots, and writes a durable graph instead of moving cards. Two of this feature's own "must not be traded away" items were in fact broken and are fixed here: the write-set cache's gate suite (`dispatch-writeset-cache-contract`) and the durable graph's gate suite (`sendable-batch-and-durable-graph-contract`) existed as files with no `package.json` script and no CI step, so every assertion in both was decorative — both are now wired and green; and the sendable filter's staleness check compared a judgement write set against a regex re-derivation of the same prose, which can never match, leaving the batch permanently empty (fixed with a `plans.analysis_source_stamp` written in the same statement as the file set, compared with one `stat`). The staging-as-a-filter subtask was retired before implementation, so the feature's strict ordering resolved to the three remaining plans landing in board order. Validation: `compile-tests` clean; the six feature suites plus six adjacent ones green; `catalog:check` and `standalone-parity:check` green; an end-to-end run over real plan prose confirms a non-empty sendable batch that loses exactly the edited card.
+
+## Deferred Findings
+
+- MAJOR — `src/services/bundledProtocols.ts` (dispatch-analysis body, step 1a and step 2): the prose is still layered staging language over a pass that moves nothing ("stays in Planned", "does not go to Staging", "held back"); the outright contradiction (a `POST /kanban/move` instruction) was removed, but the section deserves one coherent rewrite.
+- NIT — `src/services/LocalApiServer.ts:6500`: `GET /kanban/sendable` and `KanbanProvider._resolveSendableForBoard` build their candidate sets slightly differently (column normalisation, ghost filtering), so the "one resolver" has two non-identical inputs.
+- NIT — `src/services/agentPromptBuilder.ts:618`: `buildFeatureWorktreeModeLine` collapses missing/unreadable config into `none`, indistinguishable from a configured `none`.
+- NIT — the write-set cache and the durable graph each keep their own copy of "has this plan file changed"; they agree today and nothing gates that they continue to.
+- NIT — pre-existing, unrelated, verified failing before these changes: `npm run host-seam-parity:check` is red on `setOnBoardMutated` (wired in `bootstrap.ts`, not `extension.ts`, not allowlisted).

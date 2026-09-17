@@ -6344,8 +6344,9 @@ export class LocalApiServer {
                     // detects nothing; the comparison is the point.
                     const mapFingerprint = await db.getMapFingerprint?.(planId) ?? null;
                     const analysisFileSet = await db.getAnalysisFileSet?.(planId) ?? null;
+                    const analysisSourceStamp = await db.getAnalysisSourceStamp?.(planId) ?? null;
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true, planId, dependencies: deps, mapFingerprint, analysisFileSet }));
+                    res.end(JSON.stringify({ success: true, planId, dependencies: deps, mapFingerprint, analysisFileSet, analysisSourceStamp }));
                 } else {
                     const wsId = (await db.getWorkspaceId?.()) || '';
                     const deps = await db.getAllPlanDependencies(wsId);
@@ -6376,10 +6377,17 @@ export class LocalApiServer {
                 // Persisted here so the sendable filter computes overlap with zero
                 // file I/O. `[]` is a real value ("touches nothing"); a missing
                 // field leaves the stored set untouched, and `null` clears it.
+                //
+                // The optional `sourceMtimeMs` / `sourceSize` are the stamp the
+                // extractor observed when it READ the plan file. They are the same
+                // interlock POST /dispatch/writesets carries: on a mismatch the store
+                // refuses to stamp, so a set extracted from content that has since
+                // changed stays stale rather than being offered as sendable.
                 if (Array.isArray(body?.fileSet)) {
                     await db.setAnalysisFileSet?.(
                         planId,
-                        body.fileSet.map((f: unknown) => String(f || '').trim()).filter(Boolean)
+                        body.fileSet.map((f: unknown) => String(f || '').trim()).filter(Boolean),
+                        { sourceMtimeMs: body?.sourceMtimeMs, sourceSize: body?.sourceSize }
                     );
                 } else if (body?.fileSet === null) {
                     await db.setAnalysisFileSet?.(planId, null);
@@ -6495,17 +6503,18 @@ export class LocalApiServer {
             const cards = (board || []).filter((p: any) => p && p.kanbanColumn === column);
             const wsId = await this._wsId(db);
             const mode = (typeof db.getOrderByMode === 'function') ? await db.getOrderByMode(wsId) : 'manual';
-            const readPlanFile = (planFile: string): string | null => {
+            const statPlanFile = (planFile: string): { mtimeMs: number; size: number } | null => {
                 if (!planFile) return null;
                 try {
                     const abs = path.isAbsolute(planFile) ? planFile : path.join(workspaceRoot, planFile);
-                    return fsSync.readFileSync(abs, 'utf8');
+                    const st = fsSync.statSync(abs);
+                    return { mtimeMs: st.mtimeMs, size: st.size };
                 } catch {
-                    // Unreadable/deleted → the file set is now empty → stale.
+                    // Unreadable/deleted → no current stamp → stale, never offered.
                     return null;
                 }
             };
-            return await resolveSendableBatch(cards, this._dependencyReadinessSource(db, board), { column, mode, readPlanFile });
+            return await resolveSendableBatch(cards, this._dependencyReadinessSource(db, board), { column, mode, statPlanFile });
         });
     }
 

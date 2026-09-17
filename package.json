@@ -1117,6 +1117,8 @@
     "test:contract:atomic-team-lifecycle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/atomic-team-feature-run-context-lifecycle.test.js",
     "test:contract:task-complete": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/task-complete-endpoint.test.js",
     "test:contract:dependency-gate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dependency-gate-contract.test.js",
+    "test:contract:dispatch-writeset-cache": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-writeset-cache-contract.test.js",
+    "test:contract:sendable-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/sendable-batch-and-durable-graph-contract.test.js",
     "test:contract:host-auto-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/host-auto-clear-on-plan-change.test.js",
     "test:contract:cli-board-commands": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/cli-board-commands-contract.test.js",
     "test:contract:transfer-bundle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/transfer-bundle-contract.test.js",

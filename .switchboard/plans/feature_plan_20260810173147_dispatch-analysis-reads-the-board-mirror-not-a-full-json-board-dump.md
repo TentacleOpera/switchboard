@@ -417,3 +417,12 @@ as written; automated compilation and tests were skipped per dispatch directive.
 Verified: the bundle body hashes to its declared `contentHash`; the new assertions were checked
 against the edited body (plans endpoint present, board instruction absent, write endpoint
 present); `node --check` on the test file is clean.
+
+## Review Findings
+
+Reviewed 2026-09-18. The plan's premise had genuinely expired — `ef76fd45` deleted the per-column markdown mirror, its writer, and `kanban-auto-export.test.ts` — and the implementer correctly promoted this plan's own documented fallback (`GET /kanban/plans?column=PLAN%20REVIEWED`) to primary rather than reinstating a deleted subsystem; the goal (stop pulling the whole board to reach one column) is achieved even though the named destination no longer exists. The two dropped changes (the `subtask-of:` quote strip and its marker test) are correctly void: the JSON read carries structured `featureId`/`isFeature`, so no marker is parsed. Verified independently: the `dispatch-analysis` body no longer instructs `GET /kanban/board`, names the per-column endpoint, keeps its write endpoints, and hashes to its declared `contentHash` (checked across all 29 bundled protocols). `dispatch-analysis-scope-contract` — this plan's gate, and it *is* invoked by CI — is 17/0. No code changes were needed from this review.
+
+## Deferred Findings
+
+- NIT — the protocol body still tells the pass to read `planFile` "in any of three forms" (absolute / relative / `file://`) and resolve it; `KanbanDatabase._readRows` already returns `planFile` absolute via `_resolveAbsolutePlanFile`, so two of the three branches are dead instruction the agent must still read past.
+- NIT — the plan's manual verification steps 1–7 all reference the deleted mirror and are unexecutable as written; they were not rewritten against the endpoint that replaced it, so this subtask has no executable manual check.

@@ -170,7 +170,7 @@ async function main() {
             const reopened = KanbanDatabase.forWorkspace(root);
             await reopened.ensureReady();
             assert.ok(hasTable(reopened, 'plan_write_sets'), 'the migration must add the table an upgraded install lacks');
-            assert.strictEqual(await reopened.getMigrationVersion(), 82, 'and must stamp V82 exactly once');
+            assert.ok((await reopened.getMigrationVersion()) >= 82, 'and must stamp at least V82 (later migrations may carry it further)');
             await KanbanDatabase.invalidateWorkspace(root);
         } finally {
             fs.rmSync(root, { recursive: true, force: true });

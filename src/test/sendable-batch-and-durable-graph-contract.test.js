@@ -31,7 +31,7 @@ const {
     resolveSendableBatch,
     filesOverlap,
     computeMapFingerprint,
-    extractFileSetFromPlanText,
+    formatPlanSourceStamp,
     compareByPrecedence,
 } = require('../../out/services/kanbanOrdering');
 const { KanbanDatabase } = require('../../out/services/KanbanDatabase');
@@ -144,57 +144,88 @@ async function main() {
     // ── 3. Staleness ─────────────────────────────────────────────────────────
     console.log('\n── 3. staleness is excluded from the batch AND surfaced ──');
 
-    await test('a plan file that changed since analysis marks its card stale', async () => {
-        const cards = [card('A', { planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'] })];
+    await test('an unchanged plan file is fresh; a changed one is stale', async () => {
+        const cards = [card('A', {
+            planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'], analysisSourceStamp: '1000:50',
+        })];
         const unchanged = await resolveSendableBatch(cards, source({}, {}), {
-            readPlanFile: () => 'writes src/a.ts',
+            statPlanFile: () => ({ mtimeMs: 1000, size: 50 }),
         });
         assert.deepStrictEqual(unchanged.stalePlanIds, []);
         assert.deepStrictEqual(unchanged.sendablePlanIds, ['A'], 'a fresh card stays sendable');
-        const changed = await resolveSendableBatch(cards, source({}, {}), {
-            readPlanFile: () => 'writes src/a.ts and src/new.ts',
+        const touched = await resolveSendableBatch(cards, source({}, {}), {
+            statPlanFile: () => ({ mtimeMs: 2000, size: 50 }),
         });
-        assert.deepStrictEqual(changed.stalePlanIds, ['A']);
+        assert.deepStrictEqual(touched.stalePlanIds, ['A'], 'a newer mtime is a change');
+        const resized = await resolveSendableBatch(cards, source({}, {}), {
+            statPlanFile: () => ({ mtimeMs: 1000, size: 51 }),
+        });
+        assert.deepStrictEqual(resized.stalePlanIds, ['A'], 'a same-mtime edit is caught by size');
+    });
+
+    await test('staleness is a stamp comparison, NOT a re-derivation from the prose', async () => {
+        // The regression this replaces: comparing the agent's judgement write set
+        // against a regex sweep of the same prose can never match (the sweep also
+        // collects cited paths), so EVERY analysed card was permanently stale and
+        // the batch was permanently empty while looking like a working filter.
+        const cards = [card('A', {
+            planFile: '/ws/a.md',
+            analysisFileSet: ['src/a.ts'],
+            analysisSourceStamp: '1000:50',
+        })];
+        const r = await resolveSendableBatch(cards, source({}, {}), {
+            statPlanFile: () => ({ mtimeMs: 1000, size: 50 }),
+        });
+        assert.deepStrictEqual(r.stalePlanIds, [], 'an unedited plan that cites more files than it writes is NOT stale');
+        assert.deepStrictEqual(r.sendablePlanIds, ['A']);
     });
 
     await test('a STALE card is never offered as sendable', async () => {
-        // The whole point: a file set that no longer matches its plan file is no
-        // better known than no set at all. Offering it is the silent false
-        // negative the plan exists to prevent.
-        const cards = [card('A', { planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'] })];
+        const cards = [card('A', {
+            planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'], analysisSourceStamp: '1000:50',
+        })];
         const r = await resolveSendableBatch(cards, source({}, {}), {
-            readPlanFile: () => 'writes src/a.ts and src/new.ts',
+            statPlanFile: () => ({ mtimeMs: 2000, size: 50 }),
         });
         assert.deepStrictEqual(r.stalePlanIds, ['A'], 'stale is still surfaced');
         assert.ok(!r.sendablePlanIds.includes('A'),
             'a stale card must not ALSO be sendable — surfaced is not the same as offered');
     });
 
+    await test('a card with no recorded stamp is stale, not fresh', async () => {
+        const cards = [card('A', { planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'] })];
+        const r = await resolveSendableBatch(cards, source({}, {}), {
+            statPlanFile: () => ({ mtimeMs: 1000, size: 50 }),
+        });
+        assert.deepStrictEqual(r.stalePlanIds, ['A'], 'no stamp is unknown, and unknown is not fresh');
+        assert.ok(!r.sendablePlanIds.includes('A'));
+    });
+
     await test('stale exclusion runs BEFORE selection, so it changes the batch', async () => {
         // A stale card must not hold a file against a fresh card either: the
         // greedy pass only ever sees fresh candidates.
         const cards = [
-            card('STALE', { planFile: '/ws/stale.md', analysisFileSet: ['src/shared.ts'], columnOrder: 1 }),
-            card('FRESH', { planFile: '/ws/fresh.md', analysisFileSet: ['src/shared.ts'], columnOrder: 2 }),
+            card('STALE', { planFile: '/ws/stale.md', analysisFileSet: ['src/shared.ts'], analysisSourceStamp: '1000:50', columnOrder: 1 }),
+            card('FRESH', { planFile: '/ws/fresh.md', analysisFileSet: ['src/shared.ts'], analysisSourceStamp: '1000:50', columnOrder: 2 }),
         ];
         const r = await resolveSendableBatch(cards, source({}, {}), {
-            readPlanFile: (p) => (p === '/ws/stale.md' ? 'now writes src/shared.ts and src/more.ts' : 'writes src/shared.ts'),
+            statPlanFile: (p) => (p === '/ws/stale.md' ? { mtimeMs: 9999, size: 50 } : { mtimeMs: 1000, size: 50 }),
         });
         assert.deepStrictEqual(r.stalePlanIds, ['STALE']);
         assert.deepStrictEqual(r.sendablePlanIds, ['FRESH'],
             'the fresh card takes the shared file because the stale one is not in the greedy pass');
     });
 
-    await test('an unreadable plan file is stale (its set is now empty) and not sendable', async () => {
-        const cards = [card('A', { planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'] })];
-        const r = await resolveSendableBatch(cards, source({}, {}), { readPlanFile: () => null });
+    await test('an unreadable plan file is stale and not sendable', async () => {
+        const cards = [card('A', { planFile: '/ws/a.md', analysisFileSet: ['src/a.ts'], analysisSourceStamp: '1000:50' })];
+        const r = await resolveSendableBatch(cards, source({}, {}), { statPlanFile: () => null });
         assert.deepStrictEqual(r.stalePlanIds, ['A']);
         assert.ok(!r.sendablePlanIds.includes('A'), 'a deleted plan file must not be offered as sendable');
     });
 
-    await test('extractFileSetFromPlanText is deterministic and sorted', () => {
-        const a = extractFileSetFromPlanText('edit `src/b.ts` then src/a.ts');
-        assert.deepStrictEqual(a, ['src/a.ts', 'src/b.ts']);
+    await test('formatPlanSourceStamp rounds mtime and refuses a non-stat', () => {
+        assert.strictEqual(formatPlanSourceStamp({ mtimeMs: 1000.7, size: 50 }), '1001:50');
+        assert.strictEqual(formatPlanSourceStamp(null), null);
     });
 
     // ── 4. Source invariants ─────────────────────────────────────────────────
@@ -206,6 +237,13 @@ async function main() {
         assert.ok(/owner_seat, owner_since, analysis_file_set/.test(src), 'PLAN_COLUMNS must select it or every read silently drops it');
         assert.ok(/analysisFileSet\?: string\[\] \| null/.test(src), 'KanbanPlanRecord must carry it');
         assert.ok(/setAnalysisFileSet\(/.test(src) && /getAnalysisFileSet\(/.test(src), 'the setter/getter pair must exist');
+        // The stamp travels WITH the set: staleness is "the plan file changed since
+        // extraction", and without the stamp the only available signal is a
+        // re-derivation from prose, which can never match a judgement write set.
+        assert.ok(/analysis_source_stamp TEXT DEFAULT NULL/.test(src), 'the stamp column must be in SCHEMA_TABLES_SQL');
+        assert.ok(/analysis_file_set, analysis_source_stamp/.test(src), 'PLAN_COLUMNS must select the stamp too');
+        assert.ok(/UPDATE plans SET analysis_file_set = \?, analysis_source_stamp = \?/.test(src),
+            'the set and its stamp must be written in ONE statement — a set without a stamp is permanently stale');
     });
 
     await test('isDependencyReady is imported by the queue pop, and the resolver calls it', () => {
@@ -315,6 +353,47 @@ async function main() {
         }
     });
 
+    await test('the write set is stamped with the plan file, and the read-to-write interlock holds', async () => {
+        // The stamp is what makes staleness answerable with a stat(). Without it a
+        // card is permanently stale, so this is the gate on the headline mechanism.
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-sendable-stamp-'));
+        fs.mkdirSync(path.join(root, '.switchboard', 'plans'), { recursive: true });
+        fs.writeFileSync(path.join(root, '.switchboard', 'workspace-id'), 'ws-stamp\n', 'utf8');
+        const planPath = path.join(root, '.switchboard', 'plans', 'p1.md');
+        fs.writeFileSync(planPath, '# p1\nwrites src/a.ts\n', 'utf8');
+        const db = KanbanDatabase.forWorkspace(root);
+        await db.createIfMissing();
+        const wsId = await db.getWorkspaceId();
+        db.getDriver().run(
+            `INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, workspace_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'PLAN REVIEWED', 'active', ?, ?, ?)`,
+            ['p1', 'p1', 'p1', '.switchboard/plans/p1.md', wsId, new Date().toISOString(), new Date().toISOString()]
+        );
+        try {
+            await db.setAnalysisFileSet('p1', ['src/a.ts']);
+            const st = fs.statSync(planPath);
+            const expected = formatPlanSourceStamp({ mtimeMs: st.mtimeMs, size: st.size });
+            assert.strictEqual(await db.getAnalysisSourceStamp('p1'), expected,
+                'the set and the plan file it came from must be stamped together');
+            const rec = await db.getPlanByPlanId('p1');
+            assert.strictEqual(rec.analysisSourceStamp, expected, 'a plan read must surface the stamp');
+
+            // Read-to-write interlock: a stamp the extractor claims that does not
+            // match the file NOW means the file changed under it — refuse to stamp
+            // rather than certify a set against content it was not extracted from.
+            await db.setAnalysisFileSet('p1', ['src/a.ts'], { sourceMtimeMs: 1, sourceSize: 1 });
+            assert.strictEqual(await db.getAnalysisSourceStamp('p1'), null,
+                'a mismatched claimed stamp must leave the card stale, never stamp it fresh');
+
+            // Clearing the set clears the stamp with it.
+            await db.setAnalysisFileSet('p1', null);
+            assert.strictEqual(await db.getAnalysisSourceStamp('p1'), null);
+        } finally {
+            await KanbanDatabase.invalidateWorkspace(root);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     await test('a pre-column DB gains analysis_file_set on next open (schema reconciliation)', async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-sendable-mig-'));
         fs.mkdirSync(path.join(root, '.switchboard', 'plans'), { recursive: true });
@@ -325,12 +404,15 @@ async function main() {
             // Simulate an older DB: drop the column, then reopen and let
             // _ensureSchemaColumns reconcile it from SCHEMA_TABLES_SQL.
             db.getDriver().run('ALTER TABLE plans DROP COLUMN analysis_file_set');
+            db.getDriver().run('ALTER TABLE plans DROP COLUMN analysis_source_stamp');
             await KanbanDatabase.invalidateWorkspace(root);
             const reopened = KanbanDatabase.forWorkspace(root);
             await reopened.ensureReady();
             const cols = reopened.querySql("PRAGMA table_info(plans)", []);
             assert.ok(cols.some(c => c.name === 'analysis_file_set'),
                 'the column must be reconciled onto an existing DB — the installed base never runs a manual migration');
+            assert.ok(cols.some(c => c.name === 'analysis_source_stamp'),
+                'the stamp column reconciles the same way — a set without its stamp is permanently stale');
             await KanbanDatabase.invalidateWorkspace(root);
         } finally {
             fs.rmSync(root, { recursive: true, force: true });

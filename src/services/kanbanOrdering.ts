@@ -251,8 +251,10 @@ export interface SendableCandidate extends OrderableCard {
     planFile?: string;
     /** The persisted write set. `null` = never analysed; `[]` = touches nothing. */
     analysisFileSet?: string[] | null;
-    /** The fingerprint recorded at analysis time, for staleness detection. */
+    /** The fingerprint recorded at analysis time. */
     mapFingerprint?: string | null;
+    /** `"<mtimeMs>:<size>"` of the plan file when the write set was extracted. */
+    analysisSourceStamp?: string | null;
 }
 
 export interface SendableBatchResult {
@@ -267,33 +269,13 @@ export function filesOverlap(a: string[] | null | undefined, b: string[] | null 
     return b.some((f) => set.has(f));
 }
 
-/**
- * Conservative repo-relative path extraction from a plan file's text.
- *
- * This is a CHANGE DETECTOR for the staleness check, never the conflict input —
- * file overlap reads the persisted `analysis_file_set`. It deliberately
- * over-collects (a path cited as evidence counts), because over-reporting
- * staleness is the safe direction: a silently stale batch is worse than one that
- * asks to be re-analysed. Do not "improve" this into the write-set extractor —
- * deciding which files a plan *writes* is the agent's judgement, not a regex.
- */
-export function extractFileSetFromPlanText(text: string): string[] {
-    if (!text) return [];
-    const out = new Set<string>();
-    const re = /(?:^|[\s`("'])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-        const p = m[1].replace(/[.,;:]+$/, '');
-        if (p && !p.startsWith('http')) out.add(p);
-    }
-    return Array.from(out).sort();
-}
+/** The stamp form persisted beside a write set: the plan file's mtime and size. */
+export interface PlanSourceStamp { mtimeMs: number; size: number; }
 
-function sameStringSet(a: string[], b: string[]): boolean {
-    if (a.length !== b.length) return false;
-    const sa = [...a].sort();
-    const sb = [...b].sort();
-    return sa.every((v, i) => v === sb[i]);
+/** Render a stat result into the stored `"<mtimeMs>:<size>"` stamp. */
+export function formatPlanSourceStamp(stat: PlanSourceStamp | null | undefined): string | null {
+    if (!stat || !Number.isFinite(stat.mtimeMs) || !Number.isFinite(stat.size)) return null;
+    return `${Math.round(stat.mtimeMs)}:${stat.size}`;
 }
 
 /**
@@ -311,11 +293,19 @@ function sameStringSet(a: string[], b: string[]): boolean {
  * are EXCLUDED, not treated as conflict-free. Before an analysis run nothing is
  * known to be sendable, and an empty batch is the honest answer.
  *
- * STALE cards are excluded the same way and for the same reason: a persisted
- * file set that no longer matches its plan file is no better known than no set
- * at all. Staleness is evaluated before selection (never after), so it can
+ * STALE cards are excluded the same way and for the same reason: a write set
+ * extracted from a plan file that has since changed is no better known than no
+ * set at all. Staleness is evaluated before selection (never after), so it can
  * actually change what is offered; the stale IDs are returned alongside so the
  * UI can surface them.
+ *
+ * Staleness is "the plan file changed since the set was extracted", answered by
+ * comparing the persisted `analysisSourceStamp` against one stat() of the file.
+ * It is deliberately NOT a re-derivation of the file set from the plan's prose:
+ * the persisted set is the agent's judgement about what a plan WRITES, while any
+ * regex over the same prose also collects what it merely CITES, so the two can
+ * never agree and every analysed card would be permanently stale — an always-empty
+ * batch that looks like a working filter.
  */
 export async function resolveSendableBatch(
     cards: SendableCandidate[],
@@ -323,8 +313,11 @@ export async function resolveSendableBatch(
     options?: {
         column?: string;
         mode?: SortMode;
-        /** Read a plan file's text. Omit to skip the staleness check. */
-        readPlanFile?: (planFile: string) => string | null;
+        /**
+         * Stat a plan file. Omit to skip the staleness check entirely (callers
+         * that have no filesystem, e.g. a pure ordering test).
+         */
+        statPlanFile?: (planFile: string) => PlanSourceStamp | null;
     }
 ): Promise<SendableBatchResult> {
     const column = options?.column ?? 'PLAN REVIEWED';
@@ -335,20 +328,21 @@ export async function resolveSendableBatch(
             && (c.analysisFileSet !== null && c.analysisFileSet !== undefined || c.mapFingerprint !== null && c.mapFingerprint !== undefined)
     );
 
-    // Staleness is computed BEFORE selection and EXCLUDES the card. A persisted
-    // file set that no longer matches its plan file is no better known than no
-    // set at all, so offering it as sendable is the same silent false negative
+    // Staleness is computed BEFORE selection and EXCLUDES the card. A write set
+    // extracted from a plan file that has since changed is no better known than
+    // no set at all, so offering it as sendable is the same silent false negative
     // the whole plan exists to prevent — and running this after selection would
     // make it an indicator that cannot change what is offered. Stale cards are
     // still NAMED in stalePlanIds so the UI can surface them.
     const stalePlanIds: string[] = [];
     const stale = new Set<string>();
-    if (options?.readPlanFile) {
+    if (options?.statPlanFile) {
         for (const c of candidates) {
-            const persisted = c.analysisFileSet || [];
-            const text = options.readPlanFile(c.planFile || '');
-            const current = text === null ? [] : extractFileSetFromPlanText(text);
-            if (!sameStringSet(persisted, current)) {
+            const current = formatPlanSourceStamp(options.statPlanFile(c.planFile || ''));
+            // No stamp recorded (analysed before stamping, or the write refused to
+            // stamp because the file moved under the extractor), an unreadable file,
+            // or a changed one — all stale, all excluded. Unknown is not fresh.
+            if (!c.analysisSourceStamp || !current || current !== c.analysisSourceStamp) {
                 stale.add(c.planId);
                 stalePlanIds.push(c.planId);
             }
