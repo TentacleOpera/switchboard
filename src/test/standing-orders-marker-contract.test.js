@@ -381,8 +381,11 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
         'Coding headPrompt must NOT reference POST /kanban/dispatch — the head does not advance the card or dispatch a reviewer; it accepts and pops the queue');
     assert.ok(!headPrompt.includes('CODE REVIEWED'),
         'Coding headPrompt must NOT name a target column — the card stays where it is and completion is asserted, never inferred from board position');
-    assert.ok(headPrompt.includes('next --from "{head}"'),
-        'Coding headPrompt must carry next --from "{head}" — the {head} token is substituted by wireSpawnedTeam with the head terminal name');
+    assert.ok(headPrompt.includes('switchboard next'),
+        'Coding headPrompt must carry the next call — without it a lead never asks for the next card');
+    assert.ok(!/next --from/.test(headPrompt),
+        'Coding headPrompt must NOT pass --from to next — the CLI reads SWITCHBOARD_TERMINAL, which the host injects into every seat. '
+        + 'A seat typing its own name is redundant, and being told to do so is why the flag kept reappearing.');
     assert.ok(headPrompt.includes('Never move a card to a new column yourself'),
         'Coding headPrompt must forbid moving the card — a column move releases nothing and completion is asserted, not inferred from position');
     assert.ok(!headPrompt.includes('GET /kanban/feature'),
@@ -456,7 +459,7 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
     // feature passed, ...") gated the pop on a report from a seat the coding
     // team no longer waits on, and gating the pop on an inferred verdict is
     // the pattern completion-is-asserted-never-inferred.md removes.
-    const queueNextSentence = 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); if it returns '
+    const queueNextSentence = 'run node "<cliPath>" next (or switchboard next); if it returns '
         + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
         + 'empty and stop.';
     assert.ok(

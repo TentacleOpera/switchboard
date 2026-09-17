@@ -712,7 +712,7 @@ function compositionContext(
  * `POST /kanban/queue/done` form — the CLI resolves the port itself, so no
  * `${port}` interpolation is needed for this order.
  */
-export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" done --from "\${terminalName}"\` (or \`switchboard done --from "\${terminalName}"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
+export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" done\` (or \`switchboard done\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
 
 const COMPLETION_DIRECTIVE_ORDER_ID_PREFIX = 'completion-directive:role:';
 

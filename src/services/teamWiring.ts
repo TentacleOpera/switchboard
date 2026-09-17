@@ -663,7 +663,7 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'run node "<cliPath>" accept --plan "<the subtask\'s planId>" '
     + 'against the API base named in your SWITCHBOARD STATUS line. '
     + 'The card stays where it is. Completion is asserted, never inferred from board position. '
-    + 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '
+    + 'run node "<cliPath>" next (or switchboard next); '
     + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop.';
 
@@ -681,7 +681,7 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     + 'When review and fixes are complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
-    + 'When the review passes, run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); if it returns a dispatched card, work it; if it returns '
+    + 'When the review passes, run node "<cliPath>" next (or switchboard next); if it returns a dispatched card, work it; if it returns '
     + 'dispatched: null, report that the queue is empty and stop.';
 
 /**

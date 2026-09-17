@@ -30,7 +30,7 @@ function usage(): string {
        npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--seat <terminal>] [--json]
        npx switchboard done [--from <seat>] [--plan <planId>] [--outcome failed] [--json]
        npx switchboard accept --plan <subtaskPlanId> [--from <lead>] [--json]
-       npx switchboard next --from <seat> [--json]
+       npx switchboard next [--from <seat>] [--json]
        npx switchboard reports [--kind blocked|finished] [--limit N] [--json]
        npx switchboard clear <terminal|--all> [--json]
        npx switchboard fleet [--json]
@@ -2351,7 +2351,7 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
 }
 
 /**
- * `switchboard next --from <seat> [--json]`
+ * `switchboard next [--from <seat>] [--json]`
  *
  * Pull the next card from the queue for a seat via POST /kanban/queue/next.
  */
@@ -2367,9 +2367,29 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
         if (a.startsWith('--from=')) { from = a.slice('--from='.length); continue; }
     }
 
+    // Same identity resolution as `cmdDone` and `cmdAccept`. The host injects
+    // SWITCHBOARD_TERMINAL for every seat (leads included), so a head popping
+    // its own queue never types its own name. `--from` still wins for driving
+    // the CLI by hand.
+    //
+    // This arriving late is why `--from` kept reappearing in prompts: `done`
+    // and `accept` could infer the seat but `next` could not, so no instruction
+    // could drop the flag without breaking the pop, and every audit put it back.
+    let fromSource: 'flag' | 'env' = 'flag';
     if (!from) {
-        if (jsonFlag) { emitJson({ success: false, error: 'Missing required argument: --from <seat>' }); }
-        else { console.error('Usage: npx switchboard next --from <seat> [--json]'); }
+        const envSeat = (process.env.SWITCHBOARD_TERMINAL || '').trim();
+        if (envSeat) {
+            from = envSeat;
+            fromSource = 'env';
+        }
+    }
+    if (!from) {
+        // Loud, and it names the variable. NO placeholder, no 'unknown' — a pop
+        // attributed to the wrong seat hands that seat's card to someone else.
+        const msg = 'SWITCHBOARD_TERMINAL is not set — `next` is run from inside a seat, '
+            + 'which is where the host injects it. If you are driving the CLI by hand, pass --from <seat>.';
+        if (jsonFlag) { emitJson({ success: false, error: msg }); }
+        else { console.error(`[switchboard] ${msg}`); }
         exitFlushed(5);
     }
 
@@ -2397,10 +2417,13 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
     if (jsonFlag) {
         emitJson({ success: code === 0, status: res.status, exitCode: code, result: data });
     } else if (code === 0) {
+        // Name the identity source, per the repo rule: a seat resolved from the
+        // env and one passed by hand must never be indistinguishable after the fact.
+        const via = fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from';
         if (data?.dispatched) {
-            console.log(`[switchboard] Next card for '${from}': ${data.dispatched.title || data.dispatched.planId}`);
+            console.log(`[switchboard] Next card for '${from}' (${via}): ${data.dispatched.title || data.dispatched.planId}`);
         } else {
-            console.log(`[switchboard] Queue empty for seat '${from}' — the run is over.`);
+            console.log(`[switchboard] Queue empty for seat '${from}' (${via}) — the run is over.`);
         }
     } else {
         const errMsg = String(data?.error || res.body || 'next failed');

@@ -1992,7 +1992,7 @@ export class PlanIngestionEngine {
                 `[switchboard:turn-end] Queue stall — you have gone idle with ${queueCards.length} card(s) staged in the dispatch queue.`,
                 `  Next card: ${nextCard.planFile} (column ${nextCard.kanbanColumn})`,
                 `  You have been silent for ${silentFor}s.`,
-                `  Make the call: run \`node "<cliPath>" next --from "${watch.headTerminal}"\` (or \`switchboard next --from "${watch.headTerminal}"\`).`,
+                `  Make the call: run \`node "<cliPath>" next\` (or \`switchboard next\`).`,
             ];
             const body = substituteCliPath(lines.join('\n'));
 

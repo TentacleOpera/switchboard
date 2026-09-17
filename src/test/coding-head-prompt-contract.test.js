@@ -133,8 +133,10 @@ function run() {
     // ── 5. queue/next instruction ───────────────────────────────────────
 
     check('the prompt states next as the "ask for the next card" call', () => {
-        assert.ok(twPrompt.includes('run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is empty and stop.'),
+        assert.ok(twPrompt.includes('run node "<cliPath>" next (or switchboard next); if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is empty and stop.'),
             'prompt must instruct next to ask for next card');
+        assert.ok(!/--from/.test(twPrompt),
+            'no prompt may pass --from: done, accept and next all read SWITCHBOARD_TERMINAL, which the host injects into every seat');
     });
 
     // ── 6. Commit instruction marker present ────────────────────────────
