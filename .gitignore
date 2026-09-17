@@ -104,3 +104,10 @@ src/webview/vendor/
 **/*.ts.bak
 **/*.local.bak
 **/*.corrupt-*.bak
+
+# Workspace identity and board snapshots are MACHINE-LOCAL, never repo state.
+# A committed workspace id travels to other machines and either routes them at a
+# board that is not theirs, or (when absent) sends the resolver to its
+# sha256(root) fallback and mints a second, empty board. See
+# .switchboard/plans/a-machine-foreign-path-in-workspace-id-routes-agents-to-the-wrong-database.md
+/state.json
