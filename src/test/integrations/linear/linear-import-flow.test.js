@@ -131,9 +131,46 @@ async function run() {
                 'Expected team-wide Linear import flow not to send a project filter.'
             );
 
-            const parentContent = readText(path.join(plansDir, 'linear_import_issue-parent.md'));
+            // A top-level parent with sub-issues imports as a FEATURE, not a plan:
+            // it lands in .switchboard/features/ as
+            // linear_import_<issueId>_<uuid>.md, where the uuid is the feature's
+            // planId — minted per import, so it cannot be spelled out here. Its
+            // sub-issues stay in plansDir as ordinary plans, and an issue with no
+            // children imports as a normal plan too. This test used to look for
+            // the parent in plansDir, which is the pre-feature layout.
+            const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
+            const featureFiles = fs.readdirSync(featuresDir)
+                .filter((name) => /^linear_import_issue-parent_.+\.md$/.test(name));
+            assert.strictEqual(
+                featureFiles.length,
+                1,
+                `Expected the parent issue to import as exactly one feature file, got ${JSON.stringify(featureFiles)}.`
+            );
+            assert.ok(
+                !fs.existsSync(path.join(plansDir, 'linear_import_issue-parent.md')),
+                'Expected a parent with sub-issues NOT to be written to the plans directory — it is a feature.'
+            );
+            // Only the parent becomes a feature: a childless issue is a normal plan.
+            assert.deepStrictEqual(
+                fs.readdirSync(featuresDir).filter((name) => name.endsWith('.md')).sort(),
+                featureFiles.sort(),
+                'Expected only the parent issue to be imported as a feature.'
+            );
+
+            const parentContent = readText(path.join(featuresDir, featureFiles[0]));
             const childContent = readText(path.join(plansDir, 'linear_import_issue-child.md'));
             const backlogContent = readText(path.join(plansDir, 'linear_import_issue-backlog.md'));
+
+            // The subtask is bound to that feature by planId, and the feature's
+            // planId is the uuid in its filename. Asserting they match is what
+            // pins "parents become features, their sub-issues become subtasks" —
+            // two files existing in the right directories does not.
+            const featureUuid = featureFiles[0].replace(/^linear_import_issue-parent_/, '').replace(/\.md$/, '');
+            assert.match(
+                childContent,
+                new RegExp(`> \\*\\*Feature Plan ID:\\*\\* ${featureUuid}\\b`),
+                'Expected the sub-issue to carry its parent feature\'s plan ID.'
+            );
 
             assert.ok(!parentContent.includes('## Linear Issue Notes'));
             assert.ok(!parentContent.includes('**Sub-issues (each imported as a separate plan):**'));
