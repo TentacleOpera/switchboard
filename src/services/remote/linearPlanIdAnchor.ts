@@ -2,9 +2,11 @@
  * Linear's durable `planId` identity anchor.
  *
  * Linear persists no planId on the remote object — identity lived solely in the
- * local `linear_issue_id` column, which machine loss destroys. Board restore
- * (rebuilding a board from Linear) is impossible without an anchor that survives
- * on Linear's side, so the outbound push appends one to the issue description:
+ * local `linear_issue_id` column, so an issue could never be matched back to a
+ * card except through that one local row. The anchor gives the remote object a
+ * durable identity of its own, which is what makes the per-project seed
+ * re-runnable: a second seed pass ATTACHES to the issue it already created
+ * instead of duplicating it. The outbound push appends it to the description:
  *
  *     [Switchboard] Plan: {planId}
  *
@@ -17,6 +19,12 @@
  * description) and must NOT be pulled back into the local plan file, or a
  * pull→push round-trip would duplicate it. Both directions live here so the
  * write and the strip cannot drift.
+ *
+ * This anchor is NOT half a board restore. Rebuilding a board out of a tracker
+ * was removed deliberately (see NotionSyncService's header); the anchor is kept
+ * for the seed's attach-on-re-run, and
+ * `provider-capability-parity-contract.test.js` fails if board push/restore
+ * grows back on the seam.
  */
 
 /** Separator + marker + value, appended at the very end of a description. */

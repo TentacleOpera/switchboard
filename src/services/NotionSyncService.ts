@@ -15,10 +15,22 @@ export interface NotionSyncConfig {
 }
 
 /**
- * Service that pushes and restores kanban.db plans to/from a Notion database —
- * the Notion board sync, peer of `ClickUpSyncService` and `LinearSyncService`.
- * (It was named `NotionBackupService` when backing the board up was its only
- * job; the capability is general, so the name follows it.)
+ * Projects kanban.db plans into a Notion database — the plans-database
+ * projection Remote Control (`setupRemoteControl`) is built on.
+ *
+ * This is NOT a board backup/restore pair. `backupToNotion` and
+ * `restoreFromNotion` were removed deliberately: a whole-board projection into
+ * a tracker was a sql.js-era hedge against a fragile local store, and the store
+ * is one better-sqlite3 database owned by one host now. Bulk publication of a
+ * board into a tracker is the per-project seed's job
+ * (.switchboard/plans/seed-board-projects-to-linear-projects.md), which needs a
+ * destination mapping this service does not have.
+ * `provider-capability-parity-contract.test.js` ratchets the removed names out.
+ *
+ * The Notion property names written here are SHIPPED STATE in real users'
+ * databases — renaming one orphans every page. They are pinned byte-for-byte by
+ * `__tests__/NotionSyncService.test.ts` (`npm run test:contract:notion-shipped-schema`).
+ *
  * Uses Notion API with rate limiting (~3 requests/sec = 350ms delay).
  */
 export class NotionSyncService {

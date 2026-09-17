@@ -606,6 +606,19 @@ jobs:
       - name: Linear per-project seed contract (destination mapping, cursor, rate limits)
         run: npm run test:contract:linear-seed
 
+      # The Notion plans-database schema. Board push/restore were removed, but
+      # the plans-database projection is KEPT because setupRemoteControl is
+      # built on it — so every property name it writes ('Kanban Column',
+      # 'Plan ID', 'Feature', ...) still lands in real users' Notion databases,
+      # and renaming one orphans every page in them. Two tests pin those names
+      # byte-for-byte and a third pins the notion-backup-config.json ->
+      # notion-sync-config.json migration; all three survived the board-sync
+      # removal, but the file they live in was never invoked by any gate, so
+      # nothing here could ever go red. It is invoked now.
+      # Needs out/ built, so it must stay AFTER "Compile test outputs".
+      - name: Notion shipped-schema + legacy-config migration contract
+        run: npm run test:contract:notion-shipped-schema
+
       # Tailnet bind policy. Every failure mode here is silent and reach-shaped:
       # binding 0.0.0.0 instead of the specific Tailscale address exposes the
       # board to every network the machine is on; moving the bind instead of

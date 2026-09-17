@@ -667,8 +667,15 @@ export class LinearSyncService {
     return `Managed by Switchboard.\n\nPlan file: \`${planFile}\`\n\nDo not edit the title — it is synced from Switchboard.`;
   }
 
-  private _truncateInitialDescription(markdownContent: string): string {
-    const maxBytes = DEFAULT_LIVE_SYNC_CONFIG.maxContentSizeBytes;
+  /**
+   * Truncate to the live-sync byte ceiling, reserving `reserveBytes` for a
+   * footer the caller appends afterwards. The ceiling governs what is actually
+   * SENT, so anything appended after truncation has to come out of the same
+   * budget — otherwise the anchor footer pushes the create mutation over the
+   * limit the guard exists to enforce.
+   */
+  private _truncateInitialDescription(markdownContent: string, reserveBytes = 0): string {
+    const maxBytes = DEFAULT_LIVE_SYNC_CONFIG.maxContentSizeBytes - Math.max(0, reserveBytes);
     const suffix = '\n\n... (truncated by Switchboard before Linear issue creation)';
 
     if (Buffer.byteLength(markdownContent, 'utf8') <= maxBytes) {
@@ -735,8 +742,13 @@ export class LinearSyncService {
         : path.join(this._workspaceRoot, planFile);
       const markdownContent = await fs.promises.readFile(planFilePath, 'utf8');
       const contentWithoutH1 = this._stripH1Header(markdownContent);
-      // Append AFTER truncation so the anchor is never the bytes that get cut.
-      return this._truncateInitialDescription(contentWithoutH1) + anchor;
+      // Append AFTER truncation so the anchor is never the bytes that get cut —
+      // but reserve its bytes from the budget, or the footer carries the
+      // description back over the ceiling the truncation just enforced.
+      return this._truncateInitialDescription(
+        contentWithoutH1,
+        Buffer.byteLength(anchor, 'utf8')
+      ) + anchor;
     } catch (error) {
       console.warn(`[LinearSync] Failed to read plan file ${planFile}:`, error);
       return fallback;

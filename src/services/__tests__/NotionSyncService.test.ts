@@ -135,6 +135,18 @@ suite('NotionSyncService', () => {
         await fs.promises.rm(newPath, { force: true });
     });
 
+    // `_readConfigFile` promises a corrupt file throws rather than reading as
+    // unconfigured — the two states must not be indistinguishable.
+    test('a corrupt config is loud, not read as unconfigured', async () => {
+        const newPath = path.join(tmpDir, '.switchboard', 'notion-sync-config.json');
+        await fs.promises.writeFile(newPath, '{ not json', 'utf8');
+        try {
+            await assert.rejects(() => service.loadConfig());
+        } finally {
+            await fs.promises.rm(newPath, { force: true });
+        }
+    });
+
     // ── autoCreateDatabase ───────────────────────────────────────────
 
     test('autoCreateDatabase errors when no parent page configured', async () => {

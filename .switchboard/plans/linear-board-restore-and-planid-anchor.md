@@ -123,3 +123,14 @@ The backfill *is* the migration, and it is one-directional and time-sensitive: i
 ## Outstanding Questions
 
 None.
+
+## Review Findings
+
+Reviewed as part of the parent feature's single delivery unit, against the 2026-09-16 revision that supersedes this plan's body. The removal is verified complete: `boardSyncPush`, `boardSyncRestore`, `boardPush`, `boardRestore`, `backupToNotion`, `restoreFromNotion`, `restoreBoardFromClickUp`, `getListTasksWithCompleteness`, `restoreFromLinear`, `backfillPlanIdAnchors` and `ClickUpTask.customFields` are absent repo-wide (remaining hits are the two ratchet tests that name them deliberately, plus an unrelated `boardPushPolicy` local and one historical docblock line). Kept surfaces verified live and wired: the Notion plans-database projection behind `setupRemoteControl`, the shipped Notion property names, the `notion-backup-config.json` → `notion-sync-config.json` migration, and the Linear `[Switchboard] Plan:` anchor (written at `LinearSyncService.ts:737`/`:3187`, stripped at `LinearRemoteProvider.ts:131`, queried at `:3440`). One MAJOR regression was found and fixed — the anchor was appended after truncation, pushing `issueCreate` descriptions past the live-sync byte ceiling — along with a MAJOR gate-wiring hole on the Notion shipped-schema tests. Validation: `compile-tests` clean; the three contract gates and the Notion integration suite green; both ratchet halves mutation-tested red.
+
+## Deferred Findings
+
+- NIT `src/webview/setup.html:3658` — the `notionSyncProgress` message handler and the `notion-sync-progress` element are dead: nothing posts that message since the board push/restore handlers were removed. Removing them also means touching `src/test/setup-panel-element-ids.test.js:59`, which pins the id.
+- NIT `docs/IPC_PROTOCOL.md` — still documents the removed `backupToNotion` and `restoreFromNotion` verbs. The generated `protocol-catalog.json` and `src/generated/verbAllowlist.ts` are both correct; only the prose doc is stale.
+- MAJOR (pre-existing, out of scope) `src/test/integrations/linear/linear-sync-service.test.js:608` — `testNativeQueryAndMutationHelpers` fails with "No mocked HTTPS response". The queued matcher-less issues response is not matched despite being the only entry left, and three stray `{ viewer { id } }` requests arrive just before it, indicating https-mock cross-talk between test functions. None of the enclosing code is in this feature's diff; the failure was previously masked by the byte-ceiling assertion aborting the run first.
+- MAJOR (pre-existing, out of scope) `src/test/integrations/clickup/clickup-automation-service.test.js:193` — `findPlanByClickUpTaskId` returns null although `getBoard` returns the plan, i.e. `clickup_task_id` is not persisted on import. `ClickUpAutomationService.ts`, `PlanFileImporter.ts`, `planMetadataUtils.ts` and `findPlanByClickUpTaskId` are all untouched by this feature's commits and untouched since.

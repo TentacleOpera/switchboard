@@ -334,9 +334,21 @@ async function testSetupAndSyncFallback() {
                 Buffer.byteLength(oversizedDescription, 'utf8') <= DEFAULT_LIVE_SYNC_CONFIG.maxContentSizeBytes,
                 'Expected oversized Linear descriptions to respect the live-sync byte ceiling.'
             );
+            // The planId anchor is appended after truncation and MUST be last:
+            // stripLinearPlanIdAnchor's regex is anchored to end-of-string, so a
+            // footer that is not last stops round-tripping. The truncation
+            // suffix therefore sits just before it, not at the very end.
             assert.ok(
-                oversizedDescription.endsWith(truncationSuffix),
-                'Expected oversized Linear descriptions to end with the truncation suffix.'
+                oversizedDescription.includes(truncationSuffix),
+                'Expected oversized Linear descriptions to carry the truncation suffix.'
+            );
+            assert.ok(
+                /\n\n---\n\[Switchboard\] Plan: \S+$/.test(oversizedDescription),
+                'Expected the planId anchor to remain the last thing in a truncated description.'
+            );
+            assert.ok(
+                oversizedDescription.indexOf(truncationSuffix) < oversizedDescription.indexOf('[Switchboard] Plan: '),
+                'Expected the truncation suffix to precede the planId anchor.'
             );
             assert.ok(
                 oversizedDescription.startsWith('😀'),

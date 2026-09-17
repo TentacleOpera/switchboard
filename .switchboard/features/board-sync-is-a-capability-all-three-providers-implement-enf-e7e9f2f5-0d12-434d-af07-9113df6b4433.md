@@ -47,11 +47,11 @@ anchor, which the seed will want for re-runnable attach.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [ClickUp can already be queried by planId but cannot rebuild a board — add the restore orchestration](../plans/clickup-board-restore.md) — **LEAD CODED** — ID: 1d7f31cf-781c-4a65-9ef7-5c159163f86c
-- [ ] [Board sync is a seam with no interface — extend RemoteProviderCapabilities to cover it and add the contract test that keeps it symmetric](../plans/provider-capability-board-sync-and-contract-test.md) — **LEAD CODED** — ID: cbba7fc1-2227-4eee-847b-10531983770c
-- [ ] [Notion's board sync is misnamed as "backup" and sits outside the provider seam — move it behind the interface without breaking shipped Notion databases](../plans/notion-board-sync-behind-the-seam.md) — **LEAD CODED** — ID: 1ba7ecd9-04bb-4f15-a27d-cbf4f99642a4
-- [ ] [Linear issues carry no planId, so a board can never be rebuilt from Linear — add the anchor, then the restore](../plans/linear-board-restore-and-planid-anchor.md) — **LEAD CODED** — ID: 91784573-2765-4442-916b-d3263b6661ae
-- [ ] [The Linear Agent Surface Reconciles Destructively, Never Ends a Session, and Cannot Authenticate at All](../plans/memo-the-linear-agent-surface-reconciles-destructively-and-cannot-authenticate.md) — **LEAD CODED** — ID: 97a3d80b-47a1-4394-95ab-c5c54737e708
+- [ ] [ClickUp can already be queried by planId but cannot rebuild a board — add the restore orchestration](../plans/clickup-board-restore.md) — **CODE REVIEWED** — ID: 1d7f31cf-781c-4a65-9ef7-5c159163f86c
+- [ ] [Board sync is a seam with no interface — extend RemoteProviderCapabilities to cover it and add the contract test that keeps it symmetric](../plans/provider-capability-board-sync-and-contract-test.md) — **CODE REVIEWED** — ID: cbba7fc1-2227-4eee-847b-10531983770c
+- [ ] [Notion's board sync is misnamed as "backup" and sits outside the provider seam — move it behind the interface without breaking shipped Notion databases](../plans/notion-board-sync-behind-the-seam.md) — **CODE REVIEWED** — ID: 1ba7ecd9-04bb-4f15-a27d-cbf4f99642a4
+- [ ] [Linear issues carry no planId, so a board can never be rebuilt from Linear — add the anchor, then the restore](../plans/linear-board-restore-and-planid-anchor.md) — **CODE REVIEWED** — ID: 91784573-2765-4442-916b-d3263b6661ae
+- [ ] [The Linear Agent Surface Reconciles Destructively, Never Ends a Session, and Cannot Authenticate at All](../plans/memo-the-linear-agent-surface-reconciles-destructively-and-cannot-authenticate.md) — **CODE REVIEWED** — ID: 97a3d80b-47a1-4394-95ab-c5c54737e708
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -78,3 +78,14 @@ operations: the seed targets a chosen remote project per board project, whereas
 `boardPush` had a single destination for the whole config and `boardRestore`
 answered a recovery question this product does not take on.
 
+
+## Review Findings
+
+Reviewed as one delivery unit against the 2026-09-16 revision (board sync removed, capability interface + contract test kept); the removal is complete and the ratchet is real. Files changed in this pass: `src/services/LinearSyncService.ts` (anchor byte-ceiling fix), `src/test/integrations/linear/linear-sync-service.test.js` (assertion updated for the anchor-last invariant), `src/services/NotionSyncService.ts` and `src/services/remote/linearPlanIdAnchor.ts` (docblocks that still described removed behaviour), `src/services/__tests__/NotionSyncService.test.ts` (added the missing corrupt-config assertion), plus `package.json` and `.github/workflows/integration-tests.yml` (new `test:contract:notion-shipped-schema` gate). Validation: `compile-tests` clean; `test:contract:provider-capability-parity`, `test:contract:linear-seed`, `test:contract:notion-shipped-schema` (16 passing) and `test:integration:notion` all green; both halves of the board-sync ratchet were mutation-tested and confirmed to go red. Remaining risks: two pre-existing suite failures (Linear `testNativeQueryAndMutationHelpers`, ClickUp automation `clickup_task_id` persistence) are unrelated to this feature's diff and are left for their own cards. Note for the author: an earlier reading of this review claimed the byte-identical Notion schema tests had been deleted — that was a search-path error on my part; they survive at `src/services/__tests__/NotionSyncService.test.ts` exactly as this plan states, and the real defect was that no CI gate ever invoked them.
+
+## Deferred Findings
+
+- NIT `src/webview/setup.html:3658` — the `notionSyncProgress` message handler and the `notion-sync-progress` element are dead: nothing posts that message since the board push/restore handlers were removed. Removing them also means touching `src/test/setup-panel-element-ids.test.js:59`, which pins the id.
+- NIT `docs/IPC_PROTOCOL.md` — still documents the removed `backupToNotion` and `restoreFromNotion` verbs. The generated `protocol-catalog.json` and `src/generated/verbAllowlist.ts` are both correct; only the prose doc is stale.
+- MAJOR (pre-existing, out of scope) `src/test/integrations/linear/linear-sync-service.test.js:608` — `testNativeQueryAndMutationHelpers` fails with "No mocked HTTPS response". The queued matcher-less issues response is not matched despite being the only entry left, and three stray `{ viewer { id } }` requests arrive just before it, indicating https-mock cross-talk between test functions. None of the enclosing code is in this feature's diff; the failure was previously masked by the byte-ceiling assertion aborting the run first.
+- MAJOR (pre-existing, out of scope) `src/test/integrations/clickup/clickup-automation-service.test.js:193` — `findPlanByClickUpTaskId` returns null although `getBoard` returns the plan, i.e. `clickup_task_id` is not persisted on import. `ClickUpAutomationService.ts`, `PlanFileImporter.ts`, `planMetadataUtils.ts` and `findPlanByClickUpTaskId` are all untouched by this feature's commits and untouched since.
