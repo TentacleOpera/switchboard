@@ -34,10 +34,10 @@ Today the panel is seven buttons and a card dropdown, six of them one mechanical
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Agent Panel Becomes a Standing Controller, Not a Button Row](../plans/the-agent-panel-becomes-a-standing-controller.md) — **LEAD CODED** — ID: ca45cf9a-98d8-4289-8474-23974fd89a60
-- [ ] [Structured Cards Render in One Module on Three Surfaces](../plans/structured-cards-render-in-one-module-on-three-surfaces.md) — **LEAD CODED** — ID: 7c26ace7-3bed-4345-b946-445f7ceaf4b9
-- [ ] [The Controller Wakes on a Clock, Diagnoses, and Reports](../plans/the-controller-wakes-on-a-clock-diagnoses-and-reports.md) — **LEAD CODED** — ID: 7bc77681-fe26-494e-a391-3464aeeb7a68
-- [ ] [Judgement Tiers, the Supervisor Seat, and Reroute](../plans/judgement-tiers-the-supervisor-seat-and-reroute.md) — **LEAD CODED** — ID: 00ff3928-88b1-49f5-8b81-124490016f81
+- [ ] [The Agent Panel Becomes a Standing Controller, Not a Button Row](../plans/the-agent-panel-becomes-a-standing-controller.md) — **CODE REVIEWED** — ID: ca45cf9a-98d8-4289-8474-23974fd89a60
+- [ ] [Structured Cards Render in One Module on Three Surfaces](../plans/structured-cards-render-in-one-module-on-three-surfaces.md) — **CODE REVIEWED** — ID: 7c26ace7-3bed-4345-b946-445f7ceaf4b9
+- [ ] [The Controller Wakes on a Clock, Diagnoses, and Reports](../plans/the-controller-wakes-on-a-clock-diagnoses-and-reports.md) — **CODE REVIEWED** — ID: 7bc77681-fe26-494e-a391-3464aeeb7a68
+- [ ] [Judgement Tiers, the Supervisor Seat, and Reroute](../plans/judgement-tiers-the-supervisor-seat-and-reroute.md) — **CODE REVIEWED** — ID: 00ff3928-88b1-49f5-8b81-124490016f81
 <!-- END SUBTASKS -->
 
 ## Column note — these subtasks do NOT need replanning
@@ -94,7 +94,6 @@ correctness rather than scope:
 removed; wiring any of this there is throwaway work, and "the extension does not have it" is the
 intended state, not a divergence.
 
-
 ## Completion report (lead: Coding)
 
 All four subtasks coded and accepted. Round 1 (Structured Cards, Controller Wakes)
@@ -118,3 +117,34 @@ remediation/`requires` and judgement tier providerIds (Agent Panel).
 Standalone-only throughout; `src/extension.ts` untouched. Compilation and the
 automated suites were skipped this run by directive — the plans' verification checks
 remain the gate, and runtime verification on a rebuilt standalone host is outstanding.
+
+## Review Findings
+
+All four subtasks reviewed in one pass against their plan files and the shipped code; five files
+changed (`src/standalone/controller/controller.ts`, `src/standalone/controller/matrix.ts`,
+`src/services/ControllerBoardStore.ts`, `src/webview/controllerConsole.js`, `protocol-catalog.json`).
+Five defects were fixed: the board-restart rate limit both failed to report a suppressed restart and
+cleared `consecutiveRestarts` on every suppressed pass, making the declared ceiling unreachable;
+matrix-override membership was unvalidated for `condition.kind` everywhere and for `remediation`/
+`requires` in the controller's own loader, so a bad row loaded cleanly and was then silently inert;
+the console's 15-second staleness poll rebuilt the config editor on every tick and wiped in-progress
+edits; the console composed its own hardcoded reasons for unavailable capabilities instead of
+rendering the controller's; and `catalog:check` — a CI gate — was failing at HEAD on a stale
+`protocol-catalog.json`. Verification: `compile-tests` clean, `catalog:check`, `standalone-parity:check`,
+`standalone-fork:check`, `verb-returns:check`, `dispatch-surface:check`, `parity:check`,
+`push-routing:check`, `kanban-dispatch-callers:check`, `icons:parity`, `banner:check` and the three
+touched contract suites all pass; `host-seam-parity:check`, `mirror:check` and
+`test:contract:panel-runtime-surface` fail for pre-existing reasons unrelated to this feature
+(`setOnBoardMutated` from V81, a broken mirror script, and `memo.html`'s CSP). **The feature ships
+with no automated check on any of its core mechanisms** — no suite exercises the wake loop, the
+judgement chain, the lease or the three-surface renderer load — so the gates above are not evidence
+that the controller works, and the runtime verdict is provisional pending a pass against a rebuilt
+standalone host.
+
+## Deferred Findings
+
+- MAJOR — No automated check discriminates on any core mechanism of this feature: the wake loop, the ladder, the lease, redaction, the tier chain and the three-surface renderer load are all manual-only, and nothing in `.github/workflows/integration-tests.yml` touches `src/standalone/controller/`, `src/standalone/judgement/` or `src/webview/controllerConsole.js`. `src/standalone/controller/controller.ts:210`
+- MAJOR — `claimLease` is a read-then-write with no compare-and-swap, so two controllers claiming in the same tick can both be granted the board. `src/services/ControllerBoardStore.ts:226`
+- MAJOR — `ControllerBoardStore`'s save-time closed sets are a hand-maintained mirror of the controller's own (`KNOWN_REMEDIATIONS`/`KNOWN_CAPABILITIES`/`KNOWN_CONDITION_KINDS` versus `MATRIX_REMEDIATIONS`/`MATRIX_CAPABILITY_KEYS`/`MATRIX_CONDITION_KINDS`), and nothing gates the two against each other; a tenth remediation added to one and not the other reopens the silent-inert-row hole. `src/services/ControllerBoardStore.ts:750`
+- NIT — Pre-existing gate failures left untouched because they predate this feature: `host-seam-parity:check` (`setOnBoardMutated`, from commit 2da42df4), `mirror:check` (`generateClaudeMirror is not a function`), `test:contract:panel-runtime-surface` (`memo.html` CSP). `scripts/check-claude-mirror.js:115`
+- NIT — The per-subtask deferred lists in the four subtask plan files carry the remaining findings and are not repeated here.

@@ -81,6 +81,14 @@
         return { key: 'healthy', label: 'armed, controller healthy', detail: `lease renewed ${relativeStamp(lease.renewedAt)}` };
     }
 
+    /**
+     * Capability rows, greyed with THEIR REASON — and the reason is the one the
+     * controller reported, never a sentence composed here. A plausible
+     * client-side reason is indistinguishable from a reported one, which is the
+     * fallback rule applied to the surface itself; where the controller did not
+     * report one, the row says the reason was not reported rather than
+     * inventing the likeliest cause.
+     */
     function renderRows(rowsEl, stateView) {
         if (!rowsEl) { return; }
         rowsEl.textContent = '';
@@ -94,15 +102,19 @@
             rowsEl.appendChild(line);
             return;
         }
-        const reasons = {
-            model: 'no judgement backend configured — the mechanical rows still run',
-            supervisor: 'no supervisor seat configured',
-            twoProviders: 'fewer than two providers seated — reroute unavailable',
-        };
+        const detail = persisted && persisted.capabilityDetail && typeof persisted.capabilityDetail === 'object'
+            ? persisted.capabilityDetail : {};
         for (const key of Object.keys(caps)) {
             const row = document.createElement('div');
             row.className = 'agent-controller-row' + (caps[key] ? '' : ' is-unavailable');
-            row.textContent = caps[key] ? `${key}: available` : `${key}: unavailable — ${reasons[key] || 'precondition unmet'}`;
+            const d = detail[key];
+            const reason = d && typeof d.reason === 'string' && d.reason ? d.reason : '';
+            const source = d && typeof d.source === 'string' && d.source ? ` (source: ${d.source})` : '';
+            if (caps[key]) {
+                row.textContent = `${key}: available${reason ? ' — ' + reason : ''}${source}`;
+            } else {
+                row.textContent = `${key}: unavailable — ${reason || 'reason not reported by the controller'}${source}`;
+            }
             rowsEl.appendChild(row);
         }
     }
@@ -120,8 +132,24 @@
         reportEl.textContent = String(report.content || '');
     }
 
+    /**
+     * True while the operator is typing into the config editor, or has typed
+     * something they have not saved. The console re-reads the board every 15s so
+     * `late` shows up with no operator action; rebuilding the editor on that
+     * poll wiped whatever was half-typed into the matrix or judgement box, which
+     * on a phone is the difference between "configurable from the panel" and
+     * "not configurable at all".
+     */
+    let configDirty = false;
+
+    function markConfigDirty() { configDirty = true; }
+
     function renderConfig(bodyEl, config, matrix, judgement) {
         if (!bodyEl) { return; }
+        // Never rebuild under the operator's hands: a focused or edited field
+        // keeps what it holds until the next save (which clears the flag and
+        // re-renders from the board's answer).
+        if (bodyEl.childElementCount > 0 && (configDirty || bodyEl.contains(document.activeElement))) { return; }
         bodyEl.textContent = '';
 
         const intervalLabel = document.createElement('label');
@@ -132,6 +160,7 @@
         interval.min = '1';
         interval.id = 'agent-controller-interval';
         interval.value = config && config.value && config.value.intervalMinutes ? String(config.value.intervalMinutes) : '';
+        interval.addEventListener('input', markConfigDirty);
         intervalLabel.appendChild(interval);
         const intervalSave = document.createElement('button');
         intervalSave.type = 'button';
@@ -151,6 +180,7 @@
         matrixArea.id = 'agent-controller-matrix';
         matrixArea.rows = 6;
         matrixArea.value = matrix && matrix.kind === 'configured' ? JSON.stringify(matrix.rows, null, 2) : '';
+        matrixArea.addEventListener('input', markConfigDirty);
         matrixLabel.appendChild(matrixArea);
         bodyEl.appendChild(matrixLabel);
         const matrixSave = document.createElement('button');
@@ -168,6 +198,7 @@
         judgementArea.id = 'agent-controller-judgement';
         judgementArea.rows = 5;
         judgementArea.value = judgement ? JSON.stringify(judgement, null, 2) : '{}';
+        judgementArea.addEventListener('input', markConfigDirty);
         judgementLabel.appendChild(judgementArea);
         bodyEl.appendChild(judgementLabel);
         const judgementSave = document.createElement('button');
@@ -218,8 +249,6 @@
         const stateEl = el(IDS.state);
         if (!stateEl) { return null; }
         let supervisorSeat = null;
-        let lastConfig = null;
-        let lastMatrix = null;
 
         async function saveConfig() {
             const input = el('agent-controller-interval');
@@ -228,7 +257,7 @@
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ intervalMinutes: value }),
             });
-            if (res.ok && res.data && res.data.success !== false) { setStatus('Wake interval saved — it applies on the next arm.', 'ok'); }
+            if (res.ok && res.data && res.data.success !== false) { configDirty = false; setStatus('Wake interval saved — it applies on the next arm.', 'ok'); }
             else { setStatus('Interval not saved: ' + ((res.data && (res.data.reason || res.data.error)) || res.status), 'error'); }
             await refresh();
         }
@@ -243,7 +272,7 @@
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ rows }),
             });
-            if (res.ok && res.data && res.data.success !== false) { setStatus('Matrix saved — the controller loads it on its next wake.', 'ok'); }
+            if (res.ok && res.data && res.data.success !== false) { configDirty = false; setStatus('Matrix saved — the controller loads it on its next wake.', 'ok'); }
             else { setStatus('Matrix not saved: ' + ((res.data && (res.data.reason || res.data.error)) || res.status), 'error'); }
             await refresh();
         }
@@ -258,7 +287,7 @@
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ judgement }),
             });
-            if (res.ok && res.data && res.data.success !== false) { setStatus('Judgement config saved.', 'ok'); }
+            if (res.ok && res.data && res.data.success !== false) { configDirty = false; setStatus('Judgement config saved.', 'ok'); }
             else { setStatus('Judgement config not saved: ' + ((res.data && (res.data.reason || res.data.error)) || res.status), 'error'); }
             await refresh();
         }
@@ -341,8 +370,6 @@
             }
 
             supervisorSeat = judgement && typeof judgement.supervisorSeat === 'string' ? judgement.supervisorSeat : null;
-            lastConfig = config;
-            lastMatrix = matrix;
             renderRows(el(IDS.rows), stateView);
             renderConfig(el(IDS.configBody), config, matrix, judgement);
             renderReport(el(IDS.report), report);

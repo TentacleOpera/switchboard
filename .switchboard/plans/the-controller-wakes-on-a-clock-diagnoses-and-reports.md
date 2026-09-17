@@ -768,3 +768,35 @@ before `POST /shutdown`. No model call, no second HTTP client, and no new `setIn
 board process; `protocol-catalog.json` was regenerated for the six new routes. Untested in this run
 by directive — the plan's verification checks remain the gate.
 
+
+## Review Findings
+
+Reviewed the spine against the shipped code; changed `src/standalone/controller/controller.ts` and
+`src/standalone/controller/matrix.ts`, and regenerated `protocol-catalog.json`. Two defects were
+fixed: the restart rate limit both failed to report a suppressed restart and cleared
+`consecutiveRestarts` on every suppressed pass, so the declared ceiling was unreachable and a wedging
+board would have been recycled every `restartMinIntervalMs` for ever (`decideRestart` now returns a
+third `suppressed` outcome, the counter clears only when nothing was wrong, and the suppression is
+written to the report); and `loadMatrix` validated only the shape of an override, so a row naming an
+unknown `condition.kind`, `remediation` or `requires` capability loaded cleanly and then matched no
+evaluator arm — silently inert, which is the 3am failure the plan forbids. Verification:
+`compile-tests` clean, `catalog:check` now passes (it failed at HEAD — the checked-in catalog carried
+`apiEndpointCount: 167` against its own 175-entry array plus stale line numbers), `standalone-parity:check`,
+`standalone-fork:check`, `verb-returns:check`, `dispatch-surface:check`, `parity:check`,
+`push-routing:check`, `kanban-dispatch-callers:check`, `icons:parity` and `banner:check` all pass, and
+the three touched contract suites pass. Inbound field checks confirmed against the writers:
+`plans.ownerSeat/ownerSince/completedAt/lastAction/kanbanColumn/planId`, `getTurnEndReports`'
+`planId/timestamp/action`, `ptyListTerminals`' `friendlyName/status/lastDataAt/hidden/role/cliFamily/planId`,
+and `/health`'s `pid`, `memory.rss` and `ptyHost.surviveBoard`. **The core mechanism has no automated
+check** — every verification item in this plan is manual and none was executed against a live board,
+so passing the unrelated suites above is not evidence that the wake loop diagnoses or remediates
+correctly; the verdict on the loop itself is provisional.
+
+## Deferred Findings
+
+- MAJOR — No automated check discriminates on the wake loop, the ladder, the lease or redaction; the plan's entire `### Automated` list is manual and nothing in `.github/workflows/integration-tests.yml` exercises `src/standalone/controller/`. `src/standalone/controller/controller.ts:210`
+- MAJOR — `claimLease` is a read-then-write with no compare-and-swap, so two controllers claiming in the same tick can both be granted; the arm path's pre-checks and the TTL cover the realistic case but not a true race. `src/services/ControllerBoardStore.ts:226`
+- NIT — A corrupt matrix override aborts the pass before any report is written, so the reason reaches the controller's stdout and `GET /controller/matrix` but never the report file the operator reads. `src/standalone/controller/controller.ts:262`
+- NIT — `hasUsableEvidence` gates rows 2 and the judgement path, so a tail that redaction blanks produces no diagnosis and no record of why. `src/standalone/controller/redact.ts:74`
+- NIT — `boardNudgeLedger` is in-memory, so after a board restart row 2's "silence since the last board nudge" reads as "never nudged" and the controller may nudge immediately. `src/standalone/bootstrap.ts:4334`
+- NIT — The panel-armed controller is spawned without `--board-start-command`, so the restart mechanism (change 5b) is unreachable from the panel by construction. `src/standalone/bootstrap.ts:5637`

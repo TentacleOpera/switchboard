@@ -73,6 +73,28 @@ export const RUNGS_PER_ESCALATION = 2;
  */
 export type MatrixCapabilityKey = 'mechanical' | 'model' | 'supervisor' | 'two-providers';
 
+/**
+ * The closed sets an override is validated against, as VALUES rather than
+ * types alone. A type is erased at runtime: without these, a hand-written
+ * `matrix.json` naming a remediation or a condition kind that does not exist
+ * parsed, loaded, and then fell through the controller's `switch` at wake time
+ * and did nothing — a rule that is silently ignored at 3am, which is exactly
+ * what the panel's save-time validation exists to prevent.
+ */
+export const MATRIX_REMEDIATIONS: readonly MatrixRemediation[] = [
+    'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
+    'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
+];
+
+/** The condition kinds the controller's evaluator knows. */
+export const MATRIX_CONDITION_KINDS: readonly MatrixCondition['kind'][] = [
+    'completed-unasserted', 'quiet-clean-tail', 'owner-seat-dead', 'judgement',
+];
+
+export const MATRIX_CAPABILITY_KEYS: readonly MatrixCapabilityKey[] = [
+    'mechanical', 'model', 'supervisor', 'two-providers',
+];
+
 export interface MatrixCondition {
     /**
      * A GENERIC condition kind, evaluated by the controller's small set of
@@ -262,6 +284,21 @@ function validateRow(row: any, index: number, source: string): MatrixRow {
     }
     if (!Array.isArray(row.requires)) {
         throw new Error(`matrix row '${row.id}' in ${source} has a non-array 'requires'`);
+    }
+    // MEMBERSHIP, not just shape. Each of these was previously cast straight
+    // out of JSON, so an unknown value loaded cleanly and then matched no arm
+    // of the evaluator or the remediation switch — the row simply never fired,
+    // and nothing said so.
+    if (!(MATRIX_CONDITION_KINDS as readonly string[]).includes(row.condition.kind)) {
+        throw new Error(`matrix row '${row.id}' in ${source} has an unknown condition.kind '${row.condition.kind}' (known: ${MATRIX_CONDITION_KINDS.join(', ')})`);
+    }
+    if (!(MATRIX_REMEDIATIONS as readonly string[]).includes(String(row.remediation))) {
+        throw new Error(`matrix row '${row.id}' in ${source} names an unknown remediation '${String(row.remediation)}' (known: ${MATRIX_REMEDIATIONS.join(', ')})`);
+    }
+    for (const cap of row.requires) {
+        if (!(MATRIX_CAPABILITY_KEYS as readonly string[]).includes(String(cap))) {
+            throw new Error(`matrix row '${row.id}' in ${source} requires an unknown capability '${String(cap)}' (known: ${MATRIX_CAPABILITY_KEYS.join(', ')})`);
+        }
     }
     return {
         id: String(row.id),

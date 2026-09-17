@@ -722,6 +722,9 @@ function validateMatrixRows(rows: any[]): string | null {
         }
         if (row.judge !== 'mechanical' && row.judge !== 'model') { return `matrix row '${row.id}' has an unknown judge '${row.judge}'`; }
         if (!row.condition || typeof row.condition.kind !== 'string') { return `matrix row '${row.id}' has no condition.kind`; }
+        if (!KNOWN_CONDITION_KINDS.includes(String(row.condition.kind))) {
+            return `matrix row '${row.id}' has an unknown condition.kind '${String(row.condition.kind)}' — the controller's evaluator has no arm for it, so the row would never fire`;
+        }
         if (!Array.isArray(row.requires)) { return `matrix row '${row.id}' has a non-array 'requires'`; }
         // MEMBERSHIP, not just shape (plan: the-agent-panel-becomes-a-standing-
         // controller, change 11). An unknown remediation falls through the
@@ -752,6 +755,14 @@ const KNOWN_REMEDIATIONS = [
     'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
 ];
 const KNOWN_CAPABILITIES = ['mechanical', 'model', 'supervisor', 'two-providers'];
+/**
+ * The condition kinds the controller's evaluator has an arm for. A row naming
+ * anything else matches no arm, returns no diagnosis and is silently inert —
+ * the 3am failure this validation exists to refuse. Mirrored from
+ * `MATRIX_CONDITION_KINDS` in `src/standalone/controller/matrix.ts`; the
+ * controller's own loader validates the same set and remains the authority.
+ */
+const KNOWN_CONDITION_KINDS = ['completed-unasserted', 'quiet-clean-tail', 'owner-seat-dead', 'judgement'];
 
 /** Parse JSON, returning `null` for a corrupt value (never throwing). */
 function safeParse(raw: string): any | null {

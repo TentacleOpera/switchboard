@@ -426,3 +426,34 @@ was silently ignored at wake time. `validateMatrixRows` now refuses an unknown r
 closed verb set and an unknown `requires` entry against the known capability keys, and
 `writeJudgementConfig` now refuses a tier whose provider is unconfigured, naming the offending tier in
 the reason. Both edits are in `src/services/ControllerBoardStore.ts`; nothing else changed.
+
+## Review Findings
+
+Reviewed the console against the plan; changed `src/webview/controllerConsole.js`,
+`src/services/ControllerBoardStore.ts` and `src/standalone/controller/controller.ts`. Two defects were
+fixed: the 15-second staleness poll rebuilt the config editor on every tick, wiping half-typed matrix
+and judgement JSON and the interval field — which on a phone makes change 11's editor unusable, the
+exact thing it exists to replace (`renderConfig` now skips a rebuild while a field is focused or
+dirty, and a successful save clears the flag); and `renderRows` composed its own hardcoded "reason"
+strings for unavailable capabilities, a fallback indistinguishable from a reported value, so the
+controller now persists `{enabled, reason, source}` per capability and the console renders what it
+reported or says the reason was not reported. Save-time membership was also extended: `validateMatrixRows`
+now refuses an unknown `condition.kind` alongside the unknown remediation and capability it already
+caught, because a row whose kind matches no evaluator arm is silently inert. Goal invariants verified:
+`agent-control-card-select` is absent from both `dock.html` and `command.html` while the arm/disarm/
+run-now/report/last-woke/target controls are present in both under identical ids; `resolve-card` is
+gone from `quickActions` and all six mechanical actions remain `needsModel: false`; no `confirm(`/
+`window.confirm(`/`showWarningMessage` on any added path; no `/v1/chat/completions` literal in any
+file this subtask added; `src/webview/agent-control.*` untouched. Verification: `compile-tests` clean,
+`catalog:check` (which failed at HEAD) now passes, and `test:contract:shell-agent-dock`,
+`test:contract:agent-control-config` and `test:contract:terminals-payload` all pass — but **no
+automated check exercises the console itself**, so the four arming states, the report pane and the
+supervisor chat remain unverified at runtime and that part of the verdict is provisional.
+
+## Deferred Findings
+
+- MAJOR — No automated check covers the console: the four arming states, the late transition, the report pane and the config editor are all manual-only, and nothing in `.github/workflows/integration-tests.yml` loads `controllerConsole.js`. `src/webview/controllerConsole.js:217`
+- NIT — `dock.html` loads `controllerConsole.js` from a literal `/static/webview/` path while its sibling `statusCards.js` uses the `{{STATUS_CARDS_URI}}` placeholder; harmless today because only the standalone route serves `dock.html`, but the two mechanisms sit one line apart. `src/webview/dock.html:583`
+- NIT — `configDirty` is module-scoped rather than per-console, so a second `create()` in one document would share it. `src/webview/controllerConsole.js:143`
+- NIT — The legacy quick-action pane still uses different element ids in the two copies (`agent-control-quickactions`/`agent-control-status` versus `agent-quick-actions`/`agent-status-chip`); pre-existing, outside the controls this subtask added. `src/webview/command.html:1113`
+- NIT — The supervisor reply box posts to `ptySendPrompt` without `machineOrigin`, unlike every controller-issued prompt. `src/webview/controllerConsole.js:294`

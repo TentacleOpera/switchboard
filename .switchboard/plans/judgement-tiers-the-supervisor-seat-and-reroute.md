@@ -908,3 +908,33 @@ gates. No new work was required.
 
 
 
+
+## Review Findings
+
+Reviewed the judgement half against the plan; no defect required a code change in
+`src/standalone/judgement/`, and the one fix that touches this subtask's surface is the matrix
+membership validation in `src/standalone/controller/matrix.ts` and `src/services/ControllerBoardStore.ts`
+(an override row naming an unknown `condition.kind`, remediation or capability loaded cleanly and was
+then silently inert). Goal invariants verified against the code: row 8 is present and reachable and an
+unparseable reply resolves to `unknown` rather than a neighbouring class (`parseClassReply` rejects,
+`walkJudgementChain` escalates, `diagnoseJudgement` maps a mechanical class to row 8 rather than
+letting a label trigger a `clear` or a `complete`); the supervisor exclusion is applied in
+`collectSubjects` before any rule so no row is ever emitted for it; no `confirm(` on any added path;
+grep confirms zero `/api/generate`, `/api/chat`, `ollama`, `response_format`, `grammar`, `guided_json`
+or `structured_outputs` request fields, `reasoning_effort: "none"` on every call, a deadline that
+covers connect, and `isEmptyLengthStop` treating an empty `done_reason=length` body as failed
+validation. Reroute resolves on the recorded `cliFamily` — confirmed present in the persisted
+`ptyListTerminals` literal (`bootstrap.ts:2645`) and in the `PtyFleetService` handle (`ptyFleetService.ts:672`)
+— and reports the row unavailable rather than guessing when the source provider is unrecorded. Verification:
+`compile-tests` clean, `catalog:check` now passes (it failed at HEAD), and the static CI gates and three
+touched contract suites pass; **no automated check exercises the tier chain, the escalation gate or the
+supervisor path**, so the accuracy fixture set in this plan's `### Automated` list is unrun and that part
+of the verdict is provisional.
+
+## Deferred Findings
+
+- MAJOR — No automated check covers the judgement chain: tier ordering, the escalation criteria, the supervisor exclusion and the classification fixture set are all manual, and nothing in `.github/workflows/integration-tests.yml` loads `src/standalone/judgement/`. `src/standalone/judgement/tiers.ts:88`
+- NIT — `escalationGate` treats "the chain reached the last tier" as consulted-count equals tier-count, so a tier whose attempt ended in `key-missing` or `error` (never reaching a model) still counts as consulted; defensible as a decline, but it is not the "tier 2 also returned unknown, declined, or failed validation" the plan words. `src/standalone/controller/controller.ts:1201`
+- NIT — `readTierApiKey` constructs its own `StandaloneHostSecrets` rather than going through `createStandaloneHostSecrets`, so it skips the legacy-workspace migration; harmless only because the board ran that migration at boot. `src/standalone/judgement/tierKeys.ts:20`
+- NIT — `spuriousByRule` is accumulated by `applySupervisorPost` but never surfaced anywhere; change 8's "the panel shows the per-rule spurious count" is unimplemented. `src/services/ControllerBoardStore.ts:494`
+- NIT — The global ceiling counts a tier attempt that never reached a model (`unreachable`) against the day's budget, so an unreachable host burns the declared ceiling. `src/standalone/controller/controller.ts:796`

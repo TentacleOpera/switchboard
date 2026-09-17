@@ -284,3 +284,29 @@ unrecognised card type or bad payload renders as plain text on all three surface
 `src/webview/agent-control.*` was touched, and no confirmation dialog was added. Compilation and the
 automated suites were skipped this run per the dispatch directive, so runtime verification against a
 rebuilt standalone host remains outstanding.
+
+## Review Findings
+
+Reviewed the renderer; no code change was required for this subtask. Goal invariants verified: the
+card renderer is defined in exactly one module (`src/webview/statusCards.js`, `window.SwitchboardStatusCards`)
+and referenced from `dock.js`, `command.js` and `terminals.js`, with **both** script-URI mechanisms
+wired — `{{STATUS_CARDS_URI}}`/`{{STATUS_CARDS_CSS_URI}}` substituted in `headlessPanelHtml.ts`'s
+`getDockHtml` (:490) and `getTerminalsHtml` (:526), and literal `/static/webview/statusCards.js|.css`
+paths in `command.html` — and each consumer logs loudly and degrades to plain text if the module did
+not load, so "never wired" and "working" are no longer the same value. `statusCards.css` contains no
+hex literal and the renderer emits class names only (no `style` attribute); `--error`/`--warning`/
+`--success` are defined on every surface's `:root` and deliberately not overridden under
+`body.theme-claudify`, with the brand accent reserved. The declared tier renders above the
+host-derived block in `renderStatusPane` and the host-derived block survives; the card source is the
+existing `GET /kanban/reports` read with no new write path, and the fields it reads (`planId`,
+`timestamp`, `action`, `message`, `planTopic`) are all present in `getTurnEndReports`' persisted row
+literal (`KanbanDatabase.ts:13924`), as is `planId` on the `ptyListTerminals` projection. No file under
+`src/webview/agent-control.*` was modified and no confirm gate was added; `test:contract:terminals-payload`
+and `test:contract:shell-agent-dock` pass, but the three-surface **runtime** assertion this plan names
+is manual and was not executed, so that item is provisional.
+
+## Deferred Findings
+
+- MAJOR — The plan's headline verification ("assert the renderer symbol is defined in the dock, the mobile command surface and the terminals view from a running standalone host") has no automated check; the console-error fallback makes a miss visible at runtime but nothing in CI would catch a dropped script tag. `src/webview/statusCards.js:139`
+- NIT — `fromTurnEnd` never populates `from`, although `getTurnEndReports` returns `deviceId`, so every turn-end card renders without an author. `src/webview/statusCards.js:133`
+- NIT — `refreshTurnEndReports` is suppressed under `isKanbanDock` while `refreshSeatReports` is not, so the kanban dock's status pane falls back to the inbox tier only. `src/webview/terminals.js:8161`

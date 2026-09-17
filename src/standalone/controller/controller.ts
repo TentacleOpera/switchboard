@@ -129,6 +129,14 @@ interface PersistedControllerState {
     configVersion: string;
     subjects: Record<string, SubjectState>;
     capabilityAvailability: Record<string, boolean>;
+    /**
+     * The REASON and SOURCE behind each capability, carried alongside the
+     * boolean so the panel renders the controller's own words rather than a
+     * plausible sentence of its own. A hardcoded client-side reason is
+     * indistinguishable from a reported one, which is the fallback rule applied
+     * to the surface.
+     */
+    capabilityDetail: Record<string, { enabled: boolean; reason: string; source: string }>;
     restartHistory: number[];
     consecutiveRestarts: number;
     /** Quota stand-downs. Board state, not controller state (change 9). */
@@ -143,6 +151,7 @@ function emptyState(): PersistedControllerState {
         configVersion: '',
         subjects: {},
         capabilityAvailability: {},
+        capabilityDetail: {},
         restartHistory: [],
         consecutiveRestarts: 0,
         quota: {},
@@ -185,6 +194,9 @@ interface Subject {
     /** The board's resolved seat role for this card, when it declared one. */
     recommendedRole: string | null;
 }
+
+/** Restart timestamps kept in the board's config row. Bounded on purpose. */
+const RESTART_HISTORY_CAP = 20;
 
 const ERROR_MARKER = /(\berror\b|\bexception\b|traceback|\bfatal\b|\bpanic\b|rate[\s_-]?limit|quota|\bexceeded\b|\b429\b|\b401\b|\b403\b|permission denied|no such file)/i;
 const NONZERO_EXIT = /(exit(?:ed)?(?:\s+with)?(?:\s+code)?\s*[:=]?\s*[1-9]\d*|process exited|command not found|signal\s+SIG[A-Z]+)/i;
@@ -427,13 +439,42 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
 
     // 7. Mechanical restart trigger: RSS threshold or an unresponsive health
     //    endpoint. No judgement backend is required for either.
+    //
+    //    Three outcomes, never two: a trigger fired; a trigger fired but the
+    //    rate limit SUPPRESSED it; or nothing was wrong. Collapsing the middle
+    //    one into the last is the quiet-wrong-answer pattern twice over — the
+    //    report would never say the ceiling was reached, and clearing
+    //    `consecutiveRestarts` on a suppressed pass makes the ceiling
+    //    unreachable, so a board that wedges every interval is restarted for
+    //    ever.
     let restart: RestartRecord | undefined;
     const restartDecision = decideRestart({ cfg, state, health, healthRes, now: now() });
-    if (restartDecision) {
-        restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, health, decision: restartDecision });
-    } else {
-        // No restart: a successful pass clears the consecutive-restart counter.
+    if (restartDecision === null) {
+        // Nothing was wrong this pass: the consecutive-restart counter clears.
         state.consecutiveRestarts = 0;
+    } else if (restartDecision.kind === 'suppressed') {
+        // A trigger fired and the declared rate limit held it back. Reported,
+        // never silent — a controller that stops restarting must be
+        // distinguishable from a board that stopped wedging. The counter is
+        // deliberately NOT cleared.
+        restart = {
+            reason: restartDecision.reason,
+            trigger: restartDecision.trigger,
+            reportEntryWrittenFirst: false,
+            startInvocation: cfg.boardStartCommand,
+            surviveBoard: typeof health?.ptyHost?.surviveBoard === 'boolean' ? health.ptyHost.surviveBoard : null,
+            gracefulShutdown: 'not-attempted',
+            sigtermSent: false,
+            sigkillSent: false,
+            successorSpawned: false,
+            healthVerified: false,
+            outcome: `restart suppressed — ${restartDecision.suppressionReason}`,
+            rateLimited: true,
+            consecutiveRestarts: state.consecutiveRestarts,
+        };
+        log(`restart suppressed: ${restartDecision.suppressionReason}`);
+    } else {
+        restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, health, decision: restartDecision });
     }
 
     // 8. Compose and write the report to the BOARD (never the controller's disk).
@@ -459,7 +500,10 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         restart,
         errors,
     };
-    if (!restart) {
+    // A performed restart writes its own pre- and post-shutdown entries, so the
+    // ordinary entry would be a third. A SUPPRESSED restart wrote nothing, so
+    // its entry is this one — that is how the ceiling becomes visible.
+    if (!restart || restart.rateLimited) {
         await writeReport(apiRequest, port, workspaceRoot, ctx.teamId, controllerId, facts, errors);
     }
 
@@ -468,6 +512,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     //    ladder with a value that reads as "never fired".
     state.configVersion = configVersion;
     state.capabilityAvailability = snapshotAvailability(caps);
+    state.capabilityDetail = snapshotCapabilityDetail(caps);
     if (health?.pid) { state.lastKnownBoardPid = health.pid; }
     if (stateReadOk) {
         await tryRequest(apiRequest, port, 'PUT', '/controller/state', workspaceRoot, { controllerId, state });
@@ -1351,6 +1396,19 @@ function snapshotAvailability(caps: CapabilitySnapshot): Record<string, boolean>
     };
 }
 
+/**
+ * `{ enabled, reason, source }` per capability, persisted for the panel. Never a
+ * bare boolean: the panel must be able to say WHY a row is unavailable using the
+ * controller's answer, not a sentence it composed itself.
+ */
+function snapshotCapabilityDetail(caps: CapabilitySnapshot): Record<string, { enabled: boolean; reason: string; source: string }> {
+    return {
+        model: capabilityForKey('model', caps),
+        supervisor: capabilityForKey('supervisor', caps),
+        twoProviders: capabilityForKey('two-providers', caps),
+    };
+}
+
 function detectCapabilityChanges(state: PersistedControllerState, caps: CapabilitySnapshot): string[] {
     const now = snapshotAvailability(caps);
     const prev = state.capabilityAvailability || {};
@@ -1376,35 +1434,70 @@ function describeArmingState(caps: CapabilitySnapshot, stateView: ControllerApiR
 // ── Restart (change 5b) ──────────────────────────────────────────────────
 
 interface RestartDecision {
+    kind: 'restart';
     trigger: 'rss-threshold' | 'unresponsive-health';
     reason: string;
     pid: number | null;
 }
 
-function decideRestart(args: { cfg: ControllerRuntimeConfig; state: PersistedControllerState; health: any; healthRes: ControllerApiResponse | null; now: number }): RestartDecision | null {
+/** A trigger fired, and the declared rate limit held the restart back. */
+interface RestartSuppressed {
+    kind: 'suppressed';
+    trigger: 'rss-threshold' | 'unresponsive-health';
+    reason: string;
+    suppressionReason: string;
+}
+
+/**
+ * Decide whether to restart the board.
+ *
+ * `null` means NOTHING WAS WRONG. A `suppressed` result means a trigger DID
+ * fire and the declared rate limit held it back — a different fact, and the one
+ * the report has to carry. The two were collapsed once and the consequence was
+ * twofold: the ceiling was never reported, and the caller's "a pass with no
+ * restart clears the counter" arm ran on a suppressed pass, so
+ * `consecutiveRestarts` reset to 0 on every rate-limited wake and the ceiling
+ * could never be reached.
+ *
+ * The trigger is therefore evaluated FIRST, and the rate limit is applied to
+ * the trigger rather than standing in front of it.
+ */
+function decideRestart(args: { cfg: ControllerRuntimeConfig; state: PersistedControllerState; health: any; healthRes: ControllerApiResponse | null; now: number }): RestartDecision | RestartSuppressed | null {
     const { cfg, state, health, healthRes, now } = args;
     if (!cfg.boardStartCommand) { return null; } // cannot restart what we cannot start.
 
-    // Rate limit, made visible: a board that wedges immediately after start
-    // must not be restarted forever.
-    if (state.consecutiveRestarts >= cfg.restartMaxConsecutive) { return null; }
-    const last = state.restartHistory.length ? state.restartHistory[state.restartHistory.length - 1] : 0;
-    if (last && now - last < cfg.restartMinIntervalMs) { return null; }
-
+    let trigger: RestartDecision['trigger'] | null = null;
+    let reason = '';
+    let pid: number | null = state.lastKnownBoardPid;
     if (healthRes && healthRes.status >= 400) {
-        return { trigger: 'unresponsive-health', reason: `GET /health answered ${healthRes.status}`, pid: state.lastKnownBoardPid };
+        trigger = 'unresponsive-health';
+        reason = `GET /health answered ${healthRes.status}`;
+    } else if (healthRes === null) {
+        trigger = 'unresponsive-health';
+        reason = 'GET /health did not answer';
+    } else if (cfg.restartRssThresholdBytes !== null && typeof health?.memory?.rss === 'number' && health.memory.rss >= cfg.restartRssThresholdBytes) {
+        trigger = 'rss-threshold';
+        reason = `board RSS ${Math.round(health.memory.rss / (1024 * 1024))}MB >= threshold ${Math.round(cfg.restartRssThresholdBytes / (1024 * 1024))}MB`;
+        pid = typeof health?.pid === 'number' ? health.pid : state.lastKnownBoardPid;
     }
-    if (healthRes === null) {
-        return { trigger: 'unresponsive-health', reason: 'GET /health did not answer', pid: state.lastKnownBoardPid };
-    }
-    if (cfg.restartRssThresholdBytes !== null && typeof health?.memory?.rss === 'number' && health.memory.rss >= cfg.restartRssThresholdBytes) {
+    if (trigger === null) { return null; }
+
+    // Rate limit, made visible: a board that wedges immediately after start
+    // must not be restarted forever, and the suppression must be reported.
+    if (state.consecutiveRestarts >= cfg.restartMaxConsecutive) {
         return {
-            trigger: 'rss-threshold',
-            reason: `board RSS ${Math.round(health.memory.rss / (1024 * 1024))}MB >= threshold ${Math.round(cfg.restartRssThresholdBytes / (1024 * 1024))}MB`,
-            pid: typeof health?.pid === 'number' ? health.pid : state.lastKnownBoardPid,
+            kind: 'suppressed', trigger, reason,
+            suppressionReason: `${state.consecutiveRestarts} consecutive restart(s) already, at the declared ceiling of ${cfg.restartMaxConsecutive}`,
         };
     }
-    return null;
+    const last = state.restartHistory.length ? state.restartHistory[state.restartHistory.length - 1] : 0;
+    if (last && now - last < cfg.restartMinIntervalMs) {
+        return {
+            kind: 'suppressed', trigger, reason,
+            suppressionReason: `last restart ${Math.round((now - last) / 1000)}s ago, inside the declared minimum interval of ${Math.round(cfg.restartMinIntervalMs / 1000)}s`,
+        };
+    }
+    return { kind: 'restart', trigger, reason, pid };
 }
 
 async function performBoardRestart(ctx: ApplyContext & { health: any; decision: RestartDecision }): Promise<RestartRecord> {
@@ -1486,6 +1579,12 @@ async function performBoardRestart(ctx: ApplyContext & { health: any; decision: 
     }
 
     ctx.state.restartHistory.push(ctx.now());
+    // Bounded: the history answers "when was the last restart" and feeds the
+    // minimum-interval check. An unbounded array in a board config row grows
+    // for the life of the install.
+    if (ctx.state.restartHistory.length > RESTART_HISTORY_CAP) {
+        ctx.state.restartHistory = ctx.state.restartHistory.slice(-RESTART_HISTORY_CAP);
+    }
     ctx.state.consecutiveRestarts += 1;
 
     // Follow-up entry: the most important line the report will ever carry is a
@@ -1582,6 +1681,7 @@ function normalizeState(raw: any): PersistedControllerState {
         configVersion: typeof raw.configVersion === 'string' ? raw.configVersion : '',
         subjects,
         capabilityAvailability: (raw.capabilityAvailability && typeof raw.capabilityAvailability === 'object') ? raw.capabilityAvailability : {},
+        capabilityDetail: (raw.capabilityDetail && typeof raw.capabilityDetail === 'object') ? raw.capabilityDetail : {},
         restartHistory: Array.isArray(raw.restartHistory) ? raw.restartHistory.filter((n: any) => typeof n === 'number') : [],
         consecutiveRestarts: typeof raw.consecutiveRestarts === 'number' ? raw.consecutiveRestarts : 0,
         quota: (raw.quota && typeof raw.quota === 'object') ? raw.quota : {},
