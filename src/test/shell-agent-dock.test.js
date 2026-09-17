@@ -302,10 +302,16 @@ test('dock.html has three panes: agent (control surface), cli, fleet (not iframe
     assert.ok(dockHtml.includes('id="agent-control-log"'), '#agent-control-log must exist in dock.html');
     assert.ok(!dockHtml.includes('id="agent-control-input"'), '#agent-control-input must NOT exist in dock.html — the intent text box is retired');
     assert.ok(!dockHtml.includes('id="agent-control-send"'), '#agent-control-send must NOT exist in dock.html — no Send button without a text box');
-    // The by-id actions and the model-backed Resolve take a dropdown
-    // selection; the surface's own config row sets endpoint/model/key.
-    assert.ok(dockHtml.includes('id="agent-control-card-select"'), '#agent-control-card-select must exist — the card picker');
-    assert.ok(dockHtml.includes('id="agent-control-column-select"'), '#agent-control-column-select must exist — the move target picker');
+    // The card picker is GONE (plan: the-agent-panel-becomes-a-standing-
+    // controller, change 2): the model is no longer asked to pick a verb for a
+    // card the operator already resolved. The controller console replaces it.
+    assert.ok(!dockHtml.includes('id="agent-control-card-select"'), '#agent-control-card-select must NOT exist in dock.html — the card picker is retired');
+    assert.ok(!dockHtml.includes('id="agent-control-column-select"'), '#agent-control-column-select must NOT exist in dock.html — the move target picker is retired');
+    assert.ok(dockHtml.includes('id="agent-controller-arm"'), 'dock.html must have the arm control');
+    assert.ok(dockHtml.includes('id="agent-controller-disarm"'), 'dock.html must have the disarm control');
+    assert.ok(dockHtml.includes('id="agent-controller-run"'), 'dock.html must have the run-now control');
+    assert.ok(dockHtml.includes('id="agent-controller-report"'), 'dock.html must have the report pane');
+    assert.ok(dockHtml.includes('id="agent-controller-state"'), 'dock.html must have the arming-state readout');
     assert.ok(dockHtml.includes('id="agent-control-endpoint"'), '#agent-control-endpoint must exist — the surface sets its own endpoint');
     assert.ok(dockHtml.includes('id="agent-control-model"'), '#agent-control-model must exist — the model is named');
     assert.ok(dockHtml.includes('id="agent-control-key"'), '#agent-control-key must exist — write-only API key field');
@@ -322,7 +328,12 @@ test('the mobile command surface has no free-text intent input either', () => {
     const commandJs = fs.readFileSync(path.join(__dirname, '../webview/command.js'), 'utf8');
     assert.ok(!commandHtml.includes('id="agent-control-input"'), '#agent-control-input must NOT exist in command.html');
     assert.ok(!commandHtml.includes('id="btn-agent-send"'), '#btn-agent-send must NOT exist in command.html');
-    assert.ok(commandHtml.includes('id="agent-control-card-select"'), 'command.html must have the card picker');
+    assert.ok(!commandHtml.includes('id="agent-control-card-select"'), 'command.html must NOT have the card picker — it is retired');
+    assert.ok(commandHtml.includes('id="agent-controller-arm"'), 'command.html must have the arm control');
+    assert.ok(commandHtml.includes('id="agent-controller-disarm"'), 'command.html must have the disarm control');
+    assert.ok(commandHtml.includes('id="agent-controller-run"'), 'command.html must have the run-now control');
+    assert.ok(commandHtml.includes('id="agent-controller-report"'), 'command.html must have the report pane');
+    assert.ok(commandHtml.includes('id="agent-controller-state"'), 'command.html must have the arming-state readout');
     assert.ok(commandHtml.includes('id="agent-control-endpoint"'), 'command.html must have the endpoint config field');
     assert.ok(!/function\s+sendAgentControlMobile/.test(commandJs), 'sendAgentControlMobile must be absent from command.js');
     assert.ok(/function\s+runAgentActionMobile/.test(commandJs), 'command.js must have runAgentActionMobile — actions fire mechanical endpoints');

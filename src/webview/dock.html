@@ -478,12 +478,34 @@
         <div class="agent-control-reports" id="agent-control-reports"></div>
         <div class="agent-control-log" id="agent-control-log"></div>
         <div class="agent-control-quickactions" id="agent-control-quickactions"></div>
-        <!-- Card + column pickers: the by-id actions (advance/move/star) and the
-             model-backed Resolve act on the selected card. No free-text input —
-             every action on this surface is a button or a dropdown. -->
-        <div class="agent-control-picker-row">
-            <select id="agent-control-card-select" aria-label="Card"></select>
-            <select id="agent-control-column-select" aria-label="Target column"></select>
+        <!-- The controller console. Everything here is SECOND-HAND: the board
+             renders what the controller last reported and says when. Arm starts
+             the controller process, Disarm stops it, Run a pass now runs one
+             wake. No confirmation gates any of it (CLAUDE.md). The card picker
+             is gone — the model is no longer asked to pick a verb for a card the
+             operator already resolved. -->
+        <div class="agent-controller" id="agent-controller">
+            <div class="agent-controller-head">
+                <span class="agent-controller-state" id="agent-controller-state">checking…</span>
+                <span class="agent-controller-when" id="agent-controller-when"></span>
+            </div>
+            <div class="agent-controller-where" id="agent-controller-where"></div>
+            <div class="agent-controller-actions">
+                <button type="button" class="agent-controller-btn" id="agent-controller-arm">Arm</button>
+                <button type="button" class="agent-controller-btn" id="agent-controller-disarm">Disarm</button>
+                <button type="button" class="agent-controller-btn" id="agent-controller-run">Run a pass now</button>
+            </div>
+            <div class="agent-controller-status" id="agent-controller-status"></div>
+            <div class="agent-controller-rows" id="agent-controller-rows"></div>
+            <details class="agent-controller-panel">
+                <summary>Controller configuration</summary>
+                <div class="agent-controller-config-body" id="agent-controller-config-body"></div>
+            </details>
+            <details class="agent-controller-panel">
+                <summary>The report</summary>
+                <pre class="agent-controller-report" id="agent-controller-report"></pre>
+            </details>
+            <div class="agent-controller-escalations" id="agent-controller-escalations"></div>
         </div>
         <!-- The surface's own config: provider, model and key are set HERE,
              not via a repurposed startup command or an env var. The key field
@@ -558,6 +580,7 @@
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{STATUS_CARDS_URI}}"></script>
+    <script nonce="{{NONCE}}" src="/static/webview/controllerConsole.js"></script>
     <script nonce="{{NONCE}}" src="{{TERMINAL_VIEWPORT_JS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{DOCK_JS_URI}}"></script>
 </body>

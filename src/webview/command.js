@@ -2628,8 +2628,6 @@
     const agentReportsElMobile = document.getElementById('agent-control-reports');
     const agentStatusChipMobile = document.getElementById('agent-status-chip');
     const agentQuickActionsElMobile = document.getElementById('agent-quick-actions');
-    const agentCardSelectElMobile = document.getElementById('agent-control-card-select');
-    const agentColumnSelectElMobile = document.getElementById('agent-control-column-select');
     const agentEndpointElMobile = document.getElementById('agent-control-endpoint');
     const agentModelElMobile = document.getElementById('agent-control-model');
     const agentKeyElMobile = document.getElementById('agent-control-key');
@@ -2690,34 +2688,41 @@
             if (agentModelConfigured) {
                 setAgentStatusMobile('Model configured (' + (cfg.modelName || '') + '). Mechanical actions always available.', 'model');
             } else {
-                setAgentStatusMobile('No usable model. Mechanical actions available; Resolve is disabled.', 'unknown');
+                setAgentStatusMobile('No usable model. The controller runs its mechanical rows only; the mechanical actions stay available.', 'unknown');
             }
+            // The mechanical FALLBACK buttons only — the primary controls are the
+            // controller console. Actions that need a card target are not
+            // rendered (the card picker is gone); they remain reachable over the
+            // API and the CLI. The model-backed `resolve-card` is gone entirely.
             if (agentQuickActionsElMobile) {
                 agentQuickActionsElMobile.innerHTML = '';
                 const actions = Array.isArray(cfg.quickActions) ? cfg.quickActions : [];
                 for (const action of actions) {
+                    if (!TARGETLESS_ACTIONS.includes(action.id)) { continue; }
                     const btn = document.createElement('button');
                     btn.type = 'button';
                     btn.className = 'secondary-action-btn';
                     btn.style.padding = '4px 10px';
                     btn.style.fontSize = '11px';
                     btn.textContent = action.label;
-                    btn.disabled = action.needsModel === true && !agentModelConfigured;
-                    // Each action fires its mechanical endpoint DIRECTLY —
-                    // nothing is stuffed into a text box; there isn't one.
                     btn.addEventListener('click', () => void runAgentActionMobile(action.id));
                     agentQuickActionsElMobile.appendChild(btn);
                 }
             }
-            await refreshAgentPickersMobile();
+            await refreshAgentBoardMobile();
             void renderAgentReportsMobile();
+            refreshControllerConsoleMobile();
         } catch (err) {
             setAgentStatusMobile('Failed to load config: ' + (err?.message || err), 'error');
         }
     }
 
-    /** Fetch the board and fill the card picker; fetch columns for the move picker. */
-    async function refreshAgentPickersMobile() {
+    /** Mechanical actions that need no card target, and so stay on the surface
+     *  after the card picker is removed. */
+    const TARGETLESS_ACTIONS = ['dispatch-starred', 'refresh-board', 'list-columns'];
+
+    /** Fetch the board into the cache the fallback actions read. */
+    async function refreshAgentBoardMobile() {
         try {
             const res = await fetch('/kanban/board', { credentials: 'same-origin' });
             const data = res.ok ? await res.json() : null;
@@ -2726,50 +2731,21 @@
         } catch {
             agentBoardCache = [];
         }
-        if (agentCardSelectElMobile) {
-            const prev = agentCardSelectElMobile.value;
-            agentCardSelectElMobile.innerHTML = '';
-            for (const card of agentBoardCache) {
-                const id = String(card.planId || card.sessionId || '');
-                if (!id) { continue; }
-                const opt = document.createElement('option');
-                opt.value = id;
-                opt.textContent = (card.topic || id) + (card.kanbanColumn ? ' [' + card.kanbanColumn + ']' : '');
-                agentCardSelectElMobile.appendChild(opt);
-            }
-            if (prev && agentBoardCache.some(c => String(c.planId || c.sessionId) === prev)) {
-                agentCardSelectElMobile.value = prev;
-            }
-        }
-        try {
-            const res = await fetch('/kanban/columns', { credentials: 'same-origin' });
-            const data = res.ok ? await res.json() : null;
-            const cols = data ? (data.data || data) : null;
-            if (agentColumnSelectElMobile && cols) {
-                const enabled = [...(cols.builtIn || []), ...(cols.custom || [])]
-                    .filter(c => c && c.id && c.enabled !== false);
-                const prev = agentColumnSelectElMobile.value;
-                agentColumnSelectElMobile.innerHTML = '';
-                for (const col of enabled) {
-                    const opt = document.createElement('option');
-                    opt.value = String(col.id);
-                    opt.textContent = String(col.label || col.id);
-                    agentColumnSelectElMobile.appendChild(opt);
-                }
-                if (prev && enabled.some(c => String(c.id) === prev)) {
-                    agentColumnSelectElMobile.value = prev;
-                }
-            }
-        } catch { /* column picker stays empty; move reports the missing target */ }
     }
 
-    function selectedCardIdMobile() {
-        const id = agentCardSelectElMobile ? String(agentCardSelectElMobile.value || '') : '';
-        if (!id) {
-            setAgentStatusMobile('Pick a card from the dropdown first.', 'error');
-            return null;
+    /**
+     * Mount (once) and refresh the shared controller console. ONE console, both
+     * panes — controllerConsole.js — so the dock and this surface cannot drift.
+     */
+    let controllerConsoleMobile = null;
+    function refreshControllerConsoleMobile() {
+        if (!controllerConsoleMobile && window.SwitchboardControllerConsole) {
+            controllerConsoleMobile = window.SwitchboardControllerConsole.create();
         }
-        return id;
+        if (controllerConsoleMobile) { void controllerConsoleMobile.refresh(); }
+        else if (!window.SwitchboardControllerConsole) {
+            console.error('[command] window.SwitchboardControllerConsole is undefined — controllerConsole.js did not load; the controller console is not mounted.');
+        }
     }
 
     /** POST/PUT helper for the mechanical endpoints; normalises the reply. */
@@ -2807,7 +2783,7 @@
                     ? 'Advanced ' + starred.length + ' starred card(s).'
                     : 'Advance failed: ' + r.error, null, [{ type: 'advance', result: r.body }]);
             } else if (id === 'refresh-board') {
-                await refreshAgentPickersMobile();
+                await refreshAgentBoardMobile();
                 renderAgentEntryMobile('assistant', 'Board refreshed — ' + agentBoardCache.length + ' card(s).', null, null);
             } else if (id === 'list-columns') {
                 const res = await fetch('/kanban/columns', { credentials: 'same-origin' });
@@ -2815,45 +2791,6 @@
                 const cols = data ? (data.data || data) : null;
                 const names = cols ? [...(cols.builtIn || []), ...(cols.custom || [])].map(c => c.label || c.id) : [];
                 renderAgentEntryMobile('assistant', names.length ? 'Columns: ' + names.join(', ') : 'No columns reported.', null, null);
-            } else if (id === 'advance-plan') {
-                const cardId = selectedCardIdMobile();
-                if (!cardId) { return; }
-                const r = await agentFetchMobile('/kanban/advance', { planIds: [cardId] });
-                renderAgentEntryMobile('assistant', r.ok ? 'Advanced ' + cardId + '.' : 'Advance failed: ' + r.error, null, [{ type: 'advance', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
-            } else if (id === 'move-plan') {
-                const cardId = selectedCardIdMobile();
-                if (!cardId) { return; }
-                const targetColumn = agentColumnSelectElMobile ? String(agentColumnSelectElMobile.value || '') : '';
-                if (!targetColumn) {
-                    setAgentStatusMobile('Pick a target column from the dropdown first.', 'error');
-                    return;
-                }
-                const r = await agentFetchMobile('/kanban/move', { planId: cardId, targetColumn });
-                renderAgentEntryMobile('assistant', r.ok ? 'Moved ' + cardId + ' to ' + targetColumn + '.' : 'Move failed: ' + r.error, null, [{ type: 'move', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
-            } else if (id === 'star-plan') {
-                const cardId = selectedCardIdMobile();
-                if (!cardId) { return; }
-                const r = await agentFetchMobile('/kanban/plans/priority', { planId: cardId, starred: true }, 'PUT');
-                renderAgentEntryMobile('assistant', r.ok ? 'Starred ' + cardId + '.' : 'Star failed: ' + r.error, null, [{ type: 'star', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
-            } else if (id === 'resolve-card') {
-                const cardId = selectedCardIdMobile();
-                if (!cardId) { return; }
-                renderAgentEntryMobile('user', 'Resolve ' + cardId, null, null);
-                const res = await fetch('/agent/control', {
-                    method: 'POST', credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cardId }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || data.success === false) {
-                    renderAgentEntryMobile('assistant', 'Resolve failed: ' + (data.error || res.status), null, null);
-                    setAgentStatusMobile('Resolve failed: ' + (data.error || res.status), 'error');
-                } else {
-                    renderAgentEntryMobile('assistant', data.reply || '(no reply)',
-                        Array.isArray(data.resolved) ? data.resolved : null,
-                        Array.isArray(data.actions) ? data.actions : null);
-                    setAgentStatusMobile('Resolved via model.', 'model');
-                }
             }
         } catch (err) {
             setAgentStatusMobile('Action failed: ' + (err?.message || err), 'error');

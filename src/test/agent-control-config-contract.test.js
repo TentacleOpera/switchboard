@@ -385,9 +385,14 @@ async function run() {
         const mechanical = (cfg.quickActions || []).filter(a => a.needsModel === false);
         assert.ok(mechanical.length >= 6,
             'the six mechanical actions must be served even with no model configured');
+        // The model-backed Resolve is GONE (plan: the-agent-panel-becomes-a-
+        // standing-controller, change 2) — judgement belongs to the controller,
+        // not to a verb the panel asks a model to pick for a card the operator
+        // already resolved.
         const resolve = (cfg.quickActions || []).find(a => a.id === 'resolve-card');
-        assert.ok(resolve && resolve.needsModel === true,
-            'the model-backed Resolve action must be marked needsModel: true');
+        assert.ok(!resolve, 'the model-backed resolve-card action must be retired');
+        assert.ok(mechanical.every(a => a.needsModel === false),
+            'no mechanical action may be gated on a model');
     });
 }
 

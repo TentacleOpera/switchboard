@@ -141,8 +141,6 @@
     const agentReportsEl = document.getElementById('agent-control-reports');
     const agentStatusEl = document.getElementById('agent-control-status');
     const agentQuickActionsEl = document.getElementById('agent-control-quickactions');
-    const agentCardSelectEl = document.getElementById('agent-control-card-select');
-    const agentColumnSelectEl = document.getElementById('agent-control-column-select');
     const agentEndpointEl = document.getElementById('agent-control-endpoint');
     const agentModelEl = document.getElementById('agent-control-model');
     const agentKeyEl = document.getElementById('agent-control-key');
@@ -258,6 +256,7 @@
         updateDockTitle();
         await loadAgentControlConfig();
         void renderAgentReports();
+        refreshControllerConsole();
     }
 
     /** Render the modelError beside the config fields that fix it. */
@@ -294,32 +293,40 @@
             if (agentModelConfigured) {
                 setAgentStatus('Model configured (' + (cfg.modelName || '') + '). Mechanical actions always available.', 'model');
             } else {
-                setAgentStatus('No usable model. Mechanical actions available; Resolve is disabled.', '');
+                setAgentStatus('No usable model. The controller runs its mechanical rows only; the mechanical actions stay available.', '');
             }
-            // Render quick action buttons — each fires its mechanical endpoint
-            // DIRECTLY. Nothing is stuffed into a text box; there isn't one.
+            // Render the mechanical FALLBACK buttons — each fires its endpoint
+            // DIRECTLY. They are the fallback vocabulary now, not the primary
+            // one: the primary controls are the controller console. Only the
+            // actions that need no card target are rendered, because the card
+            // picker is gone — the by-id actions remain reachable over the API
+            // and the CLI, and the model-backed `resolve-card` is gone entirely.
             if (agentQuickActionsEl) {
                 agentQuickActionsEl.innerHTML = '';
                 const actions = Array.isArray(cfg.quickActions) ? cfg.quickActions : [];
                 for (const action of actions) {
+                    if (!TARGETLESS_ACTIONS.includes(action.id)) { continue; }
                     const btn = document.createElement('button');
                     btn.type = 'button';
                     btn.className = 'agent-control-quickbtn';
                     btn.textContent = action.label;
-                    btn.disabled = action.needsModel === true && !agentModelConfigured;
                     btn.addEventListener('click', () => void runAgentAction(action.id));
                     agentQuickActionsEl.appendChild(btn);
                 }
             }
-            // Populate the card + column pickers the by-id actions act on.
-            await refreshAgentPickers();
+            // Load the board so `dispatch starred cards` has the cache it needs.
+            await refreshAgentBoard();
         } catch (err) {
             setAgentStatus('Failed to load control config: ' + (err?.message || err), 'error');
         }
     }
 
-    /** Fetch the board and fill the card picker; fetch columns for the move picker. */
-    async function refreshAgentPickers() {
+    /** Mechanical actions that need no card target, and so stay on the surface
+     *  after the card picker is removed. */
+    const TARGETLESS_ACTIONS = ['dispatch-starred', 'refresh-board', 'list-columns'];
+
+    /** Fetch the board into the cache the fallback actions read. */
+    async function refreshAgentBoard() {
         try {
             const res = await fetch('/kanban/board', { credentials: 'same-origin' });
             const data = res.ok ? await res.json() : null;
@@ -328,51 +335,6 @@
         } catch {
             agentBoardCache = [];
         }
-        if (agentCardSelectEl) {
-            const prev = agentCardSelectEl.value;
-            agentCardSelectEl.innerHTML = '';
-            for (const card of agentBoardCache) {
-                const id = String(card.planId || card.sessionId || '');
-                if (!id) { continue; }
-                const opt = document.createElement('option');
-                opt.value = id;
-                opt.textContent = (card.topic || id) + (card.kanbanColumn ? ' [' + card.kanbanColumn + ']' : '');
-                agentCardSelectEl.appendChild(opt);
-            }
-            if (prev && agentBoardCache.some(c => String(c.planId || c.sessionId) === prev)) {
-                agentCardSelectEl.value = prev;
-            }
-        }
-        try {
-            const res = await fetch('/kanban/columns', { credentials: 'same-origin' });
-            const data = res.ok ? await res.json() : null;
-            const cols = data ? (data.data || data) : null;
-            if (agentColumnSelectEl && cols) {
-                const enabled = [...(cols.builtIn || []), ...(cols.custom || [])]
-                    .filter(c => c && c.id && c.enabled !== false);
-                const prev = agentColumnSelectEl.value;
-                agentColumnSelectEl.innerHTML = '';
-                for (const col of enabled) {
-                    const opt = document.createElement('option');
-                    opt.value = String(col.id);
-                    opt.textContent = String(col.label || col.id);
-                    agentColumnSelectEl.appendChild(opt);
-                }
-                if (prev && enabled.some(c => String(c.id) === prev)) {
-                    agentColumnSelectEl.value = prev;
-                }
-            }
-        } catch { /* column picker stays empty; move reports the missing target */ }
-    }
-
-    /** The selected card's id, or null with a status line saying why not. */
-    function selectedCardId() {
-        const id = agentCardSelectEl ? String(agentCardSelectEl.value || '') : '';
-        if (!id) {
-            setAgentStatus('Pick a card from the dropdown first.', 'error');
-            return null;
-        }
-        return id;
     }
 
     /**
@@ -395,7 +357,7 @@
                     ? 'Advanced ' + starred.length + ' starred card(s).'
                     : 'Advance failed: ' + r.error, null, [{ type: 'advance', result: r.body }]);
             } else if (id === 'refresh-board') {
-                await refreshAgentPickers();
+                await refreshAgentBoard();
                 renderControlEntry('assistant', 'Board refreshed — ' + agentBoardCache.length + ' card(s).', null, null);
             } else if (id === 'list-columns') {
                 const res = await fetch('/kanban/columns', { credentials: 'same-origin' });
@@ -403,45 +365,6 @@
                 const cols = data ? (data.data || data) : null;
                 const names = cols ? [...(cols.builtIn || []), ...(cols.custom || [])].map(c => c.label || c.id) : [];
                 renderControlEntry('assistant', names.length ? 'Columns: ' + names.join(', ') : 'No columns reported.', null, null);
-            } else if (id === 'advance-plan') {
-                const cardId = selectedCardId();
-                if (!cardId) { return; }
-                const r = await agentFetch('/kanban/advance', { planIds: [cardId] });
-                renderControlEntry('assistant', r.ok ? 'Advanced ' + cardId + '.' : 'Advance failed: ' + r.error, null, [{ type: 'advance', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
-            } else if (id === 'move-plan') {
-                const cardId = selectedCardId();
-                if (!cardId) { return; }
-                const targetColumn = agentColumnSelectEl ? String(agentColumnSelectEl.value || '') : '';
-                if (!targetColumn) {
-                    setAgentStatus('Pick a target column from the dropdown first.', 'error');
-                    return;
-                }
-                const r = await agentFetch('/kanban/move', { planId: cardId, targetColumn });
-                renderControlEntry('assistant', r.ok ? 'Moved ' + cardId + ' to ' + targetColumn + '.' : 'Move failed: ' + r.error, null, [{ type: 'move', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
-            } else if (id === 'star-plan') {
-                const cardId = selectedCardId();
-                if (!cardId) { return; }
-                const r = await agentFetch('/kanban/plans/priority', { planId: cardId, starred: true }, 'PUT');
-                renderControlEntry('assistant', r.ok ? 'Starred ' + cardId + '.' : 'Star failed: ' + r.error, null, [{ type: 'star', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
-            } else if (id === 'resolve-card') {
-                const cardId = selectedCardId();
-                if (!cardId) { return; }
-                renderControlEntry('user', 'Resolve ' + cardId, null, null);
-                const res = await fetch('/agent/control', {
-                    method: 'POST', credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cardId }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || data.success === false) {
-                    renderControlEntry('assistant', 'Resolve failed: ' + (data.error || res.status), null, null);
-                    setAgentStatus('Resolve failed: ' + (data.error || res.status), 'error');
-                } else {
-                    renderControlEntry('assistant', data.reply || '(no reply)',
-                        Array.isArray(data.resolved) ? data.resolved : null,
-                        Array.isArray(data.actions) ? data.actions : null);
-                    setAgentStatus('Resolved via model.', 'model');
-                }
             }
         } catch (err) {
             setAgentStatus('Action failed: ' + (err?.message || err), 'error');
@@ -578,6 +501,22 @@
             const rows = (data && data.success && Array.isArray(data.data)) ? data.data : [];
             renderer.renderInto(agentReportsEl, rows.map(renderer.fromTurnEnd));
         } catch { /* the control log still renders; the feed is not essential */ }
+    }
+
+    /**
+     * Mount (once) and refresh the shared controller console. ONE console, both
+     * panes — controllerConsole.js — so the dock and the mobile command surface
+     * cannot drift. The console renders only second-hand state the board holds.
+     */
+    let controllerConsole = null;
+    function refreshControllerConsole() {
+        if (!controllerConsole && window.SwitchboardControllerConsole) {
+            controllerConsole = window.SwitchboardControllerConsole.create();
+        }
+        if (controllerConsole) { void controllerConsole.refresh(); }
+        else if (!window.SwitchboardControllerConsole) {
+            console.error('[dock] window.SwitchboardControllerConsole is undefined — controllerConsole.js did not load; the controller console is not mounted.');
+        }
     }
 
     // ── CLI seat sync ────────────────────────────────────────────────────

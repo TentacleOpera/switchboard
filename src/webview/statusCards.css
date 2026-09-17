@@ -131,3 +131,122 @@
     border-bottom: 1px solid var(--border-color);
 }
 .agent-control-reports:empty { display: none; }
+
+/* ── The controller console (dock Agent tab + mobile command surface) ────────
+   One console, both panes. Colours are theme tokens only — no literal colour,
+   so it re-themes under body.theme-claudify like the cards do. */
+.agent-controller {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border-color);
+    background: var(--panel-bg);
+    color: var(--text-primary);
+}
+.agent-controller-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+.agent-controller-state {
+    font-family: var(--font-code);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+}
+.agent-controller-state[data-state="healthy"] { color: var(--success); }
+.agent-controller-state[data-state="late"] { color: var(--warning); }
+.agent-controller-state[data-state="unreadable"] { color: var(--error); }
+.agent-controller-when,
+.agent-controller-where {
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--sb-card-text-dim, var(--text-secondary, var(--text-dim)));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.agent-controller-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.agent-controller-btn {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-family);
+    font-size: 11px;
+    padding: 4px 10px;
+    cursor: pointer;
+}
+.agent-controller-btn:hover { border-color: var(--accent-primary); }
+.agent-controller-status { font-size: 10px; color: var(--sb-card-text-dim, var(--text-secondary, var(--text-dim))); }
+.agent-controller-status.is-error { color: var(--error); }
+.agent-controller-status.is-ok { color: var(--success); }
+.agent-controller-rows { display: flex; flex-direction: column; gap: 2px; }
+.agent-controller-row {
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--text-primary);
+}
+.agent-controller-row.is-unavailable { color: var(--warning); }
+.agent-controller-panel { border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px; }
+.agent-controller-panel > summary {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--sb-card-text-dim, var(--text-secondary, var(--text-dim)));
+    cursor: pointer;
+}
+.agent-controller-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--sb-card-text-dim, var(--text-secondary, var(--text-dim)));
+}
+.agent-controller-field input,
+.agent-controller-field textarea,
+.agent-controller-reply {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-code);
+    font-size: 11px;
+    padding: 4px 6px;
+    width: 100%;
+    box-sizing: border-box;
+}
+.agent-controller-report {
+    margin: 6px 0 0;
+    max-height: 260px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--text-primary);
+}
+.agent-controller-escalations { display: flex; flex-direction: column; gap: 4px; }
+.agent-controller-escalation {
+    border: 1px solid var(--border-color);
+    border-left: 2px solid var(--warning);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 11px;
+    color: var(--text-primary);
+}
+.agent-controller-escalation.is-answered { border-left-color: var(--success); color: var(--sb-card-text-dim, var(--text-secondary, var(--text-dim))); }
+.agent-controller-escalation-subject { font-family: var(--font-code); font-size: 10px; }
+.agent-controller-escalation-reason { font-size: 11px; }
+.agent-controller-state[data-state="model"] { color: var(--warning); }

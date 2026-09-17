@@ -1122,13 +1122,36 @@
                         <div class="agent-control-reports" id="agent-control-reports"></div>
                         <div id="agent-control-log" style="flex:1 1 auto; overflow-y:auto; padding:8px; font-family:var(--font-code); font-size:11px; line-height:1.5; color:var(--text-primary); background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px;"></div>
                         <div id="agent-quick-actions" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
-                        <!-- Card + column pickers: the by-id actions and the
-                             model-backed Resolve act on the selected card.
-                             No free-text input — this surface is phone-first;
-                             everything is a tap or a dropdown. -->
-                        <div style="display:flex; flex-direction:column; gap:6px;">
-                            <select id="agent-control-card-select" style="background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;"></select>
-                            <select id="agent-control-column-select" style="background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;"></select>
+                        <!-- The controller console. Everything here is
+                             SECOND-HAND: the board renders what the controller
+                             last reported and says when. Arm starts the
+                             controller process, Disarm stops it, Run a pass now
+                             runs one wake. No confirmation gates any of it
+                             (CLAUDE.md). The card picker is gone — the model is
+                             no longer asked to pick a verb for a card the
+                             operator already resolved. -->
+                        <div class="agent-controller" id="agent-controller">
+                            <div class="agent-controller-head">
+                                <span class="agent-controller-state" id="agent-controller-state">checking…</span>
+                                <span class="agent-controller-when" id="agent-controller-when"></span>
+                            </div>
+                            <div class="agent-controller-where" id="agent-controller-where"></div>
+                            <div class="agent-controller-actions">
+                                <button type="button" class="agent-controller-btn" id="agent-controller-arm">Arm</button>
+                                <button type="button" class="agent-controller-btn" id="agent-controller-disarm">Disarm</button>
+                                <button type="button" class="agent-controller-btn" id="agent-controller-run">Run a pass now</button>
+                            </div>
+                            <div class="agent-controller-status" id="agent-controller-status"></div>
+                            <div class="agent-controller-rows" id="agent-controller-rows"></div>
+                            <details class="agent-controller-panel">
+                                <summary>Controller configuration</summary>
+                                <div class="agent-controller-config-body" id="agent-controller-config-body"></div>
+                            </details>
+                            <details class="agent-controller-panel">
+                                <summary>The report</summary>
+                                <pre class="agent-controller-report" id="agent-controller-report"></pre>
+                            </details>
+                            <div class="agent-controller-escalations" id="agent-controller-escalations"></div>
                         </div>
                         <!-- The surface's own config: endpoint, model and key
                              set HERE — the phone is the surface this feature is
@@ -1244,6 +1267,7 @@
          defer keeps the download parallel and execution in document order. -->
     <script defer nonce="{{NONCE}}" src="/static/webview/sharedUtils.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/statusCards.js"></script>
+    <script defer nonce="{{NONCE}}" src="/static/webview/controllerConsole.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/terminalViewport.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/terminalKeyBar.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/command.js"></script>
