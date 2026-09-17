@@ -9893,7 +9893,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
                 const dispatchRole = this._columnToRole(targetCol) || role;
                 const movedSids: string[] = [];
-                const dispatchSids: string[] = [];
+                // Forward movers only — backward moves never dispatch.
+                const forwardSids: string[] = [];
                 // Per-group, NOT the accumulator: posting the running `failures`
                 // array once per group re-sends every earlier group's failures, so a
                 // card that failed in the lead group is reported again in the coder
@@ -9908,7 +9909,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, direction, workspaceRoot);
                         const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                         movedSids.push(...cascadeIds);
-                        dispatchSids.push(sid);
+                        // Classified HERE, from the same read the run sheet used,
+                        // not re-derived after the loop. The post-loop re-read
+                        // raced the 100 ms-debounced board refresh: once it lands,
+                        // _lastCards already holds the NEW column, so every
+                        // backward card in the batch reclassifies as forward and
+                        // dispatches — silently, and only under load.
+                        if (direction === 'forward') { forwardSids.push(sid); }
                         moved.push({ id: sid, targetColumn: targetCol });
                     } else {
                         groupFailures.push({ id: sid, sourceColumn: card?.column ?? sourceColumn ?? '', reason: outcome.detail });
@@ -9922,12 +9929,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (groupFailures.length > 0) {
                     this.postMessage({ type: 'moveCardsFailed', failures: groupFailures });
                 }
-
-                // Dispatch forward cards only — backward moves never dispatch.
-                const forwardSids = dispatchSids.filter(sid => {
-                    const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
-                    return !this._isColumnBefore(targetCol, card?.column ?? sourceColumn ?? '');
-                });
 
                 // `bypassTriggerGate` is the explicit-command escape hatch (today only
                 // POST /kanban/dispatch). It was threaded into this operation but never
@@ -10003,17 +10004,50 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     /**
+     * Pipeline position per column ID, derived from DEFAULT_KANBAN_COLUMNS'
+     * `order` — the same ranking `_getNextColumnId` advances through — rather
+     * than a second, hand-kept list.
+     *
+     * The hand-kept list disagreed with the real order in two places: it ranked
+     * RESEARCHER before PLAN REVIEWED (their orders are 110 and 100) and
+     * TICKET UPDATER after COMPLETED (9000 and 9999). That was invisible while
+     * only the CODED_AUTO branch classified direction — its targets are always
+     * LEAD/CODER/INTERN CODED and its sources PLAN REVIEWED / STAGING, all of
+     * which the two lists agree on. Both branches classify now, so every column
+     * is reachable and the disagreement becomes wrong run-sheet directions and,
+     * for COMPLETED → TICKET UPDATER, a backward move read as forward — which
+     * dispatches.
+     */
+    private static readonly _PIPELINE_POSITION: Record<string, number> = (() => {
+        const positions: Record<string, number> = {};
+        for (const col of DEFAULT_KANBAN_COLUMNS) { positions[col.id] = col.order; }
+        // Not peer columns, so absent from DEFAULT_KANBAN_COLUMNS: BACKLOG is a
+        // display mode of CREATED and shares its slot (a CREATED↔BACKLOG toggle
+        // is not a pipeline move), and CODED is the legacy alias of LEAD CODED.
+        positions['BACKLOG'] = positions['CREATED'] ?? 0;
+        positions['CODED'] = positions['LEAD CODED'] ?? 0;
+        return positions;
+    })();
+
+    /**
      * Check if `colA` comes before `colB` in the pipeline order.
      * Used by _advanceCards to classify forward vs backward moves.
      */
     private _isColumnBefore(colA: string, colB: string): boolean {
-        const order = ['CREATED', 'BACKLOG', 'RESEARCHER', 'PLAN REVIEWED', 'STAGING',
-            'LEAD CODED', 'CODER CODED', 'INTERN CODED', 'CODE REVIEWED',
-            'ACCEPTANCE TESTED', 'COMPLETED', 'TICKET UPDATER'];
-        const idxA = order.indexOf(colA);
-        const idxB = order.indexOf(colB);
-        if (idxA < 0 || idxB < 0) { return false; }
-        return idxA < idxB;
+        const positions = KanbanProvider._PIPELINE_POSITION;
+        const posA = positions[colA];
+        const posB = positions[colB];
+        if (posA === undefined || posB === undefined) {
+            // Custom agent columns carry no pipeline position, so the direction
+            // is genuinely unknowable rather than 'forward'. Keep the historical
+            // answer — treating it as forward is what lets a custom lane
+            // dispatch at all — but name the unranked column, because a wrong
+            // 'forward' is the answer that fires an agent.
+            const unranked = posA === undefined ? colA : colB;
+            console.warn(`[KanbanProvider] _isColumnBefore: no pipeline position for '${unranked}' — treating the move as forward (it dispatches if the gate is open)`);
+            return false;
+        }
+        return posA < posB;
     }
 
     /**

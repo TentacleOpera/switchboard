@@ -13,8 +13,8 @@ Close out two extractions that shipped their mechanism but not their consolidati
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Finish the `advanceCards` Extraction — Nineteen Call Sites Still Open-Code It](../plans/finish-advance-cards-extraction.md) — **LEAD CODED** — ID: af65df25-ecff-4376-8afc-1190b9e80067
-- [ ] [Dispatch-Surface Ratchet — Stop `apiOriginated` Growing Back](../plans/dispatch-surface-ratchet-guard.md) — **LEAD CODED** — ID: 54e52cc2-b558-48b3-80c9-eaf7b468624e
+- [ ] [Finish the `advanceCards` Extraction — Nineteen Call Sites Still Open-Code It](../plans/finish-advance-cards-extraction.md) — **CODE REVIEWED** — ID: af65df25-ecff-4376-8afc-1190b9e80067
+- [ ] [Dispatch-Surface Ratchet — Stop `apiOriginated` Growing Back](../plans/dispatch-surface-ratchet-guard.md) — **CODE REVIEWED** — ID: 54e52cc2-b558-48b3-80c9-eaf7b468624e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -38,3 +38,19 @@ Close out two extractions that shipped their mechanism but not their consolidati
 **Byte-compatibility:** every affordance must land cards in the same column as at HEAD except where a divergence is deliberately closed, and the `moveCards` / `moveCardsFailed` payload shapes and emission order are consumed by the webview's optimistic guard — normalising that order is required and is exactly the change that silently alters what the board renders mid-move. Two specific, intended shape changes must be recorded rather than absorbed: converting `moveCardForward` / `moveCardBackwards` makes them emit `moveCardsFailed` for the first time (they use the no-reason move variant today and fail silently), and the `triggerBatchAction` bypass fix makes an explicit `POST /kanban/dispatch` succeed for multi-card selections where it currently returns `'CLI triggers are disabled'`.
 
 **Line numbers in both plans were re-verified against HEAD (`3b3c6367`) on 2026-08-14** after ~200 lines of drift invalidated the previous set. Treat the tables in the plans as current; re-locate by symbol, not by line, if the file moves again.
+
+## Review Findings
+
+Both subtasks reviewed in one pass against the current tree; per-subtask detail is in each subtask plan's own `## Review Findings`. Both goals are achieved — every advance affordance now routes through `_advanceCards` with the dispatch-callers ratchet at ceiling 0, and `apiOriginated` is gated by a per-file ratchet wired into CI — and five material defects were found and fixed: `_isColumnBefore` used a hand-kept pipeline order that contradicted `DEFAULT_KANBAN_COLUMNS` (it ranked `COMPLETED → TICKET UPDATER` as forward, which dispatches) and now derives from the column definitions; the `CODED_AUTO` branch re-read `_lastCards` after the move loop, racing the debounced refresh into reclassifying backward cards as forward; the extraction's 15-test characterisation suite was defined but never invoked by CI; three arms read `bypassTriggerGate` without declaring it in `verbSchemas`, so the gate flag arrived unvalidated; and the dispatch-surface arity check compared string offsets and matched identifiers by substring, so a slot deleted ahead of the dead one or an `allowPtyFleet` rename both passed. Files changed: `src/services/KanbanProvider.ts`, `src/services/__tests__/KanbanProvider.test.ts`, `src/services/verbSchemas.ts`, `scripts/check-dispatch-surface.js`, `package.json`, `.github/workflows/integration-tests.yml`. Remaining risk is that the reviewed work carries no manual-browser verification in this pass, and three gates are red on `main` for reasons that pre-date both commits (`catalog:check` drift from the controller/API-endpoint work, `host-seam-parity:check` on `setOnBoardMutated` from `2da42df4`, and `mirror:check` failing with `generateClaudeMirror is not a function`).
+
+## Deferred Findings
+
+- MAJOR — `src/services/KanbanProvider.ts:12520`, `:12650`: `moveSelected`/`moveAll` lose the `improve-plan` instruction for a planner target on the bypass-with-triggers-off path. See the subtask plan for the full trace.
+- MAJOR — `src/services/KanbanProvider.ts:9921`, `:9979`: `sourceColumn: … ?? ''` on failure records can revert a card into a non-existent column via the webview's `moveCardsFailed` handler; newly reachable on the two move-only arms.
+- MAJOR — `src/standalone/bootstrap.ts:3324`: `columnToPromptRole(targetColumn) || 'lead'` is a routing fallback indistinguishable from a configured value. Pre-existing, outside both subtasks' scope.
+- MAJOR (pre-existing, not caused by this work) — `mirror:check` fails outright: `scripts/check-claude-mirror.js:115` calls `generateClaudeMirror`, which its dependency does not export.
+- MAJOR (pre-existing, not caused by this work) — `host-seam-parity:check` fails: `setOnBoardMutated` is wired in `bootstrap.ts` only, introduced by `2da42df4`, and is not in `ASYMMETRIC_SEAMS`.
+- NIT (pre-existing, not caused by this work) — `catalog:check` reports drift; the regenerated `protocol-catalog.json` differs by 8 API endpoints and one push site from the controller and board-seeding work. Deliberately not regenerated here — it is not this feature's drift to fold into this commit.
+- NIT — `src/services/KanbanProvider.ts:11819`, `:11837`: `movedSessionIds` narrowed from cascade ids to requested ids; no consumer reads it.
+- NIT — `src/services/KanbanProvider.ts:12484`, `:12614`: gate rule 3 survives on the custom-user branches, so "one rule everywhere" in the subtask's completion summary overstates.
+- NIT — `scripts/check-dispatch-surface.js:132`: a count below baseline passes without failing, so an improvement can go unlocked indefinitely.

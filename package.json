@@ -948,6 +948,7 @@
     "test:contract:schema-workspace-id": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/schema-workspace-id-invariant.test.js",
     "test:contract:feature-status-clobber": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/KanbanDatabase.epicStatus.test.js",
     "test:contract:coded-auto-gate": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/services/__tests__/KanbanProvider.test.js --grep \"CODED_AUTO gate placement\"",
+    "test:contract:advance-cards-extraction": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/services/__tests__/KanbanProvider.test.js --grep \"specific-target \\+ move-only arms\"",
     "test:contract:panel-scrollbars": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-panel-scrollbar-contract.test.js",
     "test:contract:browser-kanban-pane-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-kanban-pane-order.test.js",
     "test:contract:html-preview-fluid-width": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/html-preview-fluid-width-regression.test.js",

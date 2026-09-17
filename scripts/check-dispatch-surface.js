@@ -100,7 +100,12 @@ let failed = false;
 console.log('=== Dispatch-surface ratchet ===\n');
 
 for (const { name, table, mode } of IDENTIFIERS) {
-    const re = new RegExp(name, 'g');
+    // Reject identifiers that merely START with the name, or the pin is
+    // satisfiable by a RENAME: `allowPtyFleet` → `allowPtyFleetV2` deletes the
+    // load-bearing API while a bare substring scan still counts 7 and reports
+    // the floor as held. A leading `_` is deliberately still matched — the dead
+    // slot is spelled `_apiOriginated`.
+    const re = new RegExp(`${name}(?![A-Za-z0-9_])`, 'g');
     console.log(`── ${name} (${mode}) ──`);
     const seen = new Set();
     for (const full of files) {
@@ -166,22 +171,31 @@ for (const { name, table, mode } of IDENTIFIERS) {
     const ext = fs.readFileSync(path.join(REPO_ROOT, 'src/extension.ts'), 'utf8');
     const reg = ext.split('switchboard.triggerAgentFromKanban')[1] || '';
     const sig = reg.slice(0, reg.indexOf('=>'));
+    // Walk the declared PARAMETER NAMES, not string offsets. Offsets only prove
+    // relative order, so deleting a slot AHEAD of the dead one (e.g.
+    // targetTerminalOverride) slides all three down together and still reads as
+    // ordered — while every positional caller is now off by one. The three must
+    // be CONSECUTIVE, which is the property the untyped seam actually depends on.
+    const open = sig.indexOf('(');
+    const close = sig.lastIndexOf(')');
+    const params = open === -1 || close < open
+        ? []
+        : sig.slice(open + 1, close).split(',').map((p) => p.trim().split(/[?:]/)[0].trim()).filter(Boolean);
     const order = ['_apiOriginated', 'bypassTriggerGate', 'unattended'];
-    let cursor = -1;
-    let ok = true;
-    for (const pname of order) {
-        const at = sig.indexOf(pname);
-        if (at <= cursor) {
-            ok = false;
-            break;
-        }
-        cursor = at;
-    }
-    if (!ok || cursor === -1) {
-        console.error('❌ extension.ts: switchboard.triggerAgentFromKanban no longer declares _apiOriginated?, bypassTriggerGate?, unattended? in that order — the dead slot protects the untyped executeCommand seam; deleting it slides bypassTriggerGate into slot 6 with no compile error.');
+    // Consecutive AND at a fixed absolute slot. Consecutiveness alone is not
+    // enough: deleting `targetTerminalOverride?` (slot 5) keeps the three
+    // adjacent while sliding them to 5/6/7, and every positional caller —
+    // KanbanProvider's triggerAction arm passes `undefined` into slot 6 by
+    // hand — is then off by one, with no compile error. `_apiOriginated` is the
+    // SIXTH positional; the batch command's equivalent is pinned the same way
+    // by dispatch-analysis-scope-contract.test.js ("the 7th positional").
+    const DEAD_SLOT_INDEX = 5; // 0-based; the 6th parameter
+    const ok = order.every((pname, i) => params[DEAD_SLOT_INDEX + i] === pname);
+    if (!ok) {
+        console.error(`❌ extension.ts: switchboard.triggerAgentFromKanban must declare ${order.join('?, ')}? as positionals ${DEAD_SLOT_INDEX + 1}–${DEAD_SLOT_INDEX + order.length} — found [${params.join(', ')}]. The dead slot protects the untyped executeCommand seam; removing, reordering or inserting ahead of it shifts bypassTriggerGate under every positional caller with no compile error.`);
         failed = true;
     } else {
-        console.log('✅ extension.ts: triggerAgentFromKanban dead slot intact (_apiOriginated? → bypassTriggerGate? → unattended?)');
+        console.log(`✅ extension.ts: triggerAgentFromKanban dead slot intact (positional ${DEAD_SLOT_INDEX + 1}: _apiOriginated? → bypassTriggerGate? → unattended?)`);
     }
 }
 

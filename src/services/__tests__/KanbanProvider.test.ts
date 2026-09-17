@@ -868,6 +868,35 @@ Manual verification steps:
                 'run sheet must record direction: backward');
         });
 
+        // Direction comes from DEFAULT_KANBAN_COLUMNS' `order`, not a second
+        // hand-kept list. These two pairs are exactly where the hand-kept list
+        // disagreed with the real order; both were unreachable while only the
+        // CODED_AUTO branch classified, and both became live when the
+        // specific-target branch got its first caller.
+        test('direction ranks TICKET UPDATER before COMPLETED (9000 < 9999), so the move back is backward', async () => {
+            const { execStub, recordRunSheet } = wireMove([card('p1', 'COMPLETED')]);
+            (provider as any)._boardMoveCliTriggersEnabled = true;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'TICKET UPDATER' });
+
+            assert.strictEqual(result.moved.length, 1, 'backward card still moves');
+            assert.strictEqual(result.dispatched, false,
+                'COMPLETED → TICKET UPDATER is backward; ranking it forward dispatches a ticket updater on every drag back');
+            assert.ok(!dispatchedWithTrigger(execStub));
+            assert.ok(recordRunSheet.calledWith('p1', 'TICKET UPDATER', 'backward', workspaceRoot));
+        });
+
+        test('direction ranks PLAN REVIEWED before RESEARCHER (100 < 110), matching _getNextColumnId', async () => {
+            const { recordRunSheet } = wireMove([card('p1', 'PLAN REVIEWED')]);
+            (provider as any)._boardMoveCliTriggersEnabled = false;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'RESEARCHER' });
+
+            assert.strictEqual(result.moved.length, 1);
+            assert.ok(recordRunSheet.calledWith('p1', 'RESEARCHER', 'forward', workspaceRoot),
+                'PLAN REVIEWED → RESEARCHER is the advance _getNextColumnId makes; the run sheet must not call it backward');
+        });
+
         test('target undefined resolves the next pipeline stage from sourceColumn', async () => {
             const { execStub } = wireMove([card('p1', 'CREATED')]);
             (provider as any)._boardMoveCliTriggersEnabled = true;

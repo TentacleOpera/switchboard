@@ -1142,6 +1142,18 @@ jobs:
       - name: Collapsed-coder drag contract (_advanceCards CODED_AUTO gate placement)
         run: npm run test:contract:coded-auto-gate
 
+      # The characterisation suite for the advance-affordance extraction: what
+      # each affordance dispatches, what column it lands on, and the direction it
+      # records. The step above greps a DIFFERENT suite in the same file, so
+      # without this one these tests are defined and never executed — the exact
+      # green-while-incomplete hole. The assertions that matter are the
+      # dispatch-or-not ones (moveCardForward must stay move-only even with
+      # triggers on) and the pipeline-position ones: direction comes from
+      # DEFAULT_KANBAN_COLUMNS' order, and a second hand-kept list ranked
+      # COMPLETED → TICKET UPDATER as forward, which dispatches.
+      - name: Advance-affordance extraction contract (_advanceCards specific-target + move-only arms)
+        run: npm run test:contract:advance-cards-extraction
+
       # The machine-global secrets store is the ONLY copy of a standalone user's API
       # tokens. Three separate paths silently destroyed them and all three read fine
       # in a diff: an un-awaited migration loop that renamed the legacy store away

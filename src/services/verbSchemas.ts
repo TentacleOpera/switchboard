@@ -271,6 +271,12 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             sessionIds: { type: 'array', required: true },
             targetColumn: { type: 'string', required: true },
             workspaceRoot: { type: 'string' },
+            // The batch arm reads this exactly as triggerAction does — the
+            // single/batch divergence the advance-affordance extraction closed.
+            // Declared so the two arms validate it alike: undeclared, the flag
+            // still reaches the arm (validateVerbPayload only checks declared
+            // fields) and `!!'false'` opens the dispatch gate.
+            bypassTriggerGate: { type: 'boolean' },
         },
     },
     // Moves
@@ -293,12 +299,15 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             sessionIds: { type: 'array', required: true },
             column: { type: 'string', required: true },
             workspaceRoot: { type: 'string' },
+            // Both arms hand this to _advanceCards since the extraction.
+            bypassTriggerGate: { type: 'boolean' },
         },
     },
     moveAll: {
         fields: {
             column: { type: 'string', required: true },
             workspaceRoot: { type: 'string' },
+            bypassTriggerGate: { type: 'boolean' },
         },
     },
     promptOnDrop: {
