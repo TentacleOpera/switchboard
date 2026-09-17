@@ -96,6 +96,12 @@ export interface LinearSeedResult {
   skippedUnmappedColumn: Array<{ planFile: string; column: string }>;
   failed: Array<{ planFile: string; error: string }>;
   features: { linked: number; failed: number };
+  /**
+   * The run was cut short by `options.signal`. A partial seed that reports
+   * `success: true` is indistinguishable from a complete one — the caller would
+   * see fewer issues than cards and have nothing saying why.
+   */
+  aborted?: boolean;
   error?: string;
 }
 
@@ -410,6 +416,30 @@ export class LinearSyncService {
       selectedProjectName: raw.selectedProjectName || '',  // normalize missing/undefined to empty string
       ticketSaveLocation: raw.ticketSaveLocation || '',
     };
+  }
+
+  /**
+   * Config read that deliberately SKIPS the legacy projectId migration below.
+   *
+   * The migration has to turn a project id into a project NAME, which means
+   * `_resolveProjectIdToName` → `getAvailableProjects`. If that reader calls the
+   * full `loadConfig()`, the cycle is
+   * `loadConfig → _resolveProjectIdToName → getAvailableProjects → loadConfig`
+   * with no base case: `_cachedProjects` is only written AFTER the fetch, which
+   * this cycle never reaches, so nothing ever short-circuits it. It recurses
+   * until the heap dies — no request is ever sent, which is why it presents as a
+   * silent hang rather than an API error.
+   *
+   * It fires on exactly the installs the migration exists to serve: a stored
+   * config still carrying `projectId` with no `includeProjectNames`. Reading the
+   * raw config here is safe because the migration changes neither `teamId` nor
+   * `setupComplete`, which are the only two fields `getAvailableProjects` needs.
+   */
+  private async _loadConfigWithoutMigration(): Promise<LinearConfig | null> {
+    try {
+      const raw = await GlobalIntegrationConfigService.loadConfig('linear') as LinearConfig | null;
+      return this._normalizeConfig(raw);
+    } catch { return null; }
   }
 
   async loadConfig(): Promise<LinearConfig | null> {
@@ -727,13 +757,18 @@ export class LinearSyncService {
     return lines.slice(startIndex).join('\n');
   }
 
-  private async _buildInitialIssueDescription(planFile: string): Promise<string> {
+  private async _buildInitialIssueDescription(planFile: string, knownPlanId?: string | null): Promise<string> {
     // The planId anchor is the whole point of the description footer — it is
     // what makes the issue matchable back to a card after the local DB is gone.
     // It is looked up from the DB (rather than threaded through syncPlan's
     // callers) so the push chain keeps its signature. A missing planId is
     // logged loudly rather than silently producing an unanchored issue.
-    const planId = await this._lookupPlanIdByPlanFile(planFile);
+    //
+    // A caller that ALREADY holds the plan row passes `knownPlanId` and skips
+    // the lookup: the bulk seed walks hundreds of plans it has already read, and
+    // re-reading one row per issue is a round trip per create for a value it is
+    // holding.
+    const planId = String(knownPlanId || '').trim() || await this._lookupPlanIdByPlanFile(planFile);
     const anchor = buildLinearPlanIdAnchor(planId || '');
     const fallback = this._buildFallbackDescription(planFile) + anchor;
     try {
@@ -757,20 +792,36 @@ export class LinearSyncService {
 
   /**
    * The board project a plan file belongs to, for the write-destination lookup.
-   * '' means the unassigned project — which IS a board project with its own
-   * binding row, not an absence.
+   *
+   * `''` means the UNASSIGNED board project — which is a board project with its
+   * own binding row, not an absence. `null` means the lookup could not be run or
+   * found no row, and the two must never be the same answer: returning `''` for
+   * a failed lookup resolves the unassigned project's binding and files the card
+   * in a Linear project nobody chose for it, with nothing recording that a guess
+   * was made. The caller degrades to the legacy config-scoped destination on
+   * `null` instead of borrowing a binding.
    */
-  private async _lookupProjectForPlanFile(planFile: string): Promise<string> {
+  private async _lookupProjectForPlanFile(planFile: string): Promise<string | null> {
     try {
       const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-      if (!(await db.ensureReady())) { return ''; }
+      if (!(await db.ensureReady())) {
+        console.warn(`[LinearSync] board-project lookup for ${planFile}: database unavailable — destination will NOT fall back to the unassigned binding.`);
+        return null;
+      }
       const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
-      if (!workspaceId) { return ''; }
+      if (!workspaceId) {
+        console.warn(`[LinearSync] board-project lookup for ${planFile}: no workspace id — destination will NOT fall back to the unassigned binding.`);
+        return null;
+      }
       const match = await db.getPlanByPlanFile(planFile, workspaceId);
-      return String(match?.project || '');
+      if (!match) {
+        console.warn(`[LinearSync] board-project lookup for ${planFile}: no plan row — destination will NOT fall back to the unassigned binding.`);
+        return null;
+      }
+      return String(match.project || '');
     } catch (e) {
       console.warn(`[LinearSync] board-project lookup failed for ${planFile}:`, e);
-      return '';
+      return null;
     }
   }
 
@@ -782,12 +833,18 @@ export class LinearSyncService {
     try {
       const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
       if (!(await db.ensureReady())) { return null; }
-      const workspaceId = (await db.getWorkspaceId()) || '';
+      // Same workspace-id resolution as the board-project lookup. Using only
+      // getWorkspaceId() here meant a host that answers from the dominant
+      // workspace built the project destination correctly and dropped the
+      // identity anchor, silently, on the same issue.
+      const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
       if (!workspaceId) { return null; }
-      const plans = await db.getAllPlans(workspaceId);
-      const normalized = String(planFile || '').replace(/\\/g, '/');
-      const match = plans.find((p) => p.planFile === planFile
-        || String(p.planFile || '').replace(/\\/g, '/') === normalized);
+      // Indexed single-row read, NOT a full-table scan. getAllPlans materialises
+      // every plan row in the workspace, and this runs once per created issue —
+      // on a several-hundred-card seed that is quadratic work on the appliance
+      // for a value one lookup answers. getPlanByPlanFile normalises the path
+      // through _ensureRelativePlanFile, so the separator handling is the store's.
+      const match = await db.getPlanByPlanFile(planFile, workspaceId);
       if (!match) {
         console.warn(`[LinearSync] No plan row found for ${planFile} — the Linear issue will be created without a planId anchor.`);
         return null;
@@ -820,7 +877,9 @@ export class LinearSyncService {
     if (this._cachedProjects) {
       return this._cachedProjects;
     }
-    const config = await this.loadConfig();
+    // NOT loadConfig(): that runs the legacy projectId migration, which resolves
+    // a name through this very function. See _loadConfigWithoutMigration.
+    const config = await this._loadConfigWithoutMigration();
     if (!config?.setupComplete || !config.teamId) {
       throw new Error('Linear not configured');
     }
@@ -1022,16 +1081,28 @@ export class LinearSyncService {
    * A binding row whose `remote_project_id` no longer resolves in Linear is
    * reported as `dead` rather than falling through to a create: auto-recreating
    * on a deleted project quietly doubles the mirror.
+   *
+   * `boardProject` is `''` for the UNASSIGNED board project and `null` when the
+   * caller could not determine which board project the card belongs to. They are
+   * not the same question: resolving the unassigned project's binding for a card
+   * whose project is merely unknown files it in a Linear project nobody chose,
+   * and nothing afterwards records that a guess was made. On `null` the binding
+   * lookup is skipped entirely and the legacy config-scoped destination answers,
+   * which is what the write did before bindings existed.
    */
   public async resolveSeedDestination(
-    boardProject: string,
+    boardProject: string | null,
     config?: LinearConfig
   ): Promise<{ value: string | undefined; source: 'mapping' | 'include-project' | 'none'; binding?: RemoteProjectBinding }> {
     const cfg = config || await this.loadConfig();
     if (!cfg) { return { value: undefined, source: 'none' }; }
     const teamId = String(cfg.teamId || '').trim();
 
-    if (teamId) {
+    if (boardProject === null) {
+      console.warn('[LinearSync] resolveSeedDestination: board project unknown — skipping the binding lookup rather than borrowing the unassigned project\'s destination.');
+    }
+
+    if (teamId && boardProject !== null) {
       try {
         const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
         if (await db.ensureReady()) {
@@ -3253,7 +3324,8 @@ export class LinearSyncService {
     const planProject = await this._lookupProjectForPlanFile(plan.planFile);
     const destination = await this.resolveSeedDestination(planProject, config);
     const resolvedProjectId = destination.value;
-    console.log(`[LinearSync] Destination for ${plan.planFile} (board project "${planProject || '(unassigned)'}"): ${resolvedProjectId || '(none)'} [source=${destination.source}]`);
+    const projectLabel = planProject === null ? '(unknown — not resolved)' : (planProject || '(unassigned)');
+    console.log(`[LinearSync] Destination for ${plan.planFile} (board project ${projectLabel}): ${resolvedProjectId || '(none)'} [source=${destination.source}]`);
     let issueCreated = false;
     try {
       const result = await this.retry(() => this.graphqlRequest(`
@@ -3674,7 +3746,7 @@ export class LinearSyncService {
 
     const worker = async (): Promise<void> => {
       for (;;) {
-        if (options.signal?.aborted) { return; }
+        if (options.signal?.aborted) { result.aborted = true; return; }
         const plan = queue.shift();
         if (!plan) { return; }
         try {
@@ -3745,8 +3817,14 @@ export class LinearSyncService {
       workspaceId, provider: 'linear', remoteTeamId: config.teamId, boardProject: project,
     });
 
-    result.success = result.failed.length === 0;
-    console.log(`[LinearSync] Seed finished for "${project || '(unassigned)'}": created ${result.created}, attached ${result.attached}, already linked ${result.alreadyLinked}, unmapped-column skips ${result.skippedUnmappedColumn.length}, failed ${result.failed.length}.`);
+    // An aborted run is NOT a success: it wrote fewer issues than the board has
+    // cards, and only this flag distinguishes that from a clean finish.
+    result.success = result.failed.length === 0 && result.aborted !== true;
+    if (result.aborted) {
+      result.error = result.error
+        || `Seed for "${project || '(unassigned)'}" was cancelled after ${result.created + result.attached} of ${pending.length} cards — re-run to finish; linked cards are skipped.`;
+    }
+    console.log(`[LinearSync] Seed finished for "${project || '(unassigned)'}": created ${result.created}, attached ${result.attached}, already linked ${result.alreadyLinked}, unmapped-column skips ${result.skippedUnmappedColumn.length}, failed ${result.failed.length}${result.aborted ? ', CANCELLED before completion' : ''}.`);
     return result;
   }
 
@@ -3781,7 +3859,9 @@ export class LinearSyncService {
 
     const stateId = config.columnToStateId[plan.kanbanColumn];
     const priority = this._complexityToPriority(plan.complexity);
-    const description = await this._buildInitialIssueDescription(plan.planFile);
+    // The seed is holding the plan row already — hand the planId over rather
+    // than paying a DB read per issue for a value it has.
+    const description = await this._buildInitialIssueDescription(plan.planFile, plan.planId);
 
     // Hold the marker across the create — a human moving this card mid-seed
     // enters syncPlan, finds no issue id, and would create a second issue.

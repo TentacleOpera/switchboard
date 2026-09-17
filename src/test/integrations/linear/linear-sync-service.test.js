@@ -298,10 +298,19 @@ async function testSetupAndSyncFallback() {
                 && req.jsonBody?.variables?.input?.title === 'Create Linear issue'
             );
             assert.ok(createRequest, 'Expected the initial Linear issue create mutation to be sent.');
-            assert.strictEqual(
-                createRequest.jsonBody?.variables?.input?.description,
-                '## Goal\n- Sync actual markdown.\n',
+            // The description is the plan markdown PLUS the durable planId
+            // anchor footer — the anchor is what lets a re-run attach to the
+            // issue it already created instead of minting a second one, so it
+            // belongs in this assertion rather than being asserted away.
+            const createdDescription = String(createRequest.jsonBody?.variables?.input?.description || '');
+            assert.ok(
+                createdDescription.startsWith('## Goal\n- Sync actual markdown.\n'),
                 'Expected new Linear issues to start with actual plan markdown.'
+            );
+            assert.strictEqual(
+                createdDescription,
+                '## Goal\n- Sync actual markdown.\n\n\n---\n[Switchboard] Plan: session-create',
+                'Expected the planId anchor to be appended to a new issue description, and to be last.'
             );
 
             const truncationSuffix = '\n\n... (truncated by Switchboard before Linear issue creation)';
@@ -381,8 +390,8 @@ async function testSetupAndSyncFallback() {
             assert.ok(recreateMarkdownRequest, 'Expected the recreate Linear issue mutation to be sent for readable plan content.');
             assert.strictEqual(
                 recreateMarkdownRequest.jsonBody?.variables?.input?.description,
-                '## Proposed Changes\n- Preserve readable markdown on recreate.\n',
-                'Expected recreated Linear issues to preserve actual plan markdown when the file is readable.'
+                '## Proposed Changes\n- Preserve readable markdown on recreate.\n\n\n---\n[Switchboard] Plan: session-recreate',
+                'Expected recreated Linear issues to preserve actual plan markdown and carry the planId anchor.'
             );
 
             await service.setIssueIdForPlan('missing-plan.md', 'issue-existing');
@@ -412,10 +421,14 @@ async function testSetupAndSyncFallback() {
                 && req.jsonBody?.variables?.input?.title === 'Fallback issue'
             );
             assert.ok(fallbackRequest, 'Expected the fallback Linear issue create mutation to be sent.');
+            // The stub body still carries the anchor: an issue created for a plan
+            // whose file could not be read must stay matchable, or the re-run
+            // duplicates it.
             assert.strictEqual(
                 fallbackRequest.jsonBody?.variables?.input?.description,
-                'Managed by Switchboard.\n\nPlan file: `missing-plan.md`\n\nDo not edit the title — it is synced from Switchboard.',
-                'Expected unreadable plan files to fall back to the stub Linear description.'
+                'Managed by Switchboard.\n\nPlan file: `missing-plan.md`\n\nDo not edit the title — it is synced from Switchboard.'
+                + '\n\n---\n[Switchboard] Plan: session-update',
+                'Expected unreadable plan files to fall back to the stub Linear description, anchor included.'
             );
             await new Promise(resolve => setTimeout(resolve, 200));
         } finally {
@@ -569,13 +582,19 @@ async function testNativeQueryAndMutationHelpers() {
                         projects: {
                             nodes: [
                                 { id: 'project-1', name: 'Project One' }
-                            ]
+                            ],
+                            // getAvailableProjects paginates: a connection with no
+                            // arguments returns only 50 rows, so the query carries
+                            // first/after and reads pageInfo to decide on a next page.
+                            // Without pageInfo here the mock would not terminate the
+                            // loop for the right reason.
+                            pageInfo: { hasNextPage: false, endCursor: null }
                         }
                     }
                 }
             }, (req) => req.method === 'POST'
                 && req.path === '/graphql'
-                && String(req.jsonBody?.query || '').includes('projects { nodes')
+                && /projects\(\s*first:/.test(String(req.jsonBody?.query || ''))
             );
 
             http.queueJson(200, {
@@ -1052,31 +1071,134 @@ async function testSyncBailsSilentlyWithoutToken() {
     });
 }
 
+/**
+ * Regression: loadConfig() ↔ getAvailableProjects() must not recurse.
+ *
+ * loadConfig() migrates a legacy `projectId` into `includeProjectNames`, which
+ * needs a project NAME, which it reads through getAvailableProjects(). That
+ * reader used to call loadConfig() straight back, and nothing broke the cycle —
+ * `_cachedProjects` is only written after a fetch the cycle never reaches. The
+ * result was unbounded recursion that sent no request at all: the host hung and
+ * then died of heap exhaustion, on exactly the installs the migration exists to
+ * serve. Asserting ONE project request is what pins it; a count above one means
+ * the cycle is back.
+ */
+async function testLegacyProjectIdMigrationDoesNotRecurse() {
+    await withWorkspace('linear-legacy-project-migration', async ({ workspaceRoot }) => {
+        const { service } = createContext(workspaceRoot, {
+            'switchboard.linear.apiToken': 'lin_api_migration'
+        });
+
+        // The shipped legacy shape: projectId set, includeProjectNames absent.
+        await writeConfig(baseConfig({ projectId: 'project-1' }));
+
+        const http = installHttpsMock();
+        try {
+            const isProjectsQuery = (req) => req.method === 'POST'
+                && req.path === '/graphql'
+                && /projects\(\s*first:/.test(String(req.jsonBody?.query || ''));
+
+            // Exactly one answer is queued. Under the recursion this request was
+            // never even sent, so the call never returned; if the cycle ever
+            // returns, the second request finds nothing queued and errors.
+            http.queueJson(200, {
+                data: {
+                    team: {
+                        projects: {
+                            nodes: [{ id: 'project-1', name: 'Project One' }],
+                            pageInfo: { hasNextPage: false, endCursor: null }
+                        }
+                    }
+                }
+            }, isProjectsQuery);
+
+            const migrated = await Promise.race([
+                service.loadConfig(),
+                new Promise((_, reject) => setTimeout(
+                    () => reject(new Error('loadConfig did not settle — the projectId migration is recursing again')),
+                    10000
+                ).unref())
+            ]);
+
+            assert.ok(migrated, 'Expected loadConfig to return a config.');
+            assert.deepStrictEqual(
+                migrated.includeProjectNames,
+                ['Project One'],
+                'Expected the legacy projectId to be migrated to includeProjectNames.'
+            );
+            assert.strictEqual(
+                migrated.projectId,
+                undefined,
+                'Expected the legacy projectId key to be dropped once migrated.'
+            );
+
+            const projectRequests = http.requests.filter(isProjectsQuery);
+            assert.strictEqual(
+                projectRequests.length,
+                1,
+                `Expected the migration to read the project list exactly once, got ${projectRequests.length}.`
+            );
+
+            // And the migration is durable: the stored config carries it, so the
+            // next load does not re-enter the migration at all.
+            const stored = await readConfig();
+            assert.deepStrictEqual(stored.includeProjectNames, ['Project One']);
+            assert.strictEqual(stored.projectId, undefined);
+        } finally {
+            http.restore();
+        }
+    });
+}
+
 async function testRateLimitingAndRetry() {
     await withWorkspace('linear-rate-limiting', async ({ workspaceRoot }) => {
         const { service } = createContext(workspaceRoot, {
             'switchboard.linear.apiToken': 'valid_token'
         });
         
-        await writeConfig(baseConfig());
+        // No legacy `projectId` here: this test is about throttling and retry, and
+        // that key sends loadConfig() through the projectId→includeProjectNames
+        // migration, which fetches the project list. The migration has its own
+        // test below; keeping it out of this one is what stops an unmocked,
+        // network-dependent request from running before the mock is installed.
+        await writeConfig(baseConfig({ projectId: undefined, includeProjectNames: ['Project One'] }));
         service._config = await service.loadConfig();
-        
+
         // Test throttle enforcement
         let delayCalls = [];
         service.delay = async (ms) => { delayCalls.push(ms); };
-        
-        installHttpsMock((options, callback, resolve, reject) => {
-            callback(200, JSON.stringify({ data: { issue: { id: '1' } } }));
-        });
-        
-        // First call should not be delayed (elapsed > 50)
-        await service.graphqlRequest('{ query }');
-        assert.strictEqual(delayCalls.length, 0);
-        
-        // Second call should be delayed
-        await service.graphqlRequest('{ query }');
-        assert.strictEqual(delayCalls.length, 1);
-        assert.ok(delayCalls[0] > 0 && delayCalls[0] <= 50, `Delay should be <= 50, got ${delayCalls[0]}`);
+
+        // installHttpsMock() takes NO arguments. This used to be handed a
+        // responder function, which was silently discarded — so nothing was
+        // queued, every request fell through to "No mocked HTTPS response", and
+        // the two throttle assertions below were reached only by accident.
+        // Queue the answers explicitly.
+        const http = installHttpsMock();
+        try {
+            const queueOk = () => http.queueJson(
+                200,
+                { data: { issue: { id: '1' } } },
+                (req) => String(req.jsonBody?.query || '') === '{ query }'
+            );
+            queueOk();
+            queueOk();
+
+            // Make "a long gap since the last request" explicit rather than
+            // incidental — otherwise this assertion depends on how long the
+            // preceding setup happened to take.
+            service._lastRequestTime = 0;
+
+            // First call should not be delayed (elapsed > 50)
+            await service.graphqlRequest('{ query }');
+            assert.strictEqual(delayCalls.length, 0);
+
+            // Second call should be delayed
+            await service.graphqlRequest('{ query }');
+            assert.strictEqual(delayCalls.length, 1);
+            assert.ok(delayCalls[0] > 0 && delayCalls[0] <= 50, `Delay should be <= 50, got ${delayCalls[0]}`);
+        } finally {
+            http.restore();
+        }
 
         // Test transient error retry
         let graphqlCalls = 0;
@@ -1137,6 +1259,7 @@ async function run() {
     await testDetailQueryHelpers();
     await testDebouncedSyncAndUnmappedColumn();
     await testSyncBailsSilentlyWithoutToken();
+    await testLegacyProjectIdMigrationDoesNotRecurse();
     await testRateLimitingAndRetry();
     console.log('linear sync service test passed');
 }
