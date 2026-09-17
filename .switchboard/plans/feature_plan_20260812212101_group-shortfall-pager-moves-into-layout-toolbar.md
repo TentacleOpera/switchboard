@@ -65,7 +65,7 @@ Feature: **Terminals Panel Sidebar & Group Selection UX**. This is the only subt
 **Reconciled contract with the "ungrouped terminals get their own grid" sibling:**
 
 - That plan introduces an `Unassigned` pseudo-group that `getAllGroups()` returns and `getGroupMembers()` computes. The pager reads both through the existing generic lookups (`getAllGroups().find(...)`, `getGroupMembers(activeGroup).length`), so an over-subscribed `Unassigned` grid pages correctly with **no change to this plan**. The label will read `Unassigned 1–4 of 6`, which is correct.
-- That plan also adds a `clearGroupLock()` fallback inside `seatActiveGroupPage()`. `applyLayoutFloor()`'s `changed` branch calls `seatActiveGroupPage()`, and `clearGroupLock()` calls `applyLayoutFloor()` at its own tail (`src/webview/terminals.js:2366`) — so a dissolving lock re-enters this function once. It terminates: `clearGroupLock` nulls `activeGroupId` **before** calling back, so the inner pass takes `activeGroup === null` → `shortfall === false` → pager hidden, and its own `if (activeGroupId) { seatActiveGroupPage(); }` guard is false. **No guard is needed in this plan**, but the pager's hidden-state branch must be genuinely idempotent (it is — it only clears text and disables buttons). Recorded here so a reviewer seeing the re-entrancy does not read it as a defect in either plan.
+- That plan previously also added a `clearGroupLock()` fallback inside `seatActiveGroupPage()`, for the case where its `Unassigned` pseudo-group dissolved. **That scope was removed from the sibling on 2026-09-17** along with the pseudo-group itself, so the fallback — and the `clearGroupLock()` ↔ `applyLayoutFloor()` re-entry it introduced — no longer exists. Nothing is required of this plan. The pager's hidden-state branch should still be idempotent on general principle (it is — it only clears text and disables buttons), but there is no longer a re-entrant path to justify it.
 
 ## Complexity Audit (Routine vs Complex/Risky)
 
@@ -94,7 +94,7 @@ Feature: **Terminals Panel Sidebar & Group Selection UX**. This is the only subt
 | Layout floors while paged past the new end | `seatActiveGroupPage()` re-clamps `activeGroupPage` (`src/webview/terminals.js:2446-2447`); the pager must read the clamped value, so build it *after* the clamp — i.e. keep it where the banner block already sits, below `const rendered = getSlotCount(effectiveLayout)`. |
 | Window resized narrow | `.layout-toolbar` has `gap: 8px` and no wrap. The pager must be `flex-shrink: 0` on its buttons and allow its label to ellipsise. |
 | Claudify theme | Pager renders in `#D97757`-derived accent on hover; nothing red anywhere. |
-| Locked group dissolves mid-flight (`Unassigned` sibling) | `seatActiveGroupPage()` → `clearGroupLock()` → `applyLayoutFloor()` re-entry; inner pass hides the pager, outer pass finds `activeGroupId === null` on its own next run. Terminates in one extra level. |
+| Locked group dissolves mid-flight (deleted, or its last member exits) | `seatActiveGroupPage()`'s lookup returns `undefined` and no-ops; the pager hides on the next render when `activeGroup` fails to resolve. No re-entrancy — the `clearGroupLock()` fallback that would have caused it was removed from the ungrouped-grid sibling. |
 
 **Dependencies:** none outside `src/webview/terminals.html` and `src/webview/terminals.js`. No persisted setting changes (`activeGroupPage` is already transient, `src/webview/terminals.js:93`). No shared edited lines with any sibling subtask.
 
@@ -225,7 +225,7 @@ Delete `.banner-page-btn` and `.banner-page-btn:disabled` (`src/webview/terminal
         // Pager: built after the slot count is known, so the page index it reads
         // is the one seatActiveGroupPage() clamped against the floored layout.
         // Idempotent in both branches — this function re-enters (see the
-        // clearGroupLock path) and must be safe to run twice with no lock.
+        // no-lock path) and must be safe to run twice with no lock.
         if (groupPagerEl) {
             const pageCount = shortfall ? Math.max(1, Math.ceil(members / rendered)) : 1;
             const show = shortfall && pageCount > 1;

@@ -2,7 +2,7 @@
 
 > **RENAMED 2026-09-12.** The site is **labcom.dev**, not switchboard.dev — this follows *One Name End to End: Switchboard Becomes LABCOM, and the CLI Becomes `lc`* (PLAN REVIEWED), which does not itself name a domain. Every `switchboard.dev` reference in the body below has been updated. The plan's **title and filename deliberately still say `switchboard-dev`**: renaming the file would purge this card and re-import it as a new one, losing its column and history. Read the title as the card's identity, not as the target domain.
 
-**Complexity:** 4
+**Complexity:** 5
 
 ## Goal
 
@@ -17,7 +17,6 @@ Consolidate the extension's docs URL into a single constant and retire the tutor
 ## Subtasks
 - [ ] [Consolidate the extension's docs URL and retire the tutorial prompt](../plans/consolidate-the-docs-url-in-the-extension.md) — **PLAN REVIEWED** — ID: 31dc334a-cd8f-4420-babb-65da087a7dab
 - [ ] [Move the docs site to labcom.dev](../plans/move-the-docs-site-to-switchboard-dev.md) — **PLAN REVIEWED** — ID: e5c23780-8e2e-4384-b3ab-a4382bf62cdf
-- [ ] [The Docs Site Has Two Pages for One Feature, No Link Check, and No Release Surface](../plans/memo-the-docs-site-has-two-pages-for-one-feature-and-no-link-check.md) — **PLAN REVIEWED** — ID: 29c27ed7-c615-4ecc-a82b-f6008464663a
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -1,5 +1,26 @@
 # ClickUp can already be queried by planId but cannot rebuild a board — add the restore orchestration
 
+> **CANCELLED — 2026-09-16.** This work is removed, not deferred, and the code
+> that had already landed for it has been deleted.
+>
+> Tracker board-restore was a sql.js-era hedge: the board projection into Notion
+> existed because the local store used to be fragile. The store is now one
+> better-sqlite3 database owned by one host, so the premise is gone. Rebuilding a
+> board out of a SaaS tracker is also the wrong shape for a Pi appliance —
+> recovery is a system-level concern (SD-card image, restic), not the board's job.
+>
+> The one legitimate need behind it — getting an existing board into a tracker in
+> bulk — is served by the per-project seed, not by a backup/restore pair:
+> `seed-board-projects-to-linear-projects.md`, `seed-board-projects-to-clickup-lists.md`,
+> `seed-controls-in-linear-and-connections-panels.md`. Mass ticket→plan import
+> already exists in the Tickets panel ("Import All as Plans").
+>
+> `boardPush` and `boardRestore` are no longer capabilities on
+> `RemoteProviderCapabilities`, and `provider-capability-parity-contract.test.js`
+> now ratchets against them coming back. Re-adding either is a product decision,
+> not a parity fix.
+
+
 ## Goal
 
 Give ClickUp the board-restore capability Notion has. Every primitive is already built and already used for reconciliation; what is missing is the pass that fetches everything, matches it back, and applies it.

@@ -44,7 +44,7 @@ Feature: **Terminals Panel Sidebar & Group Selection UX**. Lands **after** the b
 
 1. **Two filters on one render, composed as an intersection.** This plan filters *rows* by group membership; the workspace-dropdown plan filters *buckets* by `parentRoot`. Both can be active. The reconciled ordering inside `renderSidebarList()` is: **group filter first (on `fleetList`, before bucketing) → bucket → workspace filter (on the bucket list)**. Never the reverse — bucketing a workspace-filtered fleet would make the group filter's own empty-notice branch unreachable.
 2. **`hasUnmapped` must be computed from the UNFILTERED fleet.** The dropdown plan derives its `Unmapped` option from whether the unmapped bucket is non-empty. Because this plan filters `fleetList` *before* bucketing, a group lock whose members are all mapped would empty the unmapped bucket, drop the `Unmapped` option, and — via the dropdown plan's stale-selection fallback — **persist `sidebarWorkspace = ''`**, silently destroying the operator's saved selection on a gesture that has nothing to do with workspaces. The reconciled end-state: the dropdown plan probes the unfiltered fleet for its option list. This plan must therefore expose the unfiltered array under its own name (`fleetList`) and bucket from `sidebarItems`, keeping the two readable apart. Stated here because this plan is the one that introduces the divergence.
-3. **This plan owns the group chip line** (`src/webview/terminals.js:2083`). The "ungrouped terminals get their own grid" sibling introduces a `source: 'unassigned'` pseudo-group that `findGroupForTerminalName()` starts returning instead of `null` — which would make **every ungrouped row grow an `Unassigned` chip** in unlocked mode, re-spending exactly the 220px budget the badge-removal plan just freed. The single reconciled end-state for that line is written in Proposed Changes §5 and is repeated verbatim in the sibling plan. Implement it once, in whichever of the two lands second; do not write two different guards.
+3. **This plan owns the group chip line** (`src/webview/terminals.js:2083`), and now owns it alone. It previously carried a shared end-state with the "ungrouped terminals get their own grid" sibling, because that plan was going to make `findGroupForTerminalName()` return an `Unassigned` pseudo-group instead of `null` and chip every ungrouped row. **That scope was removed from the sibling on 2026-09-17** (it broke `getUnassignedTerminalNames()`), so `findGroupForTerminalName()` keeps returning `null` for ungrouped terminals and no shared guard is required. Implement §5 as written here; there is no second copy to reconcile against.
 
 ## Complexity Audit (Routine vs Complex/Risky)
 
@@ -76,7 +76,7 @@ Feature: **Terminals Panel Sidebar & Group Selection UX**. Lands **after** the b
 | Terminal exits while locked | Next poll drops it from `getGroupMembers()`; the row disappears from the sidebar. Expected. |
 | `activeGroupId` set to a group id that no longer resolves | `getAllGroups().find()` returns `undefined`; the filter must fall through to *unfiltered* rather than rendering an empty sidebar. |
 | Locked group **and** a specific workspace selected (dropdown sibling shipped) | Intersection. The workspace's terminals that are also group members render; if none are, the *group* notice text wins (it is the more specific explanation, and the dropdown itself already names the workspace). |
-| Lock taken while the `Unassigned` pseudo-group is active (ungrouped-grid sibling shipped) | `getAllGroups()` resolves `__unassigned__`, `getGroupMembers()` returns the computed complement, and the filter works unchanged. No extra branch. |
+| Lock taken while the unassigned scope is showing | Unassigned is `activeGroupId === null`, so there is no lock to take from it — clicking a group's tab locks that group and the filter applies normally. No extra branch. |
 
 **Dependencies:** none outside `src/webview/terminals.html` and `src/webview/terminals.js`. No verb calls, no persisted-settings change, no backend change. Within the feature, lands after the badge-removal plan and before the workspace-dropdown plan.
 
@@ -170,26 +170,24 @@ with the element cached beside the other DOM handles (`~189`):
 
 **5. Suppress the redundant chip under a lock** (`renderTerminalRow`, `~2083`).
 
-This is the **reconciled end-state for this line across two subtasks** — the ungrouped-grid sibling makes `findGroupForTerminalName()` return an `Unassigned` pseudo-group instead of `null`, which would otherwise chip every ungrouped row. Write this once:
+Under a group lock every visible row is a member, so the chip carries no
+information — and the sidebar is 220px wide.
 
 ```js
-        // Two suppressions, one line:
-        //  - Under a group lock every visible row is a member, so the chip
-        //    carries no information — and the sidebar is 220px wide.
-        //  - The Unassigned pseudo-group is the computed remainder, not a
-        //    membership. Chipping it would label most of the fleet with a word
-        //    that means "no group", spending the width the count badge just
-        //    gave back.
-        const resolvedGroup = activeGroupId ? null : findGroupForTerminalName(item.friendlyName);
-        const claimingGroup = (resolvedGroup && resolvedGroup.source !== 'unassigned')
-            ? resolvedGroup
-            : null;
+        // Under a group lock every visible row is a member, so the chip
+        // carries no information — and the sidebar is 220px wide.
+        const claimingGroup = activeGroupId ? null : findGroupForTerminalName(item.friendlyName);
         if (claimingGroup) {
             ...unchanged chip construction...
         }
 ```
 
-The `source !== 'unassigned'` clause is inert until the sibling lands and harmless before it, so this line is order-independent.
+An earlier revision of this plan carried an extra `source !== 'unassigned'`
+clause here, reconciled verbatim with the ungrouped-grid sibling. **That clause
+is removed:** the sibling no longer introduces a pseudo-group, so
+`findGroupForTerminalName()` returns `null` for ungrouped terminals and they are
+never chipped in the first place. A `source` check against a value nothing
+produces would be dead code that reads as a live guard.
 
 ### `src/webview/terminals.html`
 

@@ -1,5 +1,26 @@
 # Linear issues carry no planId, so a board can never be rebuilt from Linear — add the anchor, then the restore
 
+> **CANCELLED — 2026-09-16.** This work is removed, not deferred, and the code
+> that had already landed for it has been deleted.
+>
+> Tracker board-restore was a sql.js-era hedge: the board projection into Notion
+> existed because the local store used to be fragile. The store is now one
+> better-sqlite3 database owned by one host, so the premise is gone. Rebuilding a
+> board out of a SaaS tracker is also the wrong shape for a Pi appliance —
+> recovery is a system-level concern (SD-card image, restic), not the board's job.
+>
+> The one legitimate need behind it — getting an existing board into a tracker in
+> bulk — is served by the per-project seed, not by a backup/restore pair:
+> `seed-board-projects-to-linear-projects.md`, `seed-board-projects-to-clickup-lists.md`,
+> `seed-controls-in-linear-and-connections-panels.md`. Mass ticket→plan import
+> already exists in the Tickets panel ("Import All as Plans").
+>
+> `boardPush` and `boardRestore` are no longer capabilities on
+> `RemoteProviderCapabilities`, and `provider-capability-parity-contract.test.js`
+> now ratchets against them coming back. Re-adding either is a product decision,
+> not a parity fix.
+
+
 ## Goal
 
 Give Linear the board-restore capability Notion has and ClickUp is getting. Unlike ClickUp, Linear needs a durable identity anchor added to what it pushes before restore is even possible — and existing issues need a backfill path, or every board created before this change stays unrecoverable.
