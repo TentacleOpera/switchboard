@@ -19,6 +19,7 @@ import { resolveTailnetOrigin } from '../utils/tailnetOrigin';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
 import { BANNER_ART_TRUECOLOR, BANNER_ART_256, BANNER_ART_ASCII } from '../generated/bannerArt';
 import { getInotifyWatchCount, getOpenFdCount } from './planIngestionHost';
+import { runController, type ControllerRuntimeConfig } from './controller/controller';
 
 function usage(): string {
     return `Usage: npx switchboard                        (interactive front-door menu — default)
@@ -35,6 +36,7 @@ function usage(): string {
        npx switchboard fleet [--json]
        npx switchboard verb <verbName> [jsonPayload] [--json]
        npx switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>] [--timeout <ms>]
+       npx switchboard controller [--once] [--interval <minutes>] [--json]
        npx switchboard setup [init|scaffold|control-plane] [options]
        npx switchboard stop [--fleet]
        npx switchboard status [--json]
@@ -79,6 +81,9 @@ Board commands (drive the board from a terminal):
   probe               Probe host resident memory, inotify watches, and open FDs.
   verb                Call any protocol verb directly: switchboard verb <name> <json>
   api                 Call any API endpoint directly: switchboard api <METHOD> <path> [json] [--data @file]
+  controller          Run the Agent-panel controller: wake on a clock, diagnose stuck
+                      work, apply mechanical remediations, and append a Markdown report
+                      to the board. Long-running; --once runs a single pass.
   setup               Unified setup wizard (init, scaffold, control-plane).
   help                Show this help (alias: --help, -h).
   about               Show version and system info (alias: version, --version, -v).
@@ -130,6 +135,18 @@ Options:
   --search <query>     plans: search card titles and plan files
   --limit <N>          plans: pagination limit (default: 10)
   --offset <N>         plans: pagination offset (default: 0)
+  --once               controller: run a single wake then exit
+  --interval <min>     controller: wake cadence in minutes (default: 5)
+  --id <name>          controller: this controller's identity (recorded in every entry)
+  --team <id>          controller: report team id (default: controller)
+  --restart-rss-mb <N> controller: restart the board above this RSS (needs --board-start-command)
+  --board-start-command <cmd>  controller: invocation that starts the board again
+  --board-start-cwd <dir>      controller: cwd for that invocation
+  --supervisor <seat>          controller: supervisor seat for judgement escalations
+  --tier <id>:<role>[:<loc>[:<op>[:<cost>]]]  controller: ordered judgement tier
+  --ceiling <N>                controller: global judgement-call ceiling per day
+  --stuck-passes <N>           controller: passes stuck before a supervisor is woken
+  --judgement-deadline <ms>    controller: per-call deadline (covers connect)
   --help               Show this help
   --version            Show version and system info
 `;
@@ -1721,6 +1738,159 @@ async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
         console.log('  ' + row.map((cell, i) => cell.padEnd(widths[i] + 2)).join('').trimEnd());
     }
     exitFlushed(0);
+}
+
+/**
+ * `switchboard controller [options]`
+ *
+ * The Agent-panel controller (plan:
+ * the-controller-wakes-on-a-clock-diagnoses-and-reports). A long-running CLIENT
+ * process that drives the board through this CLI's own `apiRequest` path — it
+ * opens no socket of its own and keeps no second client. It must be a separate
+ * process because its job includes restarting the board, which a component
+ * inside the board cannot do.
+ *
+ * `--once` runs a single wake and exits; that is the form the automated
+ * verification uses. Without it the process runs until interrupted.
+ */
+async function cmdController(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    const getFlag = (name: string): string | undefined => {
+        for (let i = 0; i < argv.length; i++) {
+            if (argv[i] === name) { return argv[i + 1]; }
+            if (argv[i].startsWith(`${name}=`)) { return argv[i].slice(name.length + 1); }
+        }
+        return undefined;
+    };
+
+    if (argv.includes('--help') || argv.includes('-h')) {
+        console.log('Usage: npx switchboard controller [--once] [--interval <minutes>] [--id <name>] [--team <id>]');
+        console.log('                                  [--tier <id>:<classifier|escalation>[:<locality>[:<operator>[:<cost>]]]]...');
+        console.log('                                  [--supervisor <seat>] [--ceiling <N>] [--stuck-passes <N>]');
+        console.log('                                  [--judgement-deadline <ms>] [--restart-rss-mb <N>]');
+        console.log('                                  [--board-start-command <cmd>] [--board-start-cwd <dir>] [--json]');
+        exitFlushed(0);
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) { emitOfflineGuidance(jsonFlag); }
+
+    const config: Partial<ControllerRuntimeConfig> = {};
+    const intervalRaw = getFlag('--interval');
+    if (intervalRaw !== undefined) {
+        const minutes = Number(intervalRaw);
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+            console.error(`[switchboard] --interval requires a positive number of minutes (got '${intervalRaw}').`);
+            exitFlushed(5);
+        }
+        config.intervalMinutes = minutes;
+    }
+    const rssRaw = getFlag('--restart-rss-mb');
+    if (rssRaw !== undefined) {
+        const mb = Number(rssRaw);
+        if (!Number.isFinite(mb) || mb <= 0) {
+            console.error(`[switchboard] --restart-rss-mb requires a positive number of MB (got '${rssRaw}').`);
+            exitFlushed(5);
+        }
+        config.restartRssThresholdBytes = Math.round(mb * 1024 * 1024);
+    }
+    const startCommand = getFlag('--board-start-command');
+    if (startCommand !== undefined) { config.boardStartCommand = startCommand || null; }
+    const startCwd = getFlag('--board-start-cwd');
+    if (startCwd !== undefined) { config.boardStartCwd = startCwd || null; }
+
+    // Judgement tier configuration (plan:
+    // judgement-tiers-the-supervisor-seat-and-reroute). The tier list is
+    // readable by any client; these flags are the CLI's door onto it. Endpoints
+    // and models still come from the existing `agentControlProviders` rows — a
+    // `--tier` entry names only the provider id, its role and its metadata.
+    const supervisorFlag = getFlag('--supervisor');
+    const ceilingFlag = getFlag('--ceiling');
+    const tierFlags = argv.reduce<string[]>((acc, a, i) => {
+        if (a === '--tier' && argv[i + 1]) { acc.push(argv[i + 1]); }
+        else if (a.startsWith('--tier=')) { acc.push(a.slice('--tier='.length)); }
+        return acc;
+    }, []);
+    if (supervisorFlag !== undefined || ceilingFlag !== undefined || tierFlags.length > 0) {
+        const current = await apiGet(port, '/controller/judgement', workspaceRoot);
+        const currentJson = current.json();
+        const existing = (currentJson?.judgement && typeof currentJson.judgement === 'object') ? currentJson.judgement : {};
+        const next: any = {
+            tiers: Array.isArray(existing.tiers) && existing.tiers.length ? existing.tiers : [],
+            supervisorSeat: typeof existing.supervisorSeat === 'string' ? existing.supervisorSeat : null,
+            globalCeilingPerDay: typeof existing.globalCeilingPerDay === 'number' ? existing.globalCeilingPerDay : null,
+        };
+        if (supervisorFlag !== undefined) { next.supervisorSeat = supervisorFlag || null; }
+        if (ceilingFlag !== undefined) {
+            const n = Number(ceilingFlag);
+            if (!Number.isFinite(n) || n <= 0) { console.error(`[switchboard] --ceiling requires a positive number (got '${ceilingFlag}').`); exitFlushed(5); }
+            next.globalCeilingPerDay = n;
+        }
+        for (const raw of tierFlags) {
+            const [providerId, role, locality, operator, costClass] = raw.split(':');
+            if (!providerId || !role) { console.error(`[switchboard] --tier expects <providerId>:<classifier|escalation>[:<locality>[:<operator>[:<cost>]]] (got '${raw}').`); exitFlushed(5); }
+            next.tiers.push({
+                providerId,
+                role,
+                locality: locality || 'internet',
+                operator: operator || 'self',
+                costClass: costClass || 'free',
+            });
+        }
+        const put = await apiRequest(port, 'PUT', '/controller/judgement', workspaceRoot, { judgement: next });
+        if (put.status !== 200) {
+            console.error(`[switchboard] failed to write judgement config: ${put.json()?.reason || put.status}`);
+            exitFlushed(1);
+        }
+    }
+
+    const stuckPasses = getFlag('--stuck-passes');
+    if (stuckPasses !== undefined) {
+        const n = Number(stuckPasses);
+        if (!Number.isFinite(n) || n < 1) { console.error(`[switchboard] --stuck-passes requires a positive integer (got '${stuckPasses}').`); exitFlushed(5); }
+        config.supervisorStuckPasses = Math.floor(n);
+    }
+    const deadlineFlag = getFlag('--judgement-deadline');
+    if (deadlineFlag !== undefined) {
+        const n = Number(deadlineFlag);
+        if (!Number.isFinite(n) || n <= 0) { console.error(`[switchboard] --judgement-deadline requires a positive number of ms (got '${deadlineFlag}').`); exitFlushed(5); }
+        config.judgementDeadlineMs = Math.floor(n);
+    }
+
+    const controllerId = getFlag('--id') || `controller:${os.hostname()}:${process.pid}`;
+    const teamId = getFlag('--team') || 'controller';
+    const once = argv.includes('--once');
+
+    const stopped = { value: false };
+    const onSignal = () => { stopped.value = true; };
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
+
+    const result = await runController({
+        workspaceRoot,
+        port,
+        // The CLI's own request path — same auth, same CSRF marker, same
+        // workspaceRoot routing as every other command. Not a second client.
+        apiRequest,
+        controllerId,
+        teamId,
+        once,
+        config,
+        shouldStop: () => stopped.value,
+        log: (line) => {
+            if (jsonFlag) { console.error(`[switchboard] ${line}`); }
+            else { console.log(`[switchboard] ${line}`); }
+        },
+    });
+
+    if (jsonFlag) {
+        emitJson({ success: result.stoppedReason !== 'lease-refused', ...result, controllerId, teamId, port });
+    } else {
+        console.log(`[switchboard] controller stopped (${result.stoppedReason}) after ${result.passes} wake(s).`);
+    }
+    exitFlushed(result.stoppedReason === 'lease-refused' ? 3 : 0);
 }
 
 /**
@@ -3472,7 +3642,7 @@ async function main() {
         'stop', 'status', 'logs', 'init', 'scaffold', 'control-plane', 'secrets',
         'token', 'export', 'import', 'plans', 'ready', 'dispatch', 'done', 'accept',
         'next', 'reports', 'clear', 'fleet', 'probe', 'heap-snapshot', 'verb', 'api',
-        'help', 'about', 'version', 'launcher-state',
+        'help', 'about', 'version', 'launcher-state', 'controller',
     ]);
     const heapFirstArg = process.argv[2];
     const mayStartBoard = !heapFirstArg
@@ -3521,7 +3691,7 @@ async function main() {
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
         'plans', 'ready', 'dispatch', 'done', 'accept', 'next', 'reports', 'clear', 'fleet', 'probe', 'verb', 'api',
-        'help', 'about', 'version', 'setup', 'launcher-state', 'service',
+        'help', 'about', 'version', 'setup', 'launcher-state', 'service', 'controller',
         // Internal routing token — re-spawned by cmdMainMenu's CLI Mode to
         // enable Back without refactoring cmdBoardConsole's exit semantics.
         // NOT documented in usage(); not a user-facing subcommand.
@@ -3621,6 +3791,7 @@ async function main() {
         && subcommand !== 'done' && subcommand !== 'next'
         && subcommand !== 'clear' && subcommand !== 'fleet' && subcommand !== 'probe' && subcommand !== 'verb'
         && subcommand !== 'api'
+        && subcommand !== 'controller'
         && subcommand !== 'help' && subcommand !== 'about' && subcommand !== 'version'
         && subcommand !== 'setup'
         && subcommand !== 'launcher-state';
@@ -4517,6 +4688,11 @@ async function main() {
     // ── api ───────────────────────────────────────────────────────
     if (process.argv[2] === 'api') {
         await cmdApi(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── controller ────────────────────────────────────────────────
+    if (process.argv[2] === 'controller') {
+        await cmdController(workspaceRoot, process.argv.slice(3));
     }
 
     // ── Internal routing token: board console (re-spawned by cmdMainMenu) ──
