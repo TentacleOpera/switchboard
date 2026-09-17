@@ -181,6 +181,79 @@ function roleToCodingColumn(role: 'intern' | 'coder' | 'lead'): string {
     return 'LEAD CODED';
 }
 
+/**
+ * Structural contract for the standalone-only controller board store (see
+ * `LocalApiServerOptions.controllerStore`). Deliberately structural — this file
+ * imports no service modules, and the standalone composition root satisfies it
+ * with `ControllerBoardStore`.
+ */
+export interface ControllerStoreOptions {
+    readLease(workspaceRoot: string): Promise<any>;
+    claimLease(workspaceRoot: string, controllerId: string, ttlMs: number): Promise<any>;
+    releaseLease(workspaceRoot: string, controllerId: string): Promise<any>;
+    readState(workspaceRoot: string): Promise<any>;
+    writeState(workspaceRoot: string, controllerId: string, state: unknown): Promise<any>;
+    readBoardNudges(workspaceRoot: string): Promise<Record<string, number>>;
+    writeReport(workspaceRoot: string, req: { from: string; kind: string; body: string; teamId?: string }): Promise<any>;
+    /** Read the controller's Markdown report back for the panel. */
+    readReport(workspaceRoot: string, teamId?: string): Promise<any>;
+    /** The panel-owned controller config (wake interval). */
+    readConfig(workspaceRoot: string): Promise<any>;
+    writeConfig(workspaceRoot: string, value: { intervalMinutes?: unknown }): Promise<any>;
+    /** The matrix override the controller loads each wake. */
+    readMatrix(workspaceRoot: string): Promise<any>;
+    writeMatrix(workspaceRoot: string, rows: unknown): Promise<any>;
+    /** The controller process this board armed, if any. */
+    readArmed(workspaceRoot: string): Promise<any>;
+    writeArmed(workspaceRoot: string, record: { pid: number; command: string; startedAt: number }): Promise<any>;
+    clearArmed(workspaceRoot: string): Promise<any>;
+    /**
+     * The resolved judgement tier list (plan:
+     * judgement-tiers-the-supervisor-seat-and-reroute). Endpoints, models and
+     * key-set flags come from the existing `agentControlProviders` rows — no
+     * second endpoint store — and the tier ORDER plus per-tier metadata comes
+     * from the controller's own config. Key VALUES are never returned.
+     */
+    readJudgement(workspaceRoot: string): Promise<any>;
+    writeJudgement(workspaceRoot: string, patch: any): Promise<any>;
+    /** Quota stand-downs — board state that must survive a board restart. */
+    readQuota(workspaceRoot: string): Promise<any>;
+    writeQuota(workspaceRoot: string, controllerId: string, quota: unknown): Promise<any>;
+    /** Open supervisor escalations, per-rule spurious counts, call usage. */
+    readEscalations(workspaceRoot: string): Promise<any>;
+    /**
+     * Open ONE escalation (board-owned table; the controller never writes the
+     * whole table back, which would clobber a verdict posted concurrently).
+     * Refuses a second open escalation for a subject that already has one.
+     */
+    openEscalation(workspaceRoot: string, controllerId: string, record: any): Promise<any>;
+    /** Close escalations past their TTL as `timedout`. */
+    pruneEscalations(workspaceRoot: string, controllerId: string, ttlMs: number): Promise<any>;
+    /**
+     * Apply a supervisor seat's structured post. Not lease-gated — the seat that
+     * was asked is the authority on its own answer — and a post for a closed
+     * escalation is refused.
+     */
+    applySupervisorPost(workspaceRoot: string, post: { escalationId: string; verdict: string; reason: string; actions?: string[] }): Promise<any>;
+}
+
+/**
+ * The controller's process lifecycle, owned by the panel (plan:
+ * the-agent-panel-becomes-a-standing-controller, change 2). The controller is a
+ * separate process — it exists to be able to restart the board — so arming is
+ * starting it and disarming is stopping it. The composition root supplies the
+ * spawn/stop mechanics; the routes are thin and every outcome is tagged with a
+ * reason so "never wired" and "working" cannot look alike.
+ */
+export interface ControllerLifecycleOptions {
+    /** Start the long-running controller. Returns the spawned pid + command. */
+    arm(opts: { workspaceRoot: string; intervalMinutes: number | null }): Promise<{ started: boolean; pid?: number; command?: string; reason?: string }>;
+    /** Stop the armed controller (SIGTERM its process group). Idempotent. */
+    disarm(opts: { workspaceRoot: string }): Promise<{ stopped: boolean; pid?: number | null; reason?: string }>;
+    /** Run exactly one wake and exit (`controller --once`). */
+    run(opts: { workspaceRoot: string }): Promise<{ started: boolean; pid?: number; command?: string; reason?: string }>;
+}
+
 interface LocalApiServerOptions {
     workspaceRoot: string;
     port?: number;
@@ -911,6 +984,32 @@ interface LocalApiServerOptions {
      * host and in headless/test harnesses.
      */
     shutdown?: () => Promise<void>;
+    /**
+     * Board-side store for the Agent-panel controller (plan:
+     * the-controller-wakes-on-a-clock-diagnoses-and-reports).
+     *
+     * The controller is a separate process, so the state that must outlive it
+     * lives on the board: the single-writer lease, the controller's durable
+     * state (ladder rungs, quota stand-downs, restart history), the board's own
+     * nudge ledger (so a controller nudge is not delivered back-to-back with a
+     * board sweep's nudge for the same seat), and the Markdown report the
+     * operator reads.
+     *
+     * Standalone-only: wired by the standalone composition root. Absent on the
+     * extension host (out of scope by the cutover rule) and in headless
+     * harnesses — in which case every `/controller/*` route answers 503 with a
+     * reason, never an empty value that reads as "no controller configured".
+     */
+    controllerStore?: ControllerStoreOptions;
+    /**
+     * Controller PROCESS lifecycle (plan: the-agent-panel-becomes-a-standing-
+     * controller, change 2). The controller is a separate process — arm is
+     * START, disarm is STOP, run is a one-shot pass — so the board spawns and
+     * stops it on the panel's behalf. Standalone-only, like the store: absent on
+     * the extension host and in harnesses, where the arm/disarm/run routes answer
+     * 503 with a reason rather than a control that silently does nothing.
+     */
+    controllerLifecycle?: ControllerLifecycleOptions;
     /**
      * Host-settings reader (plan: settings-window-and-the-write-path-review-deleted).
      * Required in production; optional in test harnesses. `GET /settings`
@@ -10986,9 +11085,12 @@ export class LocalApiServer {
             }
             // The mechanical actions below need no model, and stay available
             // when it is broken — plan edge case 1: "a control surface that
-            // goes blank is worse than a terminal". The by-id actions take
-            // their target from the card picker dropdown on the surface, and
-            // `resolve-card` is the one model-backed action (needsModel: true).
+            // goes blank is worse than a terminal". They are the FALLBACK
+            // vocabulary now, not the panel's primary one: the primary controls
+            // arm, disarm and run the controller, and the judgement-backed
+            // `resolve-card` action is gone (plan: the-agent-panel-becomes-a-
+            // standing-controller, change 2 — the model is no longer asked to
+            // pick a verb for a card the operator already resolved).
             const quickActions = [
                 { id: 'dispatch-starred', label: 'Dispatch starred cards', needsModel: false },
                 { id: 'refresh-board', label: 'Refresh board state', needsModel: false },
@@ -10996,7 +11098,6 @@ export class LocalApiServer {
                 { id: 'advance-plan', label: 'Advance selected card', needsModel: false },
                 { id: 'move-plan', label: 'Move selected card', needsModel: false },
                 { id: 'star-plan', label: 'Star selected card', needsModel: false },
-                { id: 'resolve-card', label: 'Resolve selected card', needsModel: true },
             ];
             return {
                 // TRUE only for a model that can actually be called. A
@@ -13171,6 +13272,549 @@ export class LocalApiServer {
                 }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(projection));
+            } else if (pathname === '/controller/lease' && req.method === 'GET') {
+                // Board-side controller lease read (plan:
+                // the-controller-wakes-on-a-clock-diagnoses-and-reports). The
+                // controller is a separate process; the lease is what stops two
+                // of them double-remediating the same stuck seat. Standalone-only
+                // — a host that wired no store answers 503 with a reason, never
+                // an empty lease that reads as "unclaimed".
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const leaseRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const lease = await store.readLease(leaseRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, lease }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller lease read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/lease' && req.method === 'POST') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const claimRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                const controllerId = String(body?.controllerId || '').trim();
+                const ttlMs = Number(body?.ttlMs);
+                if (!controllerId || !Number.isFinite(ttlMs) || ttlMs <= 0) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controllerId and a positive ttlMs are required' }));
+                    return;
+                }
+                try {
+                    const result = await store.claimLease(claimRoot, controllerId, ttlMs);
+                    res.writeHead(result.granted ? 200 : 409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: result.granted, ...result }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller lease claim failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/lease' && req.method === 'DELETE') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { body = {}; }
+                // The CLI's `apiRequest` routes `workspaceRoot` by method family:
+                // query param for read-like methods (GET, DELETE), body field for
+                // write-like ones. Accept BOTH so a hand-rolled DELETE works too.
+                const releaseRoot = String(body?.workspaceRoot || url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                const controllerId = String(body?.controllerId || '').trim();
+                if (!controllerId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controllerId is required' }));
+                    return;
+                }
+                try {
+                    const result = await store.releaseLease(releaseRoot, controllerId);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, ...result }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller lease release failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/state' && req.method === 'GET') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const stateRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const view = await store.readState(stateRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, state: view }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller state read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/state' && req.method === 'PUT') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const writeRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                const controllerId = String(body?.controllerId || '').trim();
+                if (!controllerId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controllerId is required' }));
+                    return;
+                }
+                try {
+                    const result = await store.writeState(writeRoot, controllerId, body?.state ?? null);
+                    res.writeHead(result.success ? 200 : 409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller state write failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/nudges' && req.method === 'GET') {
+                // The board's own nudge ledger, keyed by the seat a sweep just
+                // prompted. The controller's row-2 condition requires silence
+                // SINCE THE LAST BOARD NUDGE, not since last output — otherwise a
+                // seat gets the board's nudge and the controller's nudge back to
+                // back, because the controller cannot join the sweeps'
+                // in-process `notifiedSeatsThisTick` set.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const nudgeRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const nudges = await store.readBoardNudges(nudgeRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, nudges }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller nudge ledger read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/report' && req.method === 'POST') {
+                // The controller writes its Markdown report to the BOARD, never
+                // to its own disk: a report on the controller's filesystem is
+                // unreadable from the operator's phone, which defeats the point.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const reportRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                const reportBody = typeof body?.body === 'string' ? body.body : '';
+                if (!reportBody) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'body is required' }));
+                    return;
+                }
+                try {
+                    const result = await store.writeReport(reportRoot, {
+                        from: String(body?.from || 'controller'),
+                        kind: String(body?.kind || 'status'),
+                        body: reportBody,
+                        teamId: typeof body?.teamId === 'string' ? body.teamId : undefined,
+                    });
+                    res.writeHead(result?.success ? 200 : 500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller report write failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/judgement' && req.method === 'GET') {
+                // The resolved judgement tier list (plan:
+                // judgement-tiers-the-supervisor-seat-and-reroute). Endpoints,
+                // models and key-set flags are resolved BOARD-side from the
+                // existing `agentControlProviders` rows; the tier order and
+                // per-tier metadata come from the controller's config. Key
+                // VALUES are never returned.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const judgementRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const judgement = await store.readJudgement(judgementRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, judgement }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller judgement read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/judgement' && req.method === 'PUT') {
+                // The operator's rules, writable by any authenticated client —
+                // NOT lease-gated (the lease gates controller state, not config).
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const judgementWriteRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                try {
+                    const result = await store.writeJudgement(judgementWriteRoot, body?.judgement ?? body);
+                    res.writeHead(result?.success ? 200 : 400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller judgement write failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/quota' && req.method === 'GET') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const quotaRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const quota = await store.readQuota(quotaRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, quota }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller quota read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/quota' && req.method === 'PUT') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const quotaWriteRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                const controllerId = String(body?.controllerId || '').trim();
+                if (!controllerId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controllerId is required' }));
+                    return;
+                }
+                try {
+                    const result = await store.writeQuota(quotaWriteRoot, controllerId, body?.quota ?? null);
+                    res.writeHead(result?.success ? 200 : 409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller quota write failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/escalations' && req.method === 'GET') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const escRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const escalations = await store.readEscalations(escRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, escalations }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller escalations read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/escalations/open' && req.method === 'POST') {
+                // Open ONE escalation. The escalation table is board-owned: the
+                // controller opens and prunes entries through these ops rather
+                // than writing the whole table back, which would clobber a
+                // verdict the supervisor posted concurrently.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const openRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                const controllerId = String(body?.controllerId || '').trim();
+                if (!controllerId || !body?.escalation || typeof body.escalation !== 'object') {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controllerId and an escalation object are required' }));
+                    return;
+                }
+                try {
+                    const result = await store.openEscalation(openRoot, controllerId, body.escalation);
+                    res.writeHead(result?.success ? 200 : 409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'escalation open failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/escalations/prune' && req.method === 'POST') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const pruneRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                const controllerId = String(body?.controllerId || '').trim();
+                const ttlMs = Number(body?.ttlMs);
+                if (!controllerId || !Number.isFinite(ttlMs) || ttlMs <= 0) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controllerId and a positive ttlMs are required' }));
+                    return;
+                }
+                try {
+                    const result = await store.pruneEscalations(pruneRoot, controllerId, ttlMs);
+                    res.writeHead(result?.success ? 200 : 409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'escalation prune failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/supervisor-post' && req.method === 'POST') {
+                // The supervisor seat's structured answer. It reaches the board
+                // through the CLI — never through scrollback — and a malformed
+                // payload is REPORTED with its reason so the agent sees the error
+                // and can correct it. NOT loopback-only: the supervisor may run
+                // on a different machine from the board.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const postRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                const escalationId = typeof body?.escalationId === 'string' ? body.escalationId.trim() : '';
+                const verdict = typeof body?.verdict === 'string' ? body.verdict.trim() : '';
+                const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+                if (!escalationId) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'escalationId is required' })); return; }
+                if (!['fixed', 'spurious', 'needs-human'].includes(verdict)) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: "verdict must be one of fixed | spurious | needs-human" })); return; }
+                if (!reason) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'reason is required' })); return; }
+                const actions = Array.isArray(body?.actions) ? body.actions.filter((a: any) => typeof a === 'string') : undefined;
+                try {
+                    const result = await store.applySupervisorPost(postRoot, { escalationId, verdict, reason, ...(actions ? { actions } : {}) });
+                    res.writeHead(result?.success ? 200 : 409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'supervisor post failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/report' && req.method === 'GET') {
+                // Read the controller's Markdown report back for the panel. The
+                // report lives on the BOARD so it is readable from a phone; an
+                // absent file is `absent`, distinct from `unreadable`.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const reportRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                const teamId = url.searchParams.get('team') || undefined;
+                try {
+                    const report = await store.readReport(reportRoot, teamId);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, report }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller report read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/config' && req.method === 'GET') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const cfgRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const config = await store.readConfig(cfgRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, config }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller config read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/config' && req.method === 'PUT') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const cfgWriteRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                try {
+                    const result = await store.writeConfig(cfgWriteRoot, { intervalMinutes: body?.intervalMinutes ?? null });
+                    res.writeHead(result?.success ? 200 : 400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller config write failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/matrix' && req.method === 'GET') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const matrixRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const matrix = await store.readMatrix(matrixRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, matrix }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller matrix read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/matrix' && req.method === 'PUT') {
+                // Edits are validated at save and REFUSED with a reason — a row
+                // naming an unknown judge must not be written and then silently
+                // discarded by the controller's own loader at 3am.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid JSON body' })); return; }
+                const matrixWriteRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                try {
+                    const result = await store.writeMatrix(matrixWriteRoot, body?.rows ?? body?.matrix ?? body);
+                    res.writeHead(result?.success ? 200 : 400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller matrix write failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/arm' && req.method === 'POST') {
+                // Arm = START the controller process (plan: the-agent-panel-
+                // becomes-a-standing-controller, change 2). The controller is a
+                // separate process on purpose; the board spawns it detached so
+                // its lifetime is not the board's.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                const lifecycle = this._options.controllerLifecycle;
+                if (!store || !lifecycle) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller lifecycle unavailable', reason: 'host did not wire controllerStore/controllerLifecycle', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { body = {}; }
+                const armRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                let interval: number | null = null;
+                if (body?.intervalMinutes !== undefined && body?.intervalMinutes !== null) {
+                    const n = Number(body.intervalMinutes);
+                    if (!Number.isFinite(n) || n <= 0) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: `intervalMinutes must be a positive number (got '${String(body.intervalMinutes)}')` }));
+                        return;
+                    }
+                    interval = n;
+                } else {
+                    const cfg = await store.readConfig(armRoot);
+                    interval = cfg?.value?.intervalMinutes ?? null;
+                }
+                try {
+                    const result = await lifecycle.arm({ workspaceRoot: armRoot, intervalMinutes: interval });
+                    if (result.started && typeof result.pid === 'number') {
+                        await store.writeArmed(armRoot, { pid: result.pid, command: String(result.command || ''), startedAt: Date.now() });
+                    }
+                    res.writeHead(result.started ? 200 : 409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: result.started, ...result }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller arm failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/disarm' && req.method === 'POST') {
+                // Disarm = STOP the armed controller. Destructive by design and
+                // acts on the FIRST press — no confirmation gate (CLAUDE.md).
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                const lifecycle = this._options.controllerLifecycle;
+                if (!store || !lifecycle) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller lifecycle unavailable', reason: 'host did not wire controllerStore/controllerLifecycle', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { body = {}; }
+                const disarmRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                try {
+                    const result = await lifecycle.disarm({ workspaceRoot: disarmRoot });
+                    await store.clearArmed(disarmRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, ...result }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller disarm failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/run' && req.method === 'POST') {
+                // Run a pass NOW: one wake, then exit (`controller --once`).
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const lifecycle = this._options.controllerLifecycle;
+                if (!lifecycle) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller lifecycle unavailable', reason: 'host did not wire controllerLifecycle', source: 'host-options' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch { body = {}; }
+                const runRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                try {
+                    const result = await lifecycle.run({ workspaceRoot: runRoot });
+                    res.writeHead(result.started ? 200 : 409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: result.started, ...result }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller run failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
             } else if (pathname === '/shutdown' && req.method === 'POST') {
                 // Loopback-only authenticated shutdown (plan: go-launcher-static-binary).
                 // The top-of-_handleRequest gate already rejects non-loopback,

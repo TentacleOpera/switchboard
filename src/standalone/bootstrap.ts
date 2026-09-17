@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import { URL } from 'url';
 import { JSDOM } from 'jsdom';
 import createDOMPurify = require('dompurify');
@@ -40,6 +41,7 @@ import {
 import { resolveProtocolSet } from '../services/protocolDirectives';
 import type { ProtocolResolution } from '../services/protocolDirectives';
 import { recordTurnEndEvent } from '../services/ScheduledJobsService';
+import { ControllerBoardStore } from '../services/ControllerBoardStore';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
 import {
     HostSettingsContext,
@@ -2636,6 +2638,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         worktreePath: t.worktreePath,
                         cwd: t.cwd,
                         lastDataAt: t.lastDataAt,
+                        // The CLI family derived from the seat's INNER command —
+                        // the provider a reroute can route to. Recorded, not
+                        // guessed: `unknown` is reported as unknown rather than
+                        // being coerced to a plausible provider.
+                        cliFamily: t.cliFamily || 'unknown',
                         // The startup command this seat actually launched with and
                         // the store it came from. Surfaced so the Agent Setup panel
                         // can show what a live seat launched without reading a log.
@@ -4242,6 +4249,92 @@ Each plan file must include:
     // duplicated recipient resolution or deliverPrompt logic. Captures
     // deliverPrompt, taskViewerProvider, ptyFleetService, recordTurnEndEvent,
     // log, opts — all in scope here.
+    //
+    // Board-side controller store (plan:
+    // the-controller-wakes-on-a-clock-diagnoses-and-reports). Standalone-only by
+    // construction: the extension host wires none of this, which is the intended
+    // state under the cutover rule, not a divergence.
+    const controllerBoardStore = new ControllerBoardStore();
+    /**
+     * Resolve the judgement tier list (plan:
+     * judgement-tiers-the-supervisor-seat-and-reroute). Endpoints, models and
+     * key-set flags come from the EXISTING `agentControlProviders` rows — there
+     * is no second endpoint store — while the tier ORDER and per-tier metadata
+     * (locality/operator/costClass) come from the controller's own config row.
+     *
+     * Key VALUES are never returned; only `keySet`. An unreadable config is
+     * reported as unavailable with its reason, never as an empty tier list.
+     */
+    const resolveJudgementConfig = async (root: string): Promise<any> => {
+        const raw = await controllerBoardStore.readJudgementConfig(root);
+        if (raw.source === 'unreadable') {
+            return { tiers: [], supervisorSeat: null, globalCeilingPerDay: null, source: raw.source, unavailable: { reason: raw.reason || 'judgement config unreadable', source: raw.source } };
+        }
+        const cfg = (raw.value && typeof raw.value === 'object') ? raw.value : {};
+        const errors: string[] = [];
+        let rows: Record<string, { endpoint?: string; model?: string }> = {};
+        try {
+            rows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, { endpoint?: string; model?: string }>>('agentControlProviders')) || {};
+        } catch (e) {
+            return { tiers: [], supervisorSeat: null, globalCeilingPerDay: null, source: raw.source, unavailable: { reason: `agentControlProviders unreadable: ${e instanceof Error ? e.message : String(e)}`, source: 'agentControlProviders' } };
+        }
+        const tiers: any[] = [];
+        const list = Array.isArray(cfg.tiers) ? cfg.tiers : [];
+        for (const t of list) {
+            const providerId = String(t?.providerId || '').trim();
+            if (!providerId) { errors.push('a tier entry has no providerId'); continue; }
+            const role = t?.role === 'escalation' ? 'escalation' : (t?.role === 'classifier' ? 'classifier' : null);
+            if (!role) { errors.push(`tier '${providerId}' has an unknown role '${t?.role}'`); continue; }
+            const locality = ['loopback', 'lan', 'tailnet', 'internet'].includes(t?.locality) ? t.locality : 'internet';
+            const costClass = t?.costClass === 'metered' ? 'metered' : 'free';
+            const row = rows[providerId];
+            if (!row) { errors.push(`tier '${providerId}' has no row in agentControlProviders`); continue; }
+            const endpoint = String(row.endpoint || '').trim();
+            if (!endpoint) { errors.push(`tier '${providerId}' has no endpoint configured`); continue; }
+            let keySet = false;
+            try {
+                keySet = !!(await secrets.get(`switchboard.agentControl.apiKey.${providerId}`));
+            } catch { errors.push(`tier '${providerId}' key store unreadable`); }
+            tiers.push({
+                providerId,
+                role,
+                locality,
+                operator: String(t?.operator || 'self'),
+                costClass,
+                endpoint,
+                model: String(row.model || ''),
+                keySet,
+                source: `agentControlProviders:${providerId}`,
+            });
+        }
+        const ceilingRaw = Number(cfg.globalCeilingPerDay);
+        const ceiling = Number.isFinite(ceilingRaw) && ceilingRaw > 0 ? ceilingRaw : null;
+        return {
+            tiers,
+            supervisorSeat: typeof cfg.supervisorSeat === 'string' && cfg.supervisorSeat.trim() ? cfg.supervisorSeat.trim() : null,
+            globalCeilingPerDay: ceiling,
+            source: raw.source,
+            ...(errors.length ? { errors } : {}),
+        };
+    };
+    // The board's own nudge ledger, keyed by the seat a sweep just prompted.
+    // Written at the single turn-end delivery seam below, so all four stall
+    // sweeps feed it without each one being instrumented. The controller's row-2
+    // condition reads it so a seat nudged by a board sweep in the same minute is
+    // not also nudged by the controller — the sweeps de-duplicate among
+    // themselves via `notifiedSeatsThisTick`, a set a separate process cannot
+    // join. Bounded: insertion-ordered, oldest evicted past the cap.
+    const boardNudgeLedger = new Map<string, number>();
+    const BOARD_NUDGE_LEDGER_CAP = 500;
+    const recordBoardNudge = (seat: string) => {
+        if (!seat) { return; }
+        boardNudgeLedger.set(seat, Date.now());
+        while (boardNudgeLedger.size > BOARD_NUDGE_LEDGER_CAP) {
+            const oldest = boardNudgeLedger.keys().next().value;
+            if (oldest === undefined) { break; }
+            boardNudgeLedger.delete(oldest);
+        }
+    };
     const handleTurnEndNotify = (info: any) => {
         if (info.outcome === 'completed') {
             try {
@@ -4349,6 +4442,10 @@ Each plan file must include:
                 // twin of TaskViewerProvider's notifyTurnEnd. Orders ride every
                 // prompt delivery, so applyOrders is an unconditional true.
                 await deliverPrompt(handle, message, { clearBeforePrompt: false }, true, false);
+                // Board nudge ledger: only a STALL delivery is a nudge. A
+                // `completed` notice is a different event and must not suppress
+                // the controller's row-2 silence window.
+                if (info.outcome === 'stalled') { recordBoardNudge(recipientName); }
             } catch (err) {
                 log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
             }
@@ -5478,6 +5575,86 @@ Each plan file must include:
                 console.error('[standalone] shutdown callback fired but instanceStopRef is unbound — instance.stop() was never wired into the holder');
             }
         },
+        // Board-side controller store (plan:
+        // the-controller-wakes-on-a-clock-diagnoses-and-reports). Standalone-only:
+        // the extension host wires none of this by design (the cutover rule), and
+        // `/controller/*` then answers 503 rather than an empty value.
+        controllerStore: {
+            readLease: (root: string) => controllerBoardStore.readLease(root),
+            claimLease: (root: string, controllerId: string, ttlMs: number) => controllerBoardStore.claimLease(root, controllerId, ttlMs),
+            releaseLease: (root: string, controllerId: string) => controllerBoardStore.releaseLease(root, controllerId),
+            readState: (root: string) => controllerBoardStore.readState(root),
+            writeState: (root: string, controllerId: string, state: unknown) => controllerBoardStore.writeState(root, controllerId, state),
+            // The ledger is per-board (one fleet per standalone host), so the
+            // root is not a key. Returning the map's entries is the truthful
+            // answer; an empty map means "no sweep has nudged since boot", which
+            // is a real, configured answer.
+            readBoardNudges: async (_root: string) => Object.fromEntries(boardNudgeLedger),
+            writeReport: (root: string, req: { from: string; kind: string; body: string; teamId?: string }) => controllerBoardStore.appendReport(root, req),
+            // Judgement tiers (plan: judgement-tiers-the-supervisor-seat-and-reroute).
+            // `readJudgement` resolves endpoints/models/keySet from the existing
+            // `agentControlProviders` rows; the controller's config row supplies
+            // only the order and the per-tier metadata.
+            readJudgement: (root: string) => resolveJudgementConfig(root),
+            writeJudgement: (root: string, patch: any) => controllerBoardStore.writeJudgementConfig(root, patch),
+            readQuota: (root: string) => controllerBoardStore.readQuota(root),
+            writeQuota: (root: string, controllerId: string, quota: unknown) => controllerBoardStore.writeQuota(root, controllerId, quota),
+            readEscalations: (root: string) => controllerBoardStore.readEscalations(root),
+            openEscalation: (root: string, controllerId: string, record: any) => controllerBoardStore.openEscalation(root, controllerId, record),
+            pruneEscalations: (root: string, controllerId: string, ttlMs: number) => controllerBoardStore.pruneEscalations(root, controllerId, ttlMs),
+            applySupervisorPost: (root: string, post: { escalationId: string; verdict: string; reason: string; actions?: string[] }) => controllerBoardStore.applySupervisorPost(root, post),
+            // Panel-facing reads/writes the Agent panel owns (plan:
+            // the-agent-panel-becomes-a-standing-controller, changes 2 and 11).
+            readReport: (root: string, teamId?: string) => controllerBoardStore.readReport(root, teamId),
+            readConfig: (root: string) => controllerBoardStore.readConfig(root),
+            writeConfig: (root: string, value: { intervalMinutes?: unknown }) => controllerBoardStore.writeConfig(root, value),
+            readMatrix: (root: string) => controllerBoardStore.readMatrix(root),
+            writeMatrix: (root: string, rows: unknown) => controllerBoardStore.writeMatrix(root, rows),
+            readArmed: (root: string) => controllerBoardStore.readArmed(root),
+            writeArmed: (root: string, record: { pid: number; command: string; startedAt: number }) => controllerBoardStore.writeArmed(root, record),
+            clearArmed: (root: string) => controllerBoardStore.clearArmed(root),
+        },
+        // Controller PROCESS lifecycle (plan: the-agent-panel-becomes-a-
+        // standing-controller, change 2). The controller is a separate process
+        // — it exists so it can restart the board — so arming is starting it
+        // and disarming is stopping it. Spawned detached + unref'd, the same
+        // shape the controller uses to restart the board: the board must not be
+        // a parent whose death takes the controller with it, and the controller
+        // must not be a child whose death takes the board with it.
+        controllerLifecycle: {
+            arm: async ({ workspaceRoot: root, intervalMinutes }: { workspaceRoot: string; intervalMinutes: number | null }) => {
+                const armed = await controllerBoardStore.readArmed(root);
+                if (armed.source === 'configured' && typeof armed.pid === 'number' && isPidAlive(armed.pid)) {
+                    return { started: false, reason: `a controller is already armed (pid ${armed.pid})` };
+                }
+                const lease = await controllerBoardStore.readLease(root);
+                if (lease.available && lease.holder && !lease.stale) {
+                    return { started: false, reason: `the board is held by '${lease.holder}' until ${lease.expiresAt ? new Date(lease.expiresAt).toISOString() : 'its lease expiry'}` };
+                }
+                const args = [resolvedCliPath, 'controller', '--id', `panel:${process.pid}:${Date.now()}`, '--team', 'controller'];
+                if (intervalMinutes) { args.push('--interval', String(intervalMinutes)); }
+                const child = spawn(process.execPath, args, { cwd: root, detached: true, stdio: 'ignore' });
+                if (!child.pid) { return { started: false, reason: 'spawn produced no pid' }; }
+                child.unref();
+                return { started: true, pid: child.pid, command: `${process.execPath} ${args.join(' ')}` };
+            },
+            disarm: async ({ workspaceRoot: root }: { workspaceRoot: string }) => {
+                const armed = await controllerBoardStore.readArmed(root);
+                if (!armed.pid) { return { stopped: false, pid: null, reason: 'no controller was armed from this board' }; }
+                // The controller is its own process-group leader (detached), so
+                // signal the GROUP — a stray child must not outlive the disarm.
+                try { process.kill(-armed.pid, 'SIGTERM'); }
+                catch { try { process.kill(armed.pid, 'SIGTERM'); } catch { /* already gone */ } }
+                return { stopped: true, pid: armed.pid };
+            },
+            run: async ({ workspaceRoot: root }: { workspaceRoot: string }) => {
+                const args = [resolvedCliPath, 'controller', '--once', '--team', 'controller'];
+                const child = spawn(process.execPath, args, { cwd: root, detached: true, stdio: 'ignore' });
+                if (!child.pid) { return { started: false, reason: 'spawn produced no pid' }; }
+                child.unref();
+                return { started: true, pid: child.pid, command: `${process.execPath} ${args.join(' ')}` };
+            },
+        },
         // Host-settings read/write (plan: settings-window-and-the-write-path-review-deleted).
         // The reader resolves with the boot context (explicit CLI inputs + tagged
         // legacy env) so GET /settings reports the same source-tagged precedence
@@ -5757,4 +5934,11 @@ Each plan file must include:
     process.on('exit', syncUnlinkPortFile);
 
     return instance;
+}
+
+/** Is a pid alive? `process.kill(pid, 0)` probes without signalling. Used to
+ *  tell "a controller is already armed" from "the armed record is stale" — a
+ *  dead pid must not block a re-arm. */
+function isPidAlive(pid: number): boolean {
+    try { process.kill(pid, 0); return true; } catch { return false; }
 }
