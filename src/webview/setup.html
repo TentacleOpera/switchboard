@@ -3641,36 +3641,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (error && !message.success) error.textContent = message.error || 'Configuration failed';
                     break;
                 }
-                case 'notionSyncResult': {
-                    const backupError = document.getElementById('notion-sync-error');
-                    const backupProgress = document.getElementById('notion-sync-progress');
-                    if (message.success) {
-                        if (backupError) backupError.textContent = '';
-                        if (backupProgress) backupProgress.textContent = `Pushed ${message.pushed} plans (${message.skipped} skipped)`;
-                    } else {
-                        if (backupError) backupError.textContent = message.error || 'Board sync failed';
-                        if (backupProgress) backupProgress.textContent = `Partial: ${message.pushed} pushed, ${message.skipped} skipped`;
-                    }
-                    // Re-enable buttons
-                    setButtonBusy(document.querySelector('.notion-sync-btn'), false);
-                    setButtonBusy(document.querySelector('.notion-sync-restore-btn'), false);
-                    setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
-                    break;
-                }
-                case 'notionSyncRestoreResult': {
-                    const restoreError = document.getElementById('notion-sync-error');
-                    const restoreProgress = document.getElementById('notion-sync-progress');
-                    if (message.success) {
-                        if (restoreError) restoreError.textContent = '';
-                        if (restoreProgress) restoreProgress.textContent = `Restored ${message.restored} plans (${message.skipped} skipped)`;
-                    } else {
-                        if (restoreError) restoreError.textContent = message.error || 'Restore failed';
-                    }
-                    setButtonBusy(document.querySelector('.notion-sync-btn'), false);
-                    setButtonBusy(document.querySelector('.notion-sync-restore-btn'), false);
-                    setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
-                    break;
-                }
                 case 'notionAutoCreateResult': {
                     const autoError = document.getElementById('notion-sync-error');
                     if (message.success && message.databaseUrl) {
@@ -3682,8 +3652,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     } else {
                         if (autoError) autoError.textContent = message.error || 'Auto-create failed';
                     }
-                    setButtonBusy(document.querySelector('.notion-sync-btn'), false);
-                    setButtonBusy(document.querySelector('.notion-sync-restore-btn'), false);
                     setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
                     break;
                 }

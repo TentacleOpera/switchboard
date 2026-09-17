@@ -11319,38 +11319,6 @@ Each plan file must include:
         return { success: true };
     }
 
-    public async handleNotionBoardPush(workspaceRoot?: string): Promise<{ success: boolean; pushed: number; skipped: number; error?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) return { success: false, pushed: 0, skipped: 0, error: 'No workspace found' };
-
-        return vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Syncing board to Notion...', cancellable: false },
-            async () => {
-                const provider = this._kanbanProvider?.getRemoteProvider(resolvedRoot, 'notion');
-                if (!provider || !provider.boardSyncPush || provider.capabilities.boardPush !== true) {
-                    return { success: false, pushed: 0, skipped: 0, error: 'The Notion provider does not offer a board push' };
-                }
-                return provider.boardSyncPush([]);
-            }
-        );
-    }
-
-    public async handleNotionBoardRestore(workspaceRoot?: string): Promise<{ success: boolean; restored: number; skipped: number; error?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) return { success: false, restored: 0, skipped: 0, error: 'No workspace found' };
-
-        return vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Restoring from Notion...', cancellable: false },
-            async (progress) => {
-                const provider = this._kanbanProvider?.getRemoteProvider(resolvedRoot, 'notion');
-                if (!provider || !provider.boardSyncRestore || provider.capabilities.boardRestore !== true) {
-                    return { success: false, restored: 0, skipped: 0, error: 'The Notion provider does not offer a board restore' };
-                }
-                return provider.boardSyncRestore(resolvedRoot, progress);
-            }
-        );
-    }
-
     public async handleAutoCreateNotionDatabase(workspaceRoot?: string): Promise<{ success: boolean; databaseUrl?: string; error?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) return { success: false, error: 'No workspace found' };

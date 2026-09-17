@@ -80,19 +80,6 @@ export interface RemoteProviderCapabilities {
     push: boolean;
     /** Provider can archive a card (Linear issueArchive / Notion page archive). ClickUp has close/delete but no true archive. */
     archive: boolean;
-    /**
-     * Provider can push the whole board — columns AND feature structure — to the
-     * remote (NotionSyncService.backupToNotion; ClickUp/Linear per-plan syncPlan
-     * with the feature cascade). This is the orchestration, not the per-card push.
-     */
-    boardPush: boolean;
-    /**
-     * Provider can rebuild the board from the remote — bulk fetch, match by
-     * planId, apply columns, resolve feature structure (NotionSyncService.
-     * restoreFromNotion and ClickUpSyncService.restoreBoardFromClickUp; Linear
-     * has no restore pass).
-     */
-    boardRestore: boolean;
     /** Provider has a board-automation service (<Kind>AutomationService — Linear, ClickUp; none for Notion). */
     automation: boolean;
     /** Provider supports missions and dependency relations mirroring (Linear). */
@@ -101,6 +88,33 @@ export interface RemoteProviderCapabilities {
     agentSurface?: boolean;
     /** Provider supports agent sessions and activities (Linear). */
     agentSessions?: boolean;
+    /**
+     * Provider can bulk-seed a BOARD project's live cards into a bound remote
+     * project/list — `seedBoardProject` walks the board and creates what is
+     * missing. This is NOT the removed whole-board push/restore pair: a seed is
+     * per-project, additive, idempotent by a durable destination mapping, and
+     * never deletes remotely.
+     */
+    seedProjects: boolean;
+}
+
+/** Progress for a bulk seed — one shape, so one UI drives every provider. */
+export interface SeedProgress {
+    done: number;
+    total: number;
+    skipped: number;
+}
+
+/** Outcome of seeding one board project. */
+export interface SeedResult {
+    ok: boolean;
+    /** Cards created remotely this run. */
+    created: number;
+    /** Cards bound to an issue that already existed (identity anchor or prior link). */
+    attached: number;
+    /** Cards the seed did not write — already linked, or in an unmapped column. */
+    skipped: number;
+    error?: string;
 }
 
 /** Outcome of archiving a single remote card. */
@@ -108,41 +122,6 @@ export interface ArchiveResult {
     ok: boolean;
     /** true → provider isn't configured for this workspace; not an error. */
     skipped?: boolean;
-    error?: string;
-}
-
-/**
- * Progress sink for a bulk board-sync operation. Structurally identical to
- * `vscode.Progress<{ message?: string }>` — declared here so the provider seam
- * stays free of a `vscode` import (the standalone host loads this module).
- */
-export interface BoardSyncProgress {
-    report(value: { message?: string }): void;
-}
-
-/** Outcome of a bulk board push (`boardSyncPush`). */
-export interface BoardSyncPushResult {
-    success: boolean;
-    /** Cards written to the remote. */
-    pushed: number;
-    /** Cards the push could not write (feature not yet paged, rate-limit skip, …). */
-    skipped: number;
-    error?: string;
-}
-
-/** Outcome of a bulk board restore (`boardSyncRestore`). */
-export interface BoardSyncRestoreResult {
-    success: boolean;
-    /** Cards rebuilt locally from the remote. */
-    restored: number;
-    /** Cards left untouched — duplicates beyond the chosen anchor, apply failures, and local plans the remote did not mention. */
-    skipped: number;
-    /** Remote cards whose state key mapped to no local column — skipped and reported, never defaulted. */
-    unmapped?: number;
-    /** Remote anchors with no local plan — left alone; restore is additive and never creates rows. */
-    notFoundLocally?: number;
-    /** true → a bulk fetch was truncated or aborted and NOTHING was applied. */
-    incomplete?: boolean;
     error?: string;
 }
 
@@ -225,32 +204,6 @@ export interface RemoteProvider {
     archiveCard(remoteId: string): Promise<ArchiveResult>;
 
     /**
-     * Bulk board push — the whole board (columns AND feature structure) in one
-     * pass, not the per-card `pushState`. Gated on `capabilities.boardPush`; a
-     * provider that declares the capability must implement this. Notion delegates
-     * to `NotionSyncService.backupToNotion`; ClickUp/Linear push per-plan via
-     * their `syncPlan`. The `plans` argument is the board snapshot to push — a
-     * provider that already reads the board from the local DB may ignore it.
-     * Optional: providers without a board push omit it (and declare
-     * `boardPush: false`).
-     */
-    boardSyncPush?(plans: KanbanPlanRecord[]): Promise<BoardSyncPushResult>;
-
-    /**
-     * Bulk board restore — rebuild the board from the remote: fetch every remote
-     * row, match by `planId` (never `sessionId`), apply columns, and resolve
-     * feature structure in a second pass. Gated on `capabilities.boardRestore`; a
-     * provider that declares the capability must implement this. Notion delegates
-     * to `NotionSyncService.restoreFromNotion`; ClickUp delegates to
-     * `ClickUpSyncService.restoreBoardFromClickUp` (bulk fetch per mapped list,
-     * match by the planId anchors). Linear has none. Additive: a local plan the
-     * remote does not mention is left alone, and an incomplete fetch applies
-     * nothing. Optional: providers without a board restore omit it (and declare
-     * `boardRestore: false`).
-     */
-    boardSyncRestore?(workspaceRoot: string, progress?: BoardSyncProgress): Promise<BoardSyncRestoreResult>;
-
-    /**
      * Inbound-delete reconcile-sweep (provider-sync inbound-delete). Enumerate the
      * live remote id set in the configured scope (paginated, throttled ≤ ~2.5 RPS,
      * honouring Retry-After). `complete` is false if the sweep was aborted by
@@ -287,4 +240,16 @@ export interface RemoteProvider {
      * Post an agent activity into an issue's agent session (Linear).
      */
     postAgentActivity?(remoteId: string, content: string, ephemeral?: boolean, signal?: string): Promise<boolean>;
+
+    /**
+     * Bulk-seed one BOARD project's live cards into its bound remote project.
+     *
+     * Gated on `capabilities.seedProjects`, never on `kind` — the seed control
+     * is provider-agnostic. Implementations resolve their destination through a
+     * durable mapping (created on first seed, attached thereafter), skip cards
+     * that are already linked, and never delete anything remotely. Optional:
+     * a provider declaring `seedProjects: false` does not implement it, and
+     * "the provider does not have it" is then the honest declaration.
+     */
+    seedBoardProject?(boardProject: string, progress?: (p: SeedProgress) => void): Promise<SeedResult>;
 }

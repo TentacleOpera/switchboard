@@ -918,6 +918,7 @@
     "test:contract:loopback-invariance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/loopback-invariance-contract.test.js",
     "test:contract:remote-command-vocabulary": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/remote-command-vocabulary-contract.test.js",
     "test:contract:provider-capability-parity": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/provider-capability-parity-contract.test.js",
+    "test:contract:linear-seed": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/linear-seed-contract.test.js",
     "test:contract:tailscale-bind": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tailscale-bind-contract.test.js",
     "test:contract:tailnet-localapi-host-header": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tailnet-localapi-host-header-contract.test.js",
     "test:contract:board-csrf-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/board-csrf-guard-contract.test.js",

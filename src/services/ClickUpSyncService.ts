@@ -8,7 +8,6 @@ import { hostInlineImages } from './ImageHostingHelper';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
 import { KanbanDatabase } from './KanbanDatabase';
 import type { KanbanPlanRecord as DbPlanRecord } from './KanbanDatabase';
-import type { BoardSyncRestoreResult, BoardSyncProgress } from './remote/RemoteProvider';
 import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
 import {
   matchesClickUpAutomationRule,
@@ -101,13 +100,6 @@ export interface ClickUpTask {
   creator: { id: string; username: string; email: string } | null;
   assignees: Array<{ id: string; username: string; email: string }>;
   tags: Array<{ name: string; tagFg: string; tagBg: string }>;
-  /**
-   * Raw custom-field values from the task response. Retained so the board
-   * restore can read the configured `planId` custom-field anchor from a bulk
-   * list fetch — the tag and description-footer anchors live on `tags` and
-   * `markdownDescription`; this is the third one.
-   */
-  customFields: Array<{ id: string; value: unknown }>;
   dateCreated: string;
   dateUpdated: string;
 }
@@ -151,17 +143,6 @@ export interface ClickUpApplyOptions {
 
 export type ClickUpWriteBackTarget = 'description' | 'comment';
 export type ClickUpWriteBackFormat = 'append' | 'prepend' | 'replace';
-
-/**
- * Options for `restoreBoardFromClickUp`. `resolveColumn` is the provider's
- * `stateKeyToColumn` primitive — passing it in (rather than re-deriving the
- * list→column map here) keeps the mapping in one place and lets the restore
- * report an unmappable status instead of defaulting one.
- */
-export interface ClickUpBoardRestoreOptions {
-  progress?: BoardSyncProgress;
-  resolveColumn?: (stateKey: string) => string | undefined;
-}
 
 export type ClickUpSyncSkipReason = 'unmapped-column' | 'excluded-column' | 'complete-sync-disabled';
 
@@ -839,12 +820,6 @@ export class ClickUpSyncService {
           tagBg: String(tag?.tag_bg || '').trim()
         }))
         : [],
-      customFields: Array.isArray(raw?.custom_fields)
-        ? raw.custom_fields.map((field: any) => ({
-          id: String(field?.id || '').trim(),
-          value: field?.value ?? null
-        }))
-        : [],
       dateCreated: String(raw?.date_created || '').trim(),
       dateUpdated: String(raw?.date_updated || '').trim()
     };
@@ -1370,25 +1345,6 @@ export class ClickUpSyncService {
     return this._fetchListTasksInternal(listId, { forceRefresh: true });
   }
 
-  /**
-   * Full-list fetch that exposes BOTH the `complete` flag and `includeClosed`,
-   * which `getListTasks` (drops `complete`) and `getListTasksLive` (no options)
-   * each lack. The board restore needs both: a truncated listing makes absent
-   * plans look deleted, so it refuses to apply anything unless `complete`.
-   *
-   * `forceRefresh` defaults to true because the task cache key ignores
-   * `includeClosed` — a cached entry written by an `includeClosed:false` fetch
-   * would silently drop the closed cards this call asked for.
-   */
-  public async getListTasksWithCompleteness(
-    listId: string,
-    options: { includeClosed?: boolean; forceRefresh?: boolean } = {}
-  ): Promise<{ tasks: ClickUpTask[]; complete: boolean }> {
-    return this._fetchListTasksInternal(listId, {
-      includeClosed: options.includeClosed !== false,
-      forceRefresh: options.forceRefresh !== false
-    });
-  }
 
   public async getTaskDetails(taskId: string): Promise<{
     task: ClickUpTask;
@@ -3669,201 +3625,5 @@ export class ClickUpSyncService {
     }
 
     return { unlinked, failed };
-  }
-
-  // ── Board Restore ───────────────────────────────────────────────
-
-  /**
-   * Rebuild local board state from ClickUp — the inverse of `syncPlan`. Every
-   * primitive already exists (the three planId anchors, the list→column map,
-   * `updateColumnByPlanFile`); this is the bulk pass that fetches everything,
-   * matches it back by `planId`, and applies it.
-   *
-   * Additive, never destructive: a local plan the remote does not mention is
-   * left exactly as it is, and a remote anchor with no local plan is counted,
-   * never created. A truncated bulk fetch makes absent plans look deleted, so
-   * an incomplete listing refuses the WHOLE restore rather than applying part
-   * of it.
-   */
-  public async restoreBoardFromClickUp(
-    workspaceRoot: string,
-    options: ClickUpBoardRestoreOptions = {}
-  ): Promise<BoardSyncRestoreResult> {
-    const refuse = (error: string, incomplete = false): BoardSyncRestoreResult => ({
-      success: false, restored: 0, skipped: 0, unmapped: 0, notFoundLocally: 0, incomplete, error
-    });
-
-    const config = await this.loadConfig();
-    if (!config?.setupComplete) { return refuse('ClickUp not set up'); }
-    if (!(await this.hasApiToken())) { return refuse('ClickUp API token not configured'); }
-
-    const listIdToColumn = new Map<string, string>();
-    for (const [column, listId] of Object.entries(config.columnMappings || {})) {
-      const id = String(listId || '').trim();
-      if (id && column) { listIdToColumn.set(id, column); }
-    }
-    const listIds = [...listIdToColumn.keys()];
-    if (listIds.length === 0) { return refuse('No ClickUp lists are mapped to board columns'); }
-
-    // ── Bulk fetch: ONE paginated pass per mapped list, closed included. ──
-    // Deliberately not N per-plan `_findTaskByPlanId` calls: that has no bulk
-    // completeness story, so a truncated listing would look like deletions.
-    const tasksById = new Map<string, { task: ClickUpTask; listId: string }>();
-    for (let i = 0; i < listIds.length; i++) {
-      const listId = listIds[i];
-      options.progress?.report({ message: `Fetching ClickUp list ${i + 1} of ${listIds.length}...` });
-      let fetched: { tasks: ClickUpTask[]; complete: boolean };
-      try {
-        fetched = await this.getListTasksWithCompleteness(listId, { includeClosed: true });
-      } catch (e) {
-        return refuse(`ClickUp list ${listId} fetch failed: ${e instanceof Error ? e.message : String(e)}`, true);
-      }
-      if (!fetched.complete) {
-        return refuse(`ClickUp list ${listId} listing was incomplete — refusing to apply a partial restore`, true);
-      }
-      for (const task of fetched.tasks) {
-        const id = String(task.id || '').trim();
-        if (id) { tasksById.set(id, { task, listId }); }
-      }
-    }
-
-    const db = KanbanDatabase.forWorkspace(workspaceRoot);
-    await db.ensureReady();
-    const workspaceId = await db.getWorkspaceId();
-    if (!workspaceId) { return refuse('Workspace ID not found in database'); }
-
-    const localPlans = await db.getAllPlans(workspaceId);
-    const localByPlanId = new Map<string, DbPlanRecord>();
-    for (const plan of localPlans) { localByPlanId.set(plan.planId, plan); }
-
-    // ── Match remote tasks to planIds by the three anchors. ──
-    const matchesByPlanId = new Map<string, Array<{ task: ClickUpTask; listId: string }>>();
-    for (const { task, listId } of tasksById.values()) {
-      const planId = this._parseClickUpPlanIdAnchor(task, config);
-      if (!planId) { continue; }
-      const existing = matchesByPlanId.get(planId);
-      if (existing) { existing.push({ task, listId }); }
-      else { matchesByPlanId.set(planId, [{ task, listId }]); }
-    }
-
-    let restored = 0;
-    let skipped = 0;
-    let unmapped = 0;
-    let notFoundLocally = 0;
-    const featureLinks: Array<{ childPlanId: string; parentTaskId: string }> = [];
-    const featureTaskIds = new Set<string>();
-    const matchedLocalPlanIds = new Set<string>();
-
-    for (const [planId, matches] of matchesByPlanId) {
-      const local = localByPlanId.get(planId);
-      if (!local) { notFoundLocally++; continue; }
-      matchedLocalPlanIds.add(planId);
-
-      // Duplicate anchors: pick deterministically (newest dateUpdated) and
-      // report the collision rather than applying an arbitrary one.
-      const chosen = matches.length === 1
-        ? matches[0]
-        : matches.slice().sort((a, b) => Number(b.task.dateUpdated || 0) - Number(a.task.dateUpdated || 0))[0];
-      if (matches.length > 1) {
-        console.warn(`[ClickUpSync] restore: planId ${planId} carries ${matches.length} ClickUp anchors — using task ${chosen.task.id} (newest dateUpdated)`);
-        skipped += matches.length - 1;
-      }
-
-      const taskId = String(chosen.task.id || '').trim();
-      const column = options.resolveColumn
-        ? options.resolveColumn(chosen.listId)
-        : listIdToColumn.get(chosen.listId);
-
-      // Persist the task anchor first — it is what pushState/refreshLocalPlan
-      // look up, and on a fresh machine it is exactly what went missing.
-      try {
-        await db.updateClickUpTaskIdByPlanFile(local.planFile, local.workspaceId, taskId);
-      } catch (e) {
-        console.warn(`[ClickUpSync] restore: failed to persist clickupTaskId for ${planId}:`, e);
-      }
-
-      if (!column) {
-        // Unmappable status — skip the column and report it, never default.
-        unmapped++;
-        continue;
-      }
-      try {
-        await db.updateColumnByPlanFile(local.planFile, local.workspaceId, column);
-        restored++;
-      } catch (e) {
-        console.warn(`[ClickUpSync] restore: failed to apply column ${column} to ${planId}:`, e);
-        skipped++;
-      }
-
-      const parentTaskId = String(chosen.task.parentId || '').trim();
-      if (parentTaskId && tasksById.has(parentTaskId)) {
-        featureLinks.push({ childPlanId: planId, parentTaskId });
-        featureTaskIds.add(parentTaskId);
-      }
-    }
-
-    // Local plans the remote did not mention are left untouched (additive) —
-    // counted so the omission is visible rather than silent.
-    skipped += localPlans.filter((p) => !matchedLocalPlanIds.has(p.planId)).length;
-
-    // ── Second pass: feature structure (planId → featureId), mirroring the
-    //    ordering Notion's restore uses (columns first, relations second). ──
-    for (const { childPlanId, parentTaskId } of featureLinks) {
-      const parent = tasksById.get(parentTaskId);
-      const parentPlanId = parent ? this._parseClickUpPlanIdAnchor(parent.task, config) : null;
-      if (!parentPlanId || parentPlanId === childPlanId) { continue; }
-      if (!localByPlanId.has(parentPlanId)) { continue; }
-      try {
-        await db.updateFeatureStatus(childPlanId, 0, parentPlanId);
-      } catch (e) {
-        console.warn(`[ClickUpSync] restore: failed to link ${childPlanId} → feature ${parentPlanId}:`, e);
-      }
-    }
-    // A task with children IS the feature — mark it so the cascade treats it as one.
-    for (const parentTaskId of featureTaskIds) {
-      const parent = tasksById.get(parentTaskId);
-      const parentPlanId = parent ? this._parseClickUpPlanIdAnchor(parent.task, config) : null;
-      if (!parentPlanId || !localByPlanId.has(parentPlanId)) { continue; }
-      try {
-        await db.updateFeatureStatus(parentPlanId, 1, '');
-      } catch (e) {
-        console.warn(`[ClickUpSync] restore: failed to mark ${parentPlanId} as a feature:`, e);
-      }
-    }
-
-    // `success` means the restore ran to completion and applied what it could.
-    // The counts carry the residue — a non-zero `skipped` is the additive
-    // restore leaving local plans alone, not a failure.
-    console.log(`[ClickUpSync] restore: applied ${restored} card(s); ${skipped} skipped, ${unmapped} unmapped, ${notFoundLocally} without a local plan.`);
-    return { success: true, restored, skipped, unmapped, notFoundLocally, incomplete: false };
-  }
-
-  /**
-   * Parse the planId a ClickUp task carries, from any of the three anchors the
-   * outbound push writes. Order matches `_findTaskByPlanId` (custom field, then
-   * tag) with the description footer as the third: the tag fallback must carry
-   * the whole restore when no custom field is configured.
-   */
-  private _parseClickUpPlanIdAnchor(task: ClickUpTask, config: ClickUpConfig): string | null {
-    const fieldId = String(config.customFields?.planId || '').trim();
-    if (fieldId) {
-      const field = (task.customFields || []).find((f) => f.id === fieldId);
-      const value = field && typeof field.value === 'string' ? field.value.trim() : '';
-      if (value) { return value; }
-    }
-
-    const tag = (task.tags || []).find((t) => typeof t?.name === 'string' && t.name.toLowerCase().startsWith('switchboard:'));
-    if (tag) {
-      const value = tag.name.slice('switchboard:'.length).trim();
-      if (value) { return value; }
-    }
-
-    // `[Switchboard] PlanFile: {path} | Plan: {planId}` — the plan file path may
-    // contain spaces, so match lazily up to the ` | Plan: ` delimiter.
-    const description = `${task.markdownDescription || ''}\n${task.description || ''}`;
-    const footer = description.match(/\[Switchboard\]\s*PlanFile:[\s\S]*?\|\s*Plan:\s*([^\s|]+)/);
-    if (footer && footer[1]) { return footer[1].trim(); }
-
-    return null;
   }
 }

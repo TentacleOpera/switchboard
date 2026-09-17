@@ -318,7 +318,6 @@ export class KanbanProvider implements vscode.Disposable {
 
     private _linearAutomationServices = new Map<string, LinearAutomationService>();
     private _notionServices = new Map<string, NotionFetchService>();
-    private _notionSyncServices = new Map<string, NotionSyncService>();
     private _cacheServices = new Map<string, import('./PlanningPanelCacheService').PlanningPanelCacheService>();
     private readonly _integrationAutoPull = new IntegrationAutoPullService();
     private _clickUpSyncWarnings = new Map<string, string>();
@@ -3231,9 +3230,6 @@ export class KanbanProvider implements vscode.Disposable {
                 notion: this._getNotionService(resolved),
                 db: this._getKanbanDb(resolved),
                 getWorkspaceId, getPlansDir, log,
-                // Board-sync orchestration — backs boardSyncPush/boardSyncRestore.
-                boardSync: this._getNotionSyncService(resolved),
-                workspaceRoot: resolved,
             });
         }
         if (kind === 'clickup') {
@@ -3703,20 +3699,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (existing) { return existing; }
         const service = new NotionFetchService(resolved, this._context.secrets);
         this._notionServices.set(resolved, service);
-        return service;
-    }
-
-    /**
-     * The Notion board-sync orchestration, wired into the provider seam so the
-     * `boardSyncPush`/`boardSyncRestore` interface methods delegate to it. Cached
-     * per workspace root, same as the other per-root services.
-     */
-    private _getNotionSyncService(workspaceRoot: string): NotionSyncService {
-        const resolved = path.resolve(workspaceRoot);
-        const existing = this._notionSyncServices.get(resolved);
-        if (existing) { return existing; }
-        const service = new NotionSyncService(resolved, this._context.secrets);
-        this._notionSyncServices.set(resolved, service);
         return service;
     }
 

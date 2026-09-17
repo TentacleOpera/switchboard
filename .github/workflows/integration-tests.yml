@@ -595,6 +595,17 @@ jobs:
       - name: Provider capability parity contract (typed exemptions, stub detection)
         run: npm run test:contract:provider-capability-parity
 
+      # Linear per-project seed. A bulk one-way publication into a third-party
+      # SaaS whose failure modes are all invisible at runtime: a cursor that is
+      # never re-baselined drops ~520 cards' first inbound signal permanently
+      # and replays the rest into the dispatch path; a full-table link replace
+      # under concurrency erases a sibling worker's link and the next run
+      # duplicates the issue; a rate limit arrives as HTTP 400 and, classified
+      # as a generic status error, kills the run on its first throttle. Source
+      # level — none of these can be observed from a run that never hit them.
+      - name: Linear per-project seed contract (destination mapping, cursor, rate limits)
+        run: npm run test:contract:linear-seed
+
       # Tailnet bind policy. Every failure mode here is silent and reach-shaped:
       # binding 0.0.0.0 instead of the specific Tailscale address exposes the
       # board to every network the machine is on; moving the bind instead of

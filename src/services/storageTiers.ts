@@ -33,6 +33,11 @@ export const SHARED_TABLES = [
     'stitch_projects',
     'stitch_screens',
     'coding_rounds',
+    // Which board project points at which remote project — board state, not
+    // machine runtime. It must travel with the Board store: an untiered table is
+    // silently absent from the board snapshot, the state serializers and every
+    // export format (linear_issue_links is exactly that bug; do not copy it).
+    'remote_project_bindings',
 ] as const;
 
 export type SharedTableName = typeof SHARED_TABLES[number];

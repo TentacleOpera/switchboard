@@ -786,6 +786,39 @@ async function run() {
         assert.ok(!/\binFlight\b/.test(popBody), 'the pop must carry no in-flight concept');
     });
 
+    await check('the rounds path refuses no dispatch either', () => {
+        // The ratchet above was written against one exact string ('Team already
+        // in flight') on the CARD path, so an identical gate grew back on the
+        // ROUND path and wedged a feature for a day: round 1 stamped
+        // 'dispatched' on 2026-09-15 with nothing delivered, never closable,
+        // and every later round/register skipped the dispatch because a kept
+        // round was 'in flight'. The board never refuses a dispatch — that is
+        // the invariant, not the absence of one spelling of it.
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+
+        // round/register must start a round unconditionally.
+        const regStart = src.indexOf('private async _handleKanbanRoundRegister(');
+        assert.ok(regStart > -1, '_handleKanbanRoundRegister must exist');
+        const regBody = src.slice(regStart, src.indexOf('\n    /**', regStart + 10));
+        assert.ok(!/const inFlight\b/.test(regBody),
+            'round/register must carry no in-flight predicate — a kept dispatched round must not suppress the dispatch');
+        assert.ok(!/if \(!inFlight/.test(regBody),
+            'round/register must not gate its dispatch on anything being in flight');
+
+        // round/complete must close the round it is given, never 409 on an
+        // ambiguous set — the only way to reduce the in-flight count is to
+        // close one, so refusing here is a wedge with no recovery path.
+        const compStart = src.indexOf('private async _handleKanbanRoundComplete(');
+        if (compStart > -1) {
+            const compBody = src.slice(compStart, src.indexOf('\n    /**', compStart + 10));
+            assert.ok(!/refusing to close an ambiguous round set/.test(compBody),
+                'round/complete must not refuse an ambiguous round set — take the lowest ordinal and log it');
+        }
+        assert.ok(!/refusing to close an ambiguous round set/.test(src),
+            'the ambiguous-round-set refusal body must be deleted');
+    });
+
     await check('a held card does not release the team on a stale completion — dispatch just proceeds', async () => {
         // V81: there is no team to "release". The old scan stopped the whole
         // pop when a second card was held; now the pop simply hands out the

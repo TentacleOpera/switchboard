@@ -649,20 +649,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'notionSyncConfigResult', ...result });
                     return { success: true };
                 }
-                case 'backupToNotion': {
-                    const result = await this._taskViewerProvider.handleNotionBoardPush(
-                        typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
-                    );
-                    this.postMessage({ type: 'notionSyncResult', ...result });
-                    return { success: true };
-                }
-                case 'restoreFromNotion': {
-                    const result = await this._taskViewerProvider.handleNotionBoardRestore(
-                        typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
-                    );
-                    this.postMessage({ type: 'notionSyncRestoreResult', ...result });
-                    return { success: true };
-                }
                 case 'autoCreateNotionDatabase': {
                     const result = await this._taskViewerProvider.handleAutoCreateNotionDatabase(
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined

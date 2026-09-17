@@ -455,31 +455,13 @@
         setTimeout(loadStatus, 1000);
     });
 
-    // Notion Projection Actions
-    document.getElementById('btn-notion-backup').addEventListener('click', () => {
+    // Notion Projection Actions — the plans database Remote Control polls.
+    document.getElementById('btn-notion-auto-setup').addEventListener('click', () => {
         const url = document.getElementById('notion-db-url-input').value.trim();
         if (url) {
             vscode.postMessage({ type: 'configureNotionBackup', databaseUrl: url });
         }
-        vscode.postMessage({ type: 'backupToNotion' });
-    });
-
-    document.getElementById('btn-notion-auto-setup').addEventListener('click', () => {
         vscode.postMessage({ type: 'autoCreateNotionDatabase' });
-    });
-
-    // Notion Break-Glass Restore Flow (Explicit multi-step flow)
-    const notionRestoreConfirmBox = document.getElementById('notion-restore-confirm-box');
-    document.getElementById('btn-notion-restore-breakglass').addEventListener('click', () => {
-        notionRestoreConfirmBox.classList.remove('hidden');
-    });
-    document.getElementById('btn-cancel-notion-restore').addEventListener('click', () => {
-        notionRestoreConfirmBox.classList.add('hidden');
-    });
-    document.getElementById('btn-confirm-notion-restore').addEventListener('click', () => {
-        vscode.postMessage({ type: 'restoreFromNotion' });
-        notionRestoreConfirmBox.classList.add('hidden');
-        setTimeout(loadStatus, 1000);
     });
 
     // ─── Storage Stats & Retention ───────────────────────────────────────────

@@ -3,10 +3,15 @@
  * Provider-capability parity contract.
  *
  * `RemoteProviderCapabilities` (src/services/remote/RemoteProvider.ts) is the only
- * interface the provider seam has, and for a long time it covered only the
- * pull/push/archive half — board sync lived outside it, which is exactly why
- * "every provider stays in parity" kept landing truthfully and leaving the
- * important half asymmetric. This test is the enforcement half of the seam:
+ * interface the provider seam has. This test is the enforcement half of it.
+ *
+ * Board push/restore are deliberately NOT capabilities. The whole-board
+ * projection into a tracker was a sql.js-era hedge against a fragile local
+ * store; the store is one better-sqlite3 database owned by one host now, and
+ * bulk board seeding is the job of the per-project seed (see
+ * .switchboard/plans/seed-board-projects-to-linear-projects.md), not of a
+ * backup/restore pair. Re-adding a `boardPush`/`boardRestore` field here is a
+ * product decision, not a parity fix.
  *
  *   1. EVERY RemoteProvider implementation is enumerated. The provider list is
  *      discovered from source (`implements RemoteProvider`), not hardcoded —
@@ -21,8 +26,8 @@
  *      collection returned with the input cursor unchanged, or a call that
  *      produces no remote write — fails. This is the check that would have
  *      caught ClickUp declaring `pull: true` over a fetchCommentDeltas stub.
- *   5. Capabilities implemented off the RemoteProvider interface (boardPush,
- *      boardRestore, automation) are checked against their backing service
+ *   5. Capabilities implemented off the RemoteProvider interface (automation)
+ *      are checked against their backing service
  *      module: declared-true requires the implementation to resolve; an
  *      implementation that lands while the flag stays false also fails —
  *      flipping the flag and deleting the exemption is the proof of landing.
@@ -82,11 +87,6 @@ const EXEMPTIONS = [
         reason: 'ClickUp has close/delete but no true archive — permanently correct; AutoArchiveService already honours archive:false',
     },
     {
-        provider: 'linear', capability: 'boardRestore', kind: 'not-yet-built',
-        plan: '.switchboard/plans/linear-board-restore-and-planid-anchor.md',
-        reason: 'no planId anchor on remote objects; restore is blocked on the anchor + backfill plan',
-    },
-    {
         provider: 'notion', capability: 'automation', kind: 'not-yet-built',
         plan: FEATURE_PARITY,
         reason: 'no NotionAutomationService — LinearAutomationService and ClickUpAutomationService exist',
@@ -96,8 +96,6 @@ const EXEMPTIONS = [
     { provider: 'store', capability: 'pullComments', kind: 'platform-limitation', reason: 'plan_inbox is a one-way queue — no comment channel exists' },
     { provider: 'store', capability: 'push', kind: 'platform-limitation', reason: 'the queue is an inbox, not a two-way channel' },
     { provider: 'store', capability: 'archive', kind: 'platform-limitation', reason: 'queue rows have no archive lifecycle' },
-    { provider: 'store', capability: 'boardPush', kind: 'platform-limitation', reason: 'no remote board to push to' },
-    { provider: 'store', capability: 'boardRestore', kind: 'platform-limitation', reason: 'no remote board to restore from' },
     { provider: 'store', capability: 'automation', kind: 'platform-limitation', reason: 'no remote rule surface to automate' },
     // Linear-only platform surfaces. Permanently correct on the other providers.
     { provider: 'clickup', capability: 'missions', kind: 'platform-limitation', reason: 'missions/dependency mirroring is a Linear concept' },
@@ -106,30 +104,31 @@ const EXEMPTIONS = [
     { provider: 'clickup', capability: 'agentSurface', kind: 'platform-limitation', reason: 'agent actor surface is Linear-only' },
     { provider: 'notion', capability: 'agentSurface', kind: 'platform-limitation', reason: 'agent actor surface is Linear-only' },
     { provider: 'store', capability: 'agentSurface', kind: 'platform-limitation', reason: 'agent actor surface is Linear-only' },
+    // The per-project bulk seed. Linear ships it; ClickUp's list axis is unbuilt
+    // work with a named plan, Notion has no destination mapping at all, and the
+    // store provider has no project concept to seed into.
+    {
+        provider: 'clickup', capability: 'seedProjects', kind: 'not-yet-built',
+        plan: '.switchboard/plans/seed-board-projects-to-clickup-lists.md',
+        reason: 'ClickUp consumes the same remote_project_bindings mapping but its list axis is not wired yet',
+    },
+    {
+        provider: 'notion', capability: 'seedProjects', kind: 'not-yet-built',
+        plan: FEATURE_PARITY,
+        reason: 'no Notion per-database destination mapping exists; no Notion seed plan is written yet',
+    },
+    { provider: 'store', capability: 'seedProjects', kind: 'platform-limitation', reason: 'plan_inbox is a one-way queue with no project concept to seed into' },
     { provider: 'clickup', capability: 'agentSessions', kind: 'platform-limitation', reason: 'agent sessions/activities are Linear-only' },
     { provider: 'notion', capability: 'agentSessions', kind: 'platform-limitation', reason: 'agent sessions/activities are Linear-only' },
     { provider: 'store', capability: 'agentSessions', kind: 'platform-limitation', reason: 'agent sessions/activities are Linear-only' },
 ];
 
 // ── Evidence for capabilities that live off the RemoteProvider interface ─────
-// boardPush/boardRestore/automation are realised by services, not provider
-// methods. A `true` declaration must resolve to a real implementation; an
-// implementation that appears while the flag stays false fails (the flag is
-// the declaration — flip it and delete the exemption in the same change).
-//
-// Notion is deliberately ABSENT for boardPush/boardRestore: its board sync is
-// now on the RemoteProvider interface (boardSyncPush/boardSyncRestore) and is
-// checked by the interface-method probe below, not by a service lookup. ClickUp
-// and Linear still push per-plan through their `syncPlan`, so they stay here.
+// `automation` is realised by a service, not a provider method. A `true`
+// declaration must resolve to a real implementation; an implementation that
+// appears while the flag stays false fails (the flag is the declaration — flip
+// it and delete the exemption in the same change).
 const OFF_INTERFACE_EVIDENCE = {
-    boardPush: {
-        clickup: { module: 'services/ClickUpSyncService.js', cls: 'ClickUpSyncService', method: 'syncPlan' },
-        linear: { module: 'services/LinearSyncService.js', cls: 'LinearSyncService', method: 'syncPlan' },
-    },
-    boardRestore: {
-        // methodPattern watches for the restore landing before the flag flips.
-        linear: { module: 'services/LinearSyncService.js', cls: 'LinearSyncService', methodPattern: /^restoreFrom/ },
-    },
     automation: {
         clickup: { module: 'services/ClickUpAutomationService.js', cls: 'ClickUpAutomationService' },
         linear: { module: 'services/LinearAutomationService.js', cls: 'LinearAutomationService' },
@@ -137,23 +136,13 @@ const OFF_INTERFACE_EVIDENCE = {
     },
 };
 
-// ── Board sync ON the interface ──────────────────────────────────────────────
-// The capability must be a declared interface method that delegates to a real
-// implementation — the cautionary precedent is `NotionRemoteProvider.
-// createPageForPlan`, a public method the interface never declared and no
-// capability gate could see. Only providers listed here may implement the
-// board-sync methods; a provider whose push is realised off-interface (ClickUp
-// and Linear push per-plan through `syncPlan`) must NOT implement one.
-const BOARD_SYNC_INTERFACE = {
-    notion: {
-        boardPush: { method: 'boardSyncPush', delegate: 'backupToNotion', probe: (p) => p.boardSyncPush([]) },
-        boardRestore: { method: 'boardSyncRestore', delegate: 'restoreFromNotion', probe: (p) => p.boardSyncRestore('/tmp/notion-ws') },
-    },
-    clickup: {
-        boardRestore: { method: 'boardSyncRestore', delegate: 'restoreBoardFromClickUp', probe: (p) => p.boardSyncRestore('/tmp/clickup-ws') },
-    },
-};
-const BOARD_SYNC_METHODS = { boardPush: 'boardSyncPush', boardRestore: 'boardSyncRestore' };
+// ── Board sync is removed, and stays removed ────────────────────────────────
+// Whole-board push/restore was a sql.js-era hedge; the per-project seed
+// replaces the only honest use it had. These names must not reappear on the
+// seam — a seed belongs behind its own capability with its own mapping, not
+// behind a resurrected backup/restore pair.
+const REMOVED_BOARD_SYNC_METHODS = ['boardSyncPush', 'boardSyncRestore'];
+const REMOVED_BOARD_SYNC_CAPABILITIES = ['boardPush', 'boardRestore'];
 
 function evidenceResolves(spec) {
     try {
@@ -187,10 +176,6 @@ function buildClickUp(rec) {
         getTaskDetails: async (id) => ({ task: { id, name: 'Task', markdownDescription: 'd' } }),
         syncPlan: async (plan) => { rec.record('syncPlan', plan); return { success: true }; },
         syncPlanContent: async () => ({ success: true }),
-        restoreBoardFromClickUp: async (workspaceRoot) => {
-            rec.record('restoreBoardFromClickUp', workspaceRoot);
-            return { success: true, restored: 2, skipped: 1, unmapped: 0, notFoundLocally: 0, incomplete: false };
-        },
         hasApiToken: async () => true,
     };
     const db = {
@@ -223,6 +208,16 @@ function buildLinear(rec) {
             return { data: {} };
         },
         archiveIssue: async (id) => { rec.record('archiveIssue', id); return { success: true }; },
+        seedProjectToRemote: async (boardProject, opts) => {
+            rec.record('seedProjectToRemote', boardProject);
+            opts?.onProgress?.({ done: 1, total: 1, skipped: 0 });
+            return {
+                success: true, boardProject,
+                destination: { projectId: 'proj-1', source: 'created', origin: 'created' },
+                total: 1, created: 1, attached: 0, alreadyLinked: 0,
+                skippedUnmappedColumn: [], failed: [], features: { linked: 0, failed: 0 },
+            };
+        },
         hasApiToken: async () => true,
         syncPlanContent: async () => ({ success: true }),
         syncMissionsAndDependencies: async () => {},
@@ -262,16 +257,8 @@ function buildNotion(rec) {
             : null,
         findPlanByNotionPageId: async () => null,
     };
-    // The board-sync orchestration the provider's interface methods delegate to.
-    // Records the delegation so a declared-true capability backed by a no-op is
-    // detectable (the same empty-stub rule the pull checks apply).
-    const boardSync = {
-        backupToNotion: async (workspaceRoot) => { rec.record('backupToNotion', workspaceRoot); return { success: true, backedUp: 2, total: 3 }; },
-        restoreFromNotion: async (workspaceRoot) => { rec.record('restoreFromNotion', workspaceRoot); return { success: true, restored: 4, skipped: 1 }; },
-    };
     return new NotionRemoteProvider({
         notion, db, getWorkspaceId: async () => 'ws-1',
-        boardSync, workspaceRoot: '/tmp/notion-ws',
     });
 }
 
@@ -364,7 +351,7 @@ async function run() {
         // diff IS the point: a capability cannot slip in unenumerated.
         assert.deepStrictEqual(names, [
             'agentSessions', 'agentSurface', 'archive', 'automation',
-            'boardPush', 'boardRestore', 'missions', 'pullComments', 'pullState', 'push',
+            'missions', 'pullComments', 'pullState', 'push', 'seedProjects',
         ], 'RemoteProviderCapabilities gained or lost a field — update the enumeration');
     });
 
@@ -501,9 +488,32 @@ async function run() {
         });
     }
 
-    // 6. Off-interface capabilities: boardPush / boardRestore / automation.
-    //    Only providers with an evidence spec are checked here — Notion's board
-    //    sync is on the interface (step 6b), and a `false` declaration with no
+    // seedProjects: a declared-true seed must reach the remote; a declared-false
+    // one must not implement the method at all. This is check 4 for the bulk
+    // seed — the field is worth nothing if a `true` can sit over a stub that
+    // walks no board.
+    for (const [kind, b] of Object.entries(built)) {
+        await check(`${kind}: seedProjects declaration matches the implementation`, async () => {
+            const declared = b.provider.capabilities.seedProjects === true;
+            const implemented = typeof b.provider.seedBoardProject === 'function';
+            if (declared) {
+                assert.ok(implemented,
+                    `${kind} declares seedProjects: true but has no seedBoardProject — stub behind a true`);
+                const before = b.rec.calls.length;
+                const res = await b.provider.seedBoardProject('Trackers & Tickets');
+                assert.ok(b.rec.calls.length > before,
+                    `${kind} declares seedProjects: true but seedBoardProject produced no remote call — stub behind a true`);
+                assert.ok(res && typeof res.created === 'number' && typeof res.attached === 'number' && typeof res.skipped === 'number',
+                    `${kind}.seedBoardProject must return the { ok, created, attached, skipped } SeedResult shape`);
+            } else {
+                assert.ok(!implemented,
+                    `${kind} declares seedProjects: false but implements seedBoardProject — flip the flag and delete the exemption`);
+            }
+        });
+    }
+
+    // 6. Off-interface capabilities: automation. Only providers with an
+    //    evidence spec are checked here — a `false` declaration with no
     //    implementation needs no spec.
     for (const [cap, byProvider] of Object.entries(OFF_INTERFACE_EVIDENCE)) {
         for (const [kind, spec] of Object.entries(byProvider)) {
@@ -521,39 +531,25 @@ async function run() {
         }
     }
 
-    // 6b. Board sync declared ON the interface: each provider listed in
-    //     BOARD_SYNC_INTERFACE must implement the method and the method must
-    //     delegate to a real implementation. This is the check that makes the
-    //     capability non-decorative — a public method the interface never
-    //     declares (createPageForPlan) is what this rules out.
-    for (const [kind, caps] of Object.entries(BOARD_SYNC_INTERFACE)) {
-        await check(`${kind}: board sync is on the RemoteProvider interface, not a service lookup`, async () => {
-            const b = built[kind];
-            for (const [cap, spec] of Object.entries(caps)) {
-                assert.strictEqual(b.provider.capabilities[cap], true, `${kind} must declare ${cap}: true`);
-                assert.strictEqual(typeof b.provider[spec.method], 'function',
-                    `${kind} declares ${cap}: true but does not implement ${spec.method} on RemoteProvider`);
-                const before = b.rec.calls.length;
-                const result = await spec.probe(b.provider);
-                const delegated = b.rec.calls.slice(before).some((c) => c.name === spec.delegate);
-                assert.ok(delegated,
-                    `${kind}.${spec.method} returned without delegating to ${spec.delegate} — a stub behind a true`);
-                assert.strictEqual(result.success, true, `${kind}.${spec.method} did not report success`);
-            }
-        });
-    }
-
-    // 6c. A provider NOT listed in BOARD_SYNC_INTERFACE must not implement the
-    //     board-sync methods — its capability is realised off-interface
-    //     (ClickUp/Linear push per-plan via syncPlan). If one lands, its
-    //     declaration and evidence must move onto the interface.
-    check('only the enumerated providers implement the board-sync interface methods', () => {
+    // 6b. Board sync stays removed. The capability fields and the interface
+    //     methods are both gone; this is the ratchet that stops them growing
+    //     back under the old names. Bulk seeding is the per-project seed's job
+    //     (.switchboard/plans/seed-board-projects-to-linear-projects.md) and
+    //     needs its own capability + destination mapping, not this pair.
+    check('no provider implements the removed board-sync interface methods', () => {
         for (const [kind, b] of Object.entries(built)) {
-            const declared = BOARD_SYNC_INTERFACE[kind] || {};
-            for (const [cap, method] of Object.entries(BOARD_SYNC_METHODS)) {
-                if (declared[cap]) { continue; }
+            for (const method of REMOVED_BOARD_SYNC_METHODS) {
                 assert.strictEqual(typeof b.provider[method], 'undefined',
-                    `${kind} implements ${method} — add it to BOARD_SYNC_INTERFACE with its delegate and evidence`);
+                    `${kind} implements ${method} — board push/restore was removed deliberately; a seed needs its own capability`);
+            }
+        }
+    });
+
+    check('no provider declares the removed board-sync capabilities', () => {
+        for (const [kind, b] of Object.entries(built)) {
+            for (const cap of REMOVED_BOARD_SYNC_CAPABILITIES) {
+                assert.ok(!(cap in b.provider.capabilities),
+                    `${kind} declares ${cap} — board push/restore was removed deliberately; a seed needs its own capability`);
             }
         }
     });

@@ -87,10 +87,9 @@ export class StoreRemoteProvider implements RemoteProvider {
         pullComments: false,    // the queue is an inbox, not a two-way channel
         push: false,
         archive: false,
-        boardPush: false,
-        boardRestore: false,
         automation: false,
         missions: false,
+        seedProjects: false,   // plan_inbox is a one-way queue with no project concept
     };
 
     private _db: KanbanDatabase;

@@ -68,6 +68,22 @@ export interface LiveDispatchAttributionRow {
     project: string | null;
 }
 
+/**
+ * One board project's bound remote destination. Returned only inside a
+ * `{ value, source }` envelope — see getRemoteProjectBinding.
+ */
+export interface RemoteProjectBinding {
+    workspaceId: string;
+    provider: string;
+    remoteTeamId: string;
+    boardProject: string;
+    remoteProjectId: string;
+    remoteProjectName: string;
+    origin: 'created' | 'attached';
+    createdAt: string;
+    seededAt: string | null;
+}
+
 export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted' | 'missing';
 
 export interface KanbanPlanRecord {
@@ -703,6 +719,34 @@ CREATE TABLE IF NOT EXISTS plan_write_sets (
     extractor_version INTEGER NOT NULL DEFAULT 1,
     extracted_at      TEXT NOT NULL
 );
+-- remote_project_bindings: which BOARD project points at which remote
+-- project/list, per provider. The durable destination mapping the per-project
+-- bulk seed resolves against — a row is what makes a re-run idempotent (a bound
+-- project seeds into its existing remote project; an unbound one creates a new
+-- remote project and writes the row).
+--
+-- 'remote_team_id' is part of the KEY, not a payload column. Linear's config is
+-- machine-global (LinearSyncService.loadConfig → GlobalIntegrationConfigService),
+-- so 'config.teamId' can be re-pointed at a different team while every
+-- workspace-scoped value stays put. Without the team on the key a retargeted
+-- config resolves a stale row to a project id in a team the install no longer
+-- uses — a destination that looks configured and is wrong.
+--
+-- 'origin' records whether Switchboard created the remote project ('created') or
+-- bound an existing one ('attached'), the same provenance discipline
+-- linear_managed_artifacts carries: we may only ever unmake what we made.
+CREATE TABLE IF NOT EXISTS remote_project_bindings (
+    workspace_id        TEXT NOT NULL,
+    provider            TEXT NOT NULL,
+    remote_team_id      TEXT NOT NULL,
+    board_project       TEXT NOT NULL,
+    remote_project_id   TEXT NOT NULL,
+    remote_project_name TEXT NOT NULL DEFAULT '',
+    origin              TEXT NOT NULL DEFAULT 'attached',
+    created_at          TEXT NOT NULL,
+    seeded_at           TEXT DEFAULT NULL,
+    PRIMARY KEY (workspace_id, provider, remote_team_id, board_project)
+);
 `;
 
 // Index DDL, one statement per entry so a single failure (e.g. a column not yet
@@ -724,6 +768,7 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_linear_managed_artifacts_workspace ON linear_managed_artifacts(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_write_sets_ws ON plan_write_sets(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_remote_project_bindings_ws ON remote_project_bindings(workspace_id, provider)`,
     `CREATE INDEX IF NOT EXISTS idx_control_plane_kind ON control_plane(kind)`,
     `CREATE INDEX IF NOT EXISTS idx_activity_workspace ON activity_log(workspace_id, timestamp)`,
     `CREATE INDEX IF NOT EXISTS idx_board_move_workspace ON board_move_requests(workspace_id, timestamp)`,
@@ -1279,6 +1324,26 @@ const MIGRATION_V82_SQL = [
         extracted_at      TEXT NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_plan_write_sets_ws ON plan_write_sets(workspace_id)`,
+];
+
+// V83: remote_project_bindings — the per-board-project remote destination the
+// bulk seed resolves against. Additive; fresh DBs get the table from
+// SCHEMA_TABLES_SQL. Two array elements (CREATE TABLE, CREATE INDEX) so a
+// re-run's first failure cannot swallow the second.
+const MIGRATION_V83_SQL = [
+    `CREATE TABLE IF NOT EXISTS remote_project_bindings (
+        workspace_id        TEXT NOT NULL,
+        provider            TEXT NOT NULL,
+        remote_team_id      TEXT NOT NULL,
+        board_project       TEXT NOT NULL,
+        remote_project_id   TEXT NOT NULL,
+        remote_project_name TEXT NOT NULL DEFAULT '',
+        origin              TEXT NOT NULL DEFAULT 'attached',
+        created_at          TEXT NOT NULL,
+        seeded_at           TEXT DEFAULT NULL,
+        PRIMARY KEY (workspace_id, provider, remote_team_id, board_project)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_remote_project_bindings_ws ON remote_project_bindings(workspace_id, provider)`,
 ];
 
 /**
@@ -7424,6 +7489,28 @@ export class KanbanDatabase {
         return map;
     }
 
+    /**
+     * Targeted single-row delete for one plan's link. The concurrency-safe way
+     * to drop a `creating_*` marker: replaceAllLinearIssueLinks is a full-table
+     * replace, and a load → delete-one → replace-all under concurrency erases a
+     * sibling worker's successful link — an issue that exists in Linear whose
+     * link is gone locally, which the next run duplicates.
+     *
+     * `expectedIssueId`, when given, makes the delete conditional: only remove
+     * the row if it still holds the value the caller wrote, never one a
+     * successful sibling replaced it with.
+     */
+    public async deleteLinearIssueLinkByPlan(planPath: string, expectedIssueId?: string): Promise<boolean> {
+        if (!planPath) return false;
+        return expectedIssueId
+            ? this._persistedUpdate(
+                'DELETE FROM linear_issue_links WHERE plan_path = ? AND issue_id = ?',
+                [planPath, expectedIssueId])
+            : this._persistedUpdate(
+                'DELETE FROM linear_issue_links WHERE plan_path = ?',
+                [planPath]);
+    }
+
     /** Full-replace semantics: rows absent from `map` are deleted. Callers use
      *  this to drop temp `creating_*` markers; upsert-only would leak them. */
     public async replaceAllLinearIssueLinks(map: Record<string, string>): Promise<boolean> {
@@ -11304,6 +11391,18 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(82);
             console.log('[KanbanDatabase] V82 migration completed: plan_write_sets cache table added');
+        }
+
+        // V83: remote_project_bindings — the seed's durable destination mapping
+        // (board project → remote project, keyed with the remote team). Additive;
+        // fresh DBs already get the table from SCHEMA_TABLES_SQL.
+        const v83 = await this.getMigrationVersion();
+        if (v83 < 83) {
+            for (const sql of MIGRATION_V83_SQL) {
+                try { this._db.exec(sql); } catch { /* table/index already exists */ }
+            }
+            await this.setMigrationVersion(83);
+            console.log('[KanbanDatabase] V83 migration completed: remote_project_bindings destination mapping added');
         }
 
         // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue
@@ -16473,6 +16572,166 @@ FROM plans
             'DELETE FROM linear_managed_artifacts WHERE kind = ? AND workspace_id = ? AND remote_key LIKE ?',
             [kind, workspaceId, `${remoteKeyPrefix}%`]
         );
+    }
+
+    // ── Remote project bindings — the seed's destination mapping ────────────
+    //
+    // One row per (workspace_id, provider, remote_team_id, board_project). The
+    // accessor NEVER returns a bare id: a destination that came from a binding
+    // row and one guessed from the integration config's single
+    // `includeProjectNames` entry must not be indistinguishable, or a card is
+    // silently filed in the wrong remote project and nothing records which store
+    // answered. Callers log `source`.
+
+    public async getRemoteProjectBinding(params: {
+        workspaceId: string;
+        provider: string;
+        remoteTeamId: string;
+        boardProject: string;
+    }): Promise<{ value: RemoteProjectBinding | null; source: 'mapping' | 'none' }> {
+        if (!(await this.ensureReady()) || !this._db) { return { value: null, source: 'none' }; }
+        const stmt = this._db.prepare(
+            `SELECT remote_project_id, remote_project_name, origin, created_at, seeded_at
+             FROM remote_project_bindings
+             WHERE workspace_id = ? AND provider = ? AND remote_team_id = ? AND board_project = ?
+             LIMIT 1`,
+            [params.workspaceId, params.provider, params.remoteTeamId, params.boardProject]
+        );
+        try {
+            if (!stmt.step()) { return { value: null, source: 'none' }; }
+            const row = stmt.getAsObject();
+            const remoteProjectId = String(row.remote_project_id ?? '').trim();
+            if (!remoteProjectId) { return { value: null, source: 'none' }; }
+            return {
+                value: {
+                    workspaceId: params.workspaceId,
+                    provider: params.provider,
+                    remoteTeamId: params.remoteTeamId,
+                    boardProject: params.boardProject,
+                    remoteProjectId,
+                    remoteProjectName: String(row.remote_project_name ?? ''),
+                    origin: String(row.origin ?? 'attached') === 'created' ? 'created' : 'attached',
+                    createdAt: String(row.created_at ?? ''),
+                    seededAt: row.seeded_at ? String(row.seeded_at) : null,
+                },
+                source: 'mapping',
+            };
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async setRemoteProjectBinding(params: {
+        workspaceId: string;
+        provider: string;
+        remoteTeamId: string;
+        boardProject: string;
+        remoteProjectId: string;
+        remoteProjectName?: string;
+        origin: 'created' | 'attached';
+        seededAt?: string | null;
+    }): Promise<boolean> {
+        if (!params.workspaceId || !params.provider || !params.remoteTeamId || !params.remoteProjectId) { return false; }
+        return this._persistedUpdate(
+            `INSERT INTO remote_project_bindings
+                (workspace_id, provider, remote_team_id, board_project, remote_project_id, remote_project_name, origin, created_at, seeded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(workspace_id, provider, remote_team_id, board_project) DO UPDATE SET
+                remote_project_id = excluded.remote_project_id,
+                remote_project_name = excluded.remote_project_name,
+                seeded_at = COALESCE(excluded.seeded_at, remote_project_bindings.seeded_at)`,
+            [
+                params.workspaceId, params.provider, params.remoteTeamId, params.boardProject,
+                params.remoteProjectId, params.remoteProjectName ?? '', params.origin,
+                new Date().toISOString(), params.seededAt ?? null,
+            ]
+        );
+    }
+
+    /**
+     * Refresh the stored DISPLAY name of a binding. The id is the binding — a
+     * remote project renamed by a person must not re-bind or re-create, so this
+     * touches `remote_project_name` and nothing else.
+     */
+    public async refreshRemoteProjectBindingName(params: {
+        workspaceId: string;
+        provider: string;
+        remoteTeamId: string;
+        boardProject: string;
+        remoteProjectName: string;
+    }): Promise<boolean> {
+        return this._persistedUpdate(
+            `UPDATE remote_project_bindings SET remote_project_name = ?
+             WHERE workspace_id = ? AND provider = ? AND remote_team_id = ? AND board_project = ?`,
+            [params.remoteProjectName, params.workspaceId, params.provider, params.remoteTeamId, params.boardProject]
+        );
+    }
+
+    public async markRemoteProjectBindingSeeded(params: {
+        workspaceId: string;
+        provider: string;
+        remoteTeamId: string;
+        boardProject: string;
+        seededAt?: string;
+    }): Promise<boolean> {
+        return this._persistedUpdate(
+            `UPDATE remote_project_bindings SET seeded_at = ?
+             WHERE workspace_id = ? AND provider = ? AND remote_team_id = ? AND board_project = ?`,
+            [params.seededAt || new Date().toISOString(), params.workspaceId, params.provider, params.remoteTeamId, params.boardProject]
+        );
+    }
+
+    public async listRemoteProjectBindings(workspaceId: string, provider: string): Promise<RemoteProjectBinding[]> {
+        const out: RemoteProjectBinding[] = [];
+        if (!(await this.ensureReady()) || !this._db) { return out; }
+        const stmt = this._db.prepare(
+            `SELECT remote_team_id, board_project, remote_project_id, remote_project_name, origin, created_at, seeded_at
+             FROM remote_project_bindings WHERE workspace_id = ? AND provider = ?`,
+            [workspaceId, provider]
+        );
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                out.push({
+                    workspaceId,
+                    provider,
+                    remoteTeamId: String(row.remote_team_id ?? ''),
+                    boardProject: String(row.board_project ?? ''),
+                    remoteProjectId: String(row.remote_project_id ?? ''),
+                    remoteProjectName: String(row.remote_project_name ?? ''),
+                    origin: String(row.origin ?? 'attached') === 'created' ? 'created' : 'attached',
+                    createdAt: String(row.created_at ?? ''),
+                    seededAt: row.seeded_at ? String(row.seeded_at) : null,
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    /**
+     * Active plans for one board project. `status = 'active'` only — the seed is
+     * the LIVE board, never its history (KanbanPlanStatus is a closed union, so
+     * this is one predicate with no judgement in it). A board project stored as
+     * NULL and one stored as '' are the same unassigned project to every reader
+     * of `project`, so both are matched when the caller asks for ''.
+     */
+    public async getActivePlansByProject(workspaceId: string, boardProject: string): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) { return []; }
+        const project = String(boardProject || '');
+        const stmt = project
+            ? this._db.prepare(
+                `SELECT ${PLAN_COLUMNS} FROM plans
+                 WHERE workspace_id = ? AND status = 'active' AND project = ?
+                 ORDER BY created_at ASC`,
+                [workspaceId, project])
+            : this._db.prepare(
+                `SELECT ${PLAN_COLUMNS} FROM plans
+                 WHERE workspace_id = ? AND status = 'active' AND (project IS NULL OR project = '')
+                 ORDER BY created_at ASC`,
+                [workspaceId]);
+        return this._readRows(stmt);
     }
 
     public async getLinearManagedArtifactKeys(kind: string, workspaceId: string): Promise<Set<string>> {

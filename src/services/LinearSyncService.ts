@@ -7,6 +7,7 @@ import * as crypto from 'crypto';
 import { hostInlineImages } from './ImageHostingHelper';
 import { CANONICAL_COLUMNS } from './ClickUpSyncService';
 import { KanbanDatabase } from './KanbanDatabase';
+import type { KanbanPlanRecord, RemoteProjectBinding } from './KanbanDatabase';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
 import { DEFAULT_LIVE_SYNC_CONFIG } from '../models/LiveSyncTypes';
 import {
@@ -18,6 +19,13 @@ import { stampMarker, truncateForComment } from './commentMarker';
 import { localizeHttpError } from './errorMessages';
 import { isLoopbackHostHeader } from '../utils/loopbackHostname';
 import { syncOwnershipLease } from './SyncOwnershipLease';
+import {
+  buildLinearPlanIdAnchor,
+  stripLinearPlanIdAnchor,
+  ensureLinearPlanIdAnchor,
+  parseLinearPlanIdAnchor,
+  LINEAR_PLAN_ANCHOR_MARKER
+} from './remote/linearPlanIdAnchor';
 
 /** Escape untrusted text before it lands in the OAuth callback's HTML response. */
 function _escapeHtml(value: string): string {
@@ -45,6 +53,51 @@ export interface LinearOAuthRefreshLease {
 }
 
 export type LinearCredentialKind = 'oauth' | 'apiKey' | 'none';
+
+/** Progress shape emitted by the per-project seed. Deliberately identical to
+ *  the shape the ClickUp seed will emit, so one UI drives both. */
+export interface LinearSeedProgress {
+  done: number;
+  total: number;
+  skipped: number;
+}
+
+/** The pre-flight report, handed to the caller BEFORE any remote write. */
+export interface LinearSeedPreflight {
+  total: number;
+  sendable: number;
+  unmapped: Array<{ planFile: string; column: string }>;
+  unmappedColumns: string[];
+}
+
+export interface LinearSeedOptions {
+  onProgress?: (progress: LinearSeedProgress) => void;
+  /** Called with the unmapped-column set before the first remote write. */
+  onPreflight?: (preflight: LinearSeedPreflight) => void;
+  /** Compute the pre-flight and stop. Zero remote writes. */
+  dryRun?: boolean;
+  concurrency?: number;
+  signal?: AbortSignal;
+}
+
+export interface LinearSeedResult {
+  success: boolean;
+  boardProject: string;
+  destination: {
+    projectId?: string;
+    /** Which store answered. A binding row and a config guess are not the same fact. */
+    source: 'mapping' | 'include-project' | 'created' | 'none';
+    origin?: 'created' | 'attached';
+  };
+  total: number;
+  created: number;
+  attached: number;
+  alreadyLinked: number;
+  skippedUnmappedColumn: Array<{ planFile: string; column: string }>;
+  failed: Array<{ planFile: string; error: string }>;
+  features: { linked: number; failed: number };
+  error?: string;
+}
 
 export interface LinearRateLimitState {
   requestsLimit?: number;
@@ -252,6 +305,13 @@ export class LinearSyncService {
   ];
 
   private _isTransientError(error: unknown): boolean {
+    // A classified rate limit is transient by construction — Linear rejects a
+    // rate-limited request BEFORE executing it, so retrying is safe even for a
+    // mutation. Read the flags the classifier sets rather than string-matching
+    // the message: `isRateLimited`/`code` were set and read by nothing, which is
+    // how a 620-mutation seed would have died on its first throttle.
+    const err = error as { code?: string; isRateLimited?: boolean } | null;
+    if (err && (err.isRateLimited === true || err.code === 'RATELIMITED')) { return true; }
     const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
     return LinearSyncService._transientMarkers.some(marker => message.includes(marker.toLowerCase()));
   }
@@ -661,17 +721,84 @@ export class LinearSyncService {
   }
 
   private async _buildInitialIssueDescription(planFile: string): Promise<string> {
-    const fallback = this._buildFallbackDescription(planFile);
+    // The planId anchor is the whole point of the description footer — it is
+    // what makes the issue matchable back to a card after the local DB is gone.
+    // It is looked up from the DB (rather than threaded through syncPlan's
+    // callers) so the push chain keeps its signature. A missing planId is
+    // logged loudly rather than silently producing an unanchored issue.
+    const planId = await this._lookupPlanIdByPlanFile(planFile);
+    const anchor = buildLinearPlanIdAnchor(planId || '');
+    const fallback = this._buildFallbackDescription(planFile) + anchor;
     try {
       const planFilePath = path.isAbsolute(planFile)
         ? planFile
         : path.join(this._workspaceRoot, planFile);
       const markdownContent = await fs.promises.readFile(planFilePath, 'utf8');
       const contentWithoutH1 = this._stripH1Header(markdownContent);
-      return this._truncateInitialDescription(contentWithoutH1);
+      // Append AFTER truncation so the anchor is never the bytes that get cut.
+      return this._truncateInitialDescription(contentWithoutH1) + anchor;
     } catch (error) {
       console.warn(`[LinearSync] Failed to read plan file ${planFile}:`, error);
       return fallback;
+    }
+  }
+
+  /**
+   * The board project a plan file belongs to, for the write-destination lookup.
+   * '' means the unassigned project — which IS a board project with its own
+   * binding row, not an absence.
+   */
+  private async _lookupProjectForPlanFile(planFile: string): Promise<string> {
+    try {
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      if (!(await db.ensureReady())) { return ''; }
+      const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+      if (!workspaceId) { return ''; }
+      const match = await db.getPlanByPlanFile(planFile, workspaceId);
+      return String(match?.project || '');
+    } catch (e) {
+      console.warn(`[LinearSync] board-project lookup failed for ${planFile}:`, e);
+      return '';
+    }
+  }
+
+  /**
+   * Resolve the local planId for a plan file, for the remote identity anchor.
+   * Returns null when the plan row is not present (no anchor can be fabricated).
+   */
+  private async _lookupPlanIdByPlanFile(planFile: string): Promise<string | null> {
+    try {
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      if (!(await db.ensureReady())) { return null; }
+      const workspaceId = (await db.getWorkspaceId()) || '';
+      if (!workspaceId) { return null; }
+      const plans = await db.getAllPlans(workspaceId);
+      const normalized = String(planFile || '').replace(/\\/g, '/');
+      const match = plans.find((p) => p.planFile === planFile
+        || String(p.planFile || '').replace(/\\/g, '/') === normalized);
+      if (!match) {
+        console.warn(`[LinearSync] No plan row found for ${planFile} — the Linear issue will be created without a planId anchor.`);
+        return null;
+      }
+      return match.planId || null;
+    } catch (e) {
+      console.warn(`[LinearSync] planId lookup failed for ${planFile}:`, e);
+      return null;
+    }
+  }
+
+  /** Resolve the local planId for a Linear issue id, for the remote identity anchor. */
+  private async _lookupPlanIdByIssueId(issueId: string): Promise<string | null> {
+    try {
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      if (!(await db.ensureReady())) { return null; }
+      const workspaceId = (await db.getWorkspaceId()) || '';
+      if (!workspaceId) { return null; }
+      const plan = await db.findPlanByLinearIssueId(workspaceId, issueId);
+      return plan?.planId || null;
+    } catch (e) {
+      console.warn(`[LinearSync] planId lookup failed for issue ${issueId}:`, e);
+      return null;
     }
   }
 
@@ -686,19 +813,96 @@ export class LinearSyncService {
       throw new Error('Linear not configured');
     }
 
-    const result = await this.graphqlRequest(`
-      query($teamId: String!) { team(id: $teamId) { projects { nodes { id name } } } }
-    `, { teamId: config.teamId });
+    // PAGINATED. A Linear connection with no arguments returns 50 rows, so the
+    // unpaginated form put a hard 50-project ceiling on this function: at project
+    // 51 "this project does not exist remotely" was indistinguishable from "it is
+    // on page 2", and a name-based attach silently created a duplicate.
+    const mapped: { id: string; name: string }[] = [];
+    let after: string | null = null;
+    let pages = 0;
+    const MAX_PAGES = 40; // 4,000 projects — a runaway guard, not an expected bound.
+    do {
+      const result: any = await this.graphqlRequest(`
+        query($teamId: String!, $after: String) {
+          team(id: $teamId) {
+            projects(first: 100, after: $after) {
+              nodes { id name }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      `, { teamId: config.teamId, after });
 
-    const projects = Array.isArray(result.data?.team?.projects?.nodes)
-      ? result.data.team.projects.nodes
-      : [];
-    const mapped = projects.map((project: any) => ({
-      id: String(project?.id || '').trim(),
-      name: String(project?.name || '').trim()
-    })).filter((project: { id: string; name: string }) => project.id.length > 0 && project.name.length > 0);
+      const page = result.data?.team?.projects;
+      const nodes = Array.isArray(page?.nodes) ? page.nodes : [];
+      for (const project of nodes) {
+        const id = String(project?.id || '').trim();
+        const name = String(project?.name || '').trim();
+        if (id.length > 0 && name.length > 0) { mapped.push({ id, name }); }
+      }
+      after = page?.pageInfo?.hasNextPage ? String(page.pageInfo.endCursor || '') : null;
+      pages++;
+    } while (after && pages < MAX_PAGES);
+
     this._cachedProjects = mapped;
     return mapped;
+  }
+
+  /**
+   * Create a Linear project and bind nothing — the caller owns the mapping row.
+   *
+   * `ProjectCreateInput` requires `name` AND `teamIds: [String!]!`: a project
+   * belongs to at least one team and cannot be created without one. (Do not
+   * trust `linear/linear-node-sdk`'s archived pre-Relay `schema.md`, which lists
+   * `key`/`organizationId` and no `teamIds` at all — it does not describe the
+   * current API.)
+   *
+   * An OAuth app actor may be refused project creation by a workspace admin.
+   * That refusal is surfaced verbatim, with the remedy named, rather than
+   * degraded into a silent "no destination" — attaching an existing project via
+   * the binding row needs no create permission.
+   */
+  public async createLinearProject(name: string, teamId?: string): Promise<{ id: string; name: string; url?: string }> {
+    const config = await this.loadConfig();
+    const resolvedTeamId = String(teamId || config?.teamId || '').trim();
+    if (!config?.setupComplete || !resolvedTeamId) {
+      throw new Error('Linear is not configured — complete setup before creating a project.');
+    }
+    const projectName = String(name || '').trim();
+    if (!projectName) {
+      throw new Error('A Linear project needs a name.');
+    }
+
+    let result: any;
+    try {
+      result = await this.retry(() => this.graphqlRequest(`
+        mutation($input: ProjectCreateInput!) {
+          projectCreate(input: $input) { success project { id name url } }
+        }
+      `, { input: { name: projectName, teamIds: [resolvedTeamId] } }));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Linear refused to create the project "${projectName}": ${detail}. ` +
+        `Remedy: bind this board project to an EXISTING Linear project instead — an attach needs no create permission.`
+      );
+    }
+
+    const project = result?.data?.projectCreate?.project;
+    if (!result?.data?.projectCreate?.success || !project?.id) {
+      throw new Error(
+        `Linear did not create the project "${projectName}" (projectCreate returned success=false). ` +
+        `Remedy: bind this board project to an EXISTING Linear project instead — an attach needs no create permission.`
+      );
+    }
+
+    // _cachedProjects has no TTL and is otherwise cleared only by saveConfig. On
+    // the standalone host, which runs for weeks, a project created here would be
+    // invisible to getAvailableProjects()/_resolveProjectIdToName() for the life
+    // of the process without this line.
+    this._cachedProjects = null;
+
+    return { id: String(project.id), name: String(project.name || projectName), url: project.url ? String(project.url) : undefined };
   }
 
   public async resolveSingleIncludeProjectId(config?: LinearConfig): Promise<string | undefined> {
@@ -763,6 +967,17 @@ export class LinearSyncService {
     });
   }
 
+  /**
+   * The legacy single-project destination: a project id only when
+   * `includeProjectNames.length === 1 && excludeProjectNames.length === 0`.
+   *
+   * Four of its five call sites build INBOUND `IssueFilter`s (queryIssues,
+   * fetchAllIssueIds, the issue-list query, importIssuesFromLinear) and must
+   * keep using it: re-scoping them would change what the board READS, which is
+   * a different decision from where the board WRITES. Only the write
+   * destination moved to `resolveSeedDestination`. The inconsistency is
+   * deliberate — do not "fix" it.
+   */
   private async _resolveSingleIncludeProjectId(config: LinearConfig): Promise<string | undefined> {
     const includeNames = config.includeProjectNames || [];
     const excludeNames = config.excludeProjectNames || [];
@@ -780,6 +995,52 @@ export class LinearSyncService {
     }
 
     return undefined;
+  }
+
+  /**
+   * The single WRITE destination resolver: binding row first, the legacy
+   * single-`includeProjectNames` guess second, nothing third.
+   *
+   * Returns `{ value, source }` and never a bare id. A destination that came
+   * from a binding row and one guessed from the integration config are not the
+   * same fact, and a wrong answer here files a card in the wrong Linear project
+   * — "which store answered?" has to be answerable after the fact, so callers
+   * log `source`.
+   *
+   * A binding row whose `remote_project_id` no longer resolves in Linear is
+   * reported as `dead` rather than falling through to a create: auto-recreating
+   * on a deleted project quietly doubles the mirror.
+   */
+  public async resolveSeedDestination(
+    boardProject: string,
+    config?: LinearConfig
+  ): Promise<{ value: string | undefined; source: 'mapping' | 'include-project' | 'none'; binding?: RemoteProjectBinding }> {
+    const cfg = config || await this.loadConfig();
+    if (!cfg) { return { value: undefined, source: 'none' }; }
+    const teamId = String(cfg.teamId || '').trim();
+
+    if (teamId) {
+      try {
+        const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+        if (await db.ensureReady()) {
+          const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+          if (workspaceId) {
+            const { value, source } = await db.getRemoteProjectBinding({
+              workspaceId, provider: 'linear', remoteTeamId: teamId, boardProject: String(boardProject || ''),
+            });
+            if (source === 'mapping' && value) {
+              return { value: value.remoteProjectId, source: 'mapping', binding: value };
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[LinearSync] resolveSeedDestination: binding lookup failed:', error);
+      }
+    }
+
+    const legacy = await this._resolveSingleIncludeProjectId(cfg);
+    if (legacy) { return { value: legacy, source: 'include-project' }; }
+    return { value: undefined, source: 'none' };
   }
 
   /**
@@ -2588,8 +2849,33 @@ export class LinearSyncService {
 
           if (res.statusCode !== 200) {
             const status = res.statusCode ?? 0;
-            const err: any = new Error(localizeHttpError(status, 'linear', 'fetch from Linear'));
+            // Linear signals a rate limit as HTTP **400** with
+            // errors[0].extensions.code === 'RATELIMITED' — never 429. Rejecting
+            // on the status before the body is parsed made the RATELIMITED branch
+            // below unreachable for every real rate limit, and the generic
+            // "Could not fetch from Linear (HTTP 400)." that replaced it matches
+            // no transient marker, so retry() threw on the first attempt with no
+            // backoff at all. Parse a JSON body first, classify, and only then
+            // fall back to the localized message.
+            let rateLimited = false;
+            let graphqlMessage = '';
+            try {
+              const parsed = JSON.parse(raw);
+              const firstErr = parsed?.errors?.[0];
+              if (firstErr) {
+                graphqlMessage = String(firstErr.message || '');
+                rateLimited = firstErr?.extensions?.code === 'RATELIMITED'
+                  || graphqlMessage.toLowerCase().includes('ratelimit');
+              }
+            } catch { /* not JSON — keep the localized status message */ }
+            const err: any = rateLimited
+              ? new Error(`Linear GraphQL error: ${graphqlMessage || 'rate limited'}`)
+              : new Error(localizeHttpError(status, 'linear', 'fetch from Linear'));
             err.statusCode = status;
+            if (rateLimited) {
+              err.code = 'RATELIMITED';
+              err.isRateLimited = true;
+            }
             return safeReject(err);
           }
           try {
@@ -2893,6 +3179,16 @@ export class LinearSyncService {
       // Strip H1 header before syncing to description
       const contentWithoutH1 = this._stripH1Header(markdownContent);
 
+      // This mutation REPLACES the whole description, so the planId anchor has
+      // to be re-appended here or every content sync silently destroys the
+      // identity that board restore depends on. Strip first (a pull that did
+      // not remove the footer would otherwise duplicate it), then re-append.
+      const planId = await this._lookupPlanIdByIssueId(issueId);
+      const anchoredDescription = ensureLinearPlanIdAnchor(
+        stripLinearPlanIdAnchor(contentWithoutH1),
+        planId || ''
+      );
+
       // Use existing graphqlRequest helper (line 192) — handles token, timeouts, error formatting
       const mutation = `
         mutation UpdateIssueDescription($id: String!, $description: String!) {
@@ -2905,7 +3201,7 @@ export class LinearSyncService {
 
       const result = await this.graphqlRequest(mutation, {
         id: issueId,
-        description: contentWithoutH1
+        description: anchoredDescription
       }, 30000, signal);
 
       if (result.data?.issueUpdate?.success) {
@@ -2937,7 +3233,15 @@ export class LinearSyncService {
     const tempMarker = `creating_${plan.planFile}_${Date.now()}`;
     await this.setIssueIdForPlan(plan.planFile, tempMarker);
 
-    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    // The WRITE destination: a seeded board project's later column moves must
+    // land in the project it was bound to, not in the config's single
+    // includeProjectNames entry — otherwise the first column change after a seed
+    // breaks the 1:1 the seed just established. Source is logged because a
+    // mapping answer and a config guess must never look alike.
+    const planProject = await this._lookupProjectForPlanFile(plan.planFile);
+    const destination = await this.resolveSeedDestination(planProject, config);
+    const resolvedProjectId = destination.value;
+    console.log(`[LinearSync] Destination for ${plan.planFile} (board project "${planProject || '(unassigned)'}"): ${resolvedProjectId || '(none)'} [source=${destination.source}]`);
     let issueCreated = false;
     try {
       const result = await this.retry(() => this.graphqlRequest(`
@@ -3074,6 +3378,427 @@ export class LinearSyncService {
     } else {
       throw new Error("Failed to create Linear issue.");
     }
+  }
+
+
+  // ── Per-project bulk seed ────────────────────────────────────
+
+  /**
+   * Pause when Linear's rate-limit budget is nearly spent.
+   *
+   * `_parseRateLimitHeaders` has always recorded `_lastRateLimitState` and
+   * nothing has ever read it. The seed does: at 620 mutations a throttle is a
+   * real possibility, and the cheap fix is to stop before the API says no.
+   *
+   * `requestsReset`/`complexityReset` are UTC epoch **milliseconds** — no unit
+   * conversion, and no `* 1000`. A pause is capped so a nonsense header cannot
+   * wedge the run for an hour.
+   */
+  private async _pauseForRateLimitBudget(): Promise<void> {
+    const state = this._lastRateLimitState;
+    if (!state) { return; }
+    const LOW_REQUESTS = 25;
+    const LOW_COMPLEXITY = 20000;
+    const MAX_PAUSE_MS = 60_000;
+
+    const resets: number[] = [];
+    if (typeof state.requestsRemaining === 'number' && state.requestsRemaining <= LOW_REQUESTS
+      && typeof state.requestsReset === 'number') {
+      resets.push(state.requestsReset);
+    }
+    if (typeof state.complexityRemaining === 'number' && state.complexityRemaining <= LOW_COMPLEXITY
+      && typeof state.complexityReset === 'number') {
+      resets.push(state.complexityReset);
+    }
+    if (resets.length === 0) { return; }
+
+    const waitMs = Math.min(Math.max(...resets) - Date.now(), MAX_PAUSE_MS);
+    if (waitMs <= 0) { return; }
+    console.warn(`[LinearSync] Rate-limit budget low (requests ${state.requestsRemaining}, complexity ${state.complexityRemaining}) — pausing ${waitMs}ms.`);
+    await this.delay(waitMs);
+  }
+
+  /**
+   * Find an existing Linear issue carrying this plan's `[Switchboard] Plan: {id}`
+   * anchor. Resolve-before-create: a plan whose local link was lost but whose
+   * issue still exists must be ATTACHED, not duplicated. Returns null when no
+   * issue carries the anchor (or the search cannot be run).
+   */
+  public async findIssueByPlanAnchor(planId: string, config?: LinearConfig): Promise<string | null> {
+    const id = String(planId || '').trim();
+    if (!id) { return null; }
+    const cfg = config || await this.loadConfig();
+    if (!cfg?.setupComplete || !cfg.teamId) { return null; }
+    try {
+      const result = await this.retry(() => this.graphqlRequest(`
+        query($filter: IssueFilter!) {
+          issues(filter: $filter, first: 10) { nodes { id description } }
+        }
+      `, {
+        filter: {
+          team: { id: { eq: cfg.teamId } },
+          description: { contains: `${LINEAR_PLAN_ANCHOR_MARKER}${id}` }
+        }
+      }));
+      const nodes = Array.isArray(result.data?.issues?.nodes) ? result.data.issues.nodes : [];
+      for (const node of nodes) {
+        // `contains` is a substring match; confirm the parsed anchor is THIS
+        // planId before attaching, or a prefix collision silently binds the card
+        // to someone else's issue.
+        if (parseLinearPlanIdAnchor(String(node?.description || '')) === id) {
+          return String(node.id || '') || null;
+        }
+      }
+    } catch (error) {
+      console.warn(`[LinearSync] Anchor search failed for plan ${id}:`, error);
+    }
+    return null;
+  }
+
+  /**
+   * Seed one BOARD project's live cards into its bound Linear project.
+   *
+   * Connecting Linear produces a mirror that reflects only the future: an issue
+   * is created only on a column change, on feature creation with realtime sync
+   * on, or one at a time by hand. Nothing walks the board. This is the pass that
+   * does.
+   *
+   * Shape of the run:
+   *  - Fails fast, ONCE, on missing config/token — not 620 times.
+   *  - PRE-FLIGHT before any remote write: the set of cards whose
+   *    `kanban_column` has no `columnToStateId` mapping is computed and handed
+   *    to the caller first. An unmapped column is the majority case on a real
+   *    board, so a user must learn that a seed will skip most of it BEFORE the
+   *    issues are created, not from the after-the-fact report.
+   *  - Already-linked cards are skipped, checking BOTH stores
+   *    (`plans.linear_issue_id` and `linear_issue_links`) — createIssue writes
+   *    both, so consulting one re-creates issues that already exist.
+   *  - Resolve-before-create by planId anchor, so a lost local link attaches
+   *    instead of duplicating.
+   *  - `linear_issue_id` is persisted PER ISSUE, never batched: a crash mid-seed
+   *    must leave every issue created so far linked, so the re-run resumes.
+   *  - `saveSyncMap` is NEVER called. It is a full-table replace, and under
+   *    concurrency it erases a sibling worker's link.
+   *  - On completion the inbound state cursor is re-baselined: every one of
+   *    those `updatedAt` bumps is Switchboard's own write, and replaying them is
+   *    meaningless at best and a burst of agent dispatches at worst.
+   *  - Second pass restores feature structure with the realtime gate bypassed.
+   *
+   * The seed does NOT require `syncOwnershipLease.isOwner()`: it is a deliberate
+   * local action, and on the appliance there is one host that always holds the
+   * lease — requiring it would block the only machine that can run the seed
+   * behind a stale lease. The holder is logged so a surprise is diagnosable.
+   */
+  public async seedProjectToRemote(
+    boardProject: string,
+    options: LinearSeedOptions = {}
+  ): Promise<LinearSeedResult> {
+    const project = String(boardProject || '');
+    const result: LinearSeedResult = {
+      success: false,
+      boardProject: project,
+      destination: { source: 'none' },
+      total: 0,
+      created: 0,
+      attached: 0,
+      alreadyLinked: 0,
+      skippedUnmappedColumn: [],
+      failed: [],
+      features: { linked: 0, failed: 0 },
+    };
+
+    // 1. Fail fast, once.
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      result.error = 'Linear is not configured — complete setup before seeding.';
+      return result;
+    }
+    if (!(await this.hasApiToken())) {
+      result.error = 'Linear API token not configured — nothing can be seeded.';
+      return result;
+    }
+    try {
+      console.log(`[LinearSync] Seed starting for board project "${project || '(unassigned)'}"; sync-ownership lease held by this machine: ${await syncOwnershipLease.isOwner()}`);
+    } catch { /* lease read is diagnostic only — never a gate */ }
+
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    if (!(await db.ensureReady())) {
+      result.error = 'Kanban database unavailable — nothing can be seeded.';
+      return result;
+    }
+    const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+    if (!workspaceId) {
+      result.error = 'No workspace id — the seed cannot resolve which board it is seeding.';
+      return result;
+    }
+
+    // 2. The live board only. Archived/completed/missing/deleted are history.
+    const plans = await db.getActivePlansByProject(workspaceId, project);
+    result.total = plans.length;
+
+    // 3. PRE-FLIGHT, before any remote write.
+    const columnToStateId = config.columnToStateId || {};
+    const sendable: KanbanPlanRecord[] = [];
+    for (const plan of plans) {
+      const stateId = columnToStateId[plan.kanbanColumn];
+      if (!stateId) {
+        result.skippedUnmappedColumn.push({ planFile: plan.planFile, column: plan.kanbanColumn });
+        continue;
+      }
+      sendable.push(plan);
+    }
+    options.onPreflight?.({
+      total: result.total,
+      sendable: sendable.length,
+      unmapped: result.skippedUnmappedColumn.slice(),
+      unmappedColumns: [...new Set(result.skippedUnmappedColumn.map((s) => s.column))],
+    });
+    if (options.dryRun) {
+      result.success = true;
+      return result;
+    }
+
+    // 4. Already linked? Check BOTH stores.
+    const pending: KanbanPlanRecord[] = [];
+    for (const plan of sendable) {
+      const fromPlansTable = String(plan.linearIssueId || '').trim();
+      if (fromPlansTable && !fromPlansTable.startsWith('creating_')) {
+        result.alreadyLinked++;
+        console.log(`[LinearSync] Seed skip ${plan.planFile}: already linked [source=plans.linear_issue_id]`);
+        continue;
+      }
+      const link = await db.getLinearIssueLinkByPlan(plan.planFile);
+      const fromLinkTable = String(link?.issueId || '').trim();
+      if (fromLinkTable && !fromLinkTable.startsWith('creating_')) {
+        result.alreadyLinked++;
+        console.log(`[LinearSync] Seed skip ${plan.planFile}: already linked [source=linear_issue_links]`);
+        // Heal the other store so the next run agrees with itself.
+        await db.updateLinearIssueIdByPlanFile(plan.planFile, workspaceId, fromLinkTable);
+        continue;
+      }
+      pending.push(plan);
+    }
+
+    // 5. The destination — binding row first, config guess second, create third.
+    const destination = await this.resolveSeedDestination(project, config);
+    if (pending.length === 0 && destination.source === 'none') {
+      // Nothing to write and nowhere bound: creating an empty remote project
+      // here would be a stray artifact for a run that publishes no card. The
+      // pre-flight already told the caller why the board is empty of sendable
+      // cards (unmapped columns, or everything already linked).
+      result.success = true;
+      console.log(`[LinearSync] Seed for "${project || '(unassigned)'}" has nothing to send and no bound destination — no remote project created.`);
+      return result;
+    }
+    let projectId: string | undefined;
+    let origin: 'created' | 'attached' = 'attached';
+    try {
+      if (destination.source === 'mapping' && destination.value) {
+        // A binding whose remote project is GONE must fail loudly. Auto-creating
+        // a replacement quietly doubles the mirror.
+        const available = await this.getAvailableProjects();
+        const live = available.find((p) => p.id === destination.value);
+        if (!live) {
+          result.error = `The Linear project bound to board project "${project || '(unassigned)'}" (${destination.value}) no longer exists in team ${config.teamId}. `
+            + `Re-bind this board project to a live Linear project before seeding — the seed will not silently create a replacement.`;
+          return result;
+        }
+        projectId = destination.value;
+        origin = destination.binding?.origin || 'attached';
+        // A renamed remote project is NORMAL: the id is the binding, the stored
+        // name is a display value that follows it.
+        if (live.name && live.name !== destination.binding?.remoteProjectName) {
+          await db.refreshRemoteProjectBindingName({
+            workspaceId, provider: 'linear', remoteTeamId: config.teamId,
+            boardProject: project, remoteProjectName: live.name,
+          });
+        }
+        result.destination = { projectId, source: 'mapping', origin };
+      } else if (destination.source === 'include-project' && destination.value) {
+        // The config already names exactly one project. Binding to it records
+        // the decision, so the next run resolves from the mapping row and the
+        // answer stops depending on a machine-global config that can be
+        // re-pointed.
+        const guessed: string = destination.value;
+        projectId = guessed;
+        origin = 'attached';
+        const available = await this.getAvailableProjects();
+        const live = available.find((p) => p.id === guessed);
+        await db.setRemoteProjectBinding({
+          workspaceId, provider: 'linear', remoteTeamId: config.teamId, boardProject: project,
+          remoteProjectId: guessed, remoteProjectName: live?.name || '', origin: 'attached',
+        });
+        result.destination = { projectId: guessed, source: 'include-project', origin };
+      } else {
+        // Name the unassigned board project for what it IS. A bare "Switchboard"
+        // would be indistinguishable from a project a person named that.
+        const created = await this.createLinearProject(project || 'Switchboard — Unassigned', config.teamId);
+        projectId = created.id;
+        origin = 'created';
+        await db.setRemoteProjectBinding({
+          workspaceId, provider: 'linear', remoteTeamId: config.teamId, boardProject: project,
+          remoteProjectId: created.id, remoteProjectName: created.name, origin: 'created',
+        });
+        result.destination = { projectId, source: 'created', origin };
+      }
+    } catch (error) {
+      result.error = error instanceof Error ? error.message : String(error);
+      return result;
+    }
+    console.log(`[LinearSync] Seed destination for "${project || '(unassigned)'}": ${projectId} [source=${result.destination.source}, origin=${origin}]`);
+
+    // 6. The creates, bounded at 4 — the concurrency syncAllTickets already uses.
+    const concurrency = Math.max(1, Math.min(options.concurrency ?? 4, 8));
+    const queue = pending.slice();
+    let done = 0;
+    const emit = () => options.onProgress?.({
+      done,
+      total: pending.length,
+      skipped: result.skippedUnmappedColumn.length + result.alreadyLinked,
+    });
+    emit();
+
+    const seededFeatures: KanbanPlanRecord[] = [];
+
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (options.signal?.aborted) { return; }
+        const plan = queue.shift();
+        if (!plan) { return; }
+        try {
+          await this._pauseForRateLimitBudget();
+          const outcome = await this._seedOnePlan(plan, {
+            config, projectId, workspaceId, db,
+          });
+          if (outcome.attached) { result.attached++; } else { result.created++; }
+          if (plan.isFeature) { seededFeatures.push(plan); }
+        } catch (error) {
+          result.failed.push({
+            planFile: plan.planFile,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          done++;
+          emit();
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) || 1 }, () => worker()));
+
+    // 7. Second pass — feature structure. A flat seed turns 110 features into
+    //    620 siblings; the parent-link pass exists, it was only ever gated on a
+    //    background toggle that has no business deciding this.
+    const allFeatures = [
+      ...seededFeatures,
+      ...plans.filter((p) => p.isFeature && !seededFeatures.some((s) => s.planId === p.planId)),
+    ];
+    for (const feature of allFeatures) {
+      try {
+        const subtasks = await db.getSubtasksByFeatureId(feature.planId);
+        if (subtasks.length === 0) { continue; }
+        const outcome = await this.syncFeatureWithSubtasks({
+          featurePlanFile: feature.planFile,
+          featureTopic: feature.topic,
+          featureColumn: feature.kanbanColumn,
+          subtasks: subtasks.map((s) => ({ planFile: s.planFile, topic: s.topic, complexity: s.complexity })),
+          force: true,
+        });
+        result.features.linked += outcome.linked.length;
+        result.features.failed += outcome.failed.length;
+        for (const planFile of outcome.failed) {
+          // Reported, never silently unparented: a subtask whose parent was
+          // skipped (unmapped column, linked elsewhere) is a structural hole the
+          // user has to be able to see.
+          console.warn(`[LinearSync] Seed: subtask ${planFile} could not be parented under ${feature.planFile}`);
+        }
+      } catch (error) {
+        console.warn(`[LinearSync] Seed: feature pass failed for ${feature.planFile}:`, error);
+        result.features.failed++;
+      }
+    }
+
+    // 8. Re-baseline the inbound state cursor, AFTER the last remote write.
+    //    Every one of those updatedAt bumps — the creates and the parent links —
+    //    is Switchboard's own write. This is the identical move seed-on-first-poll
+    //    already makes, for identical reasons: without it the poller's windowed
+    //    read drops most cards' first inbound signal permanently and replays the
+    //    rest into the dispatch path as a burst of agent runs.
+    try {
+      await db.setConfig('remote.stateCursor.linear', new Date().toISOString());
+    } catch (error) {
+      console.warn('[LinearSync] Seed could not re-baseline remote.stateCursor.linear:', error);
+    }
+
+    await db.markRemoteProjectBindingSeeded({
+      workspaceId, provider: 'linear', remoteTeamId: config.teamId, boardProject: project,
+    });
+
+    result.success = result.failed.length === 0;
+    console.log(`[LinearSync] Seed finished for "${project || '(unassigned)'}": created ${result.created}, attached ${result.attached}, already linked ${result.alreadyLinked}, unmapped-column skips ${result.skippedUnmappedColumn.length}, failed ${result.failed.length}.`);
+    return result;
+  }
+
+  /**
+   * One plan → one Linear issue, link persisted immediately.
+   *
+   * Deliberately NOT routed through `createIssue`: that resolves its own
+   * destination and its cleanup does load → delete-one → replace-the-whole-table,
+   * which under concurrency erases a sibling worker's link. `createIssueSimple`
+   * takes the projectId and returns the id, so the seed owns the three things
+   * createIssue would have done — the planId anchor, the `creating_*` marker
+   * that stops a concurrent debouncedSync double-creating, and the per-issue
+   * link write.
+   */
+  private async _seedOnePlan(
+    plan: KanbanPlanRecord,
+    ctx: { config: LinearConfig; projectId?: string; workspaceId: string; db: KanbanDatabase }
+  ): Promise<{ issueId: string; attached: boolean }> {
+    const { config, projectId, workspaceId, db } = ctx;
+
+    // Resolve-before-create: an issue already carrying this plan's anchor is
+    // ours; attach to it rather than minting a second one.
+    if (plan.planId) {
+      const existing = await this.findIssueByPlanAnchor(plan.planId, config);
+      if (existing) {
+        await this.setIssueIdForPlan(plan.planFile, existing);
+        await db.updateLinearIssueIdByPlanFile(plan.planFile, workspaceId, existing);
+        console.log(`[LinearSync] Seed attached ${plan.planFile} to existing issue ${existing} (planId anchor).`);
+        return { issueId: existing, attached: true };
+      }
+    }
+
+    const stateId = config.columnToStateId[plan.kanbanColumn];
+    const priority = this._complexityToPriority(plan.complexity);
+    const description = await this._buildInitialIssueDescription(plan.planFile);
+
+    // Hold the marker across the create — a human moving this card mid-seed
+    // enters syncPlan, finds no issue id, and would create a second issue.
+    const tempMarker = `creating_${plan.planFile}_${Date.now()}`;
+    await this.setIssueIdForPlan(plan.planFile, tempMarker);
+
+    let created: { id: string; identifier: string };
+    try {
+      created = await this.createIssueSimple({
+        title: plan.topic || `Plan ${plan.planId}`,
+        description,
+        projectId,
+        stateId,
+        priority,
+      });
+    } catch (error) {
+      // Targeted single-row cleanup. NEVER saveSyncMap — that is a full-table
+      // replace and would erase every sibling worker's link.
+      try { await db.deleteLinearIssueLinkByPlan(plan.planFile, tempMarker); }
+      catch (cleanupErr) { console.warn(`[LinearSync] Seed could not clear temp marker for ${plan.planFile}:`, cleanupErr); }
+      throw error;
+    }
+
+    await this.setIssueIdForPlan(plan.planFile, created.id);
+    const persisted = await db.updateLinearIssueIdByPlanFile(plan.planFile, workspaceId, created.id);
+    if (!persisted) {
+      throw new Error(`Created Linear issue ${created.identifier} for ${plan.planFile} but failed to persist the link — re-running the seed will attach to it via the planId anchor.`);
+    }
+    return { issueId: created.id, attached: false };
   }
 
   // ── Debounced Sync ───────────────────────────────────────────
@@ -3578,9 +4303,17 @@ export class LinearSyncService {
     featureTopic: string;
     featureColumn: string;
     subtasks: Array<{ planFile: string; topic: string; complexity: string }>;
+    /**
+     * Bypass the `realTimeSyncEnabled` gate for a DELIBERATE caller (the
+     * per-project seed). A background toggle has no business deciding whether an
+     * explicit user action preserves 110 features' parent/child structure — with
+     * realtime off, the gate below would silently yield a structurally flat
+     * mirror and no error.
+     */
+    force?: boolean;
   }): Promise<{ featureIssueId?: string; linked: string[]; failed: string[] }> {
     const config = await this.loadConfig();
-    if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
+    if (!config?.setupComplete || (config.realTimeSyncEnabled !== true && params.force !== true)) {
       return { linked: [], failed: params.subtasks.map(s => s.planFile) };
     }
     if (!(await this.hasApiToken())) {
@@ -4547,4 +5280,5 @@ export class LinearSyncService {
       return false;
     }
   }
+
 }

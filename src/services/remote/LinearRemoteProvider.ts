@@ -5,9 +5,10 @@ import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import { hasMarker } from '../commentMarker';
 import type {
     RemoteProvider, RemoteStateDelta, RemoteCommentDelta,
-    RemoteProviderCapabilities, ArchiveResult
+    RemoteProviderCapabilities, ArchiveResult, SeedProgress, SeedResult
 } from './RemoteProvider';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
+import { stripLinearPlanIdAnchor } from './linearPlanIdAnchor';
 
 /**
  * Linear backend for Remote Control delta polling.
@@ -61,12 +62,11 @@ export class LinearRemoteProvider implements RemoteProvider {
         pullComments: true,
         push: true,
         archive: true,
-        boardPush: true,       // syncPlan carries columns + parent/child structure
-        boardRestore: false,   // no planId anchor, no restoreFrom* — .switchboard/plans/linear-board-restore-and-planid-anchor.md
         automation: true,      // LinearAutomationService
         missions: true,
         agentSurface: true,
-        agentSessions: true
+        agentSessions: true,
+        seedProjects: true
     };
     private _linear: LinearSyncService;
     private _deps: LinearRemoteProviderDeps;
@@ -88,42 +88,68 @@ export class LinearRemoteProvider implements RemoteProvider {
 
         // The cursor is an ISO timestamp we mint ourselves; JSON.stringify quotes it
         // safely. Inlining avoids guessing Linear's DateTime filter scalar variable name.
+        //
+        // `orderBy: updatedAt` is LOAD-BEARING. Linear's default ordering for every
+        // connection is `createdAt`, so a query that filters on `updatedAt`, sorts on
+        // `createdAt` and then cursors on `updatedAt` does not return the oldest rows
+        // by the field it cursors on — the maximum `updatedAt` in the page can sit far
+        // ahead of rows the page never returned, and the advanced cursor excludes them
+        // PERMANENTLY. That is deterministic, not a rare interleaving, and a bulk seed
+        // is exactly what makes it fire.
+        //
+        // Raising `first` is not the alternative: the nested `children` connection
+        // multiplies this selection's cost (a connection defaults to 50 children), so
+        // `first: 100` already runs ~5,000 complexity points against Linear's hard
+        // 10,000-point single-query ceiling. Real `pageInfo`/`after` pagination is the
+        // only correct fix.
         const since = JSON.stringify(String(sinceCursor || ''));
         const QUERY = `
-          query {
-            issues(filter: { updatedAt: { gt: ${since} } }, first: 100) {
+          query($after: String) {
+            issues(filter: { updatedAt: { gt: ${since} } }, orderBy: updatedAt, first: 100, after: $after) {
               nodes { id updatedAt description priority state { id } parent { id } children { nodes { id } } }
+              pageInfo { hasNextPage endCursor }
             }
           }
         `;
         const deltas: RemoteStateDelta[] = [];
         let nextCursor = sinceCursor;
         try {
-            const resp = await this._linear.graphqlRequest(QUERY, {});
-            const nodes = resp?.data?.issues?.nodes || [];
-            for (const node of nodes) {
-                const remoteId = String(node.id || '');
-                const stateKey = String(node.state?.id || '');
-                const updatedAt = String(node.updatedAt || '');
-                const description = String(node.description || '');
-                const rawPriority = node.priority;
-                const priority = (rawPriority === undefined || rawPriority === null || Number(rawPriority) === 0) ? null : Number(rawPriority);
-                if (remoteId && stateKey) {
-                    deltas.push({
-                        remoteId,
-                        stateKey,
-                        // Feature structure — parent/children are native Linear GraphQL fields.
-                        // updatedAt bumps on parentId changes (issue property update), so a
-                        // parent/child link change IS detected by this delta query.
-                        parentRemoteId: String(node.parent?.id || ''),
-                        isFeatureCandidate: (node.children?.nodes?.length || 0) > 0,
-                        updatedAt: updatedAt || undefined,
-                        description: description || undefined,
-                        priority,
-                    });
+            let after: string | null = null;
+            let pages = 0;
+            const MAX_PAGES = 20; // 2,000 issues per poll — a runaway guard, not an expected bound.
+            do {
+                const resp = await this._linear.graphqlRequest(QUERY, { after });
+                const page = resp?.data?.issues;
+                const nodes = page?.nodes || [];
+                for (const node of nodes) {
+                    const remoteId = String(node.id || '');
+                    const stateKey = String(node.state?.id || '');
+                    const updatedAt = String(node.updatedAt || '');
+                    // Strip our own planId anchor before the body is handed to the
+                    // content pull — otherwise the footer round-trips into the local
+                    // plan file and a pull→push cycle would duplicate it.
+                    const description = stripLinearPlanIdAnchor(String(node.description || ''));
+                    const rawPriority = node.priority;
+                    const priority = (rawPriority === undefined || rawPriority === null || Number(rawPriority) === 0) ? null : Number(rawPriority);
+                    if (remoteId && stateKey) {
+                        deltas.push({
+                            remoteId,
+                            stateKey,
+                            // Feature structure — parent/children are native Linear GraphQL fields.
+                            // updatedAt bumps on parentId changes (issue property update), so a
+                            // parent/child link change IS detected by this delta query.
+                            parentRemoteId: String(node.parent?.id || ''),
+                            isFeatureCandidate: (node.children?.nodes?.length || 0) > 0,
+                            updatedAt: updatedAt || undefined,
+                            description: description || undefined,
+                            priority,
+                        });
+                    }
+                    if (updatedAt && updatedAt > nextCursor) { nextCursor = updatedAt; }
                 }
-                if (updatedAt && updatedAt > nextCursor) { nextCursor = updatedAt; }
-            }
+                after = page?.pageInfo?.hasNextPage ? String(page.pageInfo.endCursor || '') : null;
+                pages++;
+            } while (after && pages < MAX_PAGES);
         } catch (e) {
             console.warn('[LinearRemoteProvider] fetchStateDeltas failed:', e);
         }
@@ -275,6 +301,26 @@ export class LinearRemoteProvider implements RemoteProvider {
         if (!result.success) {
             throw new Error(`Linear pushContent failed for ${remoteId}: ${result.error || 'unknown error'}`);
         }
+    }
+
+    /**
+     * Bulk-seed one board project — a thin delegate to
+     * `LinearSyncService.seedProjectToRemote`, the same shape `pushState`/
+     * `pushContent` use. The engine owns the destination mapping, the pre-flight,
+     * the concurrency and the cursor re-baseline; the seam exists so the seed
+     * control can gate on `capabilities.seedProjects` and never on `kind`.
+     */
+    public async seedBoardProject(boardProject: string, progress?: (p: SeedProgress) => void): Promise<SeedResult> {
+        const outcome = await this._linear.seedProjectToRemote(boardProject, {
+            onProgress: progress ? (p) => progress({ done: p.done, total: p.total, skipped: p.skipped }) : undefined,
+        });
+        return {
+            ok: outcome.success,
+            created: outcome.created,
+            attached: outcome.attached,
+            skipped: outcome.alreadyLinked + outcome.skippedUnmappedColumn.length,
+            error: outcome.error,
+        };
     }
 
     private _renderIssue(issue: { title?: string; description?: string } | null, remoteId: string): string {
