@@ -220,6 +220,72 @@ function run() {
             'renderMoveView must hold until the columns resolve');
     });
 
+    // A dispatch-labelled control must dispatch. The command surface shipped for
+    // months posting /kanban/advance — a route that is move-only BY CONSTRUCTION
+    // (promptSelected passes dispatch:false on every built-in path) — from a
+    // button labelled ADVANCE, so an operator advanced a card, watched it move,
+    // and got no agent. Nothing on this surface was pinned to the endpoint it
+    // calls, so no gate saw it. These are those pins.
+    test('the dispatch controls call /kanban/dispatch, never the move-only /kanban/advance', () => {
+        const dispatchFn = js.slice(
+            js.indexOf('async function executeDispatch'),
+            js.indexOf('async function executeDispatch') + 2400
+        );
+        assert.ok(dispatchFn.length > 100, 'executeDispatch must exist in command.js');
+        assert.ok(dispatchFn.includes("'/kanban/dispatch'"),
+            'executeDispatch must POST /kanban/dispatch — /kanban/advance never fires a CLI trigger');
+        assert.ok(!dispatchFn.includes("'/kanban/advance'"),
+            'executeDispatch must not POST /kanban/advance — that route moves cards and dispatches nothing');
+        assert.ok(/ack:\s*true/.test(dispatchFn),
+            'executeDispatch must send ack: true — the two-phase flow the surface documents must be the one it makes');
+        // Per-card: /kanban/dispatch takes ONE plan ref, so a multi-select must
+        // loop. `planIds` posted as an array would dispatch exactly one card and
+        // report success for all of them.
+        assert.ok(/for\s*\(\s*const\s+planId\s+of\s+planIds\s*\)/.test(dispatchFn),
+            'executeDispatch must loop per card — /kanban/dispatch is single-ref by contract');
+        assert.ok(!/planIds\s*,/.test(dispatchFn.slice(dispatchFn.indexOf('JSON.stringify'))),
+            'the dispatch body must carry one plan ref, not the planIds array');
+        // The starred quick action is the same control on the agent view.
+        assert.ok(!/agentFetchMobile\(\s*'\/kanban\/advance'/.test(js),
+            "dispatch-starred must not call /kanban/advance — it is a dispatch, not a move");
+    });
+
+    test('no dispatch-firing control is labelled ADVANCE', () => {
+        const commandHtml = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'command.html'), 'utf8');
+        const btn = commandHtml.match(/<button[^>]*id="btn-dispatch"[^>]*>([^<]*)</);
+        assert.ok(btn, 'command.html must carry #btn-dispatch');
+        assert.strictEqual(btn[1].trim(), 'DISPATCH',
+            'the Dispatch view primary button must read DISPATCH — re-pointing it at /kanban/dispatch without re-labelling just reverses the mislabel');
+    });
+
+    test('the delivery poll is per-card, not single-slot', () => {
+        // pollDispatchDelivery used to open with cancelDispatchPoll() against a
+        // single `activeDispatchPoll` slot. Under the per-card loop above that
+        // cancels every poll but the last, so N dispatched cards report delivery
+        // for exactly one — a confident wrong answer for N-1 of them.
+        assert.ok(/activeDispatchPolls\s*=\s*new Map\(\)/.test(js),
+            'the poll registry must be a Map keyed by planId');
+        const pollFn = js.slice(
+            js.indexOf('function pollDispatchDelivery'),
+            js.indexOf('function pollDispatchDelivery') + 400
+        );
+        assert.ok(!pollFn.includes('cancelDispatchPoll()'),
+            'pollDispatchDelivery must not cancel its siblings — that is what made multi-card dispatch report one outcome');
+    });
+
+    test('the board-move trigger state is visible on the surface it affects', () => {
+        // The setting that silences board gestures appeared in exactly one
+        // webview file (kanban.html) and on a host where its button was
+        // display:none. An operator on the phone had nothing on screen that
+        // could explain a quiet board.
+        assert.ok(js.includes('kanban.boardMoveCliTriggersEnabled'),
+            'the command surface must read the board-move trigger key');
+        assert.ok(js.includes("'/kanban/verb/getSetting'"),
+            'the indicator must read through the getSetting verb, not a hardcoded default');
+        assert.ok(!/boardMoveCliTriggersEnabled[\s\S]{0,200}?\|\|\s*true/.test(js),
+            'the indicator must not fall back to a plausible value — an unreadable setting reads as unknown, not as on');
+    });
+
     test('the roster is real, and a dormant team seats on tap', () => {
         assert.ok(js.includes('ptyListAgentGroups'), 'the roster must come from ptyListAgentGroups');
         assert.ok(js.includes('ptyStartTeam'), 'a dormant team must seat via ptyStartTeam');

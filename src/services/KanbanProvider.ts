@@ -953,6 +953,10 @@ export class KanbanProvider implements vscode.Disposable {
      */
     public static readonly BOARD_MOVE_CLI_TRIGGERS_KEY = 'kanban.boardMoveCliTriggersEnabled';
     private static readonly LEGACY_CLI_TRIGGERS_KEY = 'kanban.cliTriggersEnabled';
+    /** `<tier>:<project>` keys already attempted by the lazy legacy-key migration
+     *  in this process. The migration is a WRITE on a read path that broadcasts;
+     *  see `migrateTo` for why it must not repeat. */
+    private readonly _boardMoveCliTriggersMigrated = new Set<string>();
 
     public _resolveBoardMoveCliTriggers(initiatorProject?: string | null): { value: boolean; source: string } {
         const NEW_KEY = KanbanProvider.BOARD_MOVE_CLI_TRIGGERS_KEY;
@@ -1002,6 +1006,17 @@ export class KanbanProvider implements vscode.Disposable {
             return {};
         };
         const migrateTo = (tierName: string, v: boolean): void => {
+            // At most one migration write per (tier, project) per process. This
+            // resolver is on the BROADCAST path — `_boardMoveCliTriggersForScope`
+            // (:8963) runs it once per connected client per board push — and each
+            // write ends in a whole-database `_persist()`. Without this latch the
+            // first push after an upgrade fires N concurrent full-DB writes, and a
+            // new-key row that is present-but-corrupt in a tier ABOVE the legacy
+            // row never converges (the corrupt row keeps winning the NEW_KEY read),
+            // so the write repeats on every push for the life of the process.
+            const latch = `${tierName}:${projectTier ?? ''}`;
+            if (this._boardMoveCliTriggersMigrated.has(latch)) { return; }
+            this._boardMoveCliTriggersMigrated.add(latch);
             try {
                 if (tierName === 'project' && db && projectTier) {
                     void db.setProjectConfigJson(projectTier, NEW_KEY, v);

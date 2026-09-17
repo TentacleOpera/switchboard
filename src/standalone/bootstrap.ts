@@ -1399,6 +1399,28 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // DEFAULT_KANBAN_COLUMNS (:334, :363), so a saved custom column is written to
     // the DB and never rendered. `featureAdvanced` likewise — `suggestFeatures`
     // and `setFeatureWorkflowMode` are not wired here. Flip each when its path is.
+    //
+    // `automation` had no stated reason at all until now, in a block where every
+    // other false flag justifies itself — and that silence is what let it hide
+    // #btn-cli-triggers on this host for a whole migration. Measured, 2026-09-17:
+    //   - It carries NO CSS selector list any more (transport.js) — every control
+    //     that used to hide under `host-automation-false` was audited against its
+    //     real backing path and none of them was an automation service. The body
+    //     class it still adds now matches zero rules in any served document.
+    //   - It does NOT gate the Mission Control panel: that manifest entry reads
+    //     `PanelAvailability.missionControl` (headlessPanelHtml.ts:724), a
+    //     different field.
+    //   - What it still gates, and the only thing it gates, is the `mission` view
+    //     on the command surface (command.js: `{ name: 'mission', cap:
+    //     'automation' }`).
+    // That view's backing path IS wired on this host: `POST /kanban/queue/next`
+    // is routed (LocalApiServer.ts:14423) and all four PlanIngestionEngine queue
+    // seams are wired below (:4484-:4516), so the queue pops, paces, re-stages a
+    // dead seat and backstops a stall here exactly as on the extension host. On
+    // the evidence this flag should be TRUE; it is left false only because
+    // unhiding a phone view is a product call, not a review call. Flip it when
+    // the mission view has been driven once against a live queue on this host —
+    // the tracing is done, the UAT is not.
     const baseStandaloneCapabilities: HostCapabilities = {
         terminalDispatch: ptyReady,
         automation: false,

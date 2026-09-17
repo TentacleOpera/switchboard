@@ -659,13 +659,23 @@
             box-shadow: var(--glow-teal);
         }
 
+        /* is-off = a toggle in its OFF state, not a disabled control. This is the
+           rule that governs the CONTROLS STRIP (#btn-cli-triggers,
+           #btn-feature-ultracode/-goal/-drive, #btn-collapse-coders) — the
+           .kanban-sub-bar variant above does not reach them, they are not in that
+           bar. At opacity 0.5 the board-move triggers button was least visible in
+           exactly the state an operator needs to find it, which is half of why the
+           gate stayed invisible. The off signal is desaturation plus a dimmed
+           glyph; opacity stays high so the control is still identifiable.
+           (btn-collapse-coders has INVERTED polarity — is-off there means collapse
+           is ON — so this state must never read as disabled.) */
         .strip-icon-btn.is-off {
             border-color: transparent;
-            opacity: 0.5;
+            opacity: 0.85;
         }
 
         .strip-icon-btn.is-off img {
-            filter: grayscale(0.5) brightness(0.7);
+            filter: grayscale(0.8) brightness(0.9);
         }
 
         .backlog-toggle-btn {
