@@ -3599,7 +3599,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             };
                         }
                         for (const rec of records) {
-                            if (!rec.planFile) { continue; }
+                            // No plan_file means updateDispatchInfoByPlanFile cannot run,
+                            // so no `dispatched` event is appended — and that event is the
+                            // ONLY delivery evidence the verifiers read. Skipping quietly
+                            // returns 'delivered' for a card that will verify as
+                            // not-delivered. Name it.
+                            if (!rec.planFile) {
+                                console.error(`[bootstrap] dispatched ${rec.planId || rec.sessionId || '(unknown card)'} but it has no plan_file — no dispatch evidence was recorded, so this delivery will verify as not-delivered`);
+                                continue;
+                            }
                             try {
                                 await db.updateDispatchInfoByPlanFile(rec.planFile, rec.workspaceId || workspaceId, {
                                     ownerSeat: tmuxPaneRecord.friendlyName,
@@ -3683,7 +3691,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     }
 
                     for (const rec of records) {
-                        if (!rec.planFile) { continue; }
+                        // See the tmux leg: no plan_file ⇒ no `dispatched` event ⇒ the
+                        // verifiers report not-delivered for a prompt that landed.
+                        if (!rec.planFile) {
+                            console.error(`[bootstrap] dispatched ${rec.planId || rec.sessionId || '(unknown card)'} but it has no plan_file — no dispatch evidence was recorded, so this delivery will verify as not-delivered`);
+                            continue;
+                        }
                         try {
                             await db.updateDispatchInfoByPlanFile(rec.planFile, rec.workspaceId || workspaceId, {
                                 ownerSeat: terminal.friendlyName,

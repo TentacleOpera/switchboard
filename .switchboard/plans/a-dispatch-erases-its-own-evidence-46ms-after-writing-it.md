@@ -357,3 +357,72 @@ current silence is why it has always appeared to be the only path that works.
 ---
 
 **Recommendation: Send to Lead Coder.** (Complexity 7.)
+
+---
+
+## Step 1 — the ordering determination (recorded here, as the plan required)
+
+The second write was **the documented move arriving late**, not a redundant
+second move. The standalone `triggerAction` arm ran its `moveSessionsToColumn`
+block *after* delivery and after `updateDispatchInfoByPlanFile` had stamped, so
+the column-move UPDATE's `, owner_since = NULL` fragment erased the stamp the
+dispatch had just written — 46 ms later, every time. The arm now moves **before**
+it builds the prompt and delivers (`src/standalone/bootstrap.ts:3503`), matching
+the extension's documented move-FIRST-then-deliver coupling, and the stamp is the
+last write. Delivery evidence no longer depends on that ordering either way: it
+is the append-only `dispatched` row in `plan_events`, which no move can touch.
+
+## Review Findings
+
+Implementation landed in `205b2c40` (alongside the board-move-gate plan) across
+`LocalApiServer.ts`, `KanbanDatabase.ts`, `bootstrap.ts`, `TaskViewerProvider.ts`,
+`command.js`, `dock.js` and `kanban.html`; the review fixed four defects in it
+and added the missing gate. Verified against the code, not the plan: the
+persisted `dispatched` payload literal really does carry `seat`/`agent`/`ide`
+(`KanbanDatabase.ts:14612`), and `dispatch_rejected` really does carry
+`error`/`seat` — both reads have writers. Fixes applied: a rejection arriving
+after the stamp no longer overwrites an evidenced delivery
+(`LocalApiServer.ts:3611`); the stamp loop no longer skips a `plan_file`-less
+card in silence (`bootstrap.ts:3608`, `:3698`); a dead `ownerSinceBefore` local
+and two docblocks that described the pre-fix behaviour were corrected. The core
+mechanism had **no** discriminating automated check before this pass — the
+plan's seven listed tests did not exist — so
+`src/test/dispatch-evidence-append-only-contract.test.js` (14 checks) was
+written, scripted as `test:contract:dispatch-evidence`, and wired into
+`.github/workflows/integration-tests.yml`; it passes 14/14, as do
+external-headed-team (10), dispatch-hops (15), team-scoped-routing (68),
+shell-agent-dock (61), verb-engine-kanban (25), cross-client-scope (18),
+headless-feature-mgmt (47), drag-confirm-order, both browser dispatch surfaces
+and `catalog:check`/`icons:parity`/`banner:check`.
+
+## Deferred Findings
+
+- MAJOR — `test:contract:mobile-command-route` is red on `main` with 6 failures
+  (input tags on `/command`, the `password` keyword, a fifth sub-nav view, a pty
+  write path, `setInterval` polling, and `dispatchedTerminal` not persisted by
+  the push writer). Unrelated to this plan's files; it reads neither
+  `LocalApiServer.ts` nor `bootstrap.ts`. `src/test/mobile-command-route-contract.test.js:1`
+- MAJOR — the standalone arm now moves the card before it builds the prompt and
+  delivers, so a prompt-build failure, a roster-barrier abort or a boot-exit
+  leaves the card in the target column with nothing dispatched. This is the
+  intended ordering (it is what removes the defect, and the response is honest:
+  `moved:true, dispatched:false, delivery:'not-delivered'`), but it is a real
+  behaviour change from "a failed dispatch left the card where it was".
+  `src/standalone/bootstrap.ts:3503`
+- MAJOR — the plan's wider invariant "`owner_since` is not read by any
+  correctness gate" is met for dispatch verification but **not** board-wide:
+  `getLiveDispatchAttribution` still filters `owner_since IS NOT NULL`, so
+  `_resolveAttributedCodingSeats` — the completion multi-seat clear — finds no
+  seats for any card whose column has moved since dispatch. Pre-existing, same
+  root cause, outside this plan's scope. `src/services/LocalApiServer.ts:4501`
+- NIT — the raw verb rail annotates its outcome from `body.sessionId || body.plan`
+  only, so a multi-card `triggerAction` reports the first card's verdict for the
+  whole batch. `src/services/LocalApiServer.ts:8374`
+- NIT — on the acked path a prompt-mode dispatch that resolved without stamping
+  would poll to `unknown` at 60 s, where the sync path calls the same outcome
+  `delivered`. Unreachable in the standalone arm today (it always delivers to a
+  PTY and always stamps on its success path), so left alone rather than given a
+  second vocabulary. `src/services/LocalApiServer.ts:3651`
+- NIT — `GET /kanban/dispatch/state`'s `unknown` branch still says "Check the
+  terminal agent". Correct there, unlike the 502 the plan called out: delivery
+  genuinely is uncertain at the deadline. `src/services/LocalApiServer.ts:3841`

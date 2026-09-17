@@ -3329,7 +3329,6 @@ export class LocalApiServer {
             //    dispatch write itself (inside triggerAction → the shared
             //    `updateDispatchInfoByPlanFile`) resets `completed_at` and stamps
             //    the advisory owner unconditionally — no claim, no refusal.
-            const ownerSinceBefore = record.ownerSince ?? null;
             await db.clearCompletedAt?.(record.planId);
             // Delivery evidence is the append-only `dispatched` plan event, scoped
             // to THIS attempt by its AUTOINCREMENT event_id baseline. `owner_since`
@@ -3471,8 +3470,9 @@ export class LocalApiServer {
         const isPromptMode = gate?.dragDropMode === 'prompt';
         // V81: no live-terminal refusal. The dispatch write happens regardless;
         // when no seat is live the delivery layer falls back to the clipboard
-        // and the verify step below reports what actually happened (502 with
-        // owner_since unchanged) rather than a refusal the card carries.
+        // and the verify step below reports what actually happened (502 with no
+        // fresh `dispatched` event in `plan_events`) rather than a refusal the
+        // card carries.
         if (!isPromptMode) {
             let terminals: string[] | undefined;
             try { terminals = this._options.getRegisteredTerminals?.(); } catch { /* health-style guard */ }
@@ -3544,11 +3544,13 @@ export class LocalApiServer {
      * (CHUNK_SIZE / CHUNK_DELAY_MS / SUBMIT_DELAY_MS) are untouched — this makes
      * the wait invisible, not shorter.
      *
-     * The `triggerAction` promise is retained and its rejection recorded (logged
-     * + the in-memory poll entry left to time out to `unknown`), never unhandled.
-     * A rejection does NOT retroactively change the ack: the operator already saw
-     * "receiving the prompt" and the poll reaches `unknown` at the deadline with
-     * the same wording the synchronous 502 uses.
+     * The `triggerAction` promise is retained and its rejection recorded where
+     * the poll can SEE it — the in-memory entry's `failed` flag AND a durable
+     * `dispatch_rejected` plan event — so the state endpoint answers
+     * 'not-delivered' with the reason instead of timing out to `unknown` 60 s
+     * later while the error scrolls off a mosh session. A rejection does NOT
+     * retroactively change the ack the operator already saw, and it never
+     * overwrites a delivery this attempt has already evidenced.
      */
     public async performKanbanDispatchAcked(
         workspaceRoot: string,
@@ -3608,20 +3610,42 @@ export class LocalApiServer {
             // answers 'not-delivered' with the reason instead of timing out to
             // 'unknown' 60 s later while the error scrolls off a mosh session.
             // `unknown` means "no signal", not "we had the error and dropped it".
-            const recordDeliveryFailure = (error: string) => {
+            //
+            // A rejection that arrives AFTER the arm already stamped its
+            // `dispatched` event is NOT a non-delivery: the prompt landed and
+            // something downstream of the stamp threw (a broadcast, a status
+            // message). Appending `dispatch_rejected` there would write a row
+            // NEWER than the evidence, and `getLatestDispatchOutcomeByPlanId`
+            // returns the latest — so a delivered dispatch would flip back to
+            // 'not-delivered'. That is this defect with its polarity reversed,
+            // and the plan names it as an explicit edge case.
+            const recordDeliveryFailure = async (error: string): Promise<void> => {
+                try {
+                    const evidenced = await db.getLatestDispatchOutcomeByPlanId?.(planId);
+                    if (evidenced && evidenced.eventId > eventBaseline && evidenced.eventType === 'dispatched') {
+                        console.warn(`[LocalApiServer] acked dispatch of ${planId} errored AFTER delivery was evidenced (event ${evidenced.eventId}) — keeping 'delivered': ${error}`);
+                        return;
+                    }
+                } catch (e) {
+                    // The evidence read itself failed. Fall through and record the
+                    // failure — a missing verdict is worse than a pessimistic one.
+                    console.warn('[LocalApiServer] dispatch evidence read before recording a failure failed:', e);
+                }
                 const entry = this._ackedDispatchState.get(planId);
                 if (entry) { entry.failed = error; }
-                void Promise.resolve(
-                    db.appendPlanEventByPlanId?.(planId, {
+                try {
+                    await db.appendPlanEventByPlanId?.(planId, {
                         eventType: 'dispatch_rejected',
                         action: 'reject',
                         payload: JSON.stringify({ error, seat: seat || '' }),
-                    })
-                ).catch((e: unknown) => console.warn('[LocalApiServer] dispatch_rejected event append failed:', e));
+                    });
+                } catch (e) {
+                    console.warn('[LocalApiServer] dispatch_rejected event append failed:', e);
+                }
             };
             void delivery.then(async (result: any) => {
                 if (result && result.success === false) {
-                    recordDeliveryFailure(String(result.error || 'delivery failed'));
+                    await recordDeliveryFailure(String(result.error || 'delivery failed'));
                     return;
                 }
                 // A resolved-but-unevidenced delivery (no new dispatched event)
@@ -3631,12 +3655,12 @@ export class LocalApiServer {
                 if (!isPromptMode) {
                     const outcome = await db.getLatestDispatchOutcomeByPlanId?.(planId);
                     if (!outcome || outcome.eventId <= eventBaseline) {
-                        recordDeliveryFailure('delivery completed but no dispatch was recorded — the prompt may have been copied to the clipboard instead of a live seat');
+                        await recordDeliveryFailure('delivery completed but no dispatch was recorded — the prompt may have been copied to the clipboard instead of a live seat');
                     }
                 }
             }).catch((err: unknown) => {
                 console.error('[LocalApiServer] acked dispatch delivery error:', err);
-                recordDeliveryFailure(err instanceof Error ? err.message : String(err));
+                void recordDeliveryFailure(err instanceof Error ? err.message : String(err));
             });
 
             return {

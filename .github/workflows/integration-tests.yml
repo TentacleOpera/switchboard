@@ -1894,6 +1894,20 @@ jobs:
       - name: Terminal coder dispatch driving contract (attended + unattended bounds)
         run: npm run test:contract:terminal-coder-dispatch
 
+      # Dispatch delivery evidence is append-only. `plans.owner_since` is display
+      # metadata a column move is entitled to clear — and did, 46 ms after the
+      # dispatch write stamped it, which made 340 delivered dispatches verify as
+      # failed (2 survivors board-wide). This pins that the `dispatched` plan
+      # event survives the clear, that all three entry points answer in the
+      # sent/delivered/not-delivered/unknown vocabulary, that a previous
+      # attempt's event never satisfies a new one, that an acked rejection is
+      # durable rather than a console.error into a scrollback-less mosh session,
+      # and that a post-stamp throw does not flip an evidenced delivery back to
+      # not-delivered. Wired here in the same pass that added the file: a
+      # contract test with no CI step is the green-while-incomplete hole.
+      - name: Dispatch evidence is append-only (all three entry points)
+        run: npm run test:contract:dispatch-evidence
+
       # Feature Drive-mode prompt-body reframe: pins that ALL SIX execution-coded blocks
       # flip when the Drive toggle is on (intro, AUTHORIZATION directive, feature
       # orchestration directive, coder EXECUTION MODE block, coder FEATURE FILE trailing
