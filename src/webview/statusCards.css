@@ -1,0 +1,133 @@
+/* ── Structured cards — the ONE stylesheet, shared by three surfaces ─────────
+ *
+ * Consumed by the dock Agent panel (dock.html), the mobile command surface
+ * (command.html) and the seat status pane (terminals.html). The renderer is
+ * statusCards.js; the card's colours are written HERE and nowhere else.
+ *
+ * Every colour is a theme token. There is no literal colour in this file, so the
+ * card resolves under the default Afterburner theme (cyan accent, dark surfaces)
+ * and under `body.theme-claudify` (terracotta accent) alike — the same
+ * discipline the site keeps.
+ *
+ * State colour is SEMANTIC and RESERVED. `blocked` is an error, `finished` a
+ * success, a `question` (waiting on a human) a warning. The brand accent is
+ * never used as a status colour: it is the eyebrow for a card's TYPE
+ * (`instruction`) and for the pane's own chrome, not a state.
+ */
+:root {
+    /* Aliases onto the surfaces' own tokens, with a chain of fallbacks because
+       the three surfaces do not carry an identical token set (the dock has
+       `--text-dim` but not `--text-secondary`; the command view has
+       `--accent-green` but not `--term-surface`). No hex anywhere: a missing
+       token falls through to another token, never to a literal. */
+    --sb-card-surface: var(--term-surface, var(--panel-bg));
+    --sb-card-border: var(--border-color);
+    --sb-card-text: var(--text-primary);
+    --sb-card-text-dim: var(--text-secondary, var(--text-dim));
+    --sb-card-accent: var(--accent-teal, var(--accent-primary));
+
+    /* Semantic state colours, defined by each surface's own theme block
+       (dock.html / command.html / terminals.css) so the card consumes a state,
+       not a literal and not the brand accent. The neutral fallback keeps a
+       surface that forgot a token readable rather than inventing a status. */
+    --sb-state-error: var(--error, var(--sb-card-text-dim));
+    --sb-state-warning: var(--warning, var(--sb-card-text-dim));
+    --sb-state-success: var(--success, var(--sb-card-text-dim));
+
+    --sb-card-radius: var(--radius-lg, 4px);
+}
+
+/* A card is a surface, not a bare region: one step of tonal elevation above the
+   pane behind it, a 1px outline token and the tight radius the brand uses.
+   Depth comes from tone, never from a drop shadow. */
+.sb-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--sb-card-border);
+    border-radius: var(--sb-card-radius);
+    background: color-mix(in srgb, var(--sb-card-text) 4%, var(--sb-card-surface));
+    color: var(--sb-card-text);
+    box-sizing: border-box;
+    min-width: 0;
+}
+.sb-cards > .sb-card + .sb-card { margin-top: 6px; }
+
+.sb-card__head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+}
+/* The eyebrow: JetBrains-Mono-shaped — mono, uppercase, wide tracking. */
+.sb-card__chip {
+    flex-shrink: 0;
+    font-family: var(--font-code);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 2px;
+    color: var(--sb-card-surface);
+    background: var(--sb-card-text-dim);
+}
+.sb-card__chip.is-blocked { background: var(--sb-state-error); }
+.sb-card__chip.is-question { background: var(--sb-state-warning); }
+.sb-card__chip.is-finished { background: var(--sb-state-success); }
+/* `status` is a neutral report, not a state — it keeps the dim, never the accent. */
+.sb-card__chip.is-status { background: var(--sb-card-text-dim); }
+/* A card's TYPE tag is brand accent, not a status colour. */
+.sb-card__chip.is-instruction { background: var(--sb-card-accent); }
+
+/* Identifier role: seat names, plan ids, stamps. */
+.sb-card__meta {
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--sb-card-text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sb-card__plan {
+    font-size: 11px;
+    color: var(--sb-card-text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Body role: the posted content. */
+.sb-card__body {
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Plain-text fallback for an unrecognised card type or a payload that failed
+   validation. It is deliberately NOT card-shaped: it must read as raw content,
+   not as a declaration the renderer understood. */
+.sb-card--plain {
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+.sb-card--plain .sb-card__body {
+    font-family: var(--font-code);
+    font-size: 11px;
+    color: var(--sb-card-text-dim);
+}
+
+/* The reports feed inside the Agent panel's log column. */
+.agent-control-reports {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 45%;
+    overflow-y: auto;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+.agent-control-reports:empty { display: none; }

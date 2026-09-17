@@ -10,6 +10,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'self'; manifest-src 'self';">
     <link rel="stylesheet" href="{{XTERM_CSS_URI}}">
+    <link rel="stylesheet" href="/static/webview/statusCards.css">
     <title>Switchboard Command</title>
     <style>
         @font-face {
@@ -40,6 +41,13 @@
             --accent-green: #4caf50;
             --accent-red: #f44336;
             --accent-amber: #ff9800;
+            /* Semantic state colours for structured cards (statusCards.css).
+               The design-system names, shared by the card's state chips so a
+               `blocked` / `finished` / `question` reads as a state, never as the
+               brand accent. */
+            --error:   #ff4747;
+            --warning: #ffb800;
+            --success: #3ef06d;
             --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
             --font-code: Menlo, Consolas, monospace;
         }
@@ -1111,6 +1119,7 @@
                             <span style="font-weight:700; font-size:13px; color:var(--text-primary); letter-spacing:0.5px;">AGENT CONTROL</span>
                         </div>
                         <div id="agent-status-chip" class="status-chip hidden"></div>
+                        <div class="agent-control-reports" id="agent-control-reports"></div>
                         <div id="agent-control-log" style="flex:1 1 auto; overflow-y:auto; padding:8px; font-family:var(--font-code); font-size:11px; line-height:1.5; color:var(--text-primary); background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px;"></div>
                         <div id="agent-quick-actions" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
                         <!-- Card + column pickers: the by-id actions and the
@@ -1234,6 +1243,7 @@
          at viewer-open time, so they must be loaded before any viewer opens.
          defer keeps the download parallel and execution in document order. -->
     <script defer nonce="{{NONCE}}" src="/static/webview/sharedUtils.js"></script>
+    <script defer nonce="{{NONCE}}" src="/static/webview/statusCards.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/terminalViewport.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/terminalKeyBar.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/command.js"></script>

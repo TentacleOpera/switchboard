@@ -6593,7 +6593,10 @@
         // inbox answers. A declaration therefore appears on the next poll, at most
         // one poll interval late, which is the same latency every other fact on
         // this pane already has.
-        if (paneModes.slice(0, slotCount).some(m => m === 'status')) { refreshSeatReports(); }
+        if (paneModes.slice(0, slotCount).some(m => m === 'status')) {
+            refreshSeatReports();
+            refreshTurnEndReports();
+        }
 
         // Sampled BEFORE any mutation. Both the surplus-pane removal below and the
         // per-pane update can drop the caret (removing or re-parenting the focused
@@ -8144,6 +8147,74 @@
         });
     }
 
+    /** Workspace turn-end reports (`GET /kanban/reports`), newest first. These
+     *  are the host's record of every seat turn that ended — INCLUDING a seat in
+     *  no spawned team, whose declaration has no file inbox this client can read
+     *  (see the note on refreshSeatReports). Matched to a seat by its dispatched
+     *  plan id in resolveSeatState. Background and non-blocking, exactly like the
+     *  seat inbox: this render paints whatever the cache holds and the next poll
+     *  picks up the answer. */
+    const _turnEndReports = [];
+    let _turnEndReportsFetchInFlight = false;
+    const TURN_END_REPORTS_LIMIT = 50;
+
+    function refreshTurnEndReports() {
+        if (_turnEndReportsFetchInFlight || isKanbanDock) { return; }
+        _turnEndReportsFetchInFlight = true;
+        fetch(`/kanban/reports?limit=${TURN_END_REPORTS_LIMIT}`, { credentials: 'same-origin' })
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => {
+                const rows = (data && data.success && Array.isArray(data.data)) ? data.data : null;
+                // A failed read keeps the previous rows rather than blanking the
+                // cache: the next poll corrects it, and an empty declared tier
+                // would read as "nothing declared" — a different fact.
+                if (!rows) { return; }
+                _turnEndReports.length = 0;
+                for (const row of rows) { _turnEndReports.push(row); }
+            })
+            .catch(() => { /* keep the previous cache; the poll corrects it */ })
+            .finally(() => { _turnEndReportsFetchInFlight = false; });
+    }
+
+    /** Map one turn-end report row to a card payload. Delegates to the shared
+     *  adapter (statusCards.js) so the three surfaces cannot disagree about how
+     *  a `turn_end` event becomes a card; the fallback shape below only runs if
+     *  that module failed to load, which renderDeclaredCards reports loudly. */
+    function turnEndToCard(row) {
+        const renderer = window.SwitchboardStatusCards;
+        if (renderer && typeof renderer.fromTurnEnd === 'function') {
+            return renderer.fromTurnEnd(row);
+        }
+        return {
+            type: 'report',
+            kind: String((row && row.action) || '').toLowerCase(),
+            text: row && typeof row.message === 'string' ? row.message : '',
+            created: 0,
+            planTitle: row && typeof row.planTopic === 'string' ? row.planTopic : ''
+        };
+    }
+
+    /**
+     * Render declared card payloads through the shared module (statusCards.js).
+     * If the module did not load, say so LOUDLY and fall back to plain text: a
+     * silently empty declared tier is indistinguishable from "nothing declared",
+     * which is exactly the wiring trap this module's load is asserted against.
+     */
+    function renderDeclaredCards(container, cards) {
+        const renderer = window.SwitchboardStatusCards;
+        if (renderer && typeof renderer.renderInto === 'function') {
+            renderer.renderInto(container, cards);
+            return;
+        }
+        console.error('[terminals] window.SwitchboardStatusCards is undefined — statusCards.js did not load; rendering declared cards as plain text.');
+        for (const c of cards) {
+            const line = document.createElement('div');
+            line.className = 'status-pane-declared-text';
+            line.textContent = [c.kind, c.from, c.text].filter(Boolean).join(' · ');
+            container.appendChild(line);
+        }
+    }
+
     /**
      * THE state-for-a-seat answer, and the only one a status pane is allowed to
      * read. Every render site goes through here rather than reaching into
@@ -8175,6 +8246,9 @@
             role: fleetItem.role || null,
             agentLabel: agentLabelForRole(fleetItem.role),
             planTitle: ((fleetItem.planTitle || '')).trim(),
+            // The dispatched card's UUID, used to match this seat to its
+            // turn-end reports. Empty for an idle seat — never a guessed plan.
+            planId: ((fleetItem.planId || '')).trim(),
             exited: fleetItem.status === 'exited',
             isHead: isTeamHead(name),
             // Declared. `null` means either "the inbox answered and this seat has
@@ -8190,6 +8264,15 @@
                 const teamId = teamIdForSeat(name);
                 if (!teamId) { return 'none'; }
                 return _seatReportTeamOk.get(teamId) === true ? 'team' : 'unreachable';
+            })(),
+            // Declared, and the tier the cards are drawn from: the turn-end
+            // reports the board already holds for this seat's dispatched plan.
+            // Empty when the seat holds no card, or when the plan has no
+            // turn-end rows — never synthesised from a host-derived signal.
+            turnEndReports: (() => {
+                const planId = ((fleetItem.planId || '')).trim();
+                if (!planId) { return []; }
+                return _turnEndReports.filter(r => r && String(r.planId || '') === planId);
             })(),
             // Host-derived, and labelled as such wherever it is rendered.
             signals: {
@@ -8305,22 +8388,27 @@
         // --- declared -------------------------------------------------------
         const declared = document.createElement('div');
         declared.className = 'status-pane-declared';
-        if (state.report) {
-            const kindEl = document.createElement('span');
-            kindEl.className = `status-pane-kind is-${state.report.kind}`;
-            kindEl.textContent = state.report.kind;
-            declared.appendChild(kindEl);
-            const meta = document.createElement('span');
-            meta.className = 'status-pane-declared-meta';
-            const when = relativeStamp(state.report.created);
-            meta.textContent = when ? `declared by ${state.report.from} · ${when}` : `declared by ${state.report.from}`;
-            declared.appendChild(meta);
-            if (state.report.text) {
-                const body = document.createElement('div');
-                body.className = 'status-pane-declared-text';
-                body.textContent = state.report.text;
-                declared.appendChild(body);
-            }
+        // The declared tier is drawn as STRUCTURED CARDS by the shared renderer.
+        // The source is the turn-end reports the board already holds for this
+        // seat's dispatched plan; the seat report inbox is the fallback for a
+        // seat whose plan has no turn-end rows yet. Both are declarations — the
+        // host-derived block below stays subordinate either way.
+        const declaredCards = [];
+        const turnEnd = state.turnEndReports || [];
+        if (turnEnd.length) {
+            for (const row of turnEnd) { declaredCards.push(turnEndToCard(row)); }
+        } else if (state.report) {
+            declaredCards.push({
+                type: 'report',
+                kind: state.report.kind,
+                from: state.report.from,
+                text: state.report.text,
+                created: state.report.created,
+                planTitle: state.planTitle
+            });
+        }
+        if (declaredCards.length) {
+            renderDeclaredCards(declared, declaredCards);
         } else {
             const none = document.createElement('span');
             none.className = 'status-pane-declared-none';

@@ -88,6 +88,8 @@ const PLACEHOLDER_TO_URI = {
     '{{TERMINALS_JS_URI}}': '/static/webview/terminals.js',
     '{{SHARED_UTILS_URI}}': '/static/webview/sharedUtils.js',
     '{{DOCK_JS_URI}}': '/static/webview/dock.js',
+    '{{STATUS_CARDS_URI}}': '/static/webview/statusCards.js',
+    '{{STATUS_CARDS_CSS_URI}}': '/static/webview/statusCards.css',
 };
 
 // The transport shim files injected by injectTransportShim

@@ -22,6 +22,7 @@
         }
     </style>
     <link rel="stylesheet" href="/static/webview/terminals.css">
+    <link rel="stylesheet" href="{{STATUS_CARDS_CSS_URI}}">
 </head>
 <body>
     <!-- Mode parse + mode body class, FIRST thing in the body.
@@ -500,6 +501,7 @@
          is deliberately NOT deferred — it is injected into kanban.html and setup.html
          too, whose inline scripts do depend on it. -->
     <script defer nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
+    <script defer nonce="{{NONCE}}" src="{{STATUS_CARDS_URI}}"></script>
     <script defer nonce="{{NONCE}}" src="{{TERMINAL_VIEWPORT_JS_URI}}"></script>
     <script defer nonce="{{NONCE}}" src="{{TERMINALS_JS_URI}}"></script>
 </body>

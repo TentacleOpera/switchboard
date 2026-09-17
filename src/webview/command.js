@@ -2625,6 +2625,7 @@
     // the-agent-control-surface-cannot-be-configured-and-is-driven-by-typing.
 
     const agentLogElMobile = document.getElementById('agent-control-log');
+    const agentReportsElMobile = document.getElementById('agent-control-reports');
     const agentStatusChipMobile = document.getElementById('agent-status-chip');
     const agentQuickActionsElMobile = document.getElementById('agent-quick-actions');
     const agentCardSelectElMobile = document.getElementById('agent-control-card-select');
@@ -2709,6 +2710,7 @@
                 }
             }
             await refreshAgentPickersMobile();
+            void renderAgentReportsMobile();
         } catch (err) {
             setAgentStatusMobile('Failed to load config: ' + (err?.message || err), 'error');
         }
@@ -2962,6 +2964,28 @@
         }
         agentLogElMobile.appendChild(entry);
         agentLogElMobile.scrollTop = agentLogElMobile.scrollHeight;
+    }
+
+    /**
+     * Render the board's turn-end reports as structured cards above the control
+     * log. ONE renderer draws them — statusCards.js — shared with the dock Agent
+     * panel and the seat status pane; this surface must not grow its own copy. A
+     * missing module is reported loudly rather than rendering an empty feed.
+     */
+    async function renderAgentReportsMobile() {
+        if (!agentReportsElMobile) { return; }
+        const renderer = window.SwitchboardStatusCards;
+        if (!renderer || typeof renderer.renderInto !== 'function') {
+            console.error('[command] window.SwitchboardStatusCards is undefined — statusCards.js did not load.');
+            return;
+        }
+        try {
+            const res = await fetch('/kanban/reports?limit=20', { credentials: 'same-origin' });
+            if (!res.ok) { return; }
+            const data = await res.json();
+            const rows = (data && data.success && Array.isArray(data.data)) ? data.data : [];
+            renderer.renderInto(agentReportsElMobile, rows.map(renderer.fromTurnEnd));
+        } catch { /* the control log still renders; the feed is not essential */ }
     }
 
     // Wire up the agent control surface event handlers — the config row's save

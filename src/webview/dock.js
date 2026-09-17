@@ -138,6 +138,7 @@
 
     // ── Agent control surface element refs ───────────────────────────────
     const agentLogEl = document.getElementById('agent-control-log');
+    const agentReportsEl = document.getElementById('agent-control-reports');
     const agentStatusEl = document.getElementById('agent-control-status');
     const agentQuickActionsEl = document.getElementById('agent-control-quickactions');
     const agentCardSelectEl = document.getElementById('agent-control-card-select');
@@ -256,6 +257,7 @@
         if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
         updateDockTitle();
         await loadAgentControlConfig();
+        void renderAgentReports();
     }
 
     /** Render the modelError beside the config fields that fix it. */
@@ -553,6 +555,29 @@
         }
         agentLogEl.appendChild(entry);
         agentLogEl.scrollTop = agentLogEl.scrollHeight;
+    }
+
+    /**
+     * Render the board's turn-end reports as structured cards above the control
+     * log. ONE renderer draws them — statusCards.js — the same module the seat
+     * status pane and the mobile command surface consume; this surface must not
+     * grow its own copy. A missing module is reported loudly rather than
+     * rendering a silently empty feed.
+     */
+    async function renderAgentReports() {
+        if (!agentReportsEl) { return; }
+        const renderer = window.SwitchboardStatusCards;
+        if (!renderer || typeof renderer.renderInto !== 'function') {
+            console.error('[dock] window.SwitchboardStatusCards is undefined — statusCards.js did not load.');
+            return;
+        }
+        try {
+            const res = await fetch('/kanban/reports?limit=20', { credentials: 'same-origin' });
+            if (!res.ok) { return; }
+            const data = await res.json();
+            const rows = (data && data.success && Array.isArray(data.data)) ? data.data : [];
+            renderer.renderInto(agentReportsEl, rows.map(renderer.fromTurnEnd));
+        } catch { /* the control log still renders; the feed is not essential */ }
     }
 
     // ── CLI seat sync ────────────────────────────────────────────────────

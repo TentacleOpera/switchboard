@@ -25,6 +25,14 @@
                change, per the no-literals rule the accent family already follows. */
             --state-connecting: #d7a03a;
             --state-readonly:   #f85149;
+
+            /* Semantic state colours for structured cards (statusCards.css).
+               Deliberately NOT overridden by body.theme-claudify: like
+               --state-connecting, a state must read the same in both themes, and
+               the brand accent is never used as one. */
+            --error:   #ff4747;
+            --warning: #ffb800;
+            --success: #3ef06d;
         }
 
         /* ── Themes ────────────────────────────────────────────────────────────
@@ -1531,13 +1539,13 @@
             height: 100%;
             box-sizing: border-box;
             overflow-y: auto;
-            padding: 10px 12px;
+            padding: 12px;
             display: flex;
             flex-direction: column;
-            gap: 8px;
-            font-size: 11px;
-            line-height: 1.45;
-            color: var(--text-primary, #e6e6e6);
+            gap: 10px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-primary);
             background: var(--term-surface);
         }
         .status-pane-identity {
@@ -1554,7 +1562,9 @@
         }
         .status-pane-brand.is-exited { opacity: 0.45; }
         .status-pane-name {
-            font-weight: 600;
+            font-family: var(--font-code);
+            font-size: 12px;
+            font-weight: 700;
             letter-spacing: 0.3px;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -1575,35 +1585,19 @@
             text-overflow: ellipsis;
             white-space: nowrap;
         }
-        /* DECLARED. Given the weight — a border, full-contrast text — because it is
-           the only thing on this card the agent actually said. The host-derived
-           block below is deliberately quieter; the ordering is the feature. */
+        /* DECLARED. The tier above the host-derived block, and now a STACK OF
+           STRUCTURED CARDS (statusCards.css) rather than a bare region: the cards
+           carry their own surface, weight and state colour, so this is only the
+           stack that holds them. */
         .status-pane-declared {
             display: flex;
-            flex-wrap: wrap;
-            align-items: baseline;
+            flex-direction: column;
             gap: 6px;
-            padding: 6px 8px;
-            border-left: 2px solid var(--border-color);
-            background: color-mix(in srgb, var(--text-primary, #e6e6e6) 5%, transparent);
+            min-width: 0;
         }
-        .status-pane-kind {
-            font-size: 9px;
-            font-weight: 700;
-            letter-spacing: 0.8px;
-            text-transform: uppercase;
-            padding: 1px 5px;
-            border-radius: 2px;
-            color: var(--term-surface);
-            background: var(--text-secondary);
-        }
-        .status-pane-kind.is-blocked { background: var(--accent-red, #f48771); }
-        .status-pane-kind.is-question { background: var(--accent-gold, #dcdcaa); }
-        .status-pane-kind.is-finished { background: var(--accent-teal); }
-        .status-pane-declared-meta { font-size: 9px; color: var(--text-secondary); }
-        .status-pane-declared-text { flex-basis: 100%; }
-        .status-pane-declared-none { font-size: 10px; font-style: italic; color: var(--text-secondary); }
-        .status-pane-declared-none.is-unreachable { color: var(--accent-red, #f48771); font-style: normal; }
+        .status-pane-declared-text { font-size: 11px; color: var(--text-primary); }
+        .status-pane-declared-none { font-size: 11px; font-style: italic; color: var(--text-secondary); }
+        .status-pane-declared-none.is-unreachable { color: var(--sb-state-error); font-style: normal; }
         /* Host-derived: smaller, dimmer, and labelled. A guess must never be able
            to read as a declaration. */
         .status-pane-inferred {
@@ -1627,14 +1621,14 @@
             justify-content: center;
             text-align: center;
             gap: 6px;
-            border: 1px dashed var(--accent-red, #f48771);
+            border: 1px dashed var(--sb-state-error);
         }
         .status-pane-unreachable-label {
             font-size: 11px;
             font-weight: 700;
             letter-spacing: 1.4px;
             text-transform: uppercase;
-            color: var(--accent-red, #f48771);
+            color: var(--sb-state-error);
         }
         .status-pane-unreachable-why { font-size: 10px; color: var(--text-secondary); }
         /* The output toggle reads as engaged while output is off — the pane is in a

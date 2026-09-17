@@ -7,6 +7,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'none';">
     <title>Dock</title>
     <link rel="stylesheet" href="{{XTERM_CSS_URI}}">
+    <link rel="stylesheet" href="{{STATUS_CARDS_CSS_URI}}">
     <style>
         @font-face {
             font-family: 'Hanken Grotesk';
@@ -32,6 +33,13 @@
             --term-selection: rgba(0, 229, 255, 0.3);
             --state-connecting: #d7a03a;
             --state-readonly:   #f85149;
+            /* Semantic state colours for structured cards (statusCards.css).
+               Defined once here, shared by the card's state chips, so `blocked`
+               / `finished` / `question` read as states in both themes and the
+               brand accent is never used as one. */
+            --error:   #ff4747;
+            --warning: #ffb800;
+            --success: #3ef06d;
         }
         body.theme-claudify {
             --accent-primary: #D97757;
@@ -467,6 +475,7 @@
         <div id="dock-empty-hint"></div>
     </div>
     <div id="dock-agent-pane">
+        <div class="agent-control-reports" id="agent-control-reports"></div>
         <div class="agent-control-log" id="agent-control-log"></div>
         <div class="agent-control-quickactions" id="agent-control-quickactions"></div>
         <!-- Card + column pickers: the by-id actions (advance/move/star) and the
@@ -548,6 +557,7 @@
     </div>
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{STATUS_CARDS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{TERMINAL_VIEWPORT_JS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{DOCK_JS_URI}}"></script>
 </body>

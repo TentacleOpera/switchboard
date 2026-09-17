@@ -483,6 +483,12 @@ export function getDockHtml(repoRoot: string, workspaceRoot: string, capabilitie
     content = content.replace(/\{\{DOCK_JS_URI\}\}/g, '/static/webview/dock.js');
     content = content.replace(/\{\{TERMINAL_VIEWPORT_JS_URI\}\}/g, '/static/webview/terminalViewport.js');
     content = content.replace(/\{\{SHARED_UTILS_URI\}\}/g, '/static/webview/sharedUtils.js');
+    // The shared structured-card renderer and its stylesheet. The dock's Agent
+    // panel renders report/instruction cards; both files are also loaded by the
+    // terminals view and the mobile command surface, which is the point — one
+    // module and one stylesheet, three surfaces.
+    content = content.replace(/\{\{STATUS_CARDS_URI\}\}/g, '/static/webview/statusCards.js');
+    content = content.replace(/\{\{STATUS_CARDS_CSS_URI\}\}/g, '/static/webview/statusCards.css');
     // The xterm bundle (xterm.js, addon-fit, addon-webgl) and addon-canvas carry NO
     // {{…_URI}} placeholder: they are no longer <script> tags in the document. Their
     // URLs reach the runtime as `data-xterm-*-uri` / `data-canvas-addon-uri` body
@@ -515,6 +521,10 @@ export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabi
     content = content.replace(/\{\{TERMINALS_JS_URI\}\}/g, '/static/webview/terminals.js');
     content = content.replace(/\{\{TERMINAL_VIEWPORT_JS_URI\}\}/g, '/static/webview/terminalViewport.js');
     content = content.replace(/\{\{SHARED_UTILS_URI\}\}/g, '/static/webview/sharedUtils.js');
+    // The seat status pane renders its declared reports through the shared card
+    // renderer; the stylesheet carries the card's (token-only) colours.
+    content = content.replace(/\{\{STATUS_CARDS_URI\}\}/g, '/static/webview/statusCards.js');
+    content = content.replace(/\{\{STATUS_CARDS_CSS_URI\}\}/g, '/static/webview/statusCards.css');
     // The xterm bundle (xterm.js, addon-fit, addon-webgl) and addon-canvas carry NO
     // {{…_URI}} placeholder: they are no longer <script> tags in the document. Their
     // URLs reach the runtime as `data-xterm-*-uri` / `data-canvas-addon-uri` body
