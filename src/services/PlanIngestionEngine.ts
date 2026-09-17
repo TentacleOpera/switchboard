@@ -27,6 +27,8 @@ import { KanbanDatabase, type KanbanPlanRecord } from './KanbanDatabase';
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import { TERMINALS_GROUPS_KEY } from './teamWiring';
+import { ControllerBoardStore } from './ControllerBoardStore';
+import { decideNudgeSweeps, describeNudgeSweeps, type NudgeSweepState } from './nudgeSuppression';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
@@ -488,6 +490,14 @@ export class PlanIngestionEngine {
      * plausible value the operator never chose or repeating it every tick.
      */
     private _dispatchThresholdOrderWarned = false;
+    /**
+     * The last nudge-sweep state reported per workspace folder, so a TRANSITION
+     * is logged once rather than the state being restated every tick. A
+     * behaviour change nothing announces is the failure this codebase names
+     * repeatedly — and a resumption after a stale lease is the one that most
+     * needs saying out loud.
+     */
+    private readonly _lastNudgeSweepState = new Map<string, NudgeSweepState>();
 
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
@@ -669,6 +679,44 @@ export class PlanIngestionEngine {
                         const wsId = await db.getWorkspaceId();
                         if (!wsId) continue;
                         const notifiedSeatsThisTick = new Set<string>();
+
+                        // ── Nudge suppression ───────────────────────────────
+                        // The four sweeps below stand down while a controller
+                        // holds a CURRENTLY-RENEWED lease and declares that
+                        // judgement is available: they all take the same action
+                        // for every cause, which is what judgement replaces.
+                        //
+                        // Every other lease state leaves them active — no
+                        // controller, a stale lease, an unreadable lease, and a
+                        // controller that reports no judgement backend. The
+                        // stale row is the one that matters: a controller that
+                        // died holding a lease must not take the board's nudges
+                        // down with it.
+                        //
+                        // The board reads WHAT THE CONTROLLER TOLD IT and holds
+                        // no model configuration of its own — exactly as the
+                        // panel does. `_runDispatchTimeoutSweep` below is
+                        // deliberately outside this gate.
+                        const sweepDecision = decideNudgeSweeps(
+                            await new ControllerBoardStore(() => db).readLease(folder).catch(() => null),
+                        );
+                        if (this._lastNudgeSweepState.get(folder) !== sweepDecision.state) {
+                            this._lastNudgeSweepState.set(folder, sweepDecision.state);
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] ${folder}: ${describeNudgeSweeps(sweepDecision)}`);
+                        }
+                        // Surfaced, not silent: the panel renders this rather
+                        // than composing a sentence of its own about a state it
+                        // would have to infer.
+                        try {
+                            await db.setConfigJson('controller.nudgeSuppression', {
+                                suppressed: sweepDecision.suppressed,
+                                state: sweepDecision.state,
+                                reason: sweepDecision.reason,
+                                source: sweepDecision.source,
+                                at: nowMs,
+                            });
+                        } catch { /* the sweeps' behaviour does not depend on the surface. */ }
+
                         const cleared = await db.clearStaleWorkingState(wsId, timeoutMs, { forceTerminals });
                         if (cleared > 0) {
                             this._host.logger.appendLine(
@@ -677,75 +725,88 @@ export class PlanIngestionEngine {
                             );
                             this._firePlanDiscovered(folder);
                         }
-                        // ── Feature-level stall nudge ───────────────────────────────
-                        // A head driving a feature can stall in the window where no
-                        // dispatch is outstanding (it dropped the thread, its turn
-                        // ended without sending the next subtask, a registration
-                        // failed). Per-dispatch turn-end says nothing about that —
-                        // there is no dispatch to observe. An armed watch keeps
-                        // nudging the head until the feature is done. Ships OFF by
-                        // default; armed by the head agent via `watchFeature`.
-                        try {
-                            await this._runFeatureNudgeSweep({
-                                db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
-                            });
-                        } catch (nudgeErr) {
-                            this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge sweep failed for ${folder}: ${nudgeErr}`);
+
+                        // The gate opens HERE, not above: `clearStaleWorkingState`
+                        // is state hygiene that prompts nobody, so it is not one
+                        // of the four nudges and is never suppressed.
+                        if (!sweepDecision.suppressed) {
+                            // ── Feature-level stall nudge ───────────────────────────────
+                            // A head driving a feature can stall in the window where no
+                            // dispatch is outstanding (it dropped the thread, its turn
+                            // ended without sending the next subtask, a registration
+                            // failed). Per-dispatch turn-end says nothing about that —
+                            // there is no dispatch to observe. An armed watch keeps
+                            // nudging the head until the feature is done. Ships OFF by
+                            // default; armed by the head agent via `watchFeature`.
+                            try {
+                                await this._runFeatureNudgeSweep({
+                                    db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
+                                });
+                            } catch (nudgeErr) {
+                                this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge sweep failed for ${folder}: ${nudgeErr}`);
+                            }
+                            // ── Queue-level stall nudge ────────────────────────────────
+                            // The backstop for a lead-paced pipeline with the schedule
+                            // off. Shares the same liveness snapshot, `nowMs`,
+                            // `turnEndSilenceMs`, `nudgeSilenceMs` and
+                            // `notifiedSeatsThisTick` set as the feature sweep so a
+                            // head that is both a feature head and a queue head is
+                            // nudged at most once per tick.
+                            try {
+                                await this._runQueueNudgeSweep({
+                                    db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
+                                });
+                            } catch (queueNudgeErr) {
+                                this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge sweep failed for ${folder}: ${queueNudgeErr}`);
+                            }
+                            // ── Member completion reminder ──────────────────────────────
+                            // Re-delivers the completion instruction to a team member
+                            // seat that has gone quiet holding an uncompleted card —
+                            // the member's equivalent of the head's turn-end top-up.
+                            // Shares the same liveness snapshot, `nowMs`,
+                            // `turnEndSilenceMs`, `nudgeSilenceMs` and
+                            // `notifiedSeatsThisTick` set as the other sweeps so a
+                            // seat that is both a pacer and a member is nudged at
+                            // most once per tick. NOT gated on an armed watch —
+                            // applies to any team member holding an uncompleted card.
+                            try {
+                                await this._runMemberCompletionReminderSweep({
+                                    db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
+                                });
+                            } catch (reminderErr) {
+                                this._host.logger.appendLine(`[GlobalPlanWatcher] member completion reminder sweep failed for ${folder}: ${reminderErr}`);
+                            }
+                            // ── Dispatch-stall nudge ────────────────────────────────
+                            // The backstop for a card that has been dispatched for
+                            // longer than the threshold with no completion posted.
+                            // Independent of the queue, of seat activity, and of the
+                            // card's column — the only inputs are owner_since,
+                            // completed_at and a clock. Fires once per stall for the
+                            // lead of the team holding the card; re-arms on evidence
+                            // of progress (plan-file mtime advancing or the seat
+                            // producing output after the nudge). A dead head
+                            // escalates to the operator instead of dropping the
+                            // watch. Shares the same liveness snapshot, `nowMs`,
+                            // `turnEndSilenceMs`, `nudgeSilenceMs` and
+                            // `notifiedSeatsThisTick` set as the other sweeps so a
+                            // seat that is both a pacer and a member is nudged at
+                            // most once per tick.
+                            try {
+                                await this._runDispatchStallSweep({
+                                    db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, dispatchStallMs, notifiedSeatsThisTick,
+                                });
+                            } catch (dispatchStallErr) {
+                                this._host.logger.appendLine(`[GlobalPlanWatcher] dispatch-stall sweep failed for ${folder}: ${dispatchStallErr}`);
+                            }
                         }
-                        // ── Queue-level stall nudge ────────────────────────────────
-                        // The backstop for a lead-paced pipeline with the schedule
-                        // off. Shares the same liveness snapshot, `nowMs`,
-                        // `turnEndSilenceMs`, `nudgeSilenceMs` and
-                        // `notifiedSeatsThisTick` set as the feature sweep so a
-                        // head that is both a feature head and a queue head is
-                        // nudged at most once per tick.
-                        try {
-                            await this._runQueueNudgeSweep({
-                                db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
-                            });
-                        } catch (queueNudgeErr) {
-                            this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge sweep failed for ${folder}: ${queueNudgeErr}`);
-                        }
-                        // ── Member completion reminder ──────────────────────────────
-                        // Re-delivers the completion instruction to a team member
-                        // seat that has gone quiet holding an uncompleted card —
-                        // the member's equivalent of the head's turn-end top-up.
-                        // Shares the same liveness snapshot, `nowMs`,
-                        // `turnEndSilenceMs`, `nudgeSilenceMs` and
-                        // `notifiedSeatsThisTick` set as the other sweeps so a
-                        // seat that is both a pacer and a member is nudged at
-                        // most once per tick. NOT gated on an armed watch —
-                        // applies to any team member holding an uncompleted card.
-                        try {
-                            await this._runMemberCompletionReminderSweep({
-                                db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
-                            });
-                        } catch (reminderErr) {
-                            this._host.logger.appendLine(`[GlobalPlanWatcher] member completion reminder sweep failed for ${folder}: ${reminderErr}`);
-                        }
-                        // ── Dispatch-stall nudge ────────────────────────────────
-                        // The backstop for a card that has been dispatched for
-                        // longer than the threshold with no completion posted.
-                        // Independent of the queue, of seat activity, and of the
-                        // card's column — the only inputs are owner_since,
-                        // completed_at and a clock. Fires once per stall for the
-                        // lead of the team holding the card; re-arms on evidence
-                        // of progress (plan-file mtime advancing or the seat
-                        // producing output after the nudge). A dead head
-                        // escalates to the operator instead of dropping the
-                        // watch. Shares the same liveness snapshot, `nowMs`,
-                        // `turnEndSilenceMs`, `nudgeSilenceMs` and
-                        // `notifiedSeatsThisTick` set as the other sweeps so a
-                        // seat that is both a pacer and a member is nudged at
-                        // most once per tick.
-                        try {
-                            await this._runDispatchStallSweep({
-                                db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, dispatchStallMs, notifiedSeatsThisTick,
-                            });
-                        } catch (dispatchStallErr) {
-                            this._host.logger.appendLine(`[GlobalPlanWatcher] dispatch-stall sweep failed for ${folder}: ${dispatchStallErr}`);
-                        }
+
                         // ── Dispatch timeout ─────────────────────────────────────
+                        // NEVER SUPPRESSED, and deliberately outside the gate
+                        // above. This is not a nudge: it prompts nobody, it is
+                        // the bounded end state for a card nobody rescued, and
+                        // it is the backstop that survives a controller failing
+                        // entirely. Suppressing it would remove the last
+                        // guarantee on the board.
                         // The bounded end state for a dispatched card that never
                         // reports. Runs on the same tick as the other sweeps, AFTER
                         // clearStaleWorkingState (which no longer nulls the stamp —

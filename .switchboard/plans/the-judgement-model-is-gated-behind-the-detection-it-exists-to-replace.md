@@ -649,29 +649,54 @@ sampler is `/proc` reads and an mtime scan, and the riskiest item (`stuckPasses`
 shipped code. Do **not** dispatch into `matrix.ts`, `controller.ts` or `judgement/` while the
 standing-controller subtasks are still in flight.
 
-## Review Findings
+## Implementation Report
 
-**No implementation exists for this plan.** The working tree is clean at `580794a4`, no commit
-carries `Switchboard-Plan: 604fac7b`, and the card's `dispatched_agent` is empty — it reached CODE
-REVIEWED via `move-to-code-reviewed` without ever being coded. Changes 1, 2, 3, 4, 7 and 8 are all
-absent: `controller.ts:856` still opens *"has gone quiet"*, every `fields` array in `matrix.ts` is
-unchanged, `MatrixRow` has no `target`, `classes.ts` still ships the eight-label `CLASS:` contract,
-`PlanIngestionEngine` has no lease read or nudge suppression, and the matrix holds eight rows with no
-row 9 or row 10. Files changed by this review: this plan file only — no code fixes were applied,
-because there is no diff to fix and the plan's own `## User Review Required` section reserves the
-change-4 contract and the xterm dependency for the author. Validation: `npm run compile-tests` clean;
-Goal Invariants 10, 11, 12, 14 and 16 already hold against shipped code, while 2, 5, 8, 13 and 15
-require the unwritten work and 1 is violated by code that shipped before this plan.
+Implemented on 2026-09-17, after the first review pass found no code at all. Changes 1, 2, 3, 4, 7
+and 8 all landed; changes 5 (configuration) and 6 (withdrawn) required none. The plan's two
+`## User Review Required` defaults were taken as stated: tier 1 emits **closed-vocabulary flags**,
+and **frame diffing is deferred** — no `@xterm/headless`, no `@xterm/addon-serialize`, no new
+dependency of any kind.
+
+**New files.** `src/standalone/controller/sample.ts` (process-tree CPU/RSS from `/proc`, worktree
+mtime scan, minute-quantised duration rendering); `src/standalone/judgement/flags.ts` (the closed
+observation vocabulary, its parser, and `deriveClass`); `src/services/nudgeSuppression.ts` (the
+six-state lease decision, pure); `src/test/controller-judgement-bundle-contract.test.js` (53
+behavioural checks against `out/`).
+
+**Changed.** `controller.ts` — the prompt no longer presupposes silence, the bundle carries cpu/rss/
+lastWrite, every subject is sampled unconditionally before any row is evaluated, the flags contract
+replaces `CLASS:`, `readSeatLeads`/`resolveTarget` resolve a row's addressee, the `report-to-lead`
+and `ask-completion-post` arms, and judgement availability is published into the lease after the
+capability probe. `matrix.ts` — `target` on `MatrixRow`, rows 9 and 10, the three new fields on every
+judgement row, membership validation for `target`. `classes.ts` — two new classes, `parseClassReply`
+removed. `tiers.ts` — the walk parses flags. `report.ts` — the trace carries the observations the
+class was derived from. `PlanIngestionEngine.ts` — the four nudge sweeps are gated on a
+currently-renewed lease; `_runDispatchTimeoutSweep` and `clearStaleWorkingState` are deliberately
+outside it. `ControllerBoardStore.ts` — the judgement declaration on the lease, `readSeatLeads`, and
+the mirrored validation vocabulary. `LocalApiServer.ts` + `bootstrap.ts` — the `/controller/leads`
+route, standalone-only.
+
+**One bug found by the tests, in code written this session:** `parseFlagsReply` anchored `FLAGS:` to
+a line start, so the single-line `SEAT: x | FLAGS: ...` shape the prompt itself asks for never
+parsed — every reply would have been rejected as "the rule did not run". Caught because the suite
+asserts the plan's own example string parses.
+
+**Verification.** `compile-tests` clean; `compile:standalone` builds (3 pre-existing optional-dependency
+warnings); the new suite passes 53/53 and is wired into `.github/workflows/integration-tests.yml`
+after the job's `compile-tests` step; `catalog:check`, `standalone-parity:check`,
+`standalone-fork:check`, `verb-returns:check`, `dispatch-surface:check`, `parity:check`,
+`push-routing:check`, `kanban-dispatch-callers:check`, `icons:parity`, `banner:check` and four
+adjacent contract suites all pass. `protocol-catalog.json` regenerated for the one new endpoint.
+
+**Not verified:** no model was called. Whether `gemma4:e2b` actually emits this flag vocabulary
+against a real bundle is untested here, and the plan's own measurements were not reproduced.
 
 ## Deferred Findings
 
-- CRITICAL — Change 1 unimplemented: prompt still presupposes silence. `src/standalone/controller/controller.ts:856`
-- CRITICAL — Change 2 unimplemented: no CPU, RSS or worktree-write signal collected anywhere; `fields` arrays unchanged. `src/standalone/controller/matrix.ts:167`
-- CRITICAL — Change 3 unimplemented: `MatrixRow` has no `target`; remediation cannot address a subject's lead. `src/standalone/controller/matrix.ts:104`
-- CRITICAL — Change 4 unimplemented: tier 1 still emits a closed-set diagnosis rather than flags. `src/standalone/judgement/classes.ts:18`
-- CRITICAL — Change 7 unimplemented: no lease-keyed nudge suppression; all four sweeps nudge unconditionally. `src/services/PlanIngestionEngine.ts:2768`
-- CRITICAL — Change 8 unimplemented: no row 9 and no row 10; the fix-round-unposted case is undetected. `src/standalone/controller/matrix.ts:225`
-- MAJOR — Goal Invariant 1 is violated by shipped code, and the superseded callout above denies it: `readLog() === null` and `!hasUsableEvidence(evidence)` are two mechanical preconditions standing in front of every judgement row, so a seat with an unreadable, empty or fully-redacted log is never judged. `src/standalone/controller/controller.ts:784`
-- MAJOR — All 24 checks in `### Automated Tests` are unwritten and unwired: `src/test/` holds no controller or judgement suite, and `.github/workflows/integration-tests.yml` references the controller only in a comment about the Go front controller. `.github/workflows/integration-tests.yml:2028`
-- MAJOR — Goal Invariant 4 has a hole in shipped code: the card title is emitted only when `subject.title` is truthy, so an empty title silently drops the input the plan calls load-bearing. `src/standalone/controller/controller.ts:844`
-- NIT — The plan filename retains the retired slug while the card carries the revised title; renaming would re-import as a duplicate card, so it is left as is. `.switchboard/plans/the-judgement-model-is-gated-behind-the-detection-it-exists-to-replace.md:1`
+- MAJOR — Two mechanical preconditions still stand in front of every judgement row: `diagnoseJudgement` returns null when `readLog()` yields null and again when `hasUsableEvidence(evidence)` is false, so a seat whose log is unreadable, empty or entirely redacted is never judged and nothing records that it was skipped. Left as-is deliberately — the plan's non-goals forbid re-architecting the gating — but Goal Invariant 1 is not literally true while these stand. `src/standalone/controller/controller.ts:833`
+- MAJOR — The flag vocabulary has never been exercised against a real model. The prompt, the closed set and `deriveClass` are internally consistent and tested, but whether a 2B model reliably emits these tokens is unmeasured; the plan's own e2b figures were not reproduced in this session. `src/standalone/judgement/flags.ts:98`
+- MAJOR — `USER_HZ` is assumed to be 100 rather than read. Correct on every Linux Node ships for, tagged in every CPU `source` string and stated in the report's assumptions, but a host with a different tick rate would report a plausible wrong percentage. `src/standalone/controller/sample.ts:30`
+- NIT — The worktree write scan is bounded at 20,000 entries and depth 8 and reports `truncated` when it hits either, but on a very large tree the newest file may lie beyond the budget, making a recent write read as an older one. The basis line says the scan was truncated. `src/standalone/controller/sample.ts:44`
+- NIT — `readSeatLeads` resolves a head per seat with one `resolveHeadForTerminal` call each, re-reading the group registry every time. Fine at nine seats; wasteful at ninety. `src/services/ControllerBoardStore.ts:381`
+- NIT — Row 9's "card write set" basis is never used: no write-set source exists, so the basis is always the worktree or the seat's cwd. Reported honestly either way, which is what the plan required. `src/standalone/controller/controller.ts:1090`
+- NIT — The plan filename retains the retired slug; renaming would re-import as a duplicate card. `.switchboard/plans/the-judgement-model-is-gated-behind-the-detection-it-exists-to-replace.md:1`

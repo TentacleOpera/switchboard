@@ -3,6 +3,7 @@ import * as path from 'path';
 import { KanbanDatabase } from './KanbanDatabase';
 import { bootstrapTeamReportsDirectory } from './ScheduledJobsService';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { resolveHeadForTerminal } from './teamWiring';
 
 /**
  * Board-side store for the Agent-panel controller
@@ -90,12 +91,30 @@ export interface ControllerArmedView {
  */
 export const CONTROLLER_REPORT_MAX_BYTES = 1_000_000;
 
+/**
+ * What the controller declares about its own judgement capability, published
+ * into the lease it already renews (plan:
+ * the-judgement-bundle-cannot-see-a-seat-that-is-busy-doing-the-wrong-thing,
+ * change 7).
+ *
+ * The BOARD STILL HOLDS NO MODEL CONFIGURATION AND MAKES NO MODEL CALL. It
+ * reads what the controller told it, exactly as the panel does. `available`
+ * means a judgement backend is configured AND reachable, which is the
+ * controller's own capability probe — not an inference from a URL being set.
+ */
+export interface ControllerJudgementDeclaration {
+    available: boolean;
+    reason: string;
+    source: string;
+}
+
 export interface ControllerLeaseRecord {
     holder: string;
     claimedAt: number;
     renewedAt: number;
     expiresAt: number;
     ttlMs: number;
+    judgement?: ControllerJudgementDeclaration;
 }
 
 export interface ControllerLeaseView {
@@ -113,6 +132,13 @@ export interface ControllerLeaseView {
      * quiet-wrong-answer the fallback rule forbids.
      */
     available: boolean;
+    /**
+     * What the holder declared about judgement, or `null` when it has not
+     * declared anything yet (a controller that has claimed but not finished its
+     * first wake). `null` is NOT "unavailable" and NOT "available" — it is
+     * undeclared, and the sweeps treat it as they treat every other non-answer.
+     */
+    judgement: ControllerJudgementDeclaration | null;
     /** `config:controller.lease` | `unclaimed` | `unreadable` */
     source: string;
     reason?: string;
@@ -149,6 +175,24 @@ export interface ControllerReportResult {
 }
 
 const LEASE_SOURCE = 'config:controller.lease';
+
+/**
+ * Validate a judgement declaration off the wire.
+ *
+ * A malformed declaration is `null` — UNDECLARED — never a coerced `available:
+ * false` and never a truthy default. The board suppresses its own nudges on
+ * this value, so a garbled row must not be able to read as either answer.
+ */
+function normalizeJudgementDeclaration(raw: unknown): ControllerJudgementDeclaration | null {
+    if (!raw || typeof raw !== 'object') { return null; }
+    const d = raw as Partial<ControllerJudgementDeclaration>;
+    if (typeof d.available !== 'boolean') { return null; }
+    return {
+        available: d.available,
+        reason: typeof d.reason === 'string' ? d.reason : '',
+        source: typeof d.source === 'string' && d.source ? d.source : 'controller',
+    };
+}
 const STATE_SOURCE = 'config:controller.state';
 
 /**
@@ -177,7 +221,7 @@ export class ControllerBoardStore {
     private _unreadable(reason: string): ControllerLeaseView {
         return {
             holder: null, claimedAt: null, renewedAt: null, expiresAt: null, ttlMs: null,
-            stale: false, available: false, source: 'unreadable', reason,
+            stale: false, available: false, judgement: null, source: 'unreadable', reason,
         };
     }
 
@@ -193,7 +237,7 @@ export class ControllerBoardStore {
         if (raw === null || raw === '') {
             return {
                 holder: null, claimedAt: null, renewedAt: null, expiresAt: null, ttlMs: null,
-                stale: false, available: true, source: 'unclaimed',
+                stale: false, available: true, judgement: null, source: 'unclaimed',
             };
         }
         let parsed: unknown;
@@ -214,6 +258,7 @@ export class ControllerBoardStore {
             ttlMs: typeof rec.ttlMs === 'number' ? rec.ttlMs : null,
             stale: rec.expiresAt <= now,
             available: true,
+            judgement: normalizeJudgementDeclaration(rec.judgement),
             source: LEASE_SOURCE,
         };
     }
@@ -224,7 +269,7 @@ export class ControllerBoardStore {
      * the refusal carries the holder and expiry so the second controller can
      * say who owns the board and until when.
      */
-    public async claimLease(workspaceRoot: string, controllerId: string, ttlMs: number, now: number = Date.now()): Promise<ControllerClaimResult> {
+    public async claimLease(workspaceRoot: string, controllerId: string, ttlMs: number, now: number = Date.now(), judgement?: unknown): Promise<ControllerClaimResult> {
         if (!controllerId) {
             return { granted: false, lease: this._unreadable('controllerId is required'), reason: 'controllerId is required' };
         }
@@ -244,12 +289,19 @@ export class ControllerBoardStore {
             return { granted: false, lease: this._unreadable('kanban database unavailable'), reason: 'kanban database unavailable' };
         }
         const prior = current.holder === controllerId ? current : null;
+        // A renewal that declares nothing KEEPS the prior declaration rather
+        // than clearing it. The controller claims at the top of a wake and
+        // declares after it has probed, so a claim with no declaration is
+        // "nothing new to say", not "judgement just went away" — and clearing
+        // it would flap the board's sweeps on and off every wake.
+        const declared = normalizeJudgementDeclaration(judgement) ?? prior?.judgement ?? undefined;
         const record: ControllerLeaseRecord = {
             holder: controllerId,
             claimedAt: prior?.claimedAt ?? now,
             renewedAt: now,
             expiresAt: now + ttlMs,
             ttlMs,
+            ...(declared ? { judgement: declared } : {}),
         };
         try {
             const ok = await db.setConfig(CONTROLLER_LEASE_KEY, JSON.stringify(record));
@@ -265,7 +317,7 @@ export class ControllerBoardStore {
             lease: {
                 holder: record.holder, claimedAt: record.claimedAt, renewedAt: record.renewedAt,
                 expiresAt: record.expiresAt, ttlMs: record.ttlMs, stale: false,
-                available: true, source: LEASE_SOURCE,
+                available: true, judgement: declared ?? null, source: LEASE_SOURCE,
             },
         };
     }
@@ -361,6 +413,46 @@ export class ControllerBoardStore {
             }
         }
         return this._writeJson(workspaceRoot, CONTROLLER_JUDGEMENT_KEY, value);
+    }
+
+    /**
+     * Seat -> its team lead, for the controller's `target: 'lead'` rows
+     * (plan: the-judgement-bundle-cannot-see-a-seat-that-is-busy-doing-the-wrong-thing,
+     * change 3).
+     *
+     * Resolved board-side because the board owns the group registry; the
+     * controller is a separate process and must not open the database.
+     *
+     * Every entry carries the STORE THAT ANSWERED. Routing is one of the four
+     * reads CLAUDE.md's fallback rule governs, and the cost of a quiet wrong
+     * answer here is not a misleading log line — it is a prompt about one
+     * team's stalled card delivered into another team's lead. A seat with no
+     * resolvable head gets `seat: null` and a reason, never a nearby name.
+     */
+    public async readSeatLeads(workspaceRoot: string): Promise<{ leads: Record<string, { seat: string | null; source: string; reason?: string }>; source: string; reason?: string }> {
+        const db = await this._db(workspaceRoot);
+        if (!db) { return { leads: {}, source: 'unreadable', reason: 'kanban database unavailable' }; }
+        let registry: Record<string, any>;
+        try {
+            registry = await db.getConfigJson('runtime.terminals', {}) as Record<string, any>;
+        } catch (e) {
+            return { leads: {}, source: 'unreadable', reason: `terminal registry read failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+        const seats = (registry && typeof registry === 'object') ? Object.keys(registry) : [];
+        const leads: Record<string, { seat: string | null; source: string; reason?: string }> = {};
+        for (const seat of seats) {
+            let head: string | null = null;
+            try {
+                head = await resolveHeadForTerminal({ db, terminal: seat });
+            } catch (e) {
+                leads[seat] = { seat: null, source: 'unreadable', reason: `head resolution threw: ${e instanceof Error ? e.message : String(e)}` };
+                continue;
+            }
+            leads[seat] = head
+                ? { seat: head, source: 'config:terminals.groups (head of the group whose roster contains this seat)' }
+                : { seat: null, source: 'config:terminals.groups', reason: 'this seat is on no registered team whose group carries a head' };
+        }
+        return { leads, source: 'config:terminals.groups' };
     }
 
     public async readQuota(workspaceRoot: string): Promise<{ value: any; source: string; holder?: string | null; reason?: string }> {
@@ -740,6 +832,9 @@ function validateMatrixRows(rows: any[]): string | null {
                 return `matrix row '${row.id}' requires an unknown capability '${String(cap)}'`;
             }
         }
+        if (row.target !== undefined && !KNOWN_TARGETS.includes(String(row.target))) {
+            return `matrix row '${row.id}' names an unknown target '${String(row.target)}'`;
+        }
     }
     return null;
 }
@@ -753,8 +848,19 @@ function validateMatrixRows(rows: any[]): string | null {
 const KNOWN_REMEDIATIONS = [
     'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
     'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
+    'report-to-lead', 'ask-completion-post',
 ];
 const KNOWN_CAPABILITIES = ['mechanical', 'model', 'supervisor', 'two-providers'];
+/**
+ * Who a row's remediation addresses. Mirrored from `MATRIX_TARGETS`.
+ *
+ * These four lists are hand-mirrored because this file imports no standalone
+ * module. That mirroring is a DRIFT HAZARD in both directions: a value added
+ * here but not there loads and is inert, and a value added there but not here
+ * makes the panel refuse a row the controller would have run. The contract
+ * suite asserts the two sides match, because nothing else would notice.
+ */
+const KNOWN_TARGETS = ['subject', 'lead'];
 /**
  * The condition kinds the controller's evaluator has an arm for. A row naming
  * anything else matches no arm, returns no diagnosis and is silently inert —

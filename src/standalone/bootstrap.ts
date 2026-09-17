@@ -5588,7 +5588,7 @@ Each plan file must include:
         // `/controller/*` then answers 503 rather than an empty value.
         controllerStore: {
             readLease: (root: string) => controllerBoardStore.readLease(root),
-            claimLease: (root: string, controllerId: string, ttlMs: number) => controllerBoardStore.claimLease(root, controllerId, ttlMs),
+            claimLease: (root: string, controllerId: string, ttlMs: number, judgement?: unknown) => controllerBoardStore.claimLease(root, controllerId, ttlMs, Date.now(), judgement),
             releaseLease: (root: string, controllerId: string) => controllerBoardStore.releaseLease(root, controllerId),
             readState: (root: string) => controllerBoardStore.readState(root),
             writeState: (root: string, controllerId: string, state: unknown) => controllerBoardStore.writeState(root, controllerId, state),
@@ -5597,6 +5597,12 @@ Each plan file must include:
             // answer; an empty map means "no sweep has nudged since boot", which
             // is a real, configured answer.
             readBoardNudges: async (_root: string) => Object.fromEntries(boardNudgeLedger),
+            // Seat -> team lead, for the controller's `target: 'lead'` rows
+            // (plan: the-judgement-bundle-cannot-see-a-seat-that-is-busy-doing-
+            // the-wrong-thing, change 3). Standalone-only, like the rest of
+            // this store: the extension host is being removed and wiring a new
+            // seam into it is throwaway work.
+            readSeatLeads: (root: string) => controllerBoardStore.readSeatLeads(root),
             writeReport: (root: string, req: { from: string; kind: string; body: string; teamId?: string }) => controllerBoardStore.appendReport(root, req),
             // Judgement tiers (plan: judgement-tiers-the-supervisor-seat-and-reroute).
             // `readJudgement` resolves endpoints/models/keySet from the existing

@@ -10,12 +10,11 @@ import * as path from 'path';
  * remediation and a precondition — not a function with branches. Adding a row
  * must not mean editing the controller.
  *
- * The full eight-row matrix ships here, including the judgement rows, because
- * it is a STORE: a row that does not exist cannot declare itself unavailable.
- * The controller's mechanical evaluation path is the only one implemented in
- * this subtask; rows 3, 5, 6, 7 and 8 report as unavailable with the reason
- * `no judgement backend configured`, which is the state a modelless deployment
- * ships in permanently.
+ * The full ten-row matrix ships here, including the judgement rows, because it
+ * is a STORE: a row that does not exist cannot declare itself unavailable. Rows
+ * 1, 2 and 4 are mechanical; rows 3, 5, 6, 7, 8, 9 and 10 report as unavailable
+ * with the reason `no judgement backend configured`, which is the state a
+ * modelless deployment ships in permanently.
  *
  * Row 8 (`unknown`) is load-bearing: without an explicit unknown outcome a
  * model is forced to name a plausible class, which is exactly the quiet wrong
@@ -39,7 +38,11 @@ export type MatrixRemediation =
     | 'supervisor'
     | 'escalate-human'
     | 'restart-board'
-    | 'record-unknown';
+    | 'record-unknown'
+    /** Row 9 — hand the OBSERVATIONS to the subject's lead (never to the subject). */
+    | 'report-to-lead'
+    /** Row 10 — ask the coder to post the completion it never posted. */
+    | 'ask-completion-post';
 
 /**
  * The escalation ladder, lowest rung first. `mark-complete` and
@@ -74,6 +77,21 @@ export const RUNGS_PER_ESCALATION = 2;
 export type MatrixCapabilityKey = 'mechanical' | 'model' | 'supervisor' | 'two-providers';
 
 /**
+ * WHO a row's remediation acts on (change 3).
+ *
+ * The row schema previously assumed the seat diagnosed is the seat acted upon.
+ * Row 9 breaks that assumption on purpose: a member looping is diagnosed on
+ * `coder-1` and acted on `lead-1`, because the lead dispatched the work, holds
+ * the plan and knows what it asked for — and because nudging a seat that is
+ * already producing output is the failure mode row 9 exists to avoid.
+ *
+ * Defaults to `subject`, so every existing row keeps its behaviour.
+ */
+export type MatrixTarget = 'subject' | 'lead';
+
+export const MATRIX_TARGETS: readonly MatrixTarget[] = ['subject', 'lead'];
+
+/**
  * The closed sets an override is validated against, as VALUES rather than
  * types alone. A type is erased at runtime: without these, a hand-written
  * `matrix.json` naming a remediation or a condition kind that does not exist
@@ -84,6 +102,7 @@ export type MatrixCapabilityKey = 'mechanical' | 'model' | 'supervisor' | 'two-p
 export const MATRIX_REMEDIATIONS: readonly MatrixRemediation[] = [
     'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
     'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
+    'report-to-lead', 'ask-completion-post',
 ];
 
 /** The condition kinds the controller's evaluator knows. */
@@ -121,6 +140,11 @@ export interface MatrixRow {
     precondition: string;
     /** Capability probes this row requires before it is reachable. */
     requires: MatrixCapabilityKey[];
+    /**
+     * Who the remediation addresses. Omitted means `subject` — the assumption
+     * every row before change 3 was written under.
+     */
+    target?: MatrixTarget;
     /**
      * Set when the row is present in the store but its remediation is not
      * implemented. A row that declares itself unavailable WITH ITS REASON is a
@@ -164,7 +188,7 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         cause: 'Waiting on a human',
         evidence: 'log tail ends in a question or prompt',
         judge: 'model',
-        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'ownerSince', 'lastAction', 'logTail'] },
+        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'ownerSince', 'lastAction', 'cpu', 'rss', 'lastWrite', 'logTail'] },
         remediation: 'relay-answer',
         precondition: 'a judgement backend is configured and reachable',
         requires: ['model'],
@@ -186,7 +210,7 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         cause: 'Out of quota / rate-limited',
         evidence: 'provider error text in tail',
         judge: 'model',
-        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'lastAction', 'logTail', 'providers'] },
+        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'lastAction', 'cpu', 'rss', 'lastWrite', 'logTail', 'providers'] },
         remediation: 'reroute',
         precondition: 'a judgement backend is configured, and at least two distinct providers are seated',
         requires: ['model', 'two-providers'],
@@ -197,7 +221,7 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         cause: 'Looping / undiscovered bug',
         evidence: 'repeated identical output, error churn',
         judge: 'model',
-        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'logTail'] },
+        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'cpu', 'rss', 'lastWrite', 'logTail'] },
         remediation: 'supervisor',
         precondition: 'a judgement backend is configured; a supervisor seat must exist to remediate',
         requires: ['model', 'supervisor'],
@@ -208,7 +232,7 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         cause: 'Board-level wedge',
         evidence: '>=N seats stuck, no single cause',
         judge: 'model',
-        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'logTail'] },
+        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'cpu', 'rss', 'lastWrite', 'logTail'] },
         remediation: 'restart-board',
         precondition: 'a judgement backend is configured and a supervisor is present',
         requires: ['model', 'supervisor'],
@@ -227,8 +251,66 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         cause: 'Unknown',
         evidence: 'nothing above matches',
         judge: 'model',
-        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'ownerSince', 'lastAction', 'logTail'] },
+        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'ownerSince', 'lastAction', 'cpu', 'rss', 'lastWrite', 'logTail'] },
         remediation: 'record-unknown',
+        precondition: 'a judgement backend is configured',
+        requires: ['model'],
+    },
+    {
+        // Row 9 — the research loop (plan:
+        // the-judgement-bundle-cannot-see-a-seat-that-is-busy-doing-the-wrong-thing,
+        // change 3).
+        //
+        // A seat stuck researching looks maximally alive: it emits output
+        // constantly, burns CPU and never repeats itself, so bytes, frame and
+        // row 6's repeated-output check all read as healthy work. The only
+        // signal that reveals it is NO FILE WRITTEN for N minutes against a
+        // card that asked for an implementation — and N is task-dependent,
+        // which is why the card text is mandatory in the bundle and why this
+        // row is judged by a model rather than a threshold.
+        //
+        // It acts on the LEAD. The lead dispatched the work and holds the plan;
+        // the subject is producing output and a nudge into it is noise
+        // competing with the work it is already doing.
+        id: 'research-loop-no-write',
+        order: 9,
+        cause: 'Research loop — producing output, producing no work',
+        evidence: 'no worktree write for N against a producing card, seat otherwise live',
+        judge: 'model',
+        condition: { kind: 'judgement', fields: ['seat', 'card', 'column', 'silence', 'ownerSince', 'cpu', 'rss', 'lastWrite', 'logTail'] },
+        remediation: 'report-to-lead',
+        target: 'lead',
+        precondition: 'a judgement backend is configured; the subject must have a resolvable lead to report to',
+        requires: ['model'],
+    },
+    {
+        // Row 10 — the fix round that was finished and never posted (change 8).
+        //
+        // The most frequently hit case on the board and nothing detected it.
+        // Row 1 is STRUCTURALLY blind to it: `evalCompletedUnasserted` requires
+        // the coder's `finished` post as its evidence, so it detects a LEAD
+        // failing to close a card the coder did post. This is the coder never
+        // posting, which leaves no `finished` after `owner_since` at all.
+        //
+        // The discriminating evidence was already in the controller's hands and
+        // was being discarded — row 1 rejects on `finishedAt < ownerSinceMs`,
+        // which is not "no evidence" but "this seat posted a completion for
+        // this very card on an EARLIER round and has not on this one".
+        //
+        // The remediation is a prompt, never an auto-complete: row 1 may
+        // complete a card because the coder ASSERTED finished, and the board is
+        // only recording an assertion that exists. Here nobody has asserted
+        // anything, so completing it would be the controller inventing a claim
+        // about work it cannot verify. A wrong completion is materially worse
+        // than a late one.
+        id: 'fix-round-unposted',
+        order: 10,
+        cause: 'Fix round finished, completion never posted',
+        evidence: 'a prior `finished` before owner_since, none after; worktree written this round; seat at rest',
+        judge: 'model',
+        condition: { kind: 'judgement', fields: ['seat', 'card', 'column', 'silence', 'ownerSince', 'lastAction', 'cpu', 'rss', 'lastWrite', 'rounds', 'logTail'] },
+        remediation: 'ask-completion-post',
+        target: 'subject',
         precondition: 'a judgement backend is configured',
         requires: ['model'],
     },
@@ -295,6 +377,9 @@ function validateRow(row: any, index: number, source: string): MatrixRow {
     if (!(MATRIX_REMEDIATIONS as readonly string[]).includes(String(row.remediation))) {
         throw new Error(`matrix row '${row.id}' in ${source} names an unknown remediation '${String(row.remediation)}' (known: ${MATRIX_REMEDIATIONS.join(', ')})`);
     }
+    if (row.target !== undefined && !(MATRIX_TARGETS as readonly string[]).includes(String(row.target))) {
+        throw new Error(`matrix row '${row.id}' in ${source} names an unknown target '${String(row.target)}' (known: ${MATRIX_TARGETS.join(', ')})`);
+    }
     for (const cap of row.requires) {
         if (!(MATRIX_CAPABILITY_KEYS as readonly string[]).includes(String(cap))) {
             throw new Error(`matrix row '${row.id}' in ${source} requires an unknown capability '${String(cap)}' (known: ${MATRIX_CAPABILITY_KEYS.join(', ')})`);
@@ -310,6 +395,7 @@ function validateRow(row: any, index: number, source: string): MatrixRow {
         remediation: row.remediation,
         precondition: String(row.precondition ?? ''),
         requires: row.requires as MatrixCapabilityKey[],
+        ...(row.target !== undefined ? { target: row.target as MatrixTarget } : {}),
         ...(row.declaredUnavailable && typeof row.declaredUnavailable === 'object'
             ? { declaredUnavailable: { reason: String(row.declaredUnavailable.reason ?? ''), source: String(row.declaredUnavailable.source ?? 'matrix-override') } }
             : {}),

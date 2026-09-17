@@ -27,6 +27,11 @@ import {
     type TierAttempt,
 } from '../judgement/tiers';
 import { CLASS_TO_ROW_ID, MODEL_ACTIONABLE_CLASSES, type JudgementClass } from '../judgement/classes';
+import { deriveClass, renderFlags, type JudgementFlag, type MechanicalPriors } from '../judgement/flags';
+import {
+    readProcessTable, sampleSeat, scanLastWrite, renderDuration, ASSUMED_USER_HZ,
+    type ProcessTable, type PreviousSample, type Reading, type WriteScan,
+} from './sample';
 import {
     buildSupervisorPrompt,
     emptyEscalationState,
@@ -144,6 +149,16 @@ interface PersistedControllerState {
     /** Judgement calls made on the current day — the declared global backstop. */
     judgementCalls: { dayKey: string; count: number };
     lastKnownBoardPid: number | null;
+    /**
+     * The previous CPU sample per seat, keyed by seat name (change 2).
+     *
+     * A rate needs two readings and the controller wakes on a clock, so the
+     * earlier reading has to survive the gap between wakes. Each entry carries
+     * the pid AND the process start time it was taken from: a seat that died
+     * and respawned reuses the pid, and a delta across that recycle is computed
+     * from two different processes.
+     */
+    samples: Record<string, PreviousSample>;
 }
 
 function emptyState(): PersistedControllerState {
@@ -157,6 +172,7 @@ function emptyState(): PersistedControllerState {
         quota: {},
         judgementCalls: { dayKey: '', count: 0 },
         lastKnownBoardPid: null,
+        samples: {},
     };
 }
 
@@ -223,6 +239,7 @@ function configAssumptions(cfg: ControllerRuntimeConfig): string[] {
             ? 'RSS restart trigger: disabled — no --restart-rss-mb configured'
             : `RSS restart trigger: ${Math.round(cfg.restartRssThresholdBytes / (1024 * 1024))}MB`,
         `judgement deadline=${cfg.judgementDeadlineMs}ms (covers CONNECT, not just read), max_tokens=${cfg.judgementMaxTokens}, reasoning_effort=none (source: controller config)`,
+        `CPU sampling: USER_HZ assumed ${ASSUMED_USER_HZ} (source: controller constant — sysconf(_SC_CLK_TCK) is not reachable from Node; every CPU percentage is computed against this)`,
         `supervisor escalation: stuck>=${cfg.supervisorStuckPasses} pass(es), TTL=${Math.round(cfg.supervisorEscalationTtlMs / 60000)}m, quota stand-down=${Math.round(cfg.quotaStandDownMs / 60000)}m (source: controller config)`,
     ];
 }
@@ -311,6 +328,11 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     const nudges = await readNudges(apiRequest, port, workspaceRoot);
     const finishedByPlan = await readFinishedTurnEnds(apiRequest, port, workspaceRoot);
     const judgementConfig = await readJudgementConfig(apiRequest, port, workspaceRoot);
+    // Seat -> its team lead (change 3). Read once per wake; every entry carries
+    // the source that answered, because "routing" is one of the four reads the
+    // fallback rule names and a lead resolved from the wrong store is a prompt
+    // delivered to the wrong agent.
+    const leadBySeat = await readSeatLeads(apiRequest, port, workspaceRoot);
     // Quota stand-down is re-read at the TOP of every wake rather than trusted
     // from the controller's own last decision: V81 means an operator tap or a
     // queue pass will happily push work back into a seat the controller stood
@@ -336,6 +358,38 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         fleet,
         health,
     });
+
+    // 4b. Publish judgement availability into the lease the controller already
+    //     renews (change 7). The BOARD holds no model configuration and makes
+    //     no model call — it reads what the controller told it, exactly as the
+    //     panel does, and stands its own nudge sweeps down only while this says
+    //     `available` on a lease that is still being renewed.
+    //
+    //     Published AFTER the probe, not at claim time: the claim happens at the
+    //     top of the wake before anything has been probed, and declaring
+    //     availability from a URL being set rather than from the probe would be
+    //     a fallback indistinguishable from a real reading.
+    const modelCap = capabilityForKey('model', caps);
+    try {
+        const publish = await apiRequest(port, 'POST', '/controller/lease', workspaceRoot, {
+            controllerId,
+            ttlMs: ctx.leaseTtlMs,
+            judgement: { available: modelCap.enabled, reason: modelCap.reason, source: modelCap.source },
+        });
+        const publishJson = safeJson(publish);
+        if (publish && !publishJson?.granted) {
+            // The board was taken by another controller between the claim at
+            // the top of this wake and here. Recorded rather than swallowed: a
+            // board whose nudges stay suppressed on a declaration this pass
+            // could not refresh is a state somebody has to be able to see.
+            errors.push(`judgement availability not published: ${publishJson?.reason || `status ${publish.status}`}`);
+        }
+    } catch (e) {
+        // A failed publication leaves the PRIOR declaration in place, which is
+        // the safe direction only because the board treats a stale lease as
+        // "resume the sweeps" regardless of what it declares.
+        errors.push(`judgement availability publication failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     // 5. Load the controller's durable state (ladder, restart history).
     const stateView = await tryRequest(apiRequest, port, 'GET', '/controller/state', workspaceRoot);
@@ -372,6 +426,22 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
 
     const actions: EntryAction[] = [];
     const readLog = makeLogReader(apiRequest, port, workspaceRoot, cfg.evidenceTailBytes);
+
+    // ONE `/proc` snapshot for the whole wake (change 2). Once, not per seat:
+    // nine seats each walking `/proc` is nine scans of the same directory, and
+    // the readings would be taken at nine different instants, which makes a CPU
+    // rate computed against a shared wall clock subtly wrong.
+    //
+    // Sampling WRITES TO NOTHING. No seat is prompted, no terminal is cleared,
+    // no file is touched. Observation frequency and remediation frequency are
+    // independent, and only the former changed.
+    const procTable = readProcessTable();
+    const nextSamples: Record<string, PreviousSample> = {};
+    if (!procTable.available) {
+        // Degrade the FIELDS, never the wake. A host without `/proc` still
+        // assembles a bundle; it just says which signals it could not read.
+        log(`process sampling unavailable: ${procTable.reason}`);
+    }
 
     // Ladder state for a card the controller is no longer holding is dropped:
     // after `_runDispatchTimeoutSweep` abandons a card, the next pass
@@ -427,12 +497,18 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             });
             continue;
         }
-        const diagnosis = await diagnose(subject, matrix.rows, {
+        const diagnoseCtx: DiagnoseContext = {
             cfg, now: now(), workspaceRoot, seatByName, finishedByPlan, nudges, caps, readLog, judgementCtx,
-        });
+            procTable, prevSamples: state.samples, nextSamples, leadBySeat, observations: null,
+        };
+        // Observe first, and unconditionally. Sampling costs the seat nothing
+        // and says nothing to it, so it must not be conditional on which row
+        // matches — and a rate needs the PREVIOUS wake to have sampled too.
+        diagnoseCtx.observations = observeSeat(subject, diagnoseCtx);
+        const diagnosis = await diagnose(subject, matrix.rows, diagnoseCtx);
         if (!diagnosis) { continue; }
         const action = await applyDiagnosis(subject, diagnosis, {
-            ...ctx, caps, state, actions, seatByName, judgementCtx,
+            ...ctx, caps, state, actions, seatByName, judgementCtx, leadBySeat,
         });
         if (action) { actions.push(action); }
     }
@@ -511,6 +587,9 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     //    state read failed — writing the empty default would clobber the live
     //    ladder with a value that reads as "never fired".
     state.configVersion = configVersion;
+    // Only seats sampled THIS wake are carried forward. A seat that is gone
+    // leaves no entry behind to be matched against a recycled pid later.
+    state.samples = nextSamples;
     state.capabilityAvailability = snapshotAvailability(caps);
     state.capabilityDetail = snapshotCapabilityDetail(caps);
     if (health?.pid) { state.lastKnownBoardPid = health.pid; }
@@ -567,8 +646,17 @@ async function readNudges(apiRequest: ControllerApiRequest, port: number, worksp
     return {};
 }
 
-async function readFinishedTurnEnds(apiRequest: ControllerApiRequest, port: number, workspaceRoot: string): Promise<Map<string, number>> {
-    const out = new Map<string, number>();
+/**
+ * Every `finished` turn-end per plan, ascending — not just the latest.
+ *
+ * Row 1 only ever needed the most recent one. Row 10 needs BOTH the latest and
+ * whether any exists BEFORE the current `owner_since`, because "this seat
+ * posted a completion for this card on an earlier round and has not on this
+ * one" is the signature of the reported failure, and a single timestamp cannot
+ * express it.
+ */
+async function readFinishedTurnEnds(apiRequest: ControllerApiRequest, port: number, workspaceRoot: string): Promise<Map<string, number[]>> {
+    const out = new Map<string, number[]>();
     const res = await tryRequest(apiRequest, port, 'GET', '/kanban/reports', workspaceRoot, undefined, { kind: 'finished', limit: '200' });
     const json = safeJson(res);
     const rows = Array.isArray(json) ? json : (Array.isArray(json?.reports) ? json.reports : (Array.isArray(json?.data) ? json.data : []));
@@ -576,8 +664,63 @@ async function readFinishedTurnEnds(apiRequest: ControllerApiRequest, port: numb
         const planId = String(r?.plan_id || r?.planId || '');
         const ts = Date.parse(String(r?.timestamp || ''));
         if (!planId || !Number.isFinite(ts)) { continue; }
-        const prior = out.get(planId);
-        if (prior === undefined || ts > prior) { out.set(planId, ts); }
+        const list = out.get(planId);
+        if (list) { list.push(ts); } else { out.set(planId, [ts]); }
+    }
+    for (const list of out.values()) { list.sort((a, b) => a - b); }
+    return out;
+}
+
+/** The most recent `finished` for a plan, or undefined when it never posted. */
+function latestFinished(map: Map<string, number[]>, planId: string): number | undefined {
+    const list = map.get(planId);
+    return list && list.length > 0 ? list[list.length - 1] : undefined;
+}
+
+/** True when a `finished` was posted for this plan strictly before `beforeMs`. */
+function finishedBefore(map: Map<string, number[]>, planId: string, beforeMs: number): boolean {
+    return (map.get(planId) || []).some(ts => ts < beforeMs);
+}
+
+/** True when a `finished` was posted for this plan at or after `sinceMs`. */
+function finishedSince(map: Map<string, number[]>, planId: string, sinceMs: number): boolean {
+    return (map.get(planId) || []).some(ts => ts >= sinceMs);
+}
+
+/**
+ * Seat -> its team lead (change 3).
+ *
+ * Routing is one of the four reads CLAUDE.md's fallback rule governs, so every
+ * entry is TAGGED with the store that answered and an unresolvable seat gets an
+ * explicit `null` with a reason rather than a plausible substitute. Guessing a
+ * lead here does not produce a slightly-wrong log line — it delivers a prompt
+ * about one team's stalled card into a different team's lead.
+ */
+async function readSeatLeads(
+    apiRequest: ControllerApiRequest,
+    port: number,
+    workspaceRoot: string,
+): Promise<Map<string, { seat: string | null; source: string; reason?: string }>> {
+    const out = new Map<string, { seat: string | null; source: string; reason?: string }>();
+    const res = await tryRequest(apiRequest, port, 'GET', '/controller/leads', workspaceRoot);
+    const json = safeJson(res);
+    if (!res || res.status !== 200 || !json?.leads || typeof json.leads !== 'object') {
+        // No map at all is not "no seat has a lead" — it is "the board did not
+        // answer". Row 9 must be able to say which of those it hit.
+        return out;
+    }
+    const source = typeof json.source === 'string' && json.source ? json.source : 'board:/controller/leads';
+    for (const seat of Object.keys(json.leads)) {
+        const entry = json.leads[seat];
+        if (typeof entry === 'string') {
+            out.set(seat, { seat: entry || null, source });
+        } else if (entry && typeof entry === 'object') {
+            out.set(seat, {
+                seat: typeof entry.seat === 'string' && entry.seat ? entry.seat : null,
+                source: typeof entry.source === 'string' && entry.source ? entry.source : source,
+                ...(typeof entry.reason === 'string' && entry.reason ? { reason: entry.reason } : {}),
+            });
+        }
     }
     return out;
 }
@@ -715,11 +858,21 @@ interface DiagnoseContext {
     now: number;
     workspaceRoot: string;
     seatByName: Map<string, any>;
-    finishedByPlan: Map<string, number>;
+    finishedByPlan: Map<string, number[]>;
     nudges: Record<string, number>;
     caps: CapabilitySnapshot;
     readLog: (seat: string) => Promise<string | null>;
     judgementCtx: JudgementRuntimeContext;
+    /** One `/proc` snapshot for the whole wake (change 2). */
+    procTable: ProcessTable;
+    /** The previous CPU sample per seat, read from persisted state. */
+    prevSamples: Record<string, PreviousSample>;
+    /** Samples taken this wake, written back into persisted state. */
+    nextSamples: Record<string, PreviousSample>;
+    /** Seat -> its team lead, with the source that answered (change 3). */
+    leadBySeat: Map<string, { seat: string | null; source: string; reason?: string }>;
+    /** This subject's readings, taken once per wake before any row is evaluated. */
+    observations: SeatObservations | null;
 }
 
 /**
@@ -776,7 +929,7 @@ async function diagnoseJudgement(subject: Subject, rows: MatrixRow[], ctx: Diagn
             evidenceWindow: 'controller.state.judgementCalls (board config)',
             detail: `global ceiling reached for ${ctx.judgementCtx.dayKey}`,
             priorVerdict: subject.lastAction,
-            judgement: { class: null, tierChain: [], answeredBy: null, ceilingReached: true, ceilingDetail: `ceiling reached (${ctx.judgementCtx.judgementCalls.count} calls on ${ctx.judgementCtx.dayKey})` },
+            judgement: { class: null, flags: [], tierChain: [], answeredBy: null, ceilingReached: true, ceilingDetail: `ceiling reached (${ctx.judgementCtx.judgementCalls.count} calls on ${ctx.judgementCtx.dayKey})` },
         };
     }
 
@@ -788,10 +941,16 @@ async function diagnoseJudgement(subject: Subject, rows: MatrixRow[], ctx: Diagn
     const fields = new Set<string>();
     for (const r of judgementRows) { for (const f of (r.condition.fields || [])) { fields.add(f); } }
 
+    // The readings taken at the top of this subject's pass — the SAME ones the
+    // controller reasons about, so the model is never asked about one set of
+    // numbers while a row is selected against another.
+    const observations = ctx.observations ?? observeSeat(subject, ctx);
+    const priors = mechanicalPriors(subject, ctx, observations);
+
     const outcome = await walkJudgementChain({
         tiers: ctx.judgementCtx.tiers,
         escalationPermitted: judgementRows.length > 0,
-        buildPrompt: (tier, askReason) => buildClassificationPrompt(subject, ctx, evidence, fields, askReason),
+        buildPrompt: (tier, askReason) => buildClassificationPrompt(subject, ctx, evidence, fields, askReason, observations, priors, tier.role),
         readKey: (providerId) => readTierApiKey(ctx.workspaceRoot, providerId),
         deadlineMs: ctx.cfg.judgementDeadlineMs,
         maxTokens: ctx.cfg.judgementMaxTokens,
@@ -801,8 +960,13 @@ async function diagnoseJudgement(subject: Subject, rows: MatrixRow[], ctx: Diagn
     const calls = outcome.attempts.filter(a => a.outcome === 'answered' || a.outcome === 'unknown' || a.outcome === 'invalid' || a.outcome === 'unreachable').length;
     ctx.judgementCtx.judgementCalls.count += calls;
 
+    // OBSERVATIONS -> CLASS, in code (change 4). The model said what it saw;
+    // the conclusion is drawn here, where it can be read and tested.
+    const derived = outcome.answered ? deriveClass(outcome.flags, priors) : null;
+
     const trace: JudgementTrace = {
-        class: outcome.class,
+        class: derived,
+        flags: [...outcome.flags],
         tierChain: outcome.attempts,
         answeredBy: outcome.answeredBy ? {
             providerId: outcome.answeredBy.providerId,
@@ -817,49 +981,124 @@ async function diagnoseJudgement(subject: Subject, rows: MatrixRow[], ctx: Diagn
     // Map the class to a row. A mechanical class (or none) resolves to `unknown`
     // with the raw class recorded — never to a mechanical remediation.
     let mapped: MatrixRow | undefined;
-    if (outcome.class && (MODEL_ACTIONABLE_CLASSES as readonly string[]).includes(outcome.class)) {
-        const rowId = CLASS_TO_ROW_ID[outcome.class];
+    if (derived && (MODEL_ACTIONABLE_CLASSES as readonly string[]).includes(derived)) {
+        const rowId = CLASS_TO_ROW_ID[derived];
         mapped = judgementRows.find(r => r.id === rowId);
+    }
+    // A tier that observed nothing worth reporting is an ANSWER, not a failure,
+    // and it must not fall through to row 8 and spend an escalation on a
+    // healthy seat. Tier 1 is deliberately permissive; this is the one outcome
+    // that says "and even so, nothing".
+    if (outcome.answered && derived === null) {
+        return null;
     }
     const row = mapped || unknownRow;
     if (!row) { return null; }
 
-    const mechanicalNote = outcome.class && !mapped
-        ? `model returned the mechanical class '${outcome.class}', which is diagnosed mechanically — recorded as unknown`
-        : (outcome.class === null ? 'no tier produced a valid class — the rule did not run' : '');
+    const mechanicalNote = derived && !mapped
+        ? `observations derived the mechanical class '${derived}', which is diagnosed mechanically — recorded as unknown`
+        : (derived === null ? 'no tier produced usable observations — the rule did not run' : `observed [${renderFlags(outcome.flags)}] -> '${derived}'`);
 
     return {
         row,
-        evidence,
-        evidenceWindow: `GET /terminals/${subject.seat}/log (tail ${ctx.cfg.evidenceTailBytes}B), redacted; fields sent: ${Array.from(fields).join(', ')}`,
-        detail: mechanicalNote || `classified '${outcome.class}'`,
+        evidence: `${observations.line}\n${evidence}`,
+        evidenceWindow: `GET /terminals/${subject.seat}/log (tail ${ctx.cfg.evidenceTailBytes}B), redacted; ${observations.window}; fields sent: ${Array.from(fields).join(', ')}`,
+        detail: mechanicalNote,
         priorVerdict: subject.lastAction,
         judgement: trace,
     };
 }
 
-function buildClassificationPrompt(subject: Subject, ctx: DiagnoseContext, evidence: string, fields: Set<string>, askReason: boolean): { system: string; user: string } {
+/** The closed flag vocabulary, as the prompt presents it. */
+const JUDGEMENT_FLAG_LIST = [
+    '  no-write | recent-write        (did anything get written to the worktree)',
+    '  card-implement | card-research (what the CARD asked for)',
+    '  cpu-zero | cpu-busy            (what the process is doing)',
+    '  silent | loud                  (what the output stream is doing)',
+    '  tail-question                  (it is waiting on a person)',
+    '  tail-quota-error               (a provider quota or rate-limit error)',
+    '  tail-crash                     (a crash, traceback or non-zero exit)',
+    '  tail-repeat                    (the same output over and over)',
+    '  tail-summary                   (it reads like a summary of finished work)',
+    '  tail-abandoned                 (it reads like work given up partway)',
+    '  tail-clean                     (nothing notable)',
+    '  no-concern                     (nothing worth reporting)',
+].join('\n');
+
+/**
+ * Assemble the bundle and the instruction (changes 1, 2 and 4).
+ *
+ * RENDERING IS STABLE ON PURPOSE. Judgement is deterministic for a fixed prompt
+ * against a fixed model at temperature 0 — that was measured, and it is why
+ * `stuckPasses` is a sound construction. What determinism does NOT survive is a
+ * bundle whose text changes between wakes for incidental reasons: a rephrased
+ * duration, a tail truncated at a different boundary, a field order that
+ * depends on set iteration. Durations are therefore quantised to minutes, the
+ * tail is truncated on a fixed byte rule, and the field order here is the
+ * source order of this function rather than the order a `Set` happens to yield.
+ */
+function buildClassificationPrompt(
+    subject: Subject,
+    ctx: DiagnoseContext,
+    evidence: string,
+    fields: Set<string>,
+    askReason: boolean,
+    observations: SeatObservations,
+    priors: MechanicalPriors,
+    tierRole: string,
+): { system: string; user: string } {
     const seat = ctx.seatByName.get(subject.seat);
     const lastDataAt = seat && typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
     const silentMs = lastDataAt > 0 ? ctx.now - lastDataAt : null;
     const lines: string[] = [];
-    if (fields.has('seat')) { lines.push(`Seat: ${subject.seat}`); }
-    if (fields.has('card')) { lines.push(`Held card: ${subject.planId}${subject.title ? ` "${subject.title}"` : ''}`); }
-    if (fields.has('silence')) { lines.push(`Silent for: ${silentMs === null ? 'unknown (no heartbeat data)' : `${Math.round(silentMs / 60000)} min`}`); }
-    if (fields.has('ownerSince')) { lines.push(`owner_since: ${subject.ownerSince}`); }
-    if (fields.has('lastAction')) { lines.push(`last_action: ${subject.lastAction ?? '(none)'}`); }
-    if (fields.has('providers')) { lines.push(`Providers seated: ${ctx.caps.providers.providers.join(', ') || 'none'}`); }
+    if (fields.has('seat')) { lines.push(`seat ${subject.seat} | role ${subject.recommendedRole || seat?.role || 'unknown'}`); }
+    // The card text is MANDATORY and is never omitted for want of a title.
+    // It is what makes the threshold task-dependent: forty minutes without a
+    // write is alarming against "fix the typo in README" and normal against
+    // "research auth architecture options". Without it this bundle reduces to
+    // the constant thresholds it exists to replace — so a card with no title
+    // SAYS SO rather than silently dropping the line, which would make "no
+    // title recorded" indistinguishable from "no card".
+    lines.push(`card ${subject.planId || '(no id)'} ${subject.title ? `"${subject.title}"` : '(the board recorded no title for this card)'}`);
+    if (fields.has('column')) { lines.push(`column ${subject.kanbanColumn || '(none)'}`); }
+    if (fields.has('silence')) { lines.push(`  last output        : ${silentMs === null ? 'unknown (no heartbeat data)' : `${renderDuration(silentMs)} ago`}`); }
+    if (fields.has('cpu') || fields.has('rss') || fields.has('lastWrite')) { lines.push(observations.line); }
+    if (fields.has('ownerSince')) { lines.push(`  owner_since        : ${subject.ownerSince}`); }
+    if (fields.has('lastAction')) { lines.push(`  last_action        : ${subject.lastAction ?? '(none)'}`); }
+    if (fields.has('rounds')) {
+        lines.push(`  completion posted  : earlier round ${priors.finishedOnEarlierRound ? 'yes' : 'no'}; this round ${priors.noFinishedThisRound ? 'no' : 'yes'}`);
+        lines.push(`  wrote this round   : ${priors.wroteThisRound ? 'yes' : 'no'}`);
+    }
+    if (fields.has('providers')) { lines.push(`  providers seated   : ${ctx.caps.providers.providers.join(', ') || 'none'}`); }
     const lastNudge = ctx.nudges[subject.seat] ?? 0;
-    lines.push(`Board nudged this seat: ${lastNudge ? new Date(lastNudge).toISOString() : 'never'}`);
+    lines.push(`  board nudged seat  : ${lastNudge ? new Date(lastNudge).toISOString() : 'never'}`);
 
+    // Change 1 — the question is no longer "why has this seat gone quiet".
+    // A seat in a research loop is the opposite of quiet: it emits output
+    // constantly and burns CPU, and a model asked to explain quietness will not
+    // report one. Silence is now ONE INPUT among several rather than the premise.
     const system = [
-        'You classify why a coding seat on a software board has gone quiet.',
+        'You observe one coding seat on a software board and report WHAT YOU SEE.',
+        'The question is whether this seat is making progress ON THE CARD IT HOLDS — not whether it is quiet.',
+        'A seat can be loud, busy and burning CPU while producing nothing: output is not progress.',
+        'Weigh the signals against what the card asked for. A card asking for research is EXPECTED to write no files; a card asking for an implementation is not.',
+        '',
         'Reply with a single line:',
-        'CLASS: <one of: finished-unreported | idle | waiting-human | crashed | quota | looping | board-wedge | unknown>',
+        `SEAT: ${subject.seat} | FLAGS: <comma-separated, from this closed list>`,
+        JUDGEMENT_FLAG_LIST,
+        '',
+        'Report observations ONLY, never a conclusion: "stuck", "stalled", "looping", "overthinking", "wedged", "blocked" and "broken" are rejected and your whole reply is discarded.',
+        'If nothing about this seat is worth reporting, reply with FLAGS: no-concern.',
+        // Change 4 — the tiers calibrate in OPPOSITE directions, and saying so
+        // in the prompt IS the mechanism rather than a note about it. Tuning
+        // both the same way discards the structure: tier 1 exists to be noisy
+        // and tier 2 exists to be the gate in front of expensive tokens.
+        tierRole === 'escalation'
+            ? 'You are the second opinion in front of an expensive agent. Be STRICT: your default answer is no-concern. Healthy seats are EXPECTED in your input, because the stage below you is deliberately permissive — their presence is normal and is not an error for you to correct.'
+            : 'Be PERMISSIVE: flag on any doubt. A later stage filters you. Over-reporting a healthy seat is an accepted outcome; missing a stalled one leaves a wedged seat until the next wake.',
         askReason
-            ? 'Put a one-line REASON: line before the CLASS: line.'
-            : 'Reply with the CLASS: line only.',
-        'The mechanical classes (finished-unreported, idle, crashed) are diagnosed mechanically; choose one only if the evidence plainly shows it.',
+            ? 'Put a one-line REASON: line before the FLAGS: line.'
+            : 'Reply with the SEAT:/FLAGS: line only.',
     ].join('\n');
     const user = [
         lines.join('\n'),
@@ -868,6 +1107,91 @@ function buildClassificationPrompt(subject: Subject, ctx: DiagnoseContext, evide
         evidence,
     ].join('\n');
     return { system, user };
+}
+
+interface SeatObservations {
+    cpu: Reading<number>;
+    rss: Reading<number>;
+    write: WriteScan;
+    /** The rendered bundle block, reused verbatim as report evidence. */
+    line: string;
+    window: string;
+}
+
+/**
+ * Read the signals that separate a stall from work (change 2).
+ *
+ * Every one of these is a COUNTER or a DURATION. CPU, RSS, mtime: none carries
+ * user data, and the worktree scan reports WHEN something was written, never
+ * what. The log tail is the only field that carries content, and it is redacted
+ * at assembly — here, before any send — so a local-only deployment exercises the
+ * same redaction path as an escalating one.
+ */
+function observeSeat(subject: Subject, ctx: DiagnoseContext): SeatObservations {
+    const seat = ctx.seatByName.get(subject.seat);
+    const pid = seat && typeof seat.pid === 'number' && seat.pid > 0 ? seat.pid : null;
+    const sample = sampleSeat({
+        pid,
+        previous: ctx.prevSamples[subject.seat] ?? null,
+        table: ctx.procTable,
+        nowMs: ctx.now,
+    });
+    if (sample.next) { ctx.nextSamples[subject.seat] = sample.next; }
+
+    // The basis is REPORTED, never assumed. "no write in 47m (whole worktree)"
+    // and "no write in 47m (card write set)" are different claims, and a reader
+    // that cannot tell which one it is holding cannot act on either.
+    const worktree = seat && typeof seat.worktreePath === 'string' && seat.worktreePath ? seat.worktreePath : null;
+    const cwd = seat && typeof seat.cwd === 'string' && seat.cwd ? seat.cwd : null;
+    const dir = worktree || cwd;
+    const basis = worktree ? 'whole worktree' : (cwd ? "the seat's cwd — no worktree is recorded for it" : 'none');
+    const write = scanLastWrite({ dir, basis, nowMs: ctx.now });
+
+    const cpuText = sample.cpu.available
+        ? `${sample.cpu.value.toFixed(0)}%`
+        : `unavailable (${sample.cpu.reason})`;
+    const rssText = sample.rss.available
+        ? `${Math.round(sample.rss.value / (1024 * 1024))} MB`
+        : `unavailable (${sample.rss.reason})`;
+    const writeText = !write.available
+        ? `unavailable (${write.reason})`
+        : `${renderDuration(write.ageMs)} ago (basis: ${write.basis}${write.truncated ? '; scan truncated at the entry budget' : ''})`;
+
+    const line = [
+        `  cpu                : ${cpuText}`,
+        `  rss                : ${rssText}`,
+        `  last worktree write: ${writeText}`,
+    ].join('\n');
+    const window = `cpu/rss from ${ctx.procTable.source} (USER_HZ assumed ${ASSUMED_USER_HZ}); last write from ${write.source} over ${dir ?? '(no directory)'}`;
+    return { cpu: sample.cpu, rss: sample.rss, write, line, window };
+}
+
+/**
+ * The priors rows 9 and 10 are selected against.
+ *
+ * These are facts the CONTROLLER measured, not a gate on the model running: the
+ * judgement chain is walked for every subject on every wake regardless of what
+ * these say, and they are sent to the model as part of the bundle. They decide
+ * only which ROW a set of observations resolves to, which is a mapping and
+ * belongs in code.
+ */
+function mechanicalPriors(subject: Subject, ctx: DiagnoseContext, observations: SeatObservations): MechanicalPriors {
+    const seat = ctx.seatByName.get(subject.seat);
+    const lastDataAt = seat && typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
+    // A write AFTER owner_since means work happened on THIS round. An
+    // unavailable or empty scan is NOT a write: it reads as "not established",
+    // never as "yes" — row 10 asks the coder to post a completion, and doing
+    // that on a round where nothing was written is the controller inventing the
+    // very claim it refuses to invent by not auto-completing.
+    const wroteAtMs = observations.write.available && observations.write.ageMs !== null
+        ? ctx.now - observations.write.ageMs
+        : null;
+    return {
+        finishedOnEarlierRound: finishedBefore(ctx.finishedByPlan, subject.planId, subject.ownerSinceMs),
+        noFinishedThisRound: !finishedSince(ctx.finishedByPlan, subject.planId, subject.ownerSinceMs),
+        wroteThisRound: wroteAtMs !== null && wroteAtMs > subject.ownerSinceMs,
+        atRest: lastDataAt > 0 && (ctx.now - lastDataAt) >= ctx.cfg.turnEndSilenceMs,
+    };
 }
 
 /**
@@ -885,7 +1209,7 @@ function evalCompletedUnasserted(row: MatrixRow, subject: Subject, ctx: Diagnose
     const lastDataAt = typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
     if (lastDataAt <= 0) { return null; } // no heartbeat data is no evidence.
     if (ctx.now - lastDataAt < ctx.cfg.turnEndSilenceMs) { return null; } // mid-turn — do not act.
-    const finishedAt = ctx.finishedByPlan.get(subject.planId);
+    const finishedAt = latestFinished(ctx.finishedByPlan, subject.planId);
     if (finishedAt === undefined || finishedAt < subject.ownerSinceMs) { return null; }
     return {
         row,
@@ -908,8 +1232,7 @@ async function evalQuietCleanTail(row: MatrixRow, subject: Subject, ctx: Diagnos
     if (subject.completedAt) { return null; }
     if (isTimedOut(subject)) { return null; }
     if (ctx.now - subject.ownerSinceMs < ctx.cfg.turnEndSilenceMs) { return null; }
-    const finishedAt = ctx.finishedByPlan.get(subject.planId);
-    if (finishedAt !== undefined && finishedAt >= subject.ownerSinceMs) { return null; } // that is row 1.
+    if (finishedSince(ctx.finishedByPlan, subject.planId, subject.ownerSinceMs)) { return null; } // that is row 1.
     const seat = ctx.seatByName.get(subject.seat);
     if (!seat || seat.status !== 'active') { return null; } // row 4's domain.
     const lastDataAt = typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
@@ -998,6 +1321,35 @@ interface ApplyContext extends PassContext {
     actions: EntryAction[];
     seatByName: Map<string, any>;
     judgementCtx: JudgementRuntimeContext;
+    /** Seat -> its lead, with the store that answered (change 3). */
+    leadBySeat?: Map<string, { seat: string | null; source: string; reason?: string }>;
+}
+
+/**
+ * Resolve WHO a row's remediation addresses (change 3).
+ *
+ * `target: 'subject'` — the assumption every row before this change was written
+ * under — returns the subject's own seat. `target: 'lead'` returns the subject's
+ * team lead, and returns `null` WITH A REASON when there is none. It never
+ * falls back to the subject: row 9 exists precisely because nudging a seat that
+ * is already producing output is the wrong action, so degrading to that would
+ * turn the row into the failure it was written to avoid.
+ */
+function resolveTarget(subject: Subject, row: MatrixRow, ctx: ApplyContext): { seat: string | null; source: string; reason?: string } {
+    if ((row.target ?? 'subject') === 'subject') {
+        return { seat: subject.seat, source: 'matrix:target=subject' };
+    }
+    const entry = ctx.leadBySeat?.get(subject.seat);
+    if (!entry) {
+        return { seat: null, source: 'board:/controller/leads', reason: `the board returned no lead mapping for seat '${subject.seat}'` };
+    }
+    if (!entry.seat) {
+        return { seat: null, source: entry.source, reason: entry.reason || `seat '${subject.seat}' is on no team with a resolvable head` };
+    }
+    if (entry.seat === subject.seat) {
+        return { seat: null, source: entry.source, reason: `seat '${subject.seat}' IS its own team's head — there is no one above it to report to` };
+    }
+    return { seat: entry.seat, source: entry.source };
 }
 
 function subjectKey(subject: Subject): string {
@@ -1221,6 +1573,63 @@ async function applyRemediation(
             }
             action.outcome = 'recorded';
             action.detail = `${diagnosis.detail}; no remediation applied (supervisor not woken: ${gate.reason})`;
+            action.ownerSinceReStamped = false;
+            return action;
+        }
+        case 'report-to-lead': {
+            // Row 9 — hand the OBSERVATIONS to the lead. Not a diagnosis: the
+            // lead dispatched the work and holds the plan, so it can weigh
+            // "no write in 47m" against what it actually asked for, which the
+            // watcher never can. Terminal and one-shot — this row is not on the
+            // escalation ladder, so it can never climb into a clear or a
+            // restart on the strength of one observation.
+            const target = resolveTarget(subject, diagnosis.row, ctx);
+            if (!target.seat) {
+                // Degrade to RECORDING, never to nudging the subject. A seat in
+                // a research loop is producing output; prompting it is noise
+                // competing with the work it is already doing, and it is the
+                // exact failure mode this row exists to avoid.
+                action.outcome = 'recorded';
+                action.detail = `${diagnosis.detail}; no lead to report to (${target.reason}) — observation recorded, the subject was NOT nudged`;
+                action.ownerSinceReStamped = false;
+                return action;
+            }
+            const data = `[switchboard:controller] Observation about ${subject.seat}, which holds ${subject.planId || 'a card'}${subject.title ? ` "${subject.title}"` : ''}.\n`
+                + `${diagnosis.evidence.split('\n').slice(0, 4).join('\n')}\n`
+                + 'This is what was observed, not a diagnosis. You dispatched this work and hold the plan — judge whether it is progressing as asked.';
+            action.command = `switchboard verb ptySendPrompt '{"name":"${target.seat}"}' --json`;
+            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptySendPrompt', ctx.workspaceRoot, { name: target.seat, data, machineOrigin: true });
+            const json = safeJson(res);
+            action.outcome = json?.success === false ? 'failed' : 'applied';
+            action.detail = `${diagnosis.detail}; observations handed to lead '${target.seat}' (resolved by ${target.source}); the subject was not nudged`;
+            action.ownerSinceReStamped = false;
+            return action;
+        }
+        case 'ask-completion-post': {
+            // Row 10 — ask the CODER to post the completion it never posted.
+            //
+            // A prompt, never an auto-complete. Row 1 may mark a card complete
+            // because the coder ASSERTED `finished` and the board is only
+            // recording an assertion that already exists. Here nobody has
+            // asserted anything, so completing the card would be the controller
+            // inventing a claim about work it cannot verify — and a wrong
+            // completion is materially worse than a late one.
+            const st = ctx.state.subjects[subjectKey(subject)];
+            const stuck = st ? st.stuckPasses : 1;
+            // First wake: the coder. Only once the same state survives a later
+            // wake does it reach the lead — the operator's own escalation
+            // order, and the reason `target` exists.
+            const escalate = stuck > 1;
+            const lead = escalate ? resolveTarget(subject, { ...diagnosis.row, target: 'lead' }, ctx) : null;
+            const addressee = escalate && lead?.seat ? lead.seat : subject.seat;
+            const data = escalate && lead?.seat
+                ? `[switchboard:controller] ${subject.seat} appears to have finished a fix round on ${subject.planId || 'a card'}${subject.title ? ` "${subject.title}"` : ''} and has still posted no completion for this round after being asked. Nothing has been completed on its behalf.`
+                : `[switchboard:controller] You appear to have finished this round of ${subject.planId || 'your card'}${subject.title ? ` "${subject.title}"` : ''} and no completion is posted for it. You posted one on an earlier round; this round has writes but no post. If the work is done, post your completion now. If it is not, say what is left.`;
+            action.command = `switchboard verb ptySendPrompt '{"name":"${addressee}"}' --json`;
+            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptySendPrompt', ctx.workspaceRoot, { name: addressee, data, machineOrigin: true });
+            const json = safeJson(res);
+            action.outcome = json?.success === false ? 'failed' : 'applied';
+            action.detail = `${diagnosis.detail}; asked ${escalate ? `lead '${addressee}'` : `coder '${addressee}'`} to post the completion (pass ${stuck}); no card was completed`;
             action.ownerSinceReStamped = false;
             return action;
         }
@@ -1677,9 +2086,23 @@ function normalizeState(raw: any): PersistedControllerState {
             };
         }
     }
+    const samples: Record<string, PreviousSample> = {};
+    if (raw.samples && typeof raw.samples === 'object') {
+        for (const seat of Object.keys(raw.samples)) {
+            const v = raw.samples[seat];
+            if (!v || typeof v !== 'object') { continue; }
+            // Every field must be a real number. A partially-written sample is
+            // dropped rather than defaulted: a zeroed `startTime` would match no
+            // live process and a zeroed `atMs` would produce a rate against the
+            // epoch, both of which are plausible-looking wrong numbers.
+            if (![v.pid, v.startTime, v.jiffies, v.atMs].every((n: any) => typeof n === 'number' && Number.isFinite(n))) { continue; }
+            samples[seat] = { pid: v.pid, startTime: v.startTime, jiffies: v.jiffies, atMs: v.atMs };
+        }
+    }
     return {
         configVersion: typeof raw.configVersion === 'string' ? raw.configVersion : '',
         subjects,
+        samples,
         capabilityAvailability: (raw.capabilityAvailability && typeof raw.capabilityAvailability === 'object') ? raw.capabilityAvailability : {},
         capabilityDetail: (raw.capabilityDetail && typeof raw.capabilityDetail === 'object') ? raw.capabilityDetail : {},
         restartHistory: Array.isArray(raw.restartHistory) ? raw.restartHistory.filter((n: any) => typeof n === 'number') : [],

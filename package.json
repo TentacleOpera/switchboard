@@ -901,6 +901,7 @@
     "test:contract:reviewer-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/reviewer-prompt-anti-artifact-contract.test.js",
     "test:contract:default-prompt-previews": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-default-prompt-previews.test.js",
     "test:contract:reviewer-prompt-behaviour": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/agentPromptBuilder.test.js",
+    "test:contract:judgement-bundle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/controller-judgement-bundle-contract.test.js",
     "test:contract:pty-host-gating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-gating-contract.test.js",
     "test:contract:pty-host-race": "go test -race -count=1 ./cmd/switchboard-pty-host/...",
     "test:contract:pty-host-blackbox": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-blackbox-contract.test.js",

@@ -15,6 +15,13 @@ import type { JudgementClass } from '../judgement/classes';
  */
 export interface JudgementTrace {
     class: JudgementClass | null;
+    /**
+     * The OBSERVATIONS the tier returned, before any conclusion was drawn from
+     * them. Recorded alongside the class so an operator reading the report can
+     * see what the class was derived FROM — a class with no visible evidence is
+     * a verdict nobody can check.
+     */
+    flags?: string[];
     tierChain: TierAttempt[];
     answeredBy: { providerId: string; role: string; url: string; locality: string; operator: string; costClass: string } | null;
     escalationId?: string;
@@ -30,8 +37,8 @@ export interface JudgementTrace {
  *
  * The controller composes every entry from facts it holds. The model never
  * writes to this file (it has no filesystem, no verb vocabulary and no command
- * surface) — it is asked for one label per judgement call, and only when the
- * judgement tier exists.
+ * surface) — it is asked for one line of closed-set observations per judgement
+ * call, and only when the judgement tier exists.
  *
  * Every action names the rule that triggered it and the source that answered:
  * "which rule did this, and on what evidence" must be answerable after the
@@ -155,7 +162,7 @@ function actionBlock(a: EntryAction): string {
     if (a.priorVerdict) { lines.push(`- prior verdict (\`last_action\`): \`${a.priorVerdict}\``); }
     if (a.judgement) {
         const j = a.judgement;
-        lines.push(`- judgement: class=${j.class === null ? 'not-run' : `\`${j.class}\``}`);
+        lines.push(`- judgement: flags=${j.flags && j.flags.length > 0 ? j.flags.map(f => `\`${f}\``).join(', ') : '(none)'} -> class=${j.class === null ? 'not-run' : `\`${j.class}\``}`);
         if (j.answeredBy) {
             lines.push(`- answered by: \`${j.answeredBy.providerId}\` ${j.answeredBy.url} (role=${j.answeredBy.role}, locality=${j.answeredBy.locality}, operator=${j.answeredBy.operator}, cost=${j.answeredBy.costClass})`);
         }

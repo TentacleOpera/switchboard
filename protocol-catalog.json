@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-17T10:27:35.837Z",
+  "generatedAt": "2026-09-17T11:28:23.740Z",
   "summary": {
     "totalArms": 677,
     "totalVerbs": 577,
@@ -14,7 +14,7 @@
       "TaskViewer": 108,
       "Setup": 112
     },
-    "apiEndpointCount": 175,
+    "apiEndpointCount": 176,
     "manualReviewCount": 7
   },
   "providers": {
@@ -29026,6 +29026,11 @@
     },
     {
       "path": "/controller/nudges",
+      "method": "GET",
+      "prefix": false
+    },
+    {
+      "path": "/controller/leads",
       "method": "GET",
       "prefix": false
     },

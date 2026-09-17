@@ -189,11 +189,13 @@ function roleToCodingColumn(role: 'intern' | 'coder' | 'lead'): string {
  */
 export interface ControllerStoreOptions {
     readLease(workspaceRoot: string): Promise<any>;
-    claimLease(workspaceRoot: string, controllerId: string, ttlMs: number): Promise<any>;
+    claimLease(workspaceRoot: string, controllerId: string, ttlMs: number, judgement?: unknown): Promise<any>;
     releaseLease(workspaceRoot: string, controllerId: string): Promise<any>;
     readState(workspaceRoot: string): Promise<any>;
     writeState(workspaceRoot: string, controllerId: string, state: unknown): Promise<any>;
     readBoardNudges(workspaceRoot: string): Promise<Record<string, number>>;
+    /** Seat -> its team lead, for the controller's `target: 'lead'` rows. */
+    readSeatLeads(workspaceRoot: string): Promise<any>;
     writeReport(workspaceRoot: string, req: { from: string; kind: string; body: string; teamId?: string }): Promise<any>;
     /** Read the controller's Markdown report back for the panel. */
     readReport(workspaceRoot: string, teamId?: string): Promise<any>;
@@ -11439,6 +11441,17 @@ export class LocalApiServer {
             messages,
             temperature: 0,
             max_tokens: 300,
+            // Load-bearing, for the SAME reason `modelClient.ts` sends it: a
+            // thinking model that suppresses its reasoning tokens spends the
+            // whole `max_tokens` budget and returns an EMPTY content string.
+            // The parse below then fails, `_handleAgentControl` sees null and
+            // answers 502 "Model returned no usable decision" — a total failure
+            // that reads like the model made a bad choice. Measured against
+            // gemma4:e2b-it-qat (capabilities include `thinking`): without this
+            // field, finish_reason 'length', 300 completion tokens, content ''.
+            // With it, finish_reason 'stop', 19 tokens, valid JSON. A backend
+            // that does not recognise the field ignores it.
+            reasoning_effort: 'none',
         });
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (model.apiKey) { headers['Authorization'] = `Bearer ${model.apiKey}`; }
@@ -13487,7 +13500,11 @@ export class LocalApiServer {
                     return;
                 }
                 try {
-                    const result = await store.claimLease(claimRoot, controllerId, ttlMs);
+                    // `judgement` is the controller's own declaration about its
+                    // backend. The board stores and serves it; it never reads a
+                    // model endpoint, a model name or a key, and it makes no
+                    // model call of its own.
+                    const result = await store.claimLease(claimRoot, controllerId, ttlMs, body?.judgement);
                     res.writeHead(result.granted ? 200 : 409, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: result.granted, ...result }));
                 } catch (err) {
@@ -13586,6 +13603,28 @@ export class LocalApiServer {
                 } catch (err) {
                     res.writeHead(500, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: false, error: 'controller nudge ledger read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/leads' && req.method === 'GET') {
+                // Seat -> its team lead. The controller is a separate process
+                // and never opens the database, so the mapping it needs for a
+                // `target: 'lead'` row is resolved here and served. Each entry
+                // carries the store that answered — a lead resolved from the
+                // wrong place delivers a prompt to the wrong agent.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const leadsRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const result = await store.readSeatLeads(leadsRoot);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, ...result }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller lead mapping read failed', reason: err instanceof Error ? err.message : String(err) }));
                 }
             } else if (pathname === '/controller/report' && req.method === 'POST') {
                 // The controller writes its Markdown report to the BOARD, never

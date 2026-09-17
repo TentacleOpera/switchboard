@@ -1,4 +1,4 @@
-import { parseClassReply, type JudgementClass } from './classes';
+import { parseFlagsReply, type JudgementFlag } from './flags';
 import { callModel, isEmptyLengthStop, type ModelCallResult } from './modelClient';
 
 /**
@@ -11,11 +11,16 @@ import { callModel, isEmptyLengthStop, type ModelCallResult } from './modelClien
  * cloud tier with no local model, and a supervisor-only deployment with no
  * classifier at all.
  *
- * The walk stops at the first tier that returns a valid class OTHER THAN
- * `unknown`; a tier that answers `unknown`, declines, or fails validation is
- * escalated to the next tier. `unknown` is a valid terminal answer only from the
- * LAST configured tier — which is what makes row 8 load-bearing rather than a
- * shrug.
+ * The walk stops at the first tier that returns usable OBSERVATIONS; a tier
+ * that observes nothing (`no-concern` alone), declines, or fails validation is
+ * escalated to the next tier. `no-concern` is a valid terminal answer only from
+ * the LAST configured tier — which is what keeps row 8 load-bearing rather than
+ * a shrug.
+ *
+ * A tier returns flags, never a class (change 4). The controller derives the
+ * class from the flags mechanically, so nothing here has to know what any
+ * observation MEANS — this module's job is to walk backends and validate
+ * replies against a closed set.
  *
  * Nothing here is runtime-aware: every tier is a URL, and the request shape is
  * the same for all of them.
@@ -66,8 +71,10 @@ export interface TierAttempt {
 }
 
 export interface JudgementOutcome {
-    /** `null` when no tier produced a valid class — the rule did not run. */
-    class: JudgementClass | null;
+    /** Empty when no tier produced a valid reply — the rule did not run. */
+    flags: JudgementFlag[];
+    /** True when a tier answered and its observations validated. */
+    answered: boolean;
     reason?: string;
     answeredBy: TierDeclaration | null;
     attempts: TierAttempt[];
@@ -91,18 +98,18 @@ export interface WalkArgs {
 export async function walkJudgementChain(args: WalkArgs): Promise<JudgementOutcome> {
     const attempts: TierAttempt[] = [];
     if (args.tiers.length === 0) {
-        return { class: null, answeredBy: null, attempts, error: 'no judgement tier is configured' };
+        return { flags: [], answered: false, answeredBy: null, attempts, error: 'no judgement tier is configured' };
     }
     if (!args.escalationPermitted) {
-        return { class: null, answeredBy: null, attempts, error: 'no judgement row has an available remediation — not worth a call' };
+        return { flags: [], answered: false, answeredBy: null, attempts, error: 'no judgement row has an available remediation — not worth a call' };
     }
     const call = args.call ?? callModel;
 
     for (let i = 0; i < args.tiers.length; i++) {
         const tier = args.tiers[i];
         const isLast = i === args.tiers.length - 1;
-        // Tier 1 (a classifier below an escalation tier) asks for the label
-        // alone. Tier 2 asks for REASON: before CLASS: — the ambiguous cases
+        // Tier 1 (a classifier below an escalation tier) asks for the flags
+        // alone. Tier 2 asks for REASON: before FLAGS: — the ambiguous cases
         // live there, and reasoning before committing is worth the decode.
         const askReason = tier.role === 'escalation' || i > 0;
         const attemptBase = {
@@ -160,18 +167,23 @@ export async function walkJudgementChain(args: WalkArgs): Promise<JudgementOutco
             attempts.push({ ...attemptBase, outcome: 'invalid', error: 'empty reply with done_reason=length', latencyMs: result.latencyMs, doneReason: result.doneReason });
             continue;
         }
-        const parsed = parseClassReply(result.content);
-        if (!parsed.ok || !parsed.class) {
+        const parsed = parseFlagsReply(result.content);
+        if (!parsed.ok || !parsed.flags) {
             attempts.push({ ...attemptBase, outcome: 'invalid', error: parsed.error, latencyMs: result.latencyMs, doneReason: result.doneReason });
             continue;
         }
-        if (parsed.class === 'unknown' && !isLast) {
+        // `no-concern` alone is "I saw nothing worth reporting". From a tier
+        // that has a tier above it, that is escalated rather than taken as the
+        // answer — tier 1 is deliberately permissive, and a quiet tier 1 is the
+        // case tier 2 exists to double-check.
+        const observedNothing = parsed.flags.length === 1 && parsed.flags[0] === 'no-concern';
+        if (observedNothing && !isLast) {
             attempts.push({ ...attemptBase, outcome: 'unknown', latencyMs: result.latencyMs, doneReason: result.doneReason });
             continue;
         }
-        attempts.push({ ...attemptBase, outcome: parsed.class === 'unknown' ? 'unknown' : 'answered', latencyMs: result.latencyMs, doneReason: result.doneReason });
-        return { class: parsed.class, reason: parsed.reason, answeredBy: tier, attempts };
+        attempts.push({ ...attemptBase, outcome: observedNothing ? 'unknown' : 'answered', latencyMs: result.latencyMs, doneReason: result.doneReason });
+        return { flags: parsed.flags, answered: true, reason: parsed.reason, answeredBy: tier, attempts };
     }
 
-    return { class: null, answeredBy: null, attempts, error: 'every configured tier declined or failed validation' };
+    return { flags: [], answered: false, answeredBy: null, attempts, error: 'every configured tier declined or failed validation' };
 }

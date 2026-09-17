@@ -1,17 +1,24 @@
 /**
- * The closed class set a judgement call may return, and the parser that
- * validates a reply against it (plan: judgement-tiers-the-supervisor-seat-and-reroute).
+ * The closed class set the controller may act on, and the class -> row mapping
+ * (plan: judgement-tiers-the-supervisor-seat-and-reroute).
  *
- * The model emits ONE label. It never chooses a remediation, a verb, a column
- * id or a command line: the remediation is a column of the matrix row, looked up
- * once the class is known. `Diagnosis is the job worth a model. Remediation
- * selection, once the cause is known, is mostly mechanical.`
+ * The class is no longer what the MODEL emits. Since
+ * `the-judgement-bundle-cannot-see-a-seat-that-is-busy-doing-the-wrong-thing`
+ * change 4, a tier returns closed-set OBSERVATIONS (`judgement/flags.ts`) and
+ * `deriveClass` turns them into one of these labels mechanically. A small
+ * model's observations are reliable; its conclusions are not, so the conclusion
+ * is drawn in code that can be read and tested.
+ *
+ * What survives unchanged: the model never chooses a remediation, a verb, a
+ * column id or a command line. The remediation is a column of the matrix row,
+ * looked up once the class is known. `Diagnosis is the job worth a model.
+ * Remediation selection, once the cause is known, is mostly mechanical.`
  *
  * There is no JSON Schema, no GBNF, no Lark and no `response_format` anywhere
- * in this path. The reply is plain text, parsed by a regex for `CLASS:` followed
- * by set membership. A reply with no `CLASS:` line, or a class outside the set,
- * means THE RULE DID NOT RUN — never a coerced nearest class, which is the
- * quiet wrong answer the fallback rule forbids.
+ * in this path. The reply is plain text, parsed by a regex and validated
+ * against a closed set. A reply that fails that validation means THE RULE DID
+ * NOT RUN — never a coerced nearest value, which is the quiet wrong answer the
+ * fallback rule forbids.
  */
 
 export type JudgementClass =
@@ -22,9 +29,13 @@ export type JudgementClass =
     | 'quota'
     | 'looping'
     | 'board-wedge'
+    /** Row 9 — no worktree write against a card that asked for an implementation. */
+    | 'research-loop'
+    /** Row 10 — a fix round that was finished and never posted. */
+    | 'finished-unposted-round'
     | 'unknown';
 
-/** The eight labels, in the order the prompt presents them. */
+/** The ten labels `deriveClass` may produce. */
 export const JUDGEMENT_CLASSES: readonly JudgementClass[] = [
     'finished-unreported',
     'idle',
@@ -33,6 +44,8 @@ export const JUDGEMENT_CLASSES: readonly JudgementClass[] = [
     'quota',
     'looping',
     'board-wedge',
+    'research-loop',
+    'finished-unposted-round',
     'unknown',
 ];
 
@@ -49,6 +62,8 @@ export const MODEL_ACTIONABLE_CLASSES: readonly JudgementClass[] = [
     'quota',
     'looping',
     'board-wedge',
+    'research-loop',
+    'finished-unposted-round',
     'unknown',
 ];
 
@@ -61,38 +76,7 @@ export const CLASS_TO_ROW_ID: Readonly<Record<JudgementClass, string>> = {
     'quota': 'out-of-quota',
     'looping': 'looping-undiscovered-bug',
     'board-wedge': 'board-level-wedge',
+    'research-loop': 'research-loop-no-write',
+    'finished-unposted-round': 'fix-round-unposted',
     'unknown': 'unknown',
 };
-
-export interface ClassReply {
-    ok: boolean;
-    class?: JudgementClass;
-    /** Tier 2 may carry a `REASON:` line; recorded, never required. */
-    reason?: string;
-    error?: string;
-}
-
-/**
- * Parse a judgement reply. `CLASS:` is matched case-insensitively on its own
- * line, so a model that opens with a preamble still parses — the prefix is kept
- * for exactly that reason. Anything else is a failed validation.
- */
-export function parseClassReply(text: unknown): ClassReply {
-    if (typeof text !== 'string' || text.trim().length === 0) {
-        return { ok: false, error: 'empty reply' };
-    }
-    const classMatch = text.match(/^[ \t]*CLASS:[ \t]*([A-Za-z-]+)[ \t]*$/m);
-    if (!classMatch) {
-        return { ok: false, error: 'no CLASS: line in reply' };
-    }
-    const raw = classMatch[1].toLowerCase();
-    if (!(JUDGEMENT_CLASSES as readonly string[]).includes(raw)) {
-        return { ok: false, error: `CLASS '${raw}' is outside the closed set` };
-    }
-    const reasonMatch = text.match(/^[ \t]*REASON:[ \t]*(.+)$/m);
-    return {
-        ok: true,
-        class: raw as JudgementClass,
-        reason: reasonMatch ? reasonMatch[1].trim().slice(0, 500) : undefined,
-    };
-}

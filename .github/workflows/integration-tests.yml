@@ -850,6 +850,19 @@ jobs:
       - name: Verb engine kanban contract (seams, db path, return contract)
         run: npm run test:contract:verb-engine-kanban
 
+      # The standing controller's judgement path had NO automated coverage at all
+      # until this suite — `src/test/` held no controller or judgement test, and
+      # this workflow named "controller" only in a comment about the Go front
+      # controller. Every claim about the matrix, the flag vocabulary, the CPU
+      # sampler and the nudge-suppression lease states was unguarded.
+      #
+      # These assertions are behavioural, against out/, not source greps: a rate
+      # computed across a pid recycle, a lease state that collapses "stale" into
+      # "judging", and a model conclusion laundered into a remediation are all
+      # invisible to a text search and all pass compile and lint.
+      - name: Judgement bundle contract (sampler rates, flag vocabulary, nudge suppression, row targets)
+        run: npm run test:contract:judgement-bundle
+
       # Runs under the vscode BOOBY TRAP (any `vscode.*` property access throws),
       # so this gate is what keeps TaskViewerProvider constructible off-editor:
       # put host work back into the constructor — a class-field
