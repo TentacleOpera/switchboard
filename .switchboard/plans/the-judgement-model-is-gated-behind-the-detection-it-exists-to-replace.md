@@ -648,3 +648,30 @@ sizing than any of the synthetic scenarios.
 sampler is `/proc` reads and an mtime scan, and the riskiest item (`stuckPasses`) is a local fix to
 shipped code. Do **not** dispatch into `matrix.ts`, `controller.ts` or `judgement/` while the
 standing-controller subtasks are still in flight.
+
+## Review Findings
+
+**No implementation exists for this plan.** The working tree is clean at `580794a4`, no commit
+carries `Switchboard-Plan: 604fac7b`, and the card's `dispatched_agent` is empty — it reached CODE
+REVIEWED via `move-to-code-reviewed` without ever being coded. Changes 1, 2, 3, 4, 7 and 8 are all
+absent: `controller.ts:856` still opens *"has gone quiet"*, every `fields` array in `matrix.ts` is
+unchanged, `MatrixRow` has no `target`, `classes.ts` still ships the eight-label `CLASS:` contract,
+`PlanIngestionEngine` has no lease read or nudge suppression, and the matrix holds eight rows with no
+row 9 or row 10. Files changed by this review: this plan file only — no code fixes were applied,
+because there is no diff to fix and the plan's own `## User Review Required` section reserves the
+change-4 contract and the xterm dependency for the author. Validation: `npm run compile-tests` clean;
+Goal Invariants 10, 11, 12, 14 and 16 already hold against shipped code, while 2, 5, 8, 13 and 15
+require the unwritten work and 1 is violated by code that shipped before this plan.
+
+## Deferred Findings
+
+- CRITICAL — Change 1 unimplemented: prompt still presupposes silence. `src/standalone/controller/controller.ts:856`
+- CRITICAL — Change 2 unimplemented: no CPU, RSS or worktree-write signal collected anywhere; `fields` arrays unchanged. `src/standalone/controller/matrix.ts:167`
+- CRITICAL — Change 3 unimplemented: `MatrixRow` has no `target`; remediation cannot address a subject's lead. `src/standalone/controller/matrix.ts:104`
+- CRITICAL — Change 4 unimplemented: tier 1 still emits a closed-set diagnosis rather than flags. `src/standalone/judgement/classes.ts:18`
+- CRITICAL — Change 7 unimplemented: no lease-keyed nudge suppression; all four sweeps nudge unconditionally. `src/services/PlanIngestionEngine.ts:2768`
+- CRITICAL — Change 8 unimplemented: no row 9 and no row 10; the fix-round-unposted case is undetected. `src/standalone/controller/matrix.ts:225`
+- MAJOR — Goal Invariant 1 is violated by shipped code, and the superseded callout above denies it: `readLog() === null` and `!hasUsableEvidence(evidence)` are two mechanical preconditions standing in front of every judgement row, so a seat with an unreadable, empty or fully-redacted log is never judged. `src/standalone/controller/controller.ts:784`
+- MAJOR — All 24 checks in `### Automated Tests` are unwritten and unwired: `src/test/` holds no controller or judgement suite, and `.github/workflows/integration-tests.yml` references the controller only in a comment about the Go front controller. `.github/workflows/integration-tests.yml:2028`
+- MAJOR — Goal Invariant 4 has a hole in shipped code: the card title is emitted only when `subject.title` is truthy, so an empty title silently drops the input the plan calls load-bearing. `src/standalone/controller/controller.ts:844`
+- NIT — The plan filename retains the retired slug while the card carries the revised title; renaming would re-import as a duplicate card, so it is left as is. `.switchboard/plans/the-judgement-model-is-gated-behind-the-detection-it-exists-to-replace.md:1`
