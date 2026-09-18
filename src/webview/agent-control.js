@@ -556,6 +556,24 @@
 
         // Agent Groups state
         let agentsTabAgentGroups = [];
+        /**
+         * Whether an `agentGroups` payload has EVER arrived from the host.
+         *
+         * `agentsTabAgentGroups` starts `[]`, and the request that fills it is
+         * fire-and-forget: it is posted on TEAMS-tab activation and nothing
+         * retries it. If the transport is down at that moment — the WS is
+         * reconnecting, a verb 502s — the response never lands and the list stays
+         * empty forever, while the tab says "No teams yet". That is a wrong answer
+         * that reads exactly like a right one, on a MEMBERSHIP read, which is the
+         * one thing this repo bans outright.
+         *
+         * This flag makes "the host has not answered" and "you genuinely have no
+         * teams" two different, visibly different states. It previously went
+         * unnoticed because the gallery ALSO drew five hard-coded shipped types
+         * that needed no host at all; deleting that second catalogue removed the
+         * accidental safety net and left the bare failure exposed.
+         */
+        let agentsTabAgentGroupsLoaded = false;
         let agentsTabEditingGroupId = null;
         // TEAMS tab card-row state: the picked card's key, and the id of an
         // optimistically-pushed adoption awaiting its saveAgentGroupResult —
@@ -1218,7 +1236,47 @@
             return teamsTabRolePortraitEl(group.headRole, size);
         }
 
+        /**
+         * The team JET for a head role — byte-for-byte the same derivation the
+         * shell rail uses (`shell.js`: ROLE_JETS allowlist, `lead` for anything
+         * unrecognised, `/static/icons/team-<role>.svg`).
+         *
+         * It is duplicated deliberately rather than imported: these are two
+         * separate webview documents with no shared module, and the alternative
+         * — the tab drawing DIFFERENT art from the rail for the same team — is
+         * what this fixes. A team must look like itself on every surface.
+         *
+         * Presentation-only, so an unrecognised role falling back to the lead jet
+         * is a placeholder, not a silent behaviour change (CLAUDE.md: fallbacks on
+         * presentation paths are fine; the test is whether a wrong value changes
+         * BEHAVIOUR, and a portrait does not).
+         */
+        const TEAMS_TAB_ROLE_JETS = ['lead', 'coder', 'planner', 'reviewer', 'intern'];
+        function teamsTabJetSrc(role) {
+            const r = String(role || '').toLowerCase();
+            return '/static/icons/team-'
+                + (TEAMS_TAB_ROLE_JETS.indexOf(r) >= 0 ? r : 'lead') + '.svg';
+        }
+
         function teamsTabRolePortraitEl(role, size) {
+            // The JET FIRST — the shipped defaults carry no `icon`, so this is the
+            // arm that actually renders every default team, and it must match the
+            // rail. Falls through to the agent portrait and then the inline SVG if
+            // the jet ever 404s.
+            const jet = document.createElement('img');
+            jet.src = teamsTabJetSrc(role);
+            jet.alt = `${role || 'agent'} portrait`;
+            jet.width = size;
+            jet.height = size;
+            jet.className = 'teams-card-portrait pixel-art';
+            jet.style.flex = 'none';
+            jet.addEventListener('error', () => {
+                jet.replaceWith(teamsTabRoleAgentPortraitEl(role, size));
+            });
+            return jet;
+        }
+
+        function teamsTabRoleAgentPortraitEl(role, size) {
             const src = agentArtSrc(role);
             if (!src) { return teamsTabPortraitSvgEl(role, size); }
             const img = document.createElement('img');
@@ -1269,6 +1327,11 @@
             if (!container) return;
             container.innerHTML = '';
             const cards = agentsTabAgentGroups.map(g => ({ group: g, adopted: true }));
+            // The gallery used to draw five hard-coded shipped types when the
+            // workspace list was empty, so a missed host response was invisible
+            // here. That catalogue is gone, so this surface must say why it is
+            // blank instead of simply being blank.
+            if (cards.length === 0) { container.appendChild(teamsTabEmptyStateEl()); }
             for (const entry of cards) {
                 container.appendChild(teamsTabGalleryCard(entry));
             }
@@ -1633,12 +1696,47 @@
          * there is no absent-means-what question to answer later.
          */
 
+        /**
+         * The empty-list notice, which says WHICH empty it is.
+         *
+         * Not loaded → the board has not answered; offer a retry, because the
+         * request is posted once on tab activation and nothing else re-sends it.
+         * Loaded and still empty → a genuine empty board, which is itself odd now
+         * that the five defaults are undeletable, so it says so rather than
+         * inviting the operator to build what should already be there.
+         */
+        function teamsTabEmptyStateEl() {
+            const wrap = document.createElement('div');
+            wrap.style.fontSize = '11px';
+            wrap.style.color = 'var(--text-secondary)';
+            wrap.style.padding = '4px 0';
+            if (!agentsTabAgentGroupsLoaded) {
+                const msg = document.createElement('span');
+                msg.textContent = 'Teams have not loaded — the board did not answer. ';
+                wrap.appendChild(msg);
+                const retry = document.createElement('button');
+                retry.className = 'agents-tab-custom-agent-item-btn';
+                retry.textContent = 'RETRY';
+                retry.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'getAgentGroups' });
+                });
+                wrap.appendChild(retry);
+                return wrap;
+            }
+            wrap.textContent = 'No teams on this board. The five shipped defaults cannot be deleted, '
+                + 'so an empty list means the board did not seed them — reload, and report it if it persists.';
+            return wrap;
+        }
+
         function teamsTabRenderAgentGroups() {
             const container = document.getElementById('agent-groups-list');
             if (!container) return;
             container.innerHTML = '';
             if (agentsTabAgentGroups.length === 0) {
-                container.innerHTML = '<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">No teams yet. Click "ADD TEAM" to build one.</div>';
+                // "The board never answered" must not read as "you have no teams".
+                // The five defaults are undeletable, so an EMPTY list from a
+                // healthy host is itself a red flag worth saying out loud.
+                container.appendChild(teamsTabEmptyStateEl());
                 return;
             }
             for (const group of agentsTabAgentGroups) {
@@ -3880,6 +3978,9 @@
                 }
                 case 'agentGroups': {
                   agentsTabAgentGroups = msg.groups || [];
+                  // The host answered. Until this lands, an empty list means
+                  // "never loaded", not "no teams" — see the flag's declaration.
+                  agentsTabAgentGroupsLoaded = true;
                   // Derived host-side from DEFAULT_TEAM_DEFINITIONS and sent with
                   // the groups — never re-typed here. A hard-coded copy drifts the
                   // moment a default's roster changes, and the failure is silent:
