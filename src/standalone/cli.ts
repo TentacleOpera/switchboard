@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
+import * as https from 'https';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
@@ -388,10 +389,17 @@ async function flushWorkspaceDb(workspaceRoot: string): Promise<void> {
     }
 }
 
-async function probeHealth(port: number, hostname = '127.0.0.1', timeoutMs = 2000): Promise<boolean> {
+async function probeHealth(port: number, hostname = '127.0.0.1', timeoutMs = 2000, expectedPort: number = port, scheme: 'http' | 'https' = 'http'): Promise<boolean> {
     try {
-        const json = await getHealthJson(port, hostname, timeoutMs);
-        return json.port === port;
+        const json = await getHealthJson(port, hostname, timeoutMs, scheme);
+        // CONNECT port vs EXPECTED port are different questions (plan:
+        // the-cli-reaches-a-remote-board-over-the-tailnet, Change B). Behind
+        // `tailscale serve` you connect on 443 while the board reports 7777 —
+        // comparing against the connect port fails a perfectly healthy
+        // remote. The comparison stays: it is what stops the CLI signalling a
+        // PID on a port some other process holds. Same split
+        // isHttpsOriginReachable uses (tailnetOrigin.ts).
+        return json.port === expectedPort;
     } catch { return false; }
 }
 
@@ -401,8 +409,12 @@ async function probeHealth(port: number, hostname = '127.0.0.1', timeoutMs = 200
  * Rejects if the endpoint is unreachable or does not identify as a switchboard
  * service — callers must never signal a PID based on a port that a non-switchboard
  * process happens to be listening on.
+ *
+ * `scheme` selects the transport — 'https' for a `tailscale serve` endpoint
+ * (tailscaled terminates TLS and proxies to the board's http listener).
+ * Defaults 'http'; every existing caller is unchanged.
  */
-async function getHealthJson(port: number, hostname = '127.0.0.1', timeoutMs = 2000): Promise<{
+async function getHealthJson(port: number, hostname = '127.0.0.1', timeoutMs = 2000, scheme: 'http' | 'https' = 'http'): Promise<{
     service: string; status: string; port: number; pid: number; roots: string[];
     terminals?: string[]; terminalCount?: number; selectedWorkspaceRoot?: string | null;
     memory?: NodeJS.MemoryUsage;
@@ -413,7 +425,8 @@ async function getHealthJson(port: number, hostname = '127.0.0.1', timeoutMs = 2
     capabilities?: { shutdown: { enabled: boolean; reason?: string } };
 }> {
     return new Promise((resolve, reject) => {
-        const req = http.get(`http://${hostname}:${port}/health`, (res) => {
+        const mod = scheme === 'https' ? https : http;
+        const req = mod.get(`${scheme}://${hostname}:${port}/health`, (res) => {
             let body = '';
             res.on('data', c => body += c);
             res.on('end', () => {
@@ -477,15 +490,38 @@ async function waitForHealth(port: number, timeoutMs = 10000): Promise<void> {
 // single implementation; the CLI is a third door onto it.
 
 /**
- * Discover an auth token for the running server.
+ * Discover an auth token for the resolved server.
  *
- * Reads `.switchboard/api-server-token.txt` (published by the sibling
- * `publish-agent-api-token-for-out-of-process-agents` plan). When no token file
- * exists, returns null — the server's `_checkAuth` returns true on loopback with
- * no token configured, so the CLI works unauthenticated locally. The token value
- * is never printed; only its source (file / none) is reported in debug output.
+ * Precedence (the same chain the Go client's ResolveToken runs — client
+ * parity, plan the-cli-reaches-a-remote-board-over-the-tailnet):
+ *   SWITCHBOARD_API_TOKEN env → --token-file → workspace token file → null.
+ * The workspace file is `.switchboard/api-server-token.txt` (published by the
+ * sibling `publish-agent-api-token-for-out-of-process-agents` plan). A token
+ * VALUE is never accepted in argv — tokens go in files or env. When no tier
+ * supplies one, returns null — the server's `_checkAuth` returns true on
+ * loopback with no token configured, so the CLI works unauthenticated
+ * locally; a remote seat is trusted by the tailnet listener the same way.
+ * An explicitly passed --token-file that cannot be read (or is empty) THROWS —
+ * the operator asked for a specific credential source and a silent demotion to
+ * unauthenticated would be a quiet wrong answer, not a fallback.
+ * The token value is never printed; only its source is reported in debug
+ * output.
  */
-function discoverAuthToken(workspaceRoot: string): string | null {
+function discoverAuthToken(workspaceRoot: string, tokenFileArg?: string): string | null {
+    const envToken = (process.env.SWITCHBOARD_API_TOKEN || '').trim();
+    if (envToken) { return envToken; }
+    if (tokenFileArg) {
+        let v = '';
+        try {
+            v = fs.readFileSync(tokenFileArg, 'utf8').trim();
+        } catch (err) {
+            throw new Error(`--token-file '${tokenFileArg}': cannot read token — ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (!v) {
+            throw new Error(`--token-file '${tokenFileArg}': file is empty — no token to send`);
+        }
+        return v;
+    }
     const tokenFile = path.join(workspaceRoot, '.switchboard', 'api-server-token.txt');
     try {
         if (fs.existsSync(tokenFile)) {

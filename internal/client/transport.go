@@ -3,14 +3,17 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -68,10 +71,10 @@ func (r *APIResponse) JSON() any {
 // request attaches the server workspace root and credential the same way
 // cli.ts apiRequest does.
 type Transport struct {
-	BaseURL     string
-	ServerRoot  string
-	Token       string
-	HTTP        *http.Client
+	BaseURL    string
+	ServerRoot string
+	Token      string
+	HTTP       *http.Client
 	// Diagnostics writer (stderr). nil = silent.
 	Diag func(format string, args ...any)
 }
@@ -200,6 +203,28 @@ func (t *Transport) apiPost(pathname string, payload map[string]any, timeoutMs i
 // injected into the body, custom timeout.
 func (t *Transport) ApiPost(pathname string, payload map[string]any, timeoutMs int) (*APIResponse, error) {
 	return t.apiPost(pathname, payload, timeoutMs)
+}
+
+// DescribeUnreachable names an unreachable remote precisely for an operator
+// message. A DNS failure is the rename case ("the machine may have been
+// renamed"), ECONNREFUSED is a reachable host with a stopped board — the
+// difference between "check the name" and "start the board". Mirrors
+// unreachableMessage in src/standalone/apiTarget.ts.
+func DescribeUnreachable(ep Endpoint, source Source, err error) string {
+	// Name the resolved URL AND the tier that produced it — "the URL and the
+	// env var" is what the operator edits.
+	target := fmt.Sprintf("remote %s (via %s)", ep.BaseURL, source)
+	if ep.RemoteName != "" {
+		target = fmt.Sprintf("remote %q (%s, via %s)", ep.RemoteName, ep.BaseURL, source)
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return fmt.Sprintf("%s does not resolve — the machine may have been renamed or is off the tailnet", target)
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return fmt.Sprintf("%s refused the connection — the host is reachable but the board is not listening", target)
+	}
+	return fmt.Sprintf("%s is unreachable: %v", target, err)
 }
 
 // GetHealth fetches and validates /health. Returns an error if the endpoint is

@@ -660,6 +660,16 @@ export interface StandingOrderRenderOptions {
      * consult it.
      */
     hasRegisteredRounds?: boolean;
+    /**
+     * The fully-resolved CLI invocation for the TARGET seat's machine
+     * (`GlobalIntegrationConfigService.resolveCliInvocationForMachineId`),
+     * threaded by the composition-root delivery seams so a seat on a remote
+     * machine receives `"<its cliPath>"` or bare `switchboard` — never the
+     * board host's absolute binary path, which does not exist on the remote.
+     * Absent → the host's own resolution substitutes (local behaviour,
+     * byte-identical to today).
+     */
+    cliInvocation?: string;
 }
 
 function compositionContext(
@@ -869,8 +879,10 @@ export function renderStandaloneOrdersBlock(
     // Emission seam: fragment text carries the `<cliPath>` token because the
     // fragments are module constants with byte-identical webview mirrors and
     // cannot interpolate. Unsubstituted, the agent is handed
-    // `node "<cliPath>" done …` — a command that cannot run.
-    return substituteCliPath(block);
+    // `node "<cliPath>" done …` — a command that cannot run. `cliInvocation`
+    // resolves the token to the TARGET seat's machine — a remote seat gets its
+    // own cliPath or bare `switchboard`, never the host's absolute path.
+    return substituteCliPath(block, undefined, options.cliInvocation);
 }
 
 /**
@@ -920,9 +932,9 @@ export function applyStandingOrders(
                 rejected
             );
         }
-        return substituteCliPath(cleanPrompt);
+        return substituteCliPath(cleanPrompt, undefined, options.cliInvocation);
     }
-    return substituteCliPath(cleanPrompt) + block;
+    return substituteCliPath(cleanPrompt, undefined, options.cliInvocation) + block;
 }
 
 /** Save-time validation. Returns an error string, or null when acceptable. */

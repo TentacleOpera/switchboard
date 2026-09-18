@@ -1101,6 +1101,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (snapshot === false) { return text; }
         return applyStandingOrders(text, targetName, snapshot.orders, snapshot.liveNames, snapshot.groups, undefined, {
             hasRegisteredRounds: snapshot.hasRegisteredRounds,
+            cliInvocation: snapshot.cliInvocation,
         });
     });
     // Queue-head resolver seam (subtask 3 fix): the queue nudge sweep calls

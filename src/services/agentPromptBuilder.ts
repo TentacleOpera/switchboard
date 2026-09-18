@@ -248,8 +248,8 @@ export function normalizeNewlines(text: string): string {
  * path — an unsubstituted token hands the agent `node "<cliPath>" done …`,
  * which cannot run and silently loses the completion signal.
  */
-function finalizeAgentPrompt(text: string, cliPath?: string): string {
-    return substituteCliPath(normalizeNewlines(text), cliPath);
+function finalizeAgentPrompt(text: string, cliPath?: string, cliInvocation?: string): string {
+    return substituteCliPath(normalizeNewlines(text), cliPath, cliInvocation);
 }
 
 /**
@@ -408,6 +408,15 @@ export interface PromptBuilderOptions {
     phoneAFriendEnabled?: boolean;
     /** Plumbed path to bundled standalone/cli.js for CLI callback directives. */
     cliPath?: string;
+    /**
+     * The fully-resolved CLI invocation for the TARGET seat's machine
+     * (`GlobalIntegrationConfigService.resolveCliInvocationForMachineId`),
+     * resolved by the dispatch caller. When present it substitutes every
+     * `node "<cliPath>"` phrase verbatim — a seat on a remote machine gets
+     * `"<its cliPath>"` or bare `switchboard`, never the board host's absolute
+     * path. Absent → `cliPath`/host resolution, byte-identical to today.
+     */
+    cliInvocation?: string;
     /** The LocalApiServer port, interpolated into the Phone-a-Friend directive's curl URL. Plumbed at build time (Option A) so worktree CWDs don't need to read the port file. */
     apiPort?: number;
     /** Terminal name reported by the Phone-a-Friend directive. Falls back to the SWITCHBOARD_TERMINAL env var or 'unknown'. */
@@ -1003,12 +1012,14 @@ export const SWITCHBOARD_LIVENESS_DIRECTIVE = (port: number) =>
  * (`done`, `next`, `verb <name>`), and the liveness line covers the endpoints
  * that do not.
  */
-export const SWITCHBOARD_CLI_DIRECTIVE = (cliPath: string) =>
+export const SWITCHBOARD_CLI_DIRECTIVE = (cliPath: string, invocation?: string) =>
   // `formatCliInvocation` owns the `node` prefix as well as the path: the static
   // Go client IS the `switchboard` executable and must not be run through node.
   // Interpolating `cliPath` directly here is what kept every dispatched prompt on
   // the 17 MB Node bundle even after both roots wired the Go client seam.
-  `SWITCHBOARD CLI: run \`${formatCliInvocation(cliPath)} <command>\` for board callbacks — ` +
+  // `invocation` is the per-machine override — a remote seat's own cliPath or
+  // bare `switchboard`; it is emitted verbatim, never re-wrapped.
+  `SWITCHBOARD CLI: run \`${invocation || formatCliInvocation(cliPath)} <command>\` for board callbacks — ` +
   `\`done\`, \`next\`, and \`verb <name> '<json>'\`. Use it instead of hand-building those ` +
   `HTTP requests; endpoints this prompt names explicitly stay on HTTP.`;
 
@@ -2020,8 +2031,8 @@ export function buildKanbanBatchPrompt(
     const livenessBlock = (options?.apiPort && options?.apiPort > 0)
         ? SWITCHBOARD_LIVENESS_DIRECTIVE(options.apiPort)
         : '';
-    const cliBlock = (options?.cliPath)
-        ? SWITCHBOARD_CLI_DIRECTIVE(options.cliPath)
+    const cliBlock = (options?.cliPath || options?.cliInvocation)
+        ? SWITCHBOARD_CLI_DIRECTIVE(options?.cliPath || '', options?.cliInvocation)
         : '';
     // Parent-side delegate notice — emitted only when the host co-launched
     // delegate children for this terminal. The children's friendlyNames are
@@ -2209,13 +2220,13 @@ UNATTENDED IMPROVER CONTRACT:
 - Write the plan file once, at the end.`;
         }
 
-        return finalizeAgentPrompt(plannerPrompt, options?.cliPath);
+        return finalizeAgentPrompt(plannerPrompt, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'reviewer') {
         const { reviewerDelegationMode, reviewerCoderTerminal, reviewerOriginLead, reviewerPreCheckPassed, reviewerPhoneAFriendPassed } = options ?? {};
         const isDelegationActive = Boolean(reviewerDelegationMode && reviewerCoderTerminal && reviewerOriginLead);
-        const cliRef = options?.cliPath ? formatCliInvocation(options.cliPath) : 'switchboard';
+        const cliRef = options?.cliInvocation || (options?.cliPath ? formatCliInvocation(options.cliPath) : 'switchboard');
         // `/kanban/move` has no verb-rail equivalent (`moveCardForward` /
         // `moveCardBackwards` take a sessionIds array, not a planId), so the
         // escalation stays on the REST route. The base comes from the injected
@@ -2343,7 +2354,7 @@ UNATTENDED IMPROVER CONTRACT:
             reviewerRisksToMemoBlock
         ].filter(Boolean).join('\n\n');
 
-        return finalizeAgentPrompt(promptParts, options?.cliPath);
+        return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'tester') {
@@ -2413,7 +2424,7 @@ For each plan:
             acceptanceBaselineBlock
         ].filter(Boolean).join('\n\n');
 
-        return finalizeAgentPrompt(promptParts, options?.cliPath);
+        return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'lead') {
@@ -2478,7 +2489,7 @@ For each plan:
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
-        return finalizeAgentPrompt(promptParts, options?.cliPath);
+        return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'coder') {
@@ -2570,7 +2581,7 @@ For each plan:
             ].filter(Boolean).join('\n\n');
 
             const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), isDriveMode ? false : accurateCodingEnabled, options?.resolvedProtocols);
-            return finalizeAgentPrompt(coderPrompt, options?.cliPath);
+            return finalizeAgentPrompt(coderPrompt, options?.cliPath, options?.cliInvocation);
         }
 
         // Non-feature coder dispatch — standard per-plan enumeration path.
@@ -2616,7 +2627,7 @@ For each plan:
         ].filter(Boolean).join('\n\n');
 
         const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled, options?.resolvedProtocols);
-        return finalizeAgentPrompt(coderPrompt, options?.cliPath);
+        return finalizeAgentPrompt(coderPrompt, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'intern') {
@@ -2660,7 +2671,7 @@ For each plan:
         ].filter(Boolean).join('\n\n');
 
         const internPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled, options?.resolvedProtocols);
-        return finalizeAgentPrompt(internPrompt, options?.cliPath);
+        return finalizeAgentPrompt(internPrompt, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'analyst') {
@@ -2688,7 +2699,7 @@ For each plan:
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
-        return finalizeAgentPrompt(promptParts, options?.cliPath);
+        return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'ticket_updater') {
@@ -2753,7 +2764,7 @@ fields above, no speculative implementation detail. Comment only.${triagerRefs.b
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
-        return finalizeAgentPrompt(promptParts, options?.cliPath);
+        return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'researcher') {
@@ -2804,7 +2815,7 @@ fields above, no speculative implementation detail. Comment only.${triagerRefs.b
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
-        return finalizeAgentPrompt(promptParts, options?.cliPath);
+        return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
     }
 
     if (role === 'chat') {
@@ -2839,7 +2850,7 @@ fields above, no speculative implementation detail. Comment only.${triagerRefs.b
             chatPrompt += `\n\nPLANS TO DISCUSS:\nNone. General consultation.`;
         }
 
-        return finalizeAgentPrompt(chatPrompt, options?.cliPath);
+        return finalizeAgentPrompt(chatPrompt, options?.cliPath, options?.cliInvocation);
     }
 
     // No fallback — every built-in role must have an explicit template.

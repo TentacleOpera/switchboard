@@ -9,8 +9,8 @@ import (
 
 // jsonMarshal/jsonUnmarshal are thin wrappers so helpers.go can avoid importing
 // encoding/json directly (keeps the import graph tidy and testable).
-func jsonMarshal(v any) ([]byte, error)        { return json.Marshal(v) }
-func jsonUnmarshal(b []byte, v any) error      { return json.Unmarshal(b, v) }
+func jsonMarshal(v any) ([]byte, error)   { return json.Marshal(v) }
+func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 
 // signalNotify registers a channel for SIGINT/SIGTERM. Wrapped so tests can
 // substitute a no-op notifier.
@@ -62,10 +62,13 @@ Board commands (drive the board from a terminal — served by this Go client):
   about               Show Go client version and system info.
 
 Connection options (resolve a remote board without Node):
+  --remote <name|url>            Named remote from remotes.json, or a URL
+                                 equivalent to --server. Outranks env.
   --server <http[s]://host:port>   Explicit board endpoint (--endpoint alias).
   --workspace-root <server-path>   Server-side workspace root, required for
                                    remote (--server-root alias).
   --token-file <path>              Credential file (or SWITCHBOARD_API_TOKEN env).
+  SWITCHBOARD_REMOTE             Remote name or URL from environment.
   SWITCHBOARD_SERVER_URL           Endpoint from environment.
   SWITCHBOARD_WORKSPACE_ROOT       Server workspace root from environment.
   SWITCHBOARD_API_TOKEN            Credential from environment.

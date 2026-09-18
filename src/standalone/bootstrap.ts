@@ -683,6 +683,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         // the catch below, which LOGS it (matching the extension twin at
                         // TaskViewerProvider, which has no catch and warns on failure).
                         ...(await readBuildRenderOptions(db)),
+                        // Per-machine CLI resolution (plan: a-remote-machines-cli-path-and-
+                        // working-directory): the seat's machineId resolves to its OWN
+                        // cliPath or bare `switchboard` — never the host's absolute path.
+                        cliInvocation: await GlobalIntegrationConfigService.resolveCliInvocationForMachineId(handle?.machineId).catch(() => undefined),
                     }, { terminalName: handle.friendlyName });
                     soBlockAdded = out !== beforeSO;
                 }
@@ -2534,7 +2538,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // the fleet root and spawn root are identical by construction.
                     // (In the extension host, standing orders write to the latched
                     // _apiServerWorkspaceRoot rather than the spawn or definition root.)
-                    const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, workspaceRoot });
+                    const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, workspaceRoot, machineId: typeof payload.machineId === 'string' ? payload.machineId : undefined });
                     // Install the completion-directive standing order for the
                     // terminal's role. Idempotent — re-installation replaces, not
                     // duplicates. Covers standalone (non-team) terminals too.
@@ -4200,7 +4204,11 @@ Each plan file must include:
         // rounds so the lead-head fragments switch to the register/mark-done
         // loop. Reads coding_rounds DIRECTLY; false is the safe default.
         const hasRegisteredRounds = await resolveHasRegisteredRoundsForSeat(db, targetName, orders, groups || []).catch(() => false);
-        return applyStandingOrders(text, targetName, orders, liveNames, groups || [], undefined, { hasRegisteredRounds }, { terminalName: targetName });
+        // Same per-machine CLI resolution as deliverPrompt's applyStandingOrders
+        // call — the tmux rail must not hand a remote seat the host's path.
+        const targetHandle = ptyFleetService.listActive().find(t => t.friendlyName === targetName);
+        const cliInvocation = await GlobalIntegrationConfigService.resolveCliInvocationForMachineId(targetHandle?.machineId).catch(() => undefined);
+        return applyStandingOrders(text, targetName, orders, liveNames, groups || [], undefined, { hasRegisteredRounds, cliInvocation }, { terminalName: targetName });
     });
     // Default for every create() path that passes no explicit claudeInlineRendering.
     // The two ptyCreateTerminal / ptyCreateBatch arms below resolve it themselves, but
@@ -4671,6 +4679,7 @@ Each plan file must include:
             friendlyName: t.friendlyName,
             parentInstanceId: t.parentInstanceId,
             status: t.status,
+            machineId: t.machineId,
         }))
     );
     // Awaited here, well before `server.start()` below: a ghost `purpose:'pty'`

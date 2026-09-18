@@ -32,7 +32,7 @@ var ownedVerbs = map[string]bool{
 // (SourceExplicitFlag) rather than silently ignored and left to fall back to
 // local discovery.
 var connectionFlags = map[string]bool{
-	"--server": true, "--endpoint": true,
+	"--server": true, "--endpoint": true, "--remote": true,
 	"--workspace-root": true, "--server-root": true,
 	"--token-file": true,
 }
@@ -119,22 +119,42 @@ func runOwnedVerb(verb string, args []string, connOpts client.Options) {
 	// server-root for remote. We fetch health once here (it is the endpoint
 	// resolution step), then the verb re-fetches only what it needs.
 	probe := client.NewTransportFromEndpoint(endpoint.Value)
-	health, _ := probe.GetHealth(2000)
+	health, herr := probe.GetHealth(2000)
+	if herr != nil && endpoint.Source != client.SourceLocalProbe && endpoint.Source != client.SourcePortFile {
+		// A remote endpoint that does not answer is an error NAMING it —
+		// never a demotion to the local board. DNS failure is the rename
+		// case; refusal is a stopped board on a reachable host.
+		fmt.Fprintln(os.Stderr, "[switchboard] "+client.DescribeUnreachable(endpoint.Value, endpoint.Source, herr))
+		os.Exit(1)
+	}
 
 	serverRoot, err := client.ResolveServerRoot(connOpts, endpoint, health)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[switchboard] "+err.Error())
-		if mr, ok := err.(*client.MissingRootError); ok && len(mr.Roots) > 0 {
+		switch e := err.(type) {
+		case *client.MissingRootError:
+			if len(e.Roots) > 0 {
+				fmt.Fprintln(os.Stderr, "Advertised roots:")
+				for _, r := range e.Roots {
+					fmt.Fprintf(os.Stderr, "  %s\n", r)
+				}
+				fmt.Fprintln(os.Stderr, "Pass --workspace-root <path> or SWITCHBOARD_WORKSPACE_ROOT.")
+			}
+		case *client.StaleRootError:
 			fmt.Fprintln(os.Stderr, "Advertised roots:")
-			for _, r := range mr.Roots {
+			for _, r := range e.Roots {
 				fmt.Fprintf(os.Stderr, "  %s\n", r)
 			}
-			fmt.Fprintln(os.Stderr, "Pass --workspace-root <path> or SWITCHBOARD_WORKSPACE_ROOT.")
+			fmt.Fprintf(os.Stderr, "Run `switchboard remote add %s <url>` again to update the stored root.\n", e.Remote)
 		}
 		os.Exit(1)
 	}
 
-	token := client.ResolveToken(connOpts)
+	token, err := client.ResolveToken(connOpts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[switchboard] "+err.Error())
+		os.Exit(1)
+	}
 
 	localBoard := endpoint.Source == client.SourceLocalProbe || endpoint.Source == client.SourcePortFile
 	routes := client.Routes{
@@ -419,6 +439,13 @@ func extractConnectionFlags(args []string) (client.Options, []string) {
 			opts.ServerURL = a[len("--server="):]
 		case strings.HasPrefix(a, "--endpoint="):
 			opts.ServerURL = a[len("--endpoint="):]
+		case a == "--remote":
+			if i+1 < len(args) {
+				opts.Remote = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--remote="):
+			opts.Remote = a[len("--remote="):]
 		case a == "--workspace-root" || a == "--server-root":
 			if i+1 < len(args) {
 				opts.WorkspaceRoot = args[i+1]

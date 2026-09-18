@@ -2426,12 +2426,16 @@
             document.getElementById('agents-tab-machine-id').disabled = true;
             document.getElementById('agents-tab-machine-transport-select').value = m?.transport || 'local';
             document.getElementById('agents-tab-machine-prefix').value = m?.transportPrefix || '';
+            document.getElementById('agents-tab-machine-clipath').value = m?.cliPath || '';
+            document.getElementById('agents-tab-machine-remotecwd').value = m?.remoteCwd || '';
           } else {
             document.getElementById('agents-tab-machine-name').value = '';
             document.getElementById('agents-tab-machine-id').value = '';
             document.getElementById('agents-tab-machine-id').disabled = false;
             document.getElementById('agents-tab-machine-transport-select').value = 'local';
             document.getElementById('agents-tab-machine-prefix').value = '';
+            document.getElementById('agents-tab-machine-clipath').value = '';
+            document.getElementById('agents-tab-machine-remotecwd').value = '';
           }
           document.getElementById('agents-tab-machine-error').textContent = '';
           form.style.display = '';
@@ -2470,7 +2474,19 @@
             errEl.textContent = `Machine id '${id}' already exists.`;
             return;
           }
-          const machine = { id, name, transport, transportPrefix: transport === 'local' ? '' : prefix };
+          // Optional per-machine fields (plan: a-remote-machines-cli-path-and-
+          // working-directory): cliPath overrides the remote's CLI binary;
+          // remoteCwd is the directory the seat cd's into. Both pass straight
+          // through to the AgentMachine record — empty is a real value (bare
+          // `switchboard` on the remote PATH / remote $HOME), stored absent.
+          const cliPath = document.getElementById('agents-tab-machine-clipath').value.trim();
+          const remoteCwd = document.getElementById('agents-tab-machine-remotecwd').value.trim();
+          const machine = {
+            id, name, transport,
+            transportPrefix: transport === 'local' ? '' : prefix,
+            ...(cliPath ? { cliPath } : {}),
+            ...(remoteCwd ? { remoteCwd } : {}),
+          };
           vscode.postMessage({ type: 'saveMachine', machine, mode: agentsTabMachineEditing });
           agentsTabHideMachineForm();
         }
@@ -3832,8 +3848,16 @@
                 case 'probeMachineResult': {
                   const statusEl = document.getElementById('agents-tab-machine-probe-status');
                   if (statusEl) {
-                    statusEl.textContent = msg.reachable ? 'reachable' : (msg.error || 'unreachable');
-                    statusEl.style.color = msg.reachable ? 'var(--accent-green, green)' : 'var(--accent-red)';
+                    if (!msg.reachable) {
+                      statusEl.textContent = msg.error || 'unreachable';
+                      statusEl.style.color = 'var(--accent-red)';
+                    } else if (msg.cliWarning) {
+                      statusEl.textContent = `reachable — ${msg.cliWarning}`;
+                      statusEl.style.color = 'var(--accent-amber, orange)';
+                    } else {
+                      statusEl.textContent = 'reachable';
+                      statusEl.style.color = 'var(--accent-green, green)';
+                    }
                   }
                   break;
                 }

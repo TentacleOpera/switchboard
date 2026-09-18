@@ -159,6 +159,45 @@ export function isGoClientResolved(): boolean {
 }
 
 /**
+ * The CLI invocation a seat on `machine` should be handed for board callbacks.
+ *
+ * An explicit `local` machine resolves exactly what `formatCliInvocation()`
+ * returns today — the host's own Go client or Node bundle. A remote machine
+ * resolves `machine.cliPath` when the operator configured one, else the bare
+ * `switchboard` word: PATH resolution happens on the REMOTE box, so the right
+ * architecture answers by construction. What must never happen is a remote
+ * machine silently inheriting the HOST's absolute binary path — that path does
+ * not exist on the remote (and if a coincidence made it exist, it would be the
+ * wrong architecture) — which is the whole defect this resolver removes.
+ *
+ * An ABSENT machine (`null`/`undefined`) is not proven local, so it must not
+ * resolve the host invocation either — "we do not know which machine this is"
+ * answering with a host-only path is the quiet wrong value this module exists
+ * to prevent. It resolves bare `switchboard` with a warning: on a remote that
+ * is the correct answer, and on a local seat that reached here by mistake it
+ * fails VISIBLY (command not found) instead of silently wrong. Callers that
+ * mean "local" pass a record — `LOCAL_AGENT_MACHINE` or `{ transport: 'local' }`.
+ *
+ * The machine record (not the id) is the input because this module is a util:
+ * `GlobalIntegrationConfigService` imports it, never the reverse. Callers that
+ * only hold a `machineId` go through
+ * `GlobalIntegrationConfigService.resolveCliInvocationForMachineId`, which does
+ * the store lookup and delegates here.
+ */
+export function resolveCliInvocationForMachine(machine: { transport?: string; cliPath?: string } | null | undefined): string {
+    if (!machine) {
+        console.warn('[cliPathToken] resolveCliInvocationForMachine called with no machine record — seat is not proven local, resolving to remote-PATH `switchboard` (never the host path). A local seat must pass its machine record.');
+        return 'switchboard';
+    }
+    if (machine.transport === 'local') {
+        return formatCliInvocation();
+    }
+    const configured = typeof machine.cliPath === 'string' ? machine.cliPath.trim() : '';
+    if (configured) { return `"${configured}"`; }
+    return 'switchboard';
+}
+
+/**
  * Replace every `<cliPath>` token in agent-facing text with a runnable path.
  * `cliPath` overrides the host-wired path (the prompt builder passes the value
  * it already resolved); omit it to use the composition-root seam.
@@ -168,15 +207,26 @@ export function isGoClientResolved(): boolean {
  * is not run through `node`. Without a Go client the Node bundle is named, as
  * before.
  */
-export function substituteCliPath(text: string, cliPath?: string): string {
+export function substituteCliPath(text: string, cliPath?: string, invocation?: string): string {
     if (!text || text.indexOf(CLI_PATH_TOKEN) === -1) { return text; }
     const nodePath = cliPath || resolveBundledCliPath();
     // The whole `node "<cliPath>"` phrase is the unit of substitution, not the
     // token alone: the Go client is its own executable and must not be handed
     // to `node`. Rewrite the phrase first, then any bare token (comments,
     // future fragments) with the Node path.
-    const invocation = formatCliInvocation(nodePath);
+    //
+    // `invocation` overrides the computed phrase wholesale — the per-machine
+    // resolver hands a remote seat `"<its cliPath>"` or bare `switchboard`,
+    // which must reach the text verbatim (wrapping it in `node "…"` or the
+    // host's Go path would be the silent-wrong-value bug the resolver exists
+    // to kill). Bare `<cliPath>` tokens then take the invocation unquoted.
+    const resolved = invocation || formatCliInvocation(nodePath);
+    const bare = invocation !== undefined
+        ? (invocation.length > 1 && invocation.startsWith('"') && invocation.endsWith('"')
+            ? invocation.slice(1, -1)
+            : invocation)
+        : nodePath;
     return text
-        .split(NODE_INVOCATION_PREFIX).join(invocation)
-        .split(CLI_PATH_TOKEN).join(nodePath);
+        .split(NODE_INVOCATION_PREFIX).join(resolved)
+        .split(CLI_PATH_TOKEN).join(bare);
 }

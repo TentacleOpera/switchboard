@@ -3037,6 +3037,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </select>
             <label class="modal-label" for="agents-tab-machine-prefix">Transport prefix</label>
             <input id="agents-tab-machine-prefix" class="modal-input" type="text" placeholder="e.g. user@host (for ssh/mosh); empty for local">
+            <label class="modal-label" for="agents-tab-machine-clipath">CLI path on this machine (optional)</label>
+            <input id="agents-tab-machine-clipath" class="modal-input" type="text" placeholder="e.g. /usr/local/bin/switchboard — empty resolves `switchboard` on the remote PATH">
+            <label class="modal-label" for="agents-tab-machine-remotecwd">Remote working directory (optional)</label>
+            <input id="agents-tab-machine-remotecwd" class="modal-input" type="text" placeholder="e.g. /home/user/checkout — empty lands the seat in remote $HOME">
             <div id="agents-tab-machine-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
             <div style="display:flex; gap:8px; margin-top:8px;">
               <button id="agents-tab-btn-save-machine" class="modal-btn-primary">SAVE MACHINE</button>

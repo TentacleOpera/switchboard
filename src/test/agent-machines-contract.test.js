@@ -416,6 +416,139 @@ async function run() {
         }
     });
 
+    // ── 10. Per-machine CLI invocation at the prompt seams ────────────────
+    // Plan: a-remote-machines-cli-path-and-working-directory. A remote seat
+    // must be handed ITS machine's CLI — the configured `cliPath`, or bare
+    // `switchboard` resolved by the remote's own PATH — never the board host's
+    // absolute binary path, which does not exist on the remote (and a
+    // path-shaped coincidence would be the wrong architecture anyway).
+
+    const { resolveCliInvocationForMachine, substituteCliPath, formatCliInvocation, resolveBundledCliPath } =
+        require(path.join(REPO, 'out', 'utils', 'cliPathToken.js'));
+
+    check('local resolves today\'s formatCliInvocation() byte-for-byte', () => {
+        assert.strictEqual(resolveCliInvocationForMachine(LOCAL_AGENT_MACHINE), formatCliInvocation());
+        assert.strictEqual(resolveCliInvocationForMachine({ id: 'x', name: 'X', transport: 'local', transportPrefix: '' }), formatCliInvocation());
+    });
+
+    check('an absent machine is not proven local — resolves remote-PATH switchboard, never the host path', () => {
+        assert.strictEqual(resolveCliInvocationForMachine(undefined), 'switchboard');
+        assert.strictEqual(resolveCliInvocationForMachine(null), 'switchboard');
+        assert.ok(!resolveCliInvocationForMachine(undefined).includes(resolveBundledCliPath()));
+    });
+
+    await acheck('resolveCliInvocationForMachineId: remote cliPath wins; absent resolves bare switchboard', async () => {
+        writeConfig({
+            agents: {
+                machines: [
+                    LOCAL_AGENT_MACHINE,
+                    { id: 'tower', name: 'Tower', transport: 'ssh', transportPrefix: 'user@tower', cliPath: '/opt/switchboard/bin/switchboard' },
+                    { id: 'bare', name: 'Bare', transport: 'ssh', transportPrefix: 'user@bare' },
+                ],
+            },
+        });
+        assert.strictEqual(await Svc.resolveCliInvocationForMachineId('tower'), '"/opt/switchboard/bin/switchboard"');
+        assert.strictEqual(await Svc.resolveCliInvocationForMachineId('bare'), 'switchboard',
+            'no cliPath → remote PATH answers — right architecture by construction');
+        assert.strictEqual(await Svc.resolveCliInvocationForMachineId('local'), formatCliInvocation());
+        assert.strictEqual(await Svc.resolveCliInvocationForMachineId(undefined), formatCliInvocation());
+        const hostPath = resolveBundledCliPath();
+        for (const id of ['tower', 'bare']) {
+            const inv = await Svc.resolveCliInvocationForMachineId(id);
+            assert.ok(!inv.includes(hostPath), `remote '${id}' must never inherit the host's absolute CLI path`);
+        }
+    });
+
+    check('substituteCliPath honours an invocation override verbatim — remote never sees the host path', () => {
+        const text = 'run `node "<cliPath>" done` when finished; binary lives at <cliPath>';
+        assert.strictEqual(
+            substituteCliPath(text, undefined, 'switchboard'),
+            'run `switchboard done` when finished; binary lives at switchboard');
+        assert.strictEqual(
+            substituteCliPath(text, undefined, '"/opt/sw/switchboard"'),
+            'run `"/opt/sw/switchboard" done` when finished; binary lives at /opt/sw/switchboard');
+        const hostPath = resolveBundledCliPath();
+        for (const inv of ['switchboard', '"/opt/sw/switchboard"']) {
+            const out = substituteCliPath(text, undefined, inv);
+            assert.ok(!out.includes(hostPath), `remote invocation '${inv}' must not leak the host path`);
+            assert.ok(!out.includes('node "'), 'a remote invocation is never re-wrapped in `node "…"`');
+        }
+        // No override → identical to today (the local contract).
+        assert.strictEqual(substituteCliPath(text), substituteCliPath(text, resolveBundledCliPath()));
+    });
+
+    check('every delivery seam resolves the target seat\'s machine before substituting', () => {
+        const boot = read('src/standalone/bootstrap.ts');
+        assert.ok(/resolveCliInvocationForMachineId\(handle\?\.machineId\)/.test(boot),
+            'deliverPrompt must resolve the seat\'s machineId before applyStandingOrders');
+        assert.ok(/resolveCliInvocationForMachineId\(targetHandle\?\.machineId\)/.test(boot),
+            'the tmux standing-orders applier must resolve the target\'s machineId');
+
+        const tvp = read('src/services/TaskViewerProvider.ts');
+        assert.ok(/resolveCliInvocationForMachineId\(targetRow\?\.machineId\)/.test(tvp),
+            'the ptySendPrompt composition must resolve the target row\'s machineId');
+        assert.ok(/resolveCliInvocationForMachineId\(targetMachineId\)/.test(tvp),
+            'the establish/clear and VS Code snapshot paths must resolve the target\'s machineId');
+
+        const kp = read('src/services/KanbanProvider.ts');
+        assert.ok(/cliInvocation: await this\._resolveCliInvocationForSeat\(overrides\?\.dispatchTargetTerminal\)/.test(kp),
+            'resolvedOptions must carry the target seat\'s machine-resolved invocation');
+        assert.ok(/_resolveCliInvocationForSeat\(head \|\| undefined\)/.test(kp),
+            'the drive prefixes must resolve the head seat\'s machine');
+        const ext = read('src/extension.ts');
+        assert.ok(/cliInvocation: snapshot\.cliInvocation/.test(ext),
+            'the extension applier must thread the snapshot\'s resolved invocation');
+
+        const tw = read('src/services/teamWiring.ts');
+        assert.ok(/resolveCliInvocationForMachineId\(opts\.machineId\)/.test(tw),
+            'member-orders.md must resolve the team\'s machine — the file is read ON the remote');
+        assert.ok(/machineId: opts\.machineId/.test(tw),
+            'wireSpawnedTeam must thread the team machine into writeMemberOrdersFile');
+        for (const rel of ['src/services/agentGroupInstantiation.ts', 'src/services/TaskViewerProvider.ts', 'src/standalone/bootstrap.ts']) {
+            assert.ok(/machineId:/.test(read(rel).slice(read(rel).indexOf('wireSpawnedTeam('), read(rel).indexOf('wireSpawnedTeam(') + 900)),
+                `${rel} must pass the team machine to wireSpawnedTeam`);
+        }
+    });
+
+    await acheck('the machines store round-trips cliPath and remoteCwd through save and reload', async () => {
+        writeConfig({ agents: {} });
+        const machine = {
+            id: 'tower', name: 'Tower', transport: 'ssh', transportPrefix: 'user@tower',
+            cliPath: '/opt/switchboard/bin/switchboard', remoteCwd: '/srv/checkout',
+        };
+        await Svc.setMachines([LOCAL_AGENT_MACHINE, machine]);
+        const reloaded = await Svc.getMachineSync('tower');
+        assert.strictEqual(reloaded?.cliPath, '/opt/switchboard/bin/switchboard');
+        assert.strictEqual(reloaded?.remoteCwd, '/srv/checkout');
+    });
+
+    check('both saveMachine handlers pass cliPath/remoteCwd through normalization', () => {
+        for (const rel of ['src/services/KanbanProvider.ts', 'src/services/TaskViewerProvider.ts']) {
+            const src = read(rel);
+            const block = src.slice(src.indexOf("case 'saveMachine'"), src.indexOf("case 'saveMachine'") + 2500);
+            assert.ok(/cliPath/.test(block), `${rel} saveMachine must carry cliPath`);
+            assert.ok(/remoteCwd/.test(block), `${rel} saveMachine must carry remoteCwd`);
+        }
+    });
+
+    check('the machine probe extends to a CLI check on the remote (advisory, both handlers)', () => {
+        for (const rel of ['src/services/KanbanProvider.ts', 'src/services/TaskViewerProvider.ts']) {
+            const src = read(rel);
+            const block = src.slice(src.indexOf("case 'probeMachine'"), src.indexOf("case 'probeMachine'") + 4500);
+            assert.ok(/command -v switchboard/.test(block), `${rel} probe must check the remote for switchboard`);
+            assert.ok(/cliFound/.test(block), `${rel} probe result must report cliFound`);
+        }
+    });
+
+    check('the machine editor exposes cliPath and remoteCwd inputs', () => {
+        const html = read('src/webview/agent-control.html');
+        assert.ok(/id="agents-tab-machine-clipath"/.test(html), 'cliPath input must exist');
+        assert.ok(/id="agents-tab-machine-remotecwd"/.test(html), 'remoteCwd input must exist');
+        const js = read('src/webview/agent-control.js');
+        assert.ok(/agents-tab-machine-clipath/.test(js) && /agents-tab-machine-remotecwd/.test(js),
+            'the editor must populate and collect both fields');
+    });
+
     console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILED`}\n`);
     process.exit(failures === 0 ? 0 : 1);
 }

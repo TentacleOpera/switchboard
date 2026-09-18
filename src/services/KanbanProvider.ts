@@ -412,8 +412,8 @@ export class KanbanProvider implements vscode.Disposable {
      * scope — same seam as setAgentGroupInstantiator. Returns the same shape
      * bootstrap.ts:1218-1224 builds for the ptyStartTeam verb.
      */
-    private _liveTerminalsProvider?: () => Promise<Array<{ role?: string; friendlyName?: string; parentInstanceId?: any; status?: string }>>;
-    public setLiveTerminalsProvider(fn: () => Promise<Array<{ role?: string; friendlyName?: string; parentInstanceId?: any; status?: string }>>) {
+    private _liveTerminalsProvider?: () => Promise<Array<{ role?: string; friendlyName?: string; parentInstanceId?: any; status?: string; machineId?: string }>>;
+    public setLiveTerminalsProvider(fn: () => Promise<Array<{ role?: string; friendlyName?: string; parentInstanceId?: any; status?: string; machineId?: string }>>) {
         this._liveTerminalsProvider = fn;
     }
 
@@ -1557,6 +1557,38 @@ export class KanbanProvider implements vscode.Disposable {
         }
         // Extension bundle: __dirname is dist/, the CLI is dist/standalone/cli.js.
         return path.join(__dirname, 'standalone', 'cli.js');
+    }
+
+    /**
+     * Resolve the CLI invocation a seat should be handed, from its terminal's
+     * `machineId` (plan: a-remote-machines-cli-path-and-working-directory).
+     * Looks the seat up in the live fleet rows — `_liveTerminalsProvider`
+     * (standalone) first, then `listFleetTerminals()` (extension host) — and
+     * delegates to the machine resolver. `undefined` when the seat cannot be
+     * found or is local, so callers fall back to `cliPath`/host resolution and
+     * local output stays byte-identical. A remote machine resolves to its
+     * configured `cliPath` or bare `switchboard` — never the host's absolute
+     * path, which does not exist on the remote box.
+     */
+    private async _resolveCliInvocationForSeat(terminalName: string | undefined): Promise<string | undefined> {
+        if (!terminalName) { return undefined; }
+        let machineId: string | undefined;
+        try {
+            if (this._liveTerminalsProvider) {
+                const live = await this._liveTerminalsProvider();
+                if (Array.isArray(live)) {
+                    machineId = live.find(t => t && t.friendlyName === terminalName)?.machineId;
+                }
+            }
+            if (machineId === undefined && this._taskViewerProvider?.listFleetTerminals) {
+                const fleet = await this._taskViewerProvider.listFleetTerminals();
+                if (Array.isArray(fleet)) {
+                    machineId = fleet.find(t => t && t.friendlyName === terminalName)?.machineId;
+                }
+            }
+        } catch { /* best effort — an unresolvable seat keeps host resolution */ }
+        if (!machineId || machineId === 'local') { return undefined; }
+        return GlobalIntegrationConfigService.resolveCliInvocationForMachineId(machineId).catch(() => undefined);
     }
 
     /**
@@ -6357,7 +6389,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- clearBeforePrompt stays false on every dispatch — the host issues no clear at dispatch time. A seat is cleared at rest (when its work is accepted, a round closes, a feature completes, or a queue item pops) or once when a new feature run starts.',
         ];
 
-        return substituteCliPath(block.join('\n'));
+        // The drive block is delivered to the HEAD seat — resolve ITS machine so
+        // a remote head gets its own CLI invocation, not the host's path.
+        return substituteCliPath(block.join('\n'), undefined, await this._resolveCliInvocationForSeat(head || undefined));
     }
 
     private async _buildDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
@@ -6432,7 +6466,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Anything irreversible (destructive git, pushing, deleting data or cards): stop and record. The only unattended action that blocks.',
         ];
 
-        return substituteCliPath(block.join('\n'));
+        // The drive block is delivered to the HEAD seat — resolve ITS machine so
+        // a remote head gets its own CLI invocation, not the host's path.
+        return substituteCliPath(block.join('\n'), undefined, await this._resolveCliInvocationForSeat(head || undefined));
     }
 
     /**
@@ -6820,18 +6856,21 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // built-in path) or the checkbox is a dead control.
             const customApiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
             const customCliPath = this.getCliPath();
+            // Per-machine CLI resolution — a remote seat gets its own cliPath or
+            // bare `switchboard`, never the host's absolute path.
+            const customCliInvocation = await this._resolveCliInvocationForSeat(overrides?.dispatchTargetTerminal);
             // Omitted, not placeholdered — see the note on PHONE_A_FRIEND_DIRECTIVE.
             // SWITCHBOARD_TERMINAL is a pty-child env var and is never set in this process.
             const customPhoneAFriendOriginTerminal = (overrides as any)?.originTerminal as string | undefined;
             const customPhoneAFriendDispatchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
             const customPhoneSuffix = (mergedAddons.phoneAFriend && customApiPort)
-                ? `\n\n${substituteCliPath(PHONE_A_FRIEND_DIRECTIVE(customApiPort, role, customPhoneAFriendOriginTerminal, customPhoneAFriendDispatchId))}`
+                ? `\n\n${substituteCliPath(PHONE_A_FRIEND_DIRECTIVE(customApiPort, role, customPhoneAFriendOriginTerminal, customPhoneAFriendDispatchId), undefined, customCliInvocation)}`
                 : '';
             const customLivenessSuffix = (customApiPort > 0)
                 ? `\n\n${SWITCHBOARD_LIVENESS_DIRECTIVE(customApiPort)}`
                 : '';
-            const customCliSuffix = customCliPath
-                ? `\n\n${SWITCHBOARD_CLI_DIRECTIVE(customCliPath)}`
+            const customCliSuffix = (customCliPath || customCliInvocation)
+                ? `\n\n${SWITCHBOARD_CLI_DIRECTIVE(customCliPath, customCliInvocation)}`
                 : '';
             if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
                 const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive(), plans);
@@ -6929,6 +6968,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // root's .switchboard/). 0 when the server isn't running → directive omitted.
             apiPort: this._taskViewerProvider?.getLocalApiServerPort() ?? 0,
             cliPath: this.getCliPath(),
+            // Per-machine CLI resolution (plan: a-remote-machines-cli-path-and-
+            // working-directory): the TARGET seat's machineId resolves to its
+            // own cliPath or bare `switchboard`. undefined for local/unresolved
+            // seats → the builder substitutes via `cliPath` exactly as today.
+            cliInvocation: await this._resolveCliInvocationForSeat(overrides?.dispatchTargetTerminal),
             // §Delegate — plumb the LocalApiServer session token at build time so the
             // delegate directive's curls can authenticate. Empty when no token is set.
             apiToken: await this._taskViewerProvider?.getApiToken() ?? '',
@@ -14218,6 +14262,13 @@ ${FOCUS_DIRECTIVE}`;
                     name: machine.name || machine.id,
                     transport: machine.transport === 'ssh' || machine.transport === 'mosh' ? machine.transport : 'local',
                     transportPrefix: machine.transport === 'local' ? '' : (machine.transportPrefix || ''),
+                    // Optional per-machine CLI path / remote cwd (plan: a-remote-
+                    // machines-cli-path-and-working-directory). Empty strings are
+                    // stored as ABSENT — an unset field resolves to bare
+                    // `switchboard` / remote $HOME, and a stored '' would read
+                    // identically while claiming to be configured.
+                    ...(typeof machine.cliPath === 'string' && machine.cliPath.trim() ? { cliPath: machine.cliPath.trim() } : {}),
+                    ...(typeof machine.remoteCwd === 'string' && machine.remoteCwd.trim() ? { remoteCwd: machine.remoteCwd.trim() } : {}),
                 };
                 const next = exists
                     ? machines.map(m => m.id === normalized.id ? normalized : m)
@@ -14303,8 +14354,32 @@ ${FOCUS_DIRECTIVE}`;
                             if (err) { reject(err); } else { resolve(); }
                         });
                     });
-                    this.postMessage({ type: 'probeMachineResult', machineId, reachable: true });
-                    return { success: true, reachable: true };
+                    // CLI probe (plan: a-remote-machines-cli-path-and-working-
+                    // directory): a remote seat with no runnable `switchboard`
+                    // dies inside the stale-command-death window hours later.
+                    // Surface it now — advisory only, never a probe failure.
+                    const configuredCli = typeof machine.cliPath === 'string' && machine.cliPath.trim()
+                        ? `test -x '${machine.cliPath.trim().replace(/'/g, `'\\''`)}'`
+                        : 'command -v switchboard';
+                    const cliArgv: [string, string[]] = machine.transport === 'ssh'
+                        ? ['ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', machine.transportPrefix, configuredCli]]
+                        : ['mosh', [`--ssh=${BATCH_SSH}`, machine.transportPrefix, '--', 'sh', '-c', configuredCli]];
+                    const cliResult = await new Promise<{ found: boolean; error?: string }>((resolve) => {
+                        execFile(cliArgv[0], cliArgv[1], { timeout: 10000 }, (err: any) => {
+                            if (err) {
+                                resolve({ found: false, error: err instanceof Error ? err.message : String(err) });
+                            } else {
+                                resolve({ found: true });
+                            }
+                        });
+                    });
+                    const cliWarning = cliResult.found
+                        ? undefined
+                        : (typeof machine.cliPath === 'string' && machine.cliPath.trim()
+                            ? `configured cliPath is not executable on the remote: ${machine.cliPath.trim()}`
+                            : 'no `switchboard` on the remote PATH — seats on this machine cannot run board callbacks');
+                    this.postMessage({ type: 'probeMachineResult', machineId, reachable: true, cliFound: cliResult.found, cliWarning });
+                    return { success: true, reachable: true, cliFound: cliResult.found, cliWarning };
                 } catch (err: any) {
                     const error = err instanceof Error ? err.message : String(err);
                     this.postMessage({ type: 'probeMachineResult', machineId, reachable: false, error });

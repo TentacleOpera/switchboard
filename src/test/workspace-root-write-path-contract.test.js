@@ -162,6 +162,52 @@ async function main() {
         assert.ok(!('error' in res), `standalone must serve its own root, got ${JSON.stringify(res)}`);
     });
 
+    await check('_requireKnownRoot throws UNKNOWN_WORKSPACE_ROOT with 400 on unknown root', async () => {
+        const server = makeServer({ allRoots: [canonical], workspaceRoot: canonical });
+        assert.strictEqual(server._requireKnownRoot(undefined), undefined);
+        assert.strictEqual(server._requireKnownRoot(''), undefined);
+        assert.strictEqual(path.resolve(server._requireKnownRoot(canonical)), path.resolve(canonical));
+        assert.throws(
+            () => server._requireKnownRoot(other),
+            (err) => {
+                assert.strictEqual(err.statusCode, 400);
+                assert.strictEqual(err.code, 'UNKNOWN_WORKSPACE_ROOT');
+                assert.ok(err.message.includes(canonical));
+                return true;
+            }
+        );
+    });
+
+    await check('_resolveDbFromQuery refuses unknown workspaceRoot with 400', async () => {
+        const server = makeServer({ allRoots: [canonical], workspaceRoot: canonical });
+        const req = { url: `/kanban/plans?workspaceRoot=${encodeURIComponent(other)}` };
+        await assert.rejects(
+            async () => await server._resolveDbFromQuery(req),
+            (err) => {
+                assert.strictEqual(err.statusCode, 400);
+                assert.strictEqual(err.code, 'UNKNOWN_WORKSPACE_ROOT');
+                return true;
+            }
+        );
+    });
+
+    await check('_resolveDbFromQuery accepts known workspaceRoot or absent workspaceRoot', async () => {
+        const server = makeServer({
+            allRoots: [canonical],
+            workspaceRoot: canonical,
+        });
+        // Override getKanbanDatabase to return dummy db
+        server._options.getKanbanDatabase = async (root) => ({ root, ready: true });
+
+        const reqAbsent = { url: '/kanban/plans' };
+        const dbAbsent = await server._resolveDbFromQuery(reqAbsent);
+        assert.ok(dbAbsent);
+
+        const reqKnown = { url: `/kanban/plans?workspaceRoot=${encodeURIComponent(canonical)}` };
+        const dbKnown = await server._resolveDbFromQuery(reqKnown);
+        assert.strictEqual(path.resolve(dbKnown.root), path.resolve(canonical));
+    });
+
     // ── Honest count ──────────────────────────────────────────────────────
     const origForWorkspace = kanbanDbModule.KanbanDatabase.forWorkspace;
 

@@ -1360,6 +1360,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 customSubagentName: seatOpts?.customSubagentName,
                                 hasRegisteredRounds,
                                 ...(db ? await readBuildRenderOptions(db) : {}),
+                                // Per-machine CLI resolution (plan: a-remote-machines-cli-
+                                // path-and-working-directory): the seat's machineId resolves
+                                // to its OWN cliPath or bare `switchboard` — never the host's
+                                // absolute path. The fleet row carries machineId (stamped at
+                                // create); absent row → local → today's resolution unchanged.
+                                cliInvocation: await GlobalIntegrationConfigService.resolveCliInvocationForMachineId(targetRow?.machineId).catch(() => undefined),
                             }, { terminalName: payload.name });
                             soBlockAdded = data !== beforeSO;
                         }
@@ -1651,11 +1657,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     public resolveStandingOrdersSnapshotForDelivery(
         targetName: string
-    ): Promise<false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[]; hasRegisteredRounds: boolean }> {
+    ): Promise<false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[]; hasRegisteredRounds: boolean; cliInvocation?: string }> {
         return this._resolveStandingOrdersForVsCode(targetName);
     }
 
-    private async _resolveStandingOrdersForVsCode(targetName = ''): Promise<false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[]; hasRegisteredRounds: boolean }> {
+    private async _resolveStandingOrdersForVsCode(targetName = ''): Promise<false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[]; hasRegisteredRounds: boolean; cliInvocation?: string }> {
         try {
             const db = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
             if (!db) { return false; }
@@ -1666,10 +1672,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // the VS Code path must include VS Code terminal names or pair
             // orders naming them never render.
             const live = new Set<string>();
+            let targetMachineId: string | undefined;
             try {
                 const listed = await this._ptyHostVerb('ptyListTerminals', {});
                 for (const t of (listed?.terminals || [])) {
                     if (t?.status === 'active' && t?.friendlyName) { live.add(t.friendlyName); }
+                    if (t?.friendlyName === targetName && typeof t?.machineId === 'string') {
+                        targetMachineId = t.machineId;
+                    }
                 }
             } catch { /* PTY host may be unavailable */ }
             if (this._registeredTerminals) {
@@ -1693,7 +1703,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     hasRegisteredRounds = await resolveHasRegisteredRoundsForSeat(db, targetName, effectiveOrders, groups || []);
                 } catch { /* safe default — keep legacy instructions */ }
             }
-            return { orders: effectiveOrders, liveNames: live, groups: groups || [], hasRegisteredRounds };
+            // Per-machine CLI resolution for the target seat — the applier
+            // substitutes `<cliPath>` with this, so a remote seat gets its own
+            // CLI (or bare `switchboard`), never the host's absolute path.
+            const cliInvocation = await GlobalIntegrationConfigService.resolveCliInvocationForMachineId(targetMachineId).catch(() => undefined);
+            return { orders: effectiveOrders, liveNames: live, groups: groups || [], hasRegisteredRounds, cliInvocation };
         } catch {
             return false;
         }
@@ -2095,7 +2109,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * array when the pty host is unavailable (fleet not booted, standalone without a
      * host). Best-effort: any throw is caught and yields `[]`.
      */
-    public async listFleetTerminals(): Promise<Array<{ friendlyName?: string; role?: string; status?: string; parentInstanceId?: any }>> {
+    public async listFleetTerminals(): Promise<Array<{ friendlyName?: string; role?: string; status?: string; parentInstanceId?: any; machineId?: string }>> {
         try {
             if (!this._hasFleet()) return [];
             const res = await this._ptyHostVerb('ptyListTerminals', {});
@@ -2107,6 +2121,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 role: t?.role,
                 status: t?.status,
                 parentInstanceId: t?.parentInstanceId,
+                machineId: t?.machineId,
             }));
         } catch { return []; }
     }
@@ -2830,10 +2845,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // Build live-names set spanning PTY fleet + VS Code terminals (same
             // pattern as _resolveStandingOrdersForVsCode).
             const live = new Set<string>();
+            let targetMachineId: string | undefined;
             try {
                 const listed = await this._ptyHostVerb('ptyListTerminals', {});
                 for (const t of (listed?.terminals || [])) {
                     if (t?.status === 'active' && t?.friendlyName) { live.add(t.friendlyName); }
+                    if (t?.friendlyName === terminalName && typeof t?.machineId === 'string') {
+                        targetMachineId = t.machineId;
+                    }
                 }
             } catch { /* PTY host may be unavailable */ }
             if (this._registeredTerminals) {
@@ -2852,6 +2871,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
                     : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
             } catch { /* empty groups is safe */ }
+
+            // Per-machine CLI resolution — the establish/clear block carries the
+            // completion directive's `node "<cliPath>" done`, so a remote seat must
+            // resolve its own CLI, not the host's (same seam as the ptySendPrompt
+            // composition above).
+            const cliInvocation = await GlobalIntegrationConfigService.resolveCliInvocationForMachineId(targetMachineId).catch(() => undefined);
 
             // Build roleMap from _terminalAgentInfo — the terminal-to-role
             // registry. Index each entry under BOTH its registry key (IDE-suffixed,
@@ -2901,6 +2926,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 subagentPolicy,
                 customSubagentName,
                 hasRegisteredRounds,
+                cliInvocation,
             });
             if (block === null) { return; }
 
@@ -4555,7 +4581,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 }
                                 : undefined;
                             const wired = wiringDb
-                                ? await wireSpawnedTeam({ db: wiringDb, settings, headName, children: result.delegates, members: Array.isArray(payload.delegates) ? payload.delegates : undefined, prompt: payload.teamPrompt, headPrompt: payload.teamHeadPrompt, workspaceRoot: this._apiServerWorkspaceRoot || effectiveRoot })
+                                ? await wireSpawnedTeam({ db: wiringDb, settings, headName, children: result.delegates, members: Array.isArray(payload.delegates) ? payload.delegates : undefined, prompt: payload.teamPrompt, headPrompt: payload.teamHeadPrompt, workspaceRoot: this._apiServerWorkspaceRoot || effectiveRoot, machineId: typeof payload.machineId === 'string' ? payload.machineId : undefined })
                                 : { ok: false as const, error: 'Fleet Kanban DB unavailable' };
                             if (!wired.ok) {
                                 // Surface the wiring error on the verb result;
@@ -16319,6 +16345,13 @@ Each plan file must include:
                             name: machine.name || machine.id,
                             transport: machine.transport === 'ssh' || machine.transport === 'mosh' ? machine.transport : 'local',
                             transportPrefix: machine.transport === 'local' ? '' : (machine.transportPrefix || ''),
+                            // Optional per-machine CLI path / remote cwd (plan: a-remote-
+                            // machines-cli-path-and-working-directory). Empty strings are
+                            // stored as ABSENT — an unset field resolves to bare
+                            // `switchboard` / remote $HOME, and a stored '' would read
+                            // identically while claiming to be configured.
+                            ...(typeof machine.cliPath === 'string' && machine.cliPath.trim() ? { cliPath: machine.cliPath.trim() } : {}),
+                            ...(typeof machine.remoteCwd === 'string' && machine.remoteCwd.trim() ? { remoteCwd: machine.remoteCwd.trim() } : {}),
                         };
                         const next = exists
                             ? machines.map(m => m.id === normalized.id ? normalized : m)
@@ -16390,8 +16423,33 @@ Each plan file must include:
                                     if (err) { reject(err); } else { resolve(); }
                                 });
                             });
-                            this.postMessage({ type: 'probeMachineResult', machineId, reachable: true });
-                            return { success: true, reachable: true };
+                            // CLI probe (plan: a-remote-machines-cli-path-and-
+                            // working-directory): a remote seat with no runnable
+                            // `switchboard` dies inside the stale-command-death
+                            // window hours later. Surface it now — advisory only,
+                            // never a probe failure.
+                            const configuredCli = typeof machine.cliPath === 'string' && machine.cliPath.trim()
+                                ? `test -x '${machine.cliPath.trim().replace(/'/g, `'\\''`)}'`
+                                : 'command -v switchboard';
+                            const cliCmd = machine.transport === 'ssh'
+                                ? `ssh ${machine.transportPrefix} '${configuredCli.replace(/'/g, `'\\''`)}'`
+                                : `mosh ${machine.transportPrefix} -- sh -c '${configuredCli.replace(/'/g, `'\\''`)}'`;
+                            const cliResult = await new Promise<{ found: boolean; error?: string }>((resolve) => {
+                                exec(cliCmd, { timeout: 15000 }, (err: any) => {
+                                    if (err) {
+                                        resolve({ found: false, error: err instanceof Error ? err.message : String(err) });
+                                    } else {
+                                        resolve({ found: true });
+                                    }
+                                });
+                            });
+                            const cliWarning = cliResult.found
+                                ? undefined
+                                : (typeof machine.cliPath === 'string' && machine.cliPath.trim()
+                                    ? `configured cliPath is not executable on the remote: ${machine.cliPath.trim()}`
+                                    : 'no `switchboard` on the remote PATH — seats on this machine cannot run board callbacks');
+                            this.postMessage({ type: 'probeMachineResult', machineId, reachable: true, cliFound: cliResult.found, cliWarning });
+                            return { success: true, reachable: true, cliFound: cliResult.found, cliWarning };
                         } catch (err: any) {
                             const error = err instanceof Error ? err.message : String(err);
                             this.postMessage({ type: 'probeMachineResult', machineId, reachable: false, error });

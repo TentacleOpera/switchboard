@@ -23,6 +23,7 @@ import {
 } from './standingOrderFragments';
 import { resolvePreset, resolvePresetMeta, DEFAULT_MEMBER_RELATIONSHIP } from './linkPresets';
 import { substituteCliPath } from '../utils/cliPathToken';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { bootstrapTeamReportsDirectory } from './ScheduledJobsService';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1421,6 +1422,15 @@ export interface WireSpawnedTeamOptions {
      * naming it.
      */
     workspaceRoot?: string;
+    /**
+     * The team's machine id — a team is one machine (`delegateMachineId` is
+     * uniform across it). Threaded to `writeMemberOrdersFile` so the
+     * `<cliPath>` tokens in member-orders.md resolve to THAT machine's CLI
+     * (its configured `cliPath`, or bare `switchboard` resolved by the
+     * remote's PATH) — never the board host's absolute binary path, which
+     * does not exist on the remote box. Absent → `'local'` (today's output).
+     */
+    machineId?: string;
 }
 
 export interface WireSpawnedTeamResult {
@@ -1458,6 +1468,9 @@ export async function writeMemberOrdersFile(
         children: Array<{ friendlyName: string; role?: string }>;
         externalHead?: boolean;
         pacing?: 'head' | 'seat';
+        /** The team's machine — one per team; resolves the `<cliPath>` tokens
+         *  to that machine's CLI rather than the host's. Absent → local. */
+        machineId?: string;
     }
 ): Promise<string | null> {
     const sbDir = path.join(workspaceRoot, '.switchboard');
@@ -1506,7 +1519,13 @@ export async function writeMemberOrdersFile(
     if (fragmentSources.length) {
         console.log(`[teamWiring] member-orders fragment sources for team '${teamId}': ${fragmentSources.map(([id, src]) => `${id}=${src}`).join(', ')}`);
     }
-    const ordersText = substituteCliPath(composed.text);
+    // Resolve `<cliPath>` to the TEAM's machine (plan: a-remote-machines-cli-
+    // path-and-working-directory). This file is read by seats on that machine —
+    // the host's absolute binary path does not exist there. A remote machine
+    // resolves to its configured cliPath or bare `switchboard` (PATH answers on
+    // the remote); absent/local resolves today's host invocation unchanged.
+    const cliInvocation = await GlobalIntegrationConfigService.resolveCliInvocationForMachineId(opts.machineId).catch(() => undefined);
+    const ordersText = substituteCliPath(composed.text, undefined, cliInvocation);
 
     const content = `# Member Orders — Team ${headName}
 
@@ -1849,6 +1868,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                 children: children as Array<{ friendlyName: string; role?: string }>,
                 externalHead: opts.externalHead,
                 pacing: opts.pacing,
+                machineId: opts.machineId,
             });
         } catch (err) { console.warn('[teamWiring] writeMemberOrdersFile failed:', err); }
 

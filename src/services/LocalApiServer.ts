@@ -3079,7 +3079,10 @@ export class LocalApiServer {
         }
         try {
             const body = await this._parseJsonBody(req);
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const rawRoot = body?.workspaceRoot !== undefined && body?.workspaceRoot !== null
+                ? String(body.workspaceRoot).trim()
+                : (this._options.workspaceRoot || '').trim();
+            const workspaceRoot = this._requireKnownRoot(rawRoot) || '';
             const ref = String(body?.plan || body?.planId || body?.sessionId || body?.planFile || '').trim();
             const rawColumn = String(body?.targetColumn || body?.column || '').trim();
             const from = String(body?.from || body?.originTerminal || '').trim();
@@ -3103,10 +3106,15 @@ export class LocalApiServer {
                 );
             res.writeHead(outcome.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(outcome.payload));
-        } catch (err) {
-            console.error('[LocalApiServer] kanbanDispatch error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanDispatch failed' }));
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            if (status >= 500) console.error('[LocalApiServer] kanbanDispatch error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: err instanceof Error ? err.message : 'kanbanDispatch failed',
+                ...(err && typeof err.code === 'string' ? { code: err.code } : {}),
+            }));
         }
     }
 
@@ -4329,14 +4337,18 @@ export class LocalApiServer {
         }
         try {
             const body = await this._parseJsonBody(req);
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            let workspaceRoot = this._options.workspaceRoot || '';
+            if (body?.workspaceRoot !== undefined && body?.workspaceRoot !== null && String(body.workspaceRoot).trim()) {
+                workspaceRoot = this._requireKnownRoot(String(body.workspaceRoot).trim())!;
+            }
             const from = String(body?.from || '').trim();
             const outcome = await this.dispatchNextFromQueue({ workspaceRoot, from });
             res.writeHead(outcome.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(outcome.payload));
-        } catch (err) {
-            console.error('[LocalApiServer] kanbanQueueNext error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            if (status >= 500) console.error('[LocalApiServer] kanbanQueueNext error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanQueueNext failed' }));
         }
     }
@@ -4389,7 +4401,10 @@ export class LocalApiServer {
         }
         try {
             const body = await this._parseJsonBody(req);
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            let workspaceRoot = this._options.workspaceRoot || '';
+            if (body?.workspaceRoot !== undefined && body?.workspaceRoot !== null && String(body.workspaceRoot).trim()) {
+                workspaceRoot = this._requireKnownRoot(String(body.workspaceRoot).trim())!;
+            }
             const from = String(body?.from || '').trim();
             if (!workspaceRoot) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -4408,9 +4423,10 @@ export class LocalApiServer {
             const result = await this._runQueueDone(workspaceRoot, from, outcome, planId);
             res.writeHead(result.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result.payload));
-        } catch (err) {
-            console.error('[LocalApiServer] kanbanQueueDone error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            if (status >= 500) console.error('[LocalApiServer] kanbanQueueDone error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanQueueDone failed' }));
         }
     }
@@ -4846,7 +4862,10 @@ export class LocalApiServer {
         }
         try {
             const body = await this._parseJsonBody(req);
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const rawRoot = body?.workspaceRoot !== undefined && body?.workspaceRoot !== null
+                ? String(body.workspaceRoot).trim()
+                : (this._options.workspaceRoot || '').trim();
+            const workspaceRoot = this._requireKnownRoot(rawRoot);
             const from = String(body?.from || '').trim();
             const planId = String(body?.planId || '').trim();
             const outcome = typeof body?.outcome === 'string' ? body.outcome.trim() : '';
@@ -5157,10 +5176,15 @@ export class LocalApiServer {
                 ...(featureCompleteAttempted ? { featureComplete } : {}),
                 ...(featureCompleteError ? { featureCompleteError } : {}),
             }));
-        } catch (err) {
-            console.error('[LocalApiServer] kanbanTaskComplete error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanTaskComplete failed' }));
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            if (status >= 500) console.error('[LocalApiServer] kanbanTaskComplete error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: err instanceof Error ? err.message : 'kanbanTaskComplete failed',
+                ...(err && typeof err.code === 'string' ? { code: err.code } : {}),
+            }));
         }
     }
 
@@ -8024,7 +8048,10 @@ export class LocalApiServer {
                 }
             }
 
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const rawRoot = body?.workspaceRoot !== undefined && body?.workspaceRoot !== null
+                ? String(body.workspaceRoot).trim()
+                : (this._options.workspaceRoot || '').trim();
+            const workspaceRoot = this._requireKnownRoot(rawRoot);
             const result = await terminalVerb(verb, body, workspaceRoot);
 
             if (verb === 'ptyListTerminals' && result && typeof result === 'object' && this._options.getKanbanDatabase) {
@@ -8059,10 +8086,15 @@ export class LocalApiServer {
             const ok = !result || result.success !== false;
             res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result ?? { success: true }));
-        } catch (err) {
-            console.error(`[LocalApiServer] terminalVerb '${verb}' error:`, err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `terminal verb '${verb}' failed` }));
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            if (status >= 500) console.error(`[LocalApiServer] terminalVerb '${verb}' error:`, err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: err instanceof Error ? err.message : `terminal verb '${verb}' failed`,
+                ...(err && typeof err.code === 'string' ? { code: err.code } : {}),
+            }));
         }
     }
 
@@ -8393,7 +8425,10 @@ export class LocalApiServer {
             // /kanban/verb/*, /mission-control/verb/*, /agent-control/verb/* —
             // so the removal un-strips all three. A board drag never sends the
             // flag, so board semantics are unchanged for callers that omit it.
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const rawRoot = body?.workspaceRoot !== undefined && body?.workspaceRoot !== null
+                ? String(body.workspaceRoot).trim()
+                : (this._options.workspaceRoot || '').trim();
+            const workspaceRoot = this._requireKnownRoot(rawRoot);
 
             // For the dispatch verb, capture the append-only event baseline
             // BEFORE firing so the response can carry the same outcome
@@ -8435,10 +8470,15 @@ export class LocalApiServer {
             const ok = !result || result.success !== false;
             res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result ?? { success: true }));
-        } catch (err) {
-            console.error(`[LocalApiServer] kanbanVerb '${verb}' error:`, err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `kanban verb '${verb}' failed` }));
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            if (status >= 500) console.error(`[LocalApiServer] kanbanVerb '${verb}' error:`, err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: err instanceof Error ? err.message : `kanban verb '${verb}' failed`,
+                ...(err && typeof err.code === 'string' ? { code: err.code } : {}),
+            }));
         }
     }
 
@@ -10457,10 +10497,18 @@ export class LocalApiServer {
         }
 
         const { ProtocolService } = require('./ProtocolService');
-        // Scoped through the same accessor every other read endpoint uses, so a
-        // `?workspaceRoot=` query resolves the right store rather than 404-ing on
-        // workspace scoping.
-        const db = await this._resolveDbFromQuery(req);
+        let db: any;
+        try {
+            db = await this._resolveDbFromQuery(req);
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: err instanceof Error ? err.message : 'failed to resolve database',
+                ...(err && typeof err.code === 'string' ? { code: err.code } : {}),
+            }));
+            return;
+        }
         const resolved = await ProtocolService.resolveProtocol(protocolName, this._options.workspaceRoot, db || undefined);
         if (!resolved) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -10651,10 +10699,14 @@ export class LocalApiServer {
             const result = await db.upsertPlanWriteSets(entries);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, data: result }));
-        } catch (err) {
-            console.error('[LocalApiServer] _handlePostDispatchWriteSets error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'write-set upsert failed' }));
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            if (status >= 500) console.error('[LocalApiServer] _handlePostDispatchWriteSets error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: err instanceof Error ? err.message : 'write-set upsert failed',
+                ...(err && typeof err.code === 'string' ? { code: err.code } : {}),
+            }));
         }
     }
 
@@ -10859,7 +10911,8 @@ export class LocalApiServer {
         const getKanbanDatabase = this._options.getKanbanDatabase;
         if (!getKanbanDatabase) return null;
         const url = new URL(req.url || '', `http://localhost:${this._port}`);
-        const wsRoot = url.searchParams.get('workspaceRoot') || undefined;
+        const rawRoot = url.searchParams.get('workspaceRoot');
+        const wsRoot = this._requireKnownRoot(rawRoot);
         return await getKanbanDatabase(wsRoot);
     }
 
@@ -11053,6 +11106,22 @@ export class LocalApiServer {
             error: `workspaceRoot '${given}' is not a known workspace root. Known roots: [${knownRoots.map(r => `'${r}'`).join(', ')}]. See GET /health.`,
             status: 400
         };
+    }
+
+    /**
+     * Require a known workspace root if one was supplied; if undefined or empty, returns undefined.
+     * When present, resolves to the canonical registered root spelling or throws a typed 400/503 error.
+     */
+    private _requireKnownRoot(rawRoot?: string | null): string | undefined {
+        if (!rawRoot || !rawRoot.trim()) return undefined;
+        const resolution = this._resolveKnownRoot(rawRoot.trim());
+        if ('error' in resolution) {
+            const err: any = new Error(resolution.error);
+            err.statusCode = resolution.status;
+            err.code = 'UNKNOWN_WORKSPACE_ROOT';
+            throw err;
+        }
+        return resolution.root;
     }
 
     /** Resolve the KanbanDatabase for a mutation handler, defaulting to the primary root. */

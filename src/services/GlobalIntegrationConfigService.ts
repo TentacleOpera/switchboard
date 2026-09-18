@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { stateFile } from '../utils/stateHome';
 import { parseCustomAgents, DEFAULT_VISIBLE_AGENTS } from './agentConfig';
+import { resolveCliInvocationForMachine } from '../utils/cliPathToken';
 
 export interface GlobalConfig {
     migrationComplete?: boolean;
@@ -637,6 +638,37 @@ export class GlobalIntegrationConfigService {
         const globalConfig = this.loadGlobalSync();
         const machines = Array.isArray(globalConfig.agents?.machines) ? globalConfig.agents!.machines! : [];
         return machines.find(m => m && m.id === machineId) ?? (machineId === 'local' ? LOCAL_AGENT_MACHINE : undefined);
+    }
+
+    /**
+     * The CLI invocation a seat on `machineId` should be handed in prompts —
+     * local keeps the host's own resolved invocation; remote resolves the
+     * machine's configured `cliPath` or bare `switchboard` (PATH answers on the
+     * remote — right architecture by construction). This is the ONLY sanctioned
+     * way to turn a machineId into an emitted CLI command: a remote seat that
+     * received the host's absolute binary path runs a file that does not exist
+     * on its box, and the failure is silent until the seat's first callback.
+     *
+     * A non-local id whose record cannot be read resolves to bare `switchboard`
+     * and logs: the seat was spawned remote (spawn refuses unknown machines
+     * earlier), so PATH resolution on the remote is the visible-or-safe answer —
+     * emitting the host path would be the quiet wrong one.
+     */
+    public static async resolveCliInvocationForMachineId(machineId: string | null | undefined): Promise<string> {
+        if (!machineId || machineId === 'local') {
+            return resolveCliInvocationForMachine(LOCAL_AGENT_MACHINE);
+        }
+        let machine: AgentMachine | undefined;
+        try {
+            machine = await this.getMachineSync(machineId);
+        } catch (err) {
+            console.warn(`[GlobalIntegrationConfigService] machine record for '${machineId}' unreadable — resolving CLI invocation to remote-PATH 'switchboard':`, err);
+        }
+        if (!machine) {
+            console.warn(`[GlobalIntegrationConfigService] no machine record for '${machineId}' — resolving CLI invocation to remote-PATH 'switchboard' (a remote seat must never inherit the host's absolute CLI path).`);
+        }
+        const remoteShape: AgentMachine = { id: machineId, name: machineId, transport: 'ssh', transportPrefix: '' };
+        return resolveCliInvocationForMachine(machine ?? remoteShape);
     }
 
     /**
