@@ -60,13 +60,19 @@ import * as path from 'path';
  * `register-an-agent-in-any-local-terminal.md`.
  */
 export const EXTERNAL_AGENT_PULL_INSTRUCTION =
-    'You are running in a terminal Switchboard cannot push into. To receive work, pull it:\n'
-    + '1. REGISTER: POST http://127.0.0.1:<port>/agents/register with {"seat":"<your name>","role":"<role>","workspaceRoot":"<root>","cwd":"<cwd>"}. '
+    'You are running in a terminal Switchboard cannot push into. To receive work, pull it.\n'
+    + 'Every call below goes through the CLI: `node "<cliPath>" api <METHOD> <path> \'<json>\'`. '
+    + 'Do NOT make raw HTTP requests. Anything that changes state is covered by a CSRF guard — a request '
+    + 'with no `Origin`, no `Sec-Fetch-Site` and no `X-Switchboard-Client` marker is refused with '
+    + '403 `cross-site request rejected`. The CLI sets that marker; curl and hand-built fetches do not. '
+    + 'Note the shape of that failure: GET is exempt, so your polling would keep working while every '
+    + 'register and heartbeat is refused — the board looks reachable while you are not actually registered.\n'
+    + '1. REGISTER: `node "<cliPath>" api POST /agents/register \'{"seat":"<your name>","role":"<role>","workspaceRoot":"<root>","cwd":"<cwd>"}\'`. '
     + 'Save the returned token — you need it for every subsequent call.\n'
-    + '2. HEARTBEAT: POST http://127.0.0.1:<port>/agents/heartbeat with {"seat":"<your name>","token":"<token>"} every 50 seconds (≤60s).\n'
-    + '3. POLL: GET http://127.0.0.1:<port>/agents/inbox?seat=<your name>&token=<token> — returns pending dispatch items. Poll every 5-10 seconds.\n'
+    + '2. HEARTBEAT: `node "<cliPath>" api POST /agents/heartbeat \'{"seat":"<your name>","token":"<token>"}\'` every 50 seconds (≤60s).\n'
+    + '3. POLL: `node "<cliPath>" api GET "/agents/inbox?seat=<your name>&token=<token>"` — returns pending dispatch items. Poll every 5-10 seconds.\n'
     + '4. DONE: When you finish a dispatched item, report completion with the CLI — `node "<cliPath>" done` for your own work, or `node "<cliPath>" accept --plan "<planId>"` if you are a lead accepting a subtask. Do NOT POST the completion endpoints directly: they are state-changing, so the CSRF guard refuses any request without an `X-Switchboard-Client` marker, and the CLI is what sets it.\n'
-    + 'The port comes from your SWITCHBOARD STATUS line. Use http://127.0.0.1:<port> for all calls.';
+    + 'The CLI resolves the host and port itself — you do not need the port and must not probe for it.';
 
 /**
  * Every layout the terminals panel will LOAD — the keys of `LAYOUTS` in
@@ -631,7 +637,7 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
     + 'review on the same subtask twice, do not send that subtask to that seat in that same context again. '
     + 'Work down this ladder and take the first rung that applies, naming the specific defects in every dispatch: '
-    + '(1) clear that seat\'s context — POST /terminals/verb/ptyClearTerminal with {"name":"<the seat>"} — then '
+    + '(1) clear that seat\'s context — `node "<cliPath>" verb ptyClearTerminal \'{"name":"<the seat>"}\'` — then '
     + 're-dispatch the subtask to it with a prompt naming exactly what to fix; a cleared seat is a fresh attempt, '
     + 'not a third one, and you may do this once per seat per subtask; (2) hand the subtask to an idle seat on your '
     + 'team that has not worked on it, clearing it first if it holds unrelated context; (3) escalate one rung along '

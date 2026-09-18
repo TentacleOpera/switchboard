@@ -10275,8 +10275,8 @@ export class LocalApiServer {
             const message = result && result.success === false
                 ? 'Mission Control start failed: ' + (result.error || 'unknown error') + '. No terminal was seated.'
                 : result && result.mode === 'clipboard'
-                    ? 'No terminal created — clipboard mode. The /switchboard launcher prompt is returned for the caller to run; no agent was seated. Call POST /mission-control/confirm after the user answers to arm.'
-                    : 'Mission Control seated and awaiting confirmation — pre-flight interview delivered. Call POST /mission-control/confirm after the user answers to arm.';
+                    ? substituteCliPath('No terminal created — clipboard mode. The /switchboard launcher prompt is returned for the caller to run; no agent was seated. Run `node "<cliPath>" api POST /mission-control/confirm` after the user answers, to arm.')
+                    : substituteCliPath('Mission Control seated and awaiting confirmation — pre-flight interview delivered. Run `node "<cliPath>" api POST /mission-control/confirm` after the user answers, to arm.');
             res.end(JSON.stringify({
                 ...(result || { success: true }),
                 message

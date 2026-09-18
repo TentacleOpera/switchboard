@@ -11299,7 +11299,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!memberId) {
                     return {
                         success: false,
-                        error: 'No member to add — a member picker is not implemented. Add members via POST /kanban/mission/member/add with a memberId.'
+                        error: 'No member to add — a member picker is not implemented. Add members with `switchboard api POST /kanban/mission/member/add` and a memberId (the CLI sets the X-Switchboard-Client marker the CSRF guard requires; a raw POST is refused).'
                     };
                 }
                 const added = await ctx.db.addMissionMember(msg.missionId, memberId, msg.kind === 'feature' ? 'feature' : 'plan');

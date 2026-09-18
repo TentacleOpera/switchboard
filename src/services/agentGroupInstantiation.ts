@@ -4,6 +4,7 @@ import { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from './ptyLimits';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { wireSpawnedTeam, SEEDED_AGENT_GROUP, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { bootstrapTeamReportsDirectory } from './ScheduledJobsService';
+import { substituteCliPath } from '../utils/cliPathToken';
 
 /**
  * Host-agnostic core of "instantiate an agent group".
@@ -329,7 +330,7 @@ export async function writeHeadPromptFile(
 
     const content = `# Team Lead Instructions — ${headName}
 
-You lead this external team via HTTP and filesystem interfaces.
+You lead this external team through the Switchboard CLI and the filesystem.
 
 ## 1. Identity & Routing
 - **Head Name / Origin:** \`${headName}\`
@@ -340,37 +341,50 @@ ${featureId ? `- **Active Feature ID:** \`${featureId}\`\n` : ''}
 ## 2. Team Roster
 ${workerLines || '- (no worker terminals)'}
 
-## 3. Endpoint Access
+## 3. Endpoint Access — use the CLI, not raw HTTP
+
+Every call below goes through the CLI:
+
+\`\`\`bash
+node "<cliPath>" api <METHOD> <path> '<json body>'
+\`\`\`
+
+**Do not make raw HTTP requests to the board.** Anything that changes state is
+covered by a CSRF guard: a request carrying no \`Origin\`, no \`Sec-Fetch-Site\`
+and no \`X-Switchboard-Client\` marker is refused with
+\`403 {"error":"Access denied: cross-site request rejected"}\`. curl is not a
+supported client. The CLI sets that marker on every request; nothing you write
+by hand will.
+
+This failure has a shape worth recognising, because it looks like success:
+**reads keep working while every write is refused.** \`GET\` is exempt from the
+guard, so the board answers your board reads perfectly while every dispatch,
+prompt-send and queue pull 403s. A lead that concludes "the board is up, my
+call must be wrong" and starts varying the payload is chasing the wrong
+variable — the transport is the problem, not the body.
+
 ${apiPort
-    ? `Base URL: \`http://127.0.0.1:${apiPort}\` — resolved at prompt-generation time. Do not read \`.switchboard/api-server-port.txt\`.`
-    : 'Base URL: `http://127.0.0.1:<port>` — probe `GET /health` on ports 7777-7780 and take the one whose `roots` array contains this workspace root. The Switchboard host binds the first free port in that range.'}
+    ? `The host is on port ${apiPort}, resolved at prompt-generation time, and the CLI finds it itself. Do not read \`.switchboard/api-server-port.txt\`.`
+    : 'The CLI resolves the host and port itself — you do not probe for it.'}
 
 ## 4. Work Dispatch & Communication
-- **Dispatch subtask to worker:** \`POST /kanban/dispatch\`
-  \`\`\`json
-  {
-    "plan": "<subtaskPlanId>",
-    "targetColumn": "<CODING_COLUMN>",
-    "from": "${headName}"
-  }
+- **Dispatch subtask to worker:**
+  \`\`\`bash
+  node "<cliPath>" api POST /kanban/dispatch '{"plan":"<subtaskPlanId>","targetColumn":"<CODING_COLUMN>","from":"${headName}"}'
   \`\`\`
-- **Send prompt to worker terminal:** \`POST /terminals/verb/ptySendPrompt\`
-  \`\`\`json
-  {
-    "name": "<workerFriendlyName>",
-    "data": "<prompt content>",
-    "clearBeforePrompt": false
-  }
+- **Send prompt to worker terminal:**
+  \`\`\`bash
+  node "<cliPath>" api POST /terminals/verb/ptySendPrompt '{"name":"<workerFriendlyName>","data":"<prompt content>","clearBeforePrompt":false}'
   \`\`\`
 
 ## 5. Board Reads & Status Check
-- **Read full board:** \`GET /kanban/board\`
-- **List features (yours is \`${featureId || '<featureId>'}\`):** \`GET /kanban/features\`
-- **Read one plan:** \`GET /kanban/plan?planId=<planId>\`
-- **Read plans:** \`GET /kanban/plans\`
+- **Read full board:** \`node "<cliPath>" api GET /kanban/board\`
+- **List features (yours is \`${featureId || '<featureId>'}\`):** \`node "<cliPath>" api GET /kanban/features\`
+- **Read one plan:** \`node "<cliPath>" api GET "/kanban/plan?planId=<planId>"\`
+- **Read plans:** \`node "<cliPath>" api GET /kanban/plans\`
 
 There is no \`GET /kanban/feature\` — \`/kanban/feature\` is POST-only (feature creation).
-Read features with \`GET /kanban/features\` and pick yours out of the list.
+Read features with \`api GET /kanban/features\` and pick yours out of the list.
 
 ## 6. Verification Pattern
 If you share a filesystem with the Switchboard host:
@@ -379,27 +393,23 @@ git -C <worktree> rev-list --count <base>..HEAD
 git -C <worktree> diff <base>..HEAD
 \`\`\`
 
-If you are remote (reaching Switchboard through a tunnel):
-- \`GET /worktree/<worktreeId>/diff\` — full diff + commit count + commit log
-- \`GET /worktree/<worktreeId>/diff?stat=true\` — summary only
-- \`GET /teams/<teamId>/reports\` — list unclaimed worker reports
-- \`POST /teams/<teamId>/reports/claim\` — mark a report processed
+If you are remote (reaching Switchboard through a tunnel) — the CLI reaches a
+remote board too, so this is the same invocation, not a different transport:
+- \`node "<cliPath>" api GET "/worktree/<worktreeId>/diff"\` — full diff + commit count + commit log
+- \`node "<cliPath>" api GET "/worktree/<worktreeId>/diff?stat=true"\` — summary only
+- \`node "<cliPath>" api GET /teams/${teamId}/reports\` — list unclaimed worker reports
+- \`node "<cliPath>" api POST /teams/${teamId}/reports/claim '{"filename":"<report>.md"}'\` — mark a report processed (bare filename, no path separators)
 
 Do not rely on worker self-reports alone; inspect the actual git commits.
 
 ## 7. Triggering Review
-${canAdvanceToReview ? `Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. Your ONLY card action is the POST /kanban/dispatch call below.
+${canAdvanceToReview ? `Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. Your ONLY card action is the \`/kanban/dispatch\` call below.
 
 When every subtask of feature \`${featureId}\` is complete and verified:
 1. Commit all changes once, as the team's head — do not commit after each subtask.
 2. Advance to review — the feature card, and only the feature card:
-\`\`\`json
-POST /kanban/dispatch
-{
-  "plan": "${featureId}",
-  "targetColumn": "CODE REVIEWED",
-  "from": "${headName}"
-}
+\`\`\`bash
+node "<cliPath>" api POST /kanban/dispatch '{"plan":"${featureId}","targetColumn":"CODE REVIEWED","from":"${headName}"}'
 \`\`\`
 *(Do not use /kanban/move for review handoff; /kanban/dispatch triggers the reviewer).*
 
@@ -412,7 +422,7 @@ When your work is complete and verified:
 2. Report completion (section 4) and stop. Mission Control owns the transition
    to CODE REVIEWED and will dispatch a reviewer.
 
-Do NOT POST /kanban/dispatch with a \`targetColumn\`, and do NOT POST
+Do NOT call /kanban/dispatch with a \`targetColumn\`, and do NOT call
 /kanban/move. Advancing a card you were not given a reviewer for puts it in a
 column no one is watching: the board reports it as reviewed, the review never
 happens, and the next "dispatch what is coded" instruction silently picks up
@@ -420,11 +430,8 @@ something else.`}
 
 ## 8. Pull Next Feature (Lead-Paced Pipeline)
 When the reviewer reports the feature has passed review, pull the next staged feature:
-\`\`\`json
-POST /kanban/queue/next
-{
-  "from": "${headName}"
-}
+\`\`\`bash
+node "<cliPath>" api POST /kanban/queue/next '{"from":"${headName}"}'
 \`\`\`
 - If a card is returned in \`dispatched\`, begin working on its subtasks.
 - If \`dispatched: null\` (\`reason: "queue empty"\`), report that the queue is empty and stop.
@@ -433,13 +440,17 @@ POST /kanban/queue/next
 ## 9. Tick Loop (Schedule / Periodic Wake)
 On each wake (or when notified by a background watcher):
 1. Read this file (\`.switchboard/teams/${teamId}/head-prompt.md\`) to re-orient.
-2. Read incoming reports in \`.switchboard/teams/${teamId}/reports/\` (or \`GET /teams/${teamId}/reports\` if remote).
-3. Process each report, verify with git (or \`GET /worktree/<worktreeId>/diff\` if remote), and move processed reports to \`.switchboard/teams/${teamId}/reports/claimed/\` (or \`POST /teams/${teamId}/reports/claim\` if remote).
+2. Read incoming reports in \`.switchboard/teams/${teamId}/reports/\` (or \`api GET /teams/${teamId}/reports\` if remote).
+3. Process each report, verify with git (or \`api GET "/worktree/<worktreeId>/diff"\` if remote), and move processed reports to \`.switchboard/teams/${teamId}/reports/claimed/\` (or \`api POST /teams/${teamId}/reports/claim\` if remote).
 4. Dispatch new subtasks to available workers.
-5. If the feature is complete and reviewed, pull the next feature via \`POST /kanban/queue/next\`.
+5. If the feature is complete and reviewed, pull the next feature via \`api POST /kanban/queue/next\`.
 `;
 
-    await fs.promises.writeFile(filePath, content, 'utf8');
+    // Substituted before it is written, NOT at read time: this file is handed to
+    // an external lead as a runnable manual, and an unresolved `<cliPath>` in it
+    // is exactly as unrunnable as the raw-HTTP form it replaced. Both composition
+    // roots wire the seam (`setBundledCliPath`).
+    await fs.promises.writeFile(filePath, substituteCliPath(content), 'utf8');
     return filePath;
 }
 

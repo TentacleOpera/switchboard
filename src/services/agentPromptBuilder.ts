@@ -1845,7 +1845,7 @@ const CODE_TOUCHING_ROLES = new Set(['planner', 'lead', 'coder', 'intern', 'revi
  * exception (POST /kanban/move on a destination/goal change) is carved out inside
  * the rule text itself so it travels with the prohibition.
  */
-const CARD_MOVE_RULE = `KANBAN COLUMN TRANSITIONS: the system moves cards automatically as work progresses — never move a card yourself (no SQL, no move-card.js, no manual board edit). Moving a card yourself races the system and can drop or duplicate it. THE ONE EXCEPTION: a reviewer escalating a destination or goal change returns the card via POST /kanban/move — that is the sanctioned escalation path, not an unsanctioned move.`;
+const CARD_MOVE_RULE = `KANBAN COLUMN TRANSITIONS: the system moves cards automatically as work progresses — never move a card yourself (no SQL, no move-card.js, no manual board edit). Moving a card yourself races the system and can drop or duplicate it. THE ONE EXCEPTION: a reviewer escalating a destination or goal change returns the card via \`switchboard api POST /kanban/move\` — that is the sanctioned escalation path, not an unsanctioned move. Reach it through the CLI, never as a raw HTTP POST: the endpoint is state-changing, so a request with no \`X-Switchboard-Client\` marker is refused by the CSRF guard.`;
 const CARD_MOVE_ROLES = new Set(['planner', 'coder', 'intern', 'reviewer', 'tester']);
 
 /**
@@ -2229,11 +2229,14 @@ UNATTENDED IMPROVER CONTRACT:
         const cliRef = options?.cliInvocation || (options?.cliPath ? formatCliInvocation(options.cliPath) : 'switchboard');
         // `/kanban/move` has no verb-rail equivalent (`moveCardForward` /
         // `moveCardBackwards` take a sessionIds array, not a planId), so the
-        // escalation stays on the REST route. The base comes from the injected
-        // port, never from the port file.
-        const moveRef = (options?.apiPort && options.apiPort > 0)
-            ? `POST http://127.0.0.1:${options.apiPort}/kanban/move`
-            : `POST /kanban/move against the API base named in your SWITCHBOARD STATUS line`;
+        // escalation stays on the REST route — but it is reached through the
+        // CLI's `api` subcommand, never as a raw POST. `/kanban/move` is
+        // state-changing, so a hand-built request carrying no
+        // `X-Switchboard-Client` marker is refused by the CSRF guard with a 403,
+        // and the reviewer's one sanctioned escalation path would fail at the
+        // moment it is used. The CLI resolves the host itself, so the injected
+        // port is no longer part of the instruction.
+        const moveRef = `${cliRef} api POST /kanban/move`;
         const fixStep = isDelegationActive
             ? `For valid CRITICAL/MAJOR findings: if your diagnosed fix set totals under approximately 100 lines of change, apply the fixes directly yourself. If the set is larger, broad, or parallelisable, send fix instructions to your coder at ${reviewerCoderTerminal} via ${cliRef} verb ptySendPrompt '{"name":"${reviewerCoderTerminal}","data":"<fix instructions>","clearBeforePrompt":false,"seatBlock":false}'. For each delegated finding: name the file and the issue. For mechanical fixes (compile errors, type issues, missing imports), specify the exact fix — the compiler is a shared oracle. For judgment calls (design decisions, which artifact is wrong, test policy), describe the problem and your reasoning — let the coder choose the fix. You will re-review their diff regardless. Tell the coder to run verification checks (typecheck/tests as applicable) and include results in their report. If the fix set grows beyond ~100 lines during implementation, switch to delegating the remaining fixes to your coder.`
             : `Apply code fixes for valid CRITICAL/MAJOR findings.`;
