@@ -315,3 +315,63 @@ test('fetchTerminalList gates the subsequent re-seat on live-member-count change
    - Manually drag a terminal to a different pane slot.
    - Wait 10 s (two poll cycles).
    - **Expected:** the drag is preserved. The re-seat does not fire because the live member count has not changed.
+
+## Review Findings
+
+Files changed: `src/webview/terminals.js` — roster sizing in `layoutForGroupSwitch` (:4466-4481), the gated re-seat in `fetchTerminalList` (:2558-2585), the `lastSeatedLiveCount` tracker (:151, now stamped in `seatActiveGroupPage` at :4154) — and three new tests in `src/test/terminal-sidebar-groupings-contract.test.js`. **Fix #1 is unreachable and does not change behaviour for any group** (see CRITICAL below), so the plan's headline goal — a team grid sized for the full roster on first click — is not achieved; fix #2 does land and is correct. One MAJOR was fixed during review: the re-seat gate was stamped only in `fetchTerminalList`, leaving it stale after `switchToGroup` and the layout picker (both seat without touching it), so the first poll after a group switch re-seated and wiped the manual pane drag the gate exists to protect — the count is now recorded inside `seatActiveGroupPage`, the one seam every seating path runs through. `npm run compile-tests` is clean and `terminal-sidebar-groupings` is 51 passed / 5 failed, with all 5 failures reproduced unchanged at the parent commit `47c1deca^` (pre-existing, unrelated stale source-text markers).
+
+## Deferred Findings
+
+- CRITICAL `src/webview/terminals.js:4480` — the roster-sizing fallback in `layoutForGroupSwitch` is dead code on every possible input, so fix #1 is a no-op. `getStoredGroupLayout` (:4445) returns `group.layout` for any `source === 'manual'` group and short-circuits before the fallback; every spawned team is `source: 'manual'` with `layout` always written (`src/services/teamWiring.ts:1769-1773`, merge at :1800-1807), both panel load paths drop rows whose layout is not a `LAYOUT_MODE` (:2245, :2458-2461), and `ManualGroupStore` always writes `source: 'manual'` plus `layout: group.layout || '1'` (`src/services/ManualGroupStore.ts:68-72`). The only groups that reach the fallback are derived `role`/`worktree` groups, whose literals (:4305-4327) carry no `order` and no `members`, so `rosterSize` is 0 and `Math.max(0, live)` is identical to the previous expression. Escalated — see **Review Deviations**.
+- CRITICAL `src/webview/terminals.js:4200` — the plan's root cause is superseded. `seatActiveGroupPage` already seats a manual/team group by `group.order` with `null` holds for not-yet-live members (:4177-4198, landed in `cb3da221`), so the stale-fleet seating defect the plan describes was fixed before this work. The residual "Showing 1-2 of 4" symptom is produced entirely by `getSlotCount(effectiveLayout)` — i.e. by `group.layout` being smaller than the roster, which happens when a team grows and `teamWiring`'s merge preserves the older `existing.layout`. Escalated — see **Review Deviations**.
+- MAJOR `src/webview/terminals.js:910` — `group.layout` is written both by `layoutForTeamSize` (auto-assigned) and by the operator's layout picker, with no field distinguishing them. This is the `CLAUDE.md` "a fallback must never be indistinguishable from a real value" shape on a configuration read, and it is why the CRITICAL above cannot be fixed without an author decision.
+- NIT `src/webview/terminals.js:2582` — a member-set change with no count change (one member exits as another spawns) still does not trigger a re-seat. Documented and accepted in the plan.
+- NIT `src/webview/terminals.js:2579` — the gate calls `getAllGroups()` on every poll, which rebuilds derived groups over the whole fleet. Cheap today, but it is per-5s work on the Pi.
+
+### Review Deviations
+
+*Inert prose for the author — not a directive to a future agent.*
+
+**What I changed:** nothing about the plan's destination. I implemented no override of the stored layout, and left fix #1 in place as written.
+
+**Why the original destination is a blocker:** the plan sites its primary fix in `layoutForGroupSwitch`'s `smallestLayoutFitting` fallback, but that fallback is unreachable for every group that has a roster (evidence chain in the CRITICAL entries above). A spawned team always carries a valid `group.layout`, so `getStoredGroupLayout` answers first and the new roster code never runs. The plan's own Edge-Case note 9 and Verification step 5 explicitly require the stored layout to be honoured, which means the one change that *would* make the sizing follow the roster — flooring the stored layout at the roster size — is ruled out by the plan itself. The two requirements are not jointly satisfiable, so no implementation in this location can achieve the goal.
+
+**What the author needs to decide:** whether a team's `group.layout` may be floored at its roster size when the stored layout has fewer slots than the team has members. That is a real behaviour change: because the layout picker writes `group.layout` for manual groups (`terminals.js:910`), the same field carries both the auto-assigned team size and a deliberate operator choice, and they are indistinguishable. Flooring would therefore also override an operator who deliberately picked a smaller grid for a large team — reversing Verification step 5. If the answer is yes, the durable fix is probably to separate the auto-assigned team layout from the operator-authored one (e.g. keep the picker's choice in `groupPrefs.layouts[id]` for team groups too, as derived groups already do) so the floor applies only to the auto value. That is a larger change than this subtask scoped, which is why it is returned rather than decided here.
+
+## Resolution — author decision, implemented
+
+The escalation above was answered by the author: the two requirements were never in
+conflict, they were two preferences sharing one field. The fix is an **AUTO option in
+the layout picker**, on by default for new teams.
+
+- `AUTO_LAYOUT = 'auto'` is now a storable layout *preference*, distinct from the
+  rendered modes (`src/webview/terminals.js:2013`, `STORABLE_GROUP_LAYOUTS` at :2042).
+  `'auto'` means "size this group to its roster"; a concrete mode means "cap it here".
+  `layoutForGroupSwitch` (:4523) returns a concrete stored mode outright and falls
+  through to the roster fallback on `'auto'` — which is what finally makes the roster
+  code from this plan **reachable**.
+- The picker gained an AUTO button (`terminals.html:173`), a store/read pair
+  (`setStoredGroupLayout` :4507 mirroring `getStoredGroupLayout` :4491), and an active
+  state driven by the stored preference rather than `currentLayout`
+  (`syncLayoutPickerUI` :6177). AUTO is disabled when no group is locked — there is
+  nothing to store it against.
+- New teams register `layout: 'auto'` (`src/services/teamWiring.ts:1758`) and the merge
+  preserves a stored `'auto'` via the new `TERMINALS_STORABLE_LAYOUTS` (:98). The
+  spawn-time sizer `layoutForTeamSize` and its `TEAM_LAYOUT_LADDER` are removed — nothing
+  picks a concrete mode for a team any more.
+- Both load-time whitelists now validate against `STORABLE_GROUP_LAYOUTS` (:2289, :2506).
+  This was the sharp edge: had they kept filtering on `LAYOUT_MODES`, every auto group
+  would have been dropped from the board with no error anywhere.
+
+Verification: `npm run compile-tests` clean; `terminal-sidebar-groupings` 59 passed / 5
+failed and `standing-orders-marker` 11 failed, both failure sets **byte-identical to the
+parent commit `47c1deca^`**; 13 further team/group suites clean. The new coverage is
+behavioural where it matters — `makeLayoutResolver` lifts the real `getStoredGroupLayout`
+and `layoutForGroupSwitch` out of the panel and runs them against a real team-group shape,
+because source-text assertions are exactly what failed to catch the original dead code.
+
+**Open decision for the author:** existing team rows are **not** rewritten to `'auto'`.
+Their stored layout may be a real operator choice and there is no way to tell after the
+fact, so migrating would destroy user data to fix a default. Existing teams keep today's
+behaviour until someone clicks AUTO. If you would rather they all flip, it is a one-line
+migration in `loadLayoutSettings` — say so and it is a small follow-up.

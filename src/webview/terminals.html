@@ -170,6 +170,14 @@
                      verb call, so something must be highlighted on the first frame. terminals.js
                      calls syncLayoutPickerUI() once the persisted layout resolves. Do not remove
                      this class, and do not add `active` to any other button. -->
+                <!-- AUTO is a PREFERENCE, not a grid: it stores "size this group to its
+                     roster" against the locked group, and the concrete mode is resolved
+                     from the membership each time the group is entered. It is inert with
+                     no group locked — there is nothing to store it against — and
+                     syncLayoutPickerUI disables it there rather than letting a click
+                     land silently. -->
+                <button type="button" class="btn-layout" data-layout="auto"
+                        title="Size this group's grid to its roster — grows and shrinks with the membership">AUTO</button>
                 <button type="button" class="btn-layout active" data-layout="1">1</button>
                 <button type="button" class="btn-layout" data-layout="2h" title="Two vertical terminals, side by side">2V</button>
                 <button type="button" class="btn-layout" data-layout="2v" title="Two horizontal terminals, stacked">2H</button>

@@ -202,3 +202,13 @@ Also update the comment at line 7344 to reflect the hybrid behaviour:
 
 ## Outstanding Questions
 - **[user]** Is the hybrid semantics acceptable? When `plannerTerminalCount = 1`, pressing Start Grid reuses an existing planner (top-up). When `plannerTerminalCount > 1`, it creates N new planners (batch). This is deliberate but creates two different behaviours for the same setting depending on its value. — proceeding on the assumption that this hybrid is acceptable since count=1 with top-up avoids creating a redundant second planner, while count>1 with batch-create matches the "give me a grid of N" intent.
+
+## Review Findings
+
+Files changed: `src/extension.ts` (max-planner-number scan at :3625, loop offset at :3637) and `src/webview/terminals.js` (`plannedTotal` at :10441, `missing` at :10459), plus the new `src/test/terminal-grid-planner-count-contract.test.js`. Both paths were verified to implement the corrected max-based (not count-based) offset, and `plannedTotal` uses the identical planner rule as `missing`, so `growLayoutForFleet` is sized for what is actually created. Caller audit found no regression: the worktree branch consumes `agents.map(a => a.role)` so the expanded list flows through unchanged, `clearGridBlockers` only disposes exited/duplicate terminals and cannot reclaim a name in the new range, and non-planner roles keep `count - live` top-up. `npm run test:contract:terminal-grid-planner-count` passes 9/9, `npm run compile-tests` is clean, and the gate is invoked by CI at `.github/workflows/integration-tests.yml:1487`.
+
+## Deferred Findings
+
+- NIT `src/webview/terminals.js:10444` — `growLayoutForFleet` caps at `3x3` (9 slots), so batch-creating 5 planners onto an already-populated fleet overflows the grid more often than before and surfaces the "could not be seated" toast. Behaviour is correct (terminals exist, just unseated) but the toast will be seen more.
+- NIT `src/extension.ts:3637` / `src/webview/terminals.js:10459` — the hybrid semantics (`plannerCount === 1` tops up, `> 1` batch-creates) and "Start Grid twice with 4 gives 8 planners" were both confirmed in the plan's User Review checkboxes; recorded here only so the divergence is discoverable from the code.
+- NIT `src/extension.ts:3628` — the planner-name regex is a second, standalone copy of `matchesGridAgentName`'s pattern. The duplication is justified in-comment (declaration order) but the two can now drift independently.

@@ -513,13 +513,26 @@ test('the layout picker authors the locked group\'s layout and re-pages it', () 
     // shared !opts.keepLock guard instead would leave create-grid holding a lock
     // it then fights with fillEmptyPanes().
     const handler = block(terminalsJs, "const layoutBtns = document.querySelectorAll('.layout-picker .btn-layout');", 'const btnClearAll =');
+    // Both stores now go through setStoredGroupLayout, the mirror of
+    // getStoredGroupLayout — so the picker and the reader can no longer disagree
+    // about where a group keeps its preference. Assert the seam here and its two
+    // destinations at the seam itself.
     assert.ok(
-        /groupPrefs\.layouts\[group\.id\] = requested/.test(handler),
+        /setStoredGroupLayout\(group, requested\)/.test(handler),
+        'the picker must store the pick through setStoredGroupLayout'
+    );
+    const store = block(terminalsJs, 'function setStoredGroupLayout(group, value) {', 'function layoutForGroupSwitch(');
+    assert.ok(
+        /groupPrefs\.layouts\[group\.id\] = value/.test(store),
         'a derived group\'s picked layout must be stored in groupPrefs.layouts'
     );
     assert.ok(
-        /group\.layout = requested/.test(handler),
+        /group\.layout = value/.test(store),
         'a manual group\'s picked layout must be stored on the group object'
+    );
+    assert.ok(
+        /STORABLE_GROUP_LAYOUTS\.includes\(value\)/.test(store),
+        'the writer must reject a value the reader would not accept back'
     );
     assert.ok(
         /setLayoutMode\(requested, \{ keepLock \}\)/.test(handler),
@@ -529,9 +542,21 @@ test('the layout picker authors the locked group\'s layout and re-pages it', () 
     // test is false and its own seatActiveGroupPage() does not fire. Without an
     // explicit re-page, growing 2h -> 2x2 for a 4-member group reveals two empty
     // panes the group already has members to fill.
+    //
+    // Sliced from each setLayoutMode call rather than searched across the whole
+    // handler: the AUTO branch has its own setLayoutMode/seat pair and sits ABOVE the
+    // concrete branch, so a whole-handler indexOf compares AUTO's seat against the
+    // concrete branch's layout call and passes no matter how either is ordered.
+    const concreteBranch = handler.slice(handler.indexOf('setLayoutMode(requested'));
     assert.ok(
-        handler.indexOf('seatActiveGroupPage()') > handler.indexOf('setLayoutMode(requested'),
+        concreteBranch.includes('seatActiveGroupPage()'),
         'the picker must re-page the locked group AFTER applying the layout'
+    );
+    const autoBranch = handler.slice(handler.indexOf('setLayoutMode(layoutForGroupSwitch(group)'));
+    assert.ok(
+        autoBranch.indexOf('seatActiveGroupPage()') !== -1
+        && autoBranch.indexOf('seatActiveGroupPage()') < autoBranch.indexOf('setLayoutMode(requested'),
+        'the AUTO branch must re-page after resolving the roster layout, before the concrete branch'
     );
     // The grow-only resolver must keep its own callers and its ratchet.
     const grow = block(terminalsJs, 'function growLayoutForFleet(count) {', 'async function loadSetting(');
@@ -1126,6 +1151,174 @@ test('fetchTerminalList gates the subsequent re-seat on live-member-count change
     assert.ok(
         /let lastSeatedLiveCount = -1;/.test(terminalsJs),
         'lastSeatedLiveCount must be declared as module state initialised to -1 (never seated)'
+    );
+});
+
+test('the seated live count is stamped by seatActiveGroupPage, not by the fetch call site', () => {
+    // switchToGroup and the layout picker also seat. A tracker stamped only in
+    // fetchTerminalList is stale the moment either runs, so the next poll sees a
+    // count it never seated, re-seats, and wipes the manual pane drag the gate
+    // exists to protect. Stamping it in the one seam every path runs through is
+    // what makes the gate mean what its comment claims.
+    const seat = block(terminalsJs, 'function seatActiveGroupPage(', 'function safeGroupIdForValue(');
+    assert.ok(
+        /lastSeatedLiveCount = members\.length;/.test(seat),
+        'seatActiveGroupPage must record lastSeatedLiveCount for every seating path'
+    );
+    const fetchFn = block(terminalsJs, 'async function fetchTerminalList(', 'function checkSoloNotFound(');
+    assert.ok(
+        !/lastSeatedLiveCount\s*=/.test(fetchFn),
+        'fetchTerminalList must only READ lastSeatedLiveCount — assigning it there re-introduces the stale-gate hole'
+    );
+});
+
+// ---------------------------------------------------------------- auto layout preference
+
+/**
+ * Lift the real getStoredGroupLayout + layoutForGroupSwitch out of terminals.js and
+ * run them.
+ *
+ * Source-text assertions could not have caught what went wrong here the first time:
+ * the roster-sizing fallback was added, read correctly, matched every regex — and was
+ * unreachable, because getStoredGroupLayout answered first for every group that HAS a
+ * roster. The code was present and dead. Only executing it against a real team-group
+ * shape distinguishes "the fallback exists" from "the fallback runs".
+ */
+function makeLayoutResolver(groupPrefsLayouts) {
+    const src = block(terminalsJs, '    function getStoredGroupLayout(group) {', '    function findGroupForTerminalName(');
+    const factory = new Function('deps', `
+        const LAYOUT_MODES = deps.LAYOUT_MODES;
+        const AUTO_LAYOUT = deps.AUTO_LAYOUT;
+        const STORABLE_GROUP_LAYOUTS = deps.STORABLE_GROUP_LAYOUTS;
+        const groupPrefs = deps.groupPrefs;
+        const getGroupMembers = deps.getGroupMembers;
+        const smallestLayoutFitting = deps.smallestLayoutFitting;
+        ${src}
+        return { getStoredGroupLayout, setStoredGroupLayout, layoutForGroupSwitch };
+    `);
+    // Slot-ascending, mirroring LAYOUT_GROW_ORDER. Returns the count itself would hide
+    // an off-by-one, so this returns the real mode names the panel renders.
+    const LADDER = [['1', 1], ['2h', 2], ['1x3', 3], ['2x2', 4], ['2x3', 6], ['3x3', 9]];
+    return factory({
+        LAYOUT_MODES: ['1', '2h', '2v', '1x3', '2x2', '2x3', '3x3'],
+        AUTO_LAYOUT: 'auto',
+        STORABLE_GROUP_LAYOUTS: ['auto', '1', '2h', '2v', '1x3', '2x2', '2x3', '3x3'],
+        groupPrefs: { layouts: groupPrefsLayouts || {} },
+        getGroupMembers: (g) => (g.__live || []),
+        smallestLayoutFitting: (n) => (LADDER.find(([, slots]) => slots >= n) || ['3x3'])[0],
+    });
+}
+
+// A spawned team as teamWiring actually persists it: source 'manual', a full roster in
+// order/members, and only two of the four live because the fleet poll has not caught up.
+function teamGroup(layout) {
+    return {
+        id: 'team_lead_1', name: 'lead-1', source: 'manual', layout,
+        members: ['lead-1', 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-intern'],
+        order: ['lead-1', 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-intern'],
+        __live: ['lead-1', 'lead-1-coder-1'],
+    };
+}
+
+test("auto: a team on 'auto' sizes to its full roster, not to the live subset", () => {
+    const r = makeLayoutResolver();
+    assert.strictEqual(
+        r.layoutForGroupSwitch(teamGroup('auto')), '2x2',
+        'a 4-member team must open on 4 panes even with 2 members live — this is the reported bug'
+    );
+});
+
+test('auto: a concrete stored mode is a cap and still wins outright', () => {
+    const r = makeLayoutResolver();
+    assert.strictEqual(
+        r.layoutForGroupSwitch(teamGroup('2h')), '2h',
+        'an operator who picked 2h for a 4-member team keeps 2h and pages'
+    );
+    assert.strictEqual(
+        r.layoutForGroupSwitch(teamGroup('2v')), '2v',
+        "'2v' is the mode only a human can have authored — it must never be re-derived"
+    );
+});
+
+test('auto: the preference round-trips for manual and derived groups alike', () => {
+    const prefs = {};
+    const r = makeLayoutResolver(prefs);
+    const manual = teamGroup('2x3');
+    r.setStoredGroupLayout(manual, 'auto');
+    assert.strictEqual(manual.layout, 'auto', 'a manual group carries the preference on the row');
+    assert.strictEqual(r.getStoredGroupLayout(manual), 'auto');
+    assert.strictEqual(r.layoutForGroupSwitch(manual), '2x2', 'and the grid follows the roster immediately');
+
+    const derived = { id: 'dg_role_planner', source: 'role', __live: ['p1', 'p2', 'p3'] };
+    r.setStoredGroupLayout(derived, 'auto');
+    assert.strictEqual(prefs['dg_role_planner'], 'auto', 'a derived group keeps it in groupPrefs.layouts');
+    assert.strictEqual(
+        r.layoutForGroupSwitch(derived), '1x3',
+        'a derived group has no authored roster, so auto sizes to its live membership'
+    );
+});
+
+test('auto: a derived group with no stored preference is unchanged', () => {
+    const r = makeLayoutResolver();
+    const derived = { id: 'dg_role_coder', source: 'role', __live: ['c1', 'c2'] };
+    assert.strictEqual(r.getStoredGroupLayout(derived), null);
+    assert.strictEqual(r.layoutForGroupSwitch(derived), '2h', 'no preference behaves exactly as before');
+});
+
+test("auto: an unknown stored layout is rejected rather than trusted", () => {
+    const r = makeLayoutResolver();
+    assert.strictEqual(
+        r.getStoredGroupLayout(teamGroup('9x9')), null,
+        'a hand-edited or stale layout id must not reach setLayoutMode'
+    );
+    assert.strictEqual(r.layoutForGroupSwitch(teamGroup('9x9')), '2x2', 'and the roster sizes it instead');
+});
+
+test("auto: the stored-layout whitelists accept 'auto' or every auto group vanishes", () => {
+    // loadLayoutSettings and reloadTerminalGroups DROP any group whose layout fails
+    // their filter. Validating a stored 'auto' against the rendered modes would delete
+    // every auto team from the board silently, which is why both filters must name the
+    // storable set.
+    const load = block(terminalsJs, 'const savedGroups = await loadSetting(\'terminals.groups\', []);', 'await fetchManualGroups();');
+    assert.ok(
+        /STORABLE_GROUP_LAYOUTS\.includes\(g\.layout\)/.test(load),
+        'loadLayoutSettings must validate a stored group layout against STORABLE_GROUP_LAYOUTS'
+    );
+    const reload = block(terminalsJs, 'async function reloadTerminalGroups(', 'async function fetchTerminalList(');
+    assert.ok(
+        /STORABLE_GROUP_LAYOUTS\.includes\(g\.layout\)/.test(reload),
+        'reloadTerminalGroups must validate a stored group layout against STORABLE_GROUP_LAYOUTS'
+    );
+    assert.ok(
+        /const STORABLE_GROUP_LAYOUTS = \[AUTO_LAYOUT, \.\.\.LAYOUT_MODES\];/.test(terminalsJs),
+        'STORABLE_GROUP_LAYOUTS must be a strict superset of LAYOUT_MODES'
+    );
+});
+
+test("auto: 'auto' can never become a rendered layout", () => {
+    // setLayoutMode is the only writer of currentLayout/effectiveLayout. Its guard must
+    // stay on LAYOUT_MODES: 'auto' names no grid, and a .pane-grid.layout-auto class
+    // matches no CSS rule, so a leak here renders an empty panel.
+    const setMode = block(terminalsJs, 'function setLayoutMode(mode, opts = {}) {', 'function locateTerminal(');
+    assert.ok(
+        /if \(!LAYOUT_MODES\.includes\(mode\)\) return;/.test(setMode),
+        'setLayoutMode must keep the rendered-mode guard, not widen it to the storable set'
+    );
+});
+
+test('auto: the picker offers AUTO and disables it with no group to store it against', () => {
+    assert.ok(
+        /data-layout="auto"/.test(terminalsHtml),
+        'the layout picker must expose an AUTO button'
+    );
+    const sync = block(terminalsJs, 'function syncLayoutPickerUI() {', 'function setLayoutMode(');
+    assert.ok(
+        /btn\.disabled = !group;/.test(sync),
+        'AUTO must be disabled when nothing is locked — a click that silently does nothing is the defect'
+    );
+    assert.ok(
+        /getStoredGroupLayout\(group\) === AUTO_LAYOUT/.test(sync),
+        'the AUTO button must light from the stored preference, not from currentLayout'
     );
 });
 

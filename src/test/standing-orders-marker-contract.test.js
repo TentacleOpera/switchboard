@@ -1128,7 +1128,9 @@ new Function('exports', 'module', 'require', tsc.transpileModule(TEAM_WIRING_SRC
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
 }).outputText)(teamWiringModule.exports, teamWiringModule, teamWiringRequire);
 
-const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES } = teamWiringModule.exports;
+const {
+    wireSpawnedTeam, TERMINALS_LAYOUT_MODES, TERMINALS_AUTO_LAYOUT, TERMINALS_STORABLE_LAYOUTS,
+} = teamWiringModule.exports;
 
 /**
  * The panel's own layout whitelist, read out of terminals.js rather than
@@ -1145,6 +1147,31 @@ const PANEL_LAYOUT_MODES = (() => {
         .map(m => m[1]);
     assert.ok(modes.length >= 7, `terminals.js: parsed only ${modes.length} layout modes`);
     return modes;
+})();
+
+/**
+ * The panel's AUTO_LAYOUT sentinel and the full set of values it will accept as a
+ * STORED group layout.
+ *
+ * Distinct from PANEL_LAYOUT_MODES on purpose: 'auto' is a preference ("size this
+ * group to its roster"), not a grid the panel can render. The load-time whitelists
+ * in loadLayoutSettings and reloadTerminalGroups validate against the storable set,
+ * so a test that validates a written row against the RENDERED set would fail a
+ * perfectly loadable 'auto' row — and, worse, a backend that wrote 'auto' while the
+ * panel still filtered on the rendered set would drop every auto group with no error.
+ * Both sides are pinned below.
+ */
+const PANEL_AUTO_LAYOUT = (() => {
+    const m = TERMINALS_JS_SRC.match(/const AUTO_LAYOUT = '([^']+)';/);
+    assert.ok(m, 'terminals.js: `const AUTO_LAYOUT = ...` not found');
+    return m[1];
+})();
+const PANEL_STORABLE_LAYOUTS = (() => {
+    assert.ok(
+        /const STORABLE_GROUP_LAYOUTS = \[AUTO_LAYOUT, \.\.\.LAYOUT_MODES\];/.test(TERMINALS_JS_SRC),
+        'terminals.js: STORABLE_GROUP_LAYOUTS must be AUTO_LAYOUT plus LAYOUT_MODES'
+    );
+    return [PANEL_AUTO_LAYOUT, ...PANEL_LAYOUT_MODES];
 })();
 
 /**
@@ -1290,8 +1317,8 @@ test('wireSpawnedTeam: group roster first-registration append path', async () =>
     // A new row must carry a layout the panel's own validator accepts, or both
     // loadLayoutSettings and reloadTerminalGroups silently drop the group.
     assert.ok(
-        PANEL_LAYOUT_MODES.includes(groups[0].layout),
-        `append path must write a LAYOUT_MODES-valid layout, got ${JSON.stringify(groups[0].layout)}`
+        PANEL_STORABLE_LAYOUTS.includes(groups[0].layout),
+        `append path must write a layout the panel will load, got ${JSON.stringify(groups[0].layout)}`
     );
 });
 
@@ -1413,7 +1440,8 @@ test('wireSpawnedTeam: existing layout on stored row is preserved across re-runs
         }
     ]);
 
-    // Spawn 1 child — head + 1 = 2 members, so layoutForTeamSize would pick '2h'.
+    // Spawn 1 child — head + 1 = 2 members. A fresh team registers 'auto' now; the
+    // point of this case is the STORED row, which must survive untouched.
     await wireSpawnedTeam({
         db, headName: HEAD_NAME, children: [{ friendlyName: 'lead-1-coder-1' }],
     });
@@ -1426,11 +1454,10 @@ test('wireSpawnedTeam: existing layout on stored row is preserved across re-runs
 
 test("wireSpawnedTeam: an operator's '2v' survives a re-run — the ladder is not the validator", async () => {
     // '2v' is the discriminating case: it is a valid panel layout with its own
-    // button, but it is deliberately ABSENT from TEAM_LAYOUT_LADDER because a
-    // stacked pair is never auto-picked. Validating a stored layout against the
-    // ladder therefore reverts the one mode only an operator can have authored.
-    // A test pinned on '2x2' passes against both the correct and the broken
-    // implementation, which is why this one exists alongside it.
+    // button, and it is the one mode that can only have come from a human — nothing
+    // in this codebase ever auto-picks a stacked pair. A re-run that reverts it has
+    // thrown away an operator edit. A test pinned on '2x2' passes against both the
+    // correct and the broken implementation, which is why this one exists alongside it.
     const db = makeInMemoryDb();
     const groupId = 'team_' + encodeURIComponent(HEAD_NAME).replace(/[^a-zA-Z0-9_]/g, '_');
     await db.setConfigJson('switchboard.prompts.terminals.groups', [
@@ -1466,8 +1493,66 @@ test('wireSpawnedTeam: a stored layout outside the panel whitelist falls back to
 
     const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
     assert.ok(
-        PANEL_LAYOUT_MODES.includes(groups[0].layout),
+        PANEL_STORABLE_LAYOUTS.includes(groups[0].layout),
         `merged row must stay loadable, got ${JSON.stringify(groups[0].layout)}`
+    );
+});
+
+test("wireSpawnedTeam: a fresh team registers 'auto', not a size computed once at spawn", async () => {
+    // The whole point of 'auto'. A team sized at spawn froze at the pane count it had
+    // on its first day: grow it from 2 to 4 and the merge below preserves the stored
+    // '2h', so four members page through two panes forever. And because the layout
+    // picker writes the SAME field, a computed size was indistinguishable from a
+    // deliberate operator pick, so neither honouring nor ignoring it could be right.
+    const db = makeInMemoryDb();
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: [{ friendlyName: 'lead-1-coder-1' }],
+    });
+    const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(
+        groups[0].layout, PANEL_AUTO_LAYOUT,
+        'a fresh team must register the auto preference so its grid follows its roster'
+    );
+});
+
+test("wireSpawnedTeam: a stored 'auto' survives a re-run", async () => {
+    // The regression that would silently undo the feature: if the merge validates the
+    // existing layout against the RENDERED modes, 'auto' fails the check and is
+    // overwritten on the next spawn. The team then re-freezes at a computed size and
+    // nothing reports it — the grid is simply wrong again a day later.
+    const db = makeInMemoryDb();
+    const groupId = 'team_' + encodeURIComponent(HEAD_NAME).replace(/[^a-zA-Z0-9_]/g, '_');
+    await db.setConfigJson('switchboard.prompts.terminals.groups', [
+        {
+            id: groupId, name: HEAD_NAME, source: 'manual', layout: PANEL_AUTO_LAYOUT,
+            members: [HEAD_NAME, 'lead-1-coder-old'],
+            order: [HEAD_NAME, 'lead-1-coder-old'],
+        }
+    ]);
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: [{ friendlyName: 'lead-1-coder-1' }],
+    });
+    const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(groups[0].layout, PANEL_AUTO_LAYOUT, "a stored 'auto' must not be overwritten");
+});
+
+test('TERMINALS_STORABLE_LAYOUTS mirrors STORABLE_GROUP_LAYOUTS in terminals.js', () => {
+    // The two sides of one whitelist. If the backend writes a value the panel's
+    // load-time filter rejects, loadLayoutSettings and reloadTerminalGroups DROP the
+    // group — the team disappears from the board with no error anywhere.
+    assert.ok(TERMINALS_STORABLE_LAYOUTS instanceof Set, 'teamWiring must export TERMINALS_STORABLE_LAYOUTS as a Set');
+    assert.deepStrictEqual(
+        [...TERMINALS_STORABLE_LAYOUTS].sort(),
+        [...PANEL_STORABLE_LAYOUTS].sort(),
+        'the backend storable-layout whitelist must mirror the panel\'s'
+    );
+    assert.ok(
+        TERMINALS_STORABLE_LAYOUTS.has(TERMINALS_AUTO_LAYOUT),
+        'the storable set must carry the auto sentinel'
+    );
+    assert.ok(
+        !TERMINALS_LAYOUT_MODES.has(TERMINALS_AUTO_LAYOUT),
+        "'auto' is a preference, not a rendered grid — it must stay OUT of the rendered-mode set"
     );
 });
 
@@ -1502,6 +1587,7 @@ function makeReloadHarness(initialGroups, backendGroups, scopedTeamId) {
     const calls = { sidebar: 0, tabStrip: 0 };
     const factory = new Function('deps', `
         const LAYOUT_MODES = deps.LAYOUT_MODES;
+        const STORABLE_GROUP_LAYOUTS = deps.STORABLE_GROUP_LAYOUTS;
         const loadSetting = deps.loadSetting;
         const renderSidebarList = deps.renderSidebarList;
         const renderGroupTabStrip = deps.renderGroupTabStrip;
@@ -1517,6 +1603,7 @@ function makeReloadHarness(initialGroups, backendGroups, scopedTeamId) {
     `);
     const api = factory({
         LAYOUT_MODES: PANEL_LAYOUT_MODES,
+        STORABLE_GROUP_LAYOUTS: PANEL_STORABLE_LAYOUTS,
         loadSetting: async () => JSON.parse(JSON.stringify(backendGroups)),
         renderSidebarList: () => { calls.sidebar++; },
         renderGroupTabStrip: () => { calls.tabStrip++; },

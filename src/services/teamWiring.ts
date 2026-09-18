@@ -68,38 +68,19 @@ export const EXTERNAL_AGENT_PULL_INSTRUCTION =
     + 'The port comes from your SWITCHBOARD STATUS line. Use http://127.0.0.1:<port> for all calls.';
 
 /**
- * Layout sizing for a registered team group. The shipped loader
- * (`loadLayoutSettings` in terminals.js) keeps a group only when
- * `LAYOUT_MODES.includes(g.layout)`, and `switchToGroup` applies the group's
- * stored `layout` — a 4-member team registered with `'1'` resolves four
- * members into one pane. Register the smallest layout whose `slots >=
- * members.length`. `MAX_DELEGATES_PER_PARENT` is 8, so head + members can
- * reach 9 and `3x3` is the ceiling; a team larger than that clamps rather
- * than falls through to an invalid mode.
+ * Every layout the terminals panel will LOAD — the keys of `LAYOUTS` in
+ * terminals.js.
  *
- * Mirrors `LAYOUT_GROW_ORDER` in terminals.js (slot-ascending, '2v' omitted
- * — a stacked pair is a taste call, not an auto-pick).
- */
-const TEAM_LAYOUT_LADDER: ReadonlyArray<{ mode: string; slots: number }> = [
-    { mode: '1', slots: 1 },
-    { mode: '2h', slots: 2 },
-    { mode: '1x3', slots: 3 },
-    { mode: '2x2', slots: 4 },
-    { mode: '2x3', slots: 6 },
-    { mode: '3x3', slots: 9 },
-];
-/**
- * Every layout the terminals panel will LOAD — the keys of `LAYOUTS`
- * (terminals.js:1384), which is a strict SUPERSET of `TEAM_LAYOUT_LADDER`.
+ * Use this to decide whether a stored `layout` on an existing roster row names a
+ * real grid. `'2v'` is in the set and matters: it is a first-class operator choice
+ * with its own layout button that `layoutForGroupSwitch` honours, and any narrower
+ * whitelist here would revert precisely the one mode that can only have come from a
+ * human.
  *
- * Use this — never the ladder — to decide whether a stored `layout` on an
- * existing roster row is keepable. The ladder omits `'2v'` on purpose (a
- * stacked pair is never auto-picked), but `'2v'` is a first-class operator
- * choice: it has its own layout button (terminals.html:2011) and
- * `layoutForGroupSwitch` honours it. Validating an operator-authored layout
- * against the auto-pick ladder would therefore revert precisely the one mode
- * that can only have come from a human — the silently-discarded user edit this
- * plan exists to end, pointed the other way.
+ * A team is no longer sized at spawn — it registers with TERMINALS_AUTO_LAYOUT and
+ * the panel resolves the grid from the roster on every entry, so the slot ladder this
+ * file used to carry (and the `layoutForTeamSize` that walked it) is gone. Nothing
+ * here picks a concrete mode any more; it only validates one it is handed.
  *
  * Pinned to terminals.js by `standing-orders-marker-contract.test.js`.
  */
@@ -107,12 +88,24 @@ export const TERMINALS_LAYOUT_MODES: ReadonlySet<string> = new Set([
     '1', '2h', '2v', '1x3', '2x2', '2x3', '3x3',
 ]);
 
-function layoutForTeamSize(memberCount: number): string {
-    for (const rung of TEAM_LAYOUT_LADDER) {
-        if (rung.slots >= memberCount) { return rung.mode; }
-    }
-    return '3x3';
-}
+/**
+ * The panel's layout PREFERENCE sentinel: "size this group's grid to its roster".
+ * Mirrors `AUTO_LAYOUT` in terminals.js. Not a rendered layout and deliberately not
+ * a member of TERMINALS_LAYOUT_MODES, which is pinned byte-identical to the panel's
+ * `LAYOUTS` keys.
+ */
+export const TERMINALS_AUTO_LAYOUT = 'auto';
+
+/**
+ * Every layout value the panel will LOAD from a stored group row — the rendered
+ * modes plus the 'auto' preference. Use this, never TERMINALS_LAYOUT_MODES, to decide
+ * whether an existing row's `layout` is keepable: validating a stored 'auto' against
+ * the rendered modes would overwrite it with a computed size on the next spawn, which
+ * is precisely the "the team grew and the grid did not" defect 'auto' exists to end.
+ */
+export const TERMINALS_STORABLE_LAYOUTS: ReadonlySet<string> = new Set([
+    TERMINALS_AUTO_LAYOUT, ...TERMINALS_LAYOUT_MODES,
+]);
 
 /**
  * Read a team group's pacing mode. Tri-state: absent OR `'head'` → `'head'`;
@@ -1740,7 +1733,14 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     const groupMembers = opts.externalHead
         ? [...childNames]
         : [headName, ...childNames];
-    const layout = layoutForTeamSize(groupMembers.length);
+    // A fresh team defaults to AUTO: its grid follows its roster, which is what a
+    // team is. Sizing it once at spawn is what froze a grown team at its old pane
+    // count — and because the picker writes this same field, a computed size was
+    // indistinguishable from an operator who had deliberately chosen one. 'auto' is
+    // a value only this path and the picker write, so the two intents stay separable.
+    // Existing rows are NOT rewritten (see the merge below): their stored layout may
+    // be a real operator choice, and there is no way to tell after the fact.
+    const layout = TERMINALS_AUTO_LAYOUT;
     // Persisted so a reader can tell "members[0] is the head" from "the head is not a
     // seat at all". Without it the terminals panel crowns members[0] — which for an
     // external-headed team is the first CODER, since the head is excluded above.
@@ -1799,7 +1799,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                     teamGroup: true,
                     teamKind: 'spawned' as const,
                     head: headName,
-                    layout: (typeof existing.layout === 'string' && TERMINALS_LAYOUT_MODES.has(existing.layout))
+                    layout: (typeof existing.layout === 'string' && TERMINALS_STORABLE_LAYOUTS.has(existing.layout))
                         ? existing.layout
                         : layout,
                     members: groupMembers,

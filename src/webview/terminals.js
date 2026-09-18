@@ -142,9 +142,12 @@
     let activeGroupPage = 0; // transient: which page of the active group is showing
     let selectedTerminalNames = new Set(); // multi-select in the sidebar
     let restoredLockOnLoad = false; // one-shot: re-seat the locked group after first fleet fetch
-    // Live member count at the last fetchTerminalList re-seat. Gates the subsequent
-    // re-seat so a poll that changes nothing does not rebuild paneAssignments and
-    // wipe a manual pane drag. -1 = never seated.
+    // Live member count as of the last seating, stamped by seatActiveGroupPage
+    // itself so EVERY seating path records it — switchToGroup and the layout
+    // picker seat too, and a tracker stamped only in fetchTerminalList went stale
+    // the moment either of them ran. Gates fetchTerminalList's re-seat so a poll
+    // that changes nothing does not rebuild paneAssignments and wipe a manual
+    // pane drag. -1 = never seated.
     let lastSeatedLiveCount = -1;
 
     // Display preferences for derived groups: threshold, hidden ids, pinned ids,
@@ -897,18 +900,30 @@
                     // create-grid-for-role) are unchanged and still drop the lock
                     // or keep it via their own paths.
                     const keepLock = !!activeGroupId;
-                    if (keepLock) {
-                        const group = getAllGroups().find(g => g.id === activeGroupId);
-                        if (group && group.source !== 'manual') {
-                            // Derived groups store their layout in groupPrefs.layouts;
-                            // manual groups carry it on the group object, which
-                            // setLayoutMode does not touch. Persist it here so the
-                            // choice survives a switch away and back.
-                            if (!groupPrefs.layouts) { groupPrefs.layouts = {}; }
-                            groupPrefs.layouts[group.id] = requested;
-                        } else if (group && group.source === 'manual') {
-                            group.layout = requested;
-                        }
+                    const group = keepLock ? getAllGroups().find(g => g.id === activeGroupId) : null;
+                    if (requested === AUTO_LAYOUT) {
+                        // AUTO is a preference about the GROUP, so there must be a group
+                        // to hang it on. With nothing locked the click is a no-op — the
+                        // button is disabled in that state, and this is the guard behind
+                        // the disable, not a substitute for it.
+                        if (!group) { return; }
+                        setStoredGroupLayout(group, AUTO_LAYOUT);
+                        // Resolve the preference to a concrete mode NOW so the grid
+                        // answers the click on this frame. layoutForGroupSwitch reads
+                        // back the preference we just stored and sizes from the roster.
+                        setLayoutMode(layoutForGroupSwitch(group), { keepLock: true });
+                        seatActiveGroupPage();
+                        batchFitVisiblePanes();
+                        syncLayoutPickerUI();
+                        saveLayoutSettings();
+                        return;
+                    }
+                    if (group) {
+                        // Derived groups store their layout in groupPrefs.layouts;
+                        // manual groups carry it on the group object, which
+                        // setLayoutMode does not touch. Persist it here so the
+                        // choice survives a switch away and back.
+                        setStoredGroupLayout(group, requested);
                     }
                     setLayoutMode(requested, { keepLock });
                     if (keepLock) {
@@ -2008,6 +2023,36 @@
     const LAYOUT_FLOOR_ORDER = ['3x3', '2x3', '1x3', '2x2', '2h', '2v', '1'];
     const LAYOUT_MODES = Object.keys(LAYOUTS);
 
+    /**
+     * A group's layout PREFERENCE, which is not the same thing as a rendered layout.
+     *
+     * 'auto' means "size this group's grid to its roster" — the grid follows the
+     * membership. Any LAYOUT_MODES value means "cap this group at that many panes",
+     * and a group larger than the cap pages.
+     *
+     * This exists because one field was carrying two different answers. A team's
+     * `group.layout` is written both by the spawn (auto-assigned from the team size,
+     * teamWiring.ts) and by the layout picker below, and nothing told them apart — so
+     * "size this to the team" and "I deliberately chose 2h" were the same bytes.
+     * Honouring the stored value froze a grown team at its old size; ignoring it threw
+     * away a deliberate pick. Neither is a bug you can fix without asking which was
+     * meant, so 'auto' is the operator answering.
+     *
+     * NEVER a value of currentLayout or effectiveLayout. layoutForGroupSwitch resolves
+     * it to a concrete mode before it can reach setLayoutMode, whose LAYOUT_MODES guard
+     * would drop it on the floor.
+     */
+    const AUTO_LAYOUT = 'auto';
+
+    /**
+     * Layout values that may be STORED against a group — a strict superset of
+     * LAYOUT_MODES. Every load-time whitelist for a stored group layout must use THIS,
+     * not LAYOUT_MODES: loadLayoutSettings and reloadTerminalGroups drop any group whose
+     * layout fails the filter, so validating a stored 'auto' against the rendered modes
+     * would make every auto group vanish from the board with no error anywhere.
+     */
+    const STORABLE_GROUP_LAYOUTS = [AUTO_LAYOUT, ...LAYOUT_MODES];
+
     // Pre-selected layout for the FILL GRID form. Deliberately NOT `currentLayout`:
     // mirroring the active layout pre-selected 2x3 (6 agents, 750px min width) for
     // anyone working dense, and the layout-floor then silently downgraded it on
@@ -2241,7 +2286,7 @@
         if (Array.isArray(savedGroups)) {
             terminalGroups = savedGroups.filter(g =>
                 g && typeof g.id === 'string' && typeof g.name === 'string' &&
-                LAYOUT_MODES.includes(g.layout)
+                STORABLE_GROUP_LAYOUTS.includes(g.layout)
             ).map(g => {
                 if (g.source === 'manual' || g.source === 'role' || g.source === 'worktree') {
                     return g;
@@ -2269,12 +2314,13 @@
 
         const savedGroupPrefs = await loadSetting('terminals.groupPrefs', null);
         if (savedGroupPrefs && typeof savedGroupPrefs === 'object') {
-            // Validate stored layouts against LAYOUT_MODES so a hand-edited or
-            // stale setting cannot inject an unknown layout id.
+            // Validate stored layouts against STORABLE_GROUP_LAYOUTS so a hand-edited
+            // or stale setting cannot inject an unknown layout id. Storable, not
+            // rendered: a derived group's preference may be 'auto'.
             const savedLayouts = (savedGroupPrefs.layouts && typeof savedGroupPrefs.layouts === 'object')
                 ? Object.fromEntries(
                     Object.entries(savedGroupPrefs.layouts)
-                        .filter(([_, v]) => typeof v === 'string' && LAYOUT_MODES.includes(v))
+                        .filter(([_, v]) => typeof v === 'string' && STORABLE_GROUP_LAYOUTS.includes(v))
                 )
                 : {};
             // Coerce each extras value to an array of strings — an install with
@@ -2457,7 +2503,7 @@
             if (!Array.isArray(savedGroups)) { return; }
             const validated = savedGroups.filter(g =>
                 g && typeof g.id === 'string' && typeof g.name === 'string' &&
-                LAYOUT_MODES.includes(g.layout) &&
+                STORABLE_GROUP_LAYOUTS.includes(g.layout) &&
                 (g.source === 'manual' || g.source === 'role' || g.source === 'worktree')
             ).map(g => {
                 if (g.id.startsWith('team_') && !g.teamGroup) {
@@ -2579,12 +2625,6 @@
                         if (liveCount !== lastSeatedLiveCount) {
                             seatActiveGroupPage();
                         }
-                    }
-                    // Track the live count after whichever seating path ran, so the
-                    // gate above can detect a change on the next fetch.
-                    if (activeGroupId) {
-                        const seatedGroup = getAllGroups().find(g => g.id === String(activeGroupId));
-                        lastSeatedLiveCount = seatedGroup ? getGroupMembers(seatedGroup).length : 0;
                     }
                     sanitizePaneAssignments();
                     renderSidebarList();
@@ -4146,6 +4186,15 @@
         const group = activeGroupId ? getAllGroups().find(g => g.id === activeGroupId) : null;
         if (!group) { return; }
         const members = getGroupMembers(group);
+        // Record the live count at the moment of seating. The gate in
+        // fetchTerminalList compares against this, so it MUST be stamped here —
+        // the single seam every seating path runs through — and not at the call
+        // site. Stamping it only in fetchTerminalList left the gate stale after
+        // switchToGroup and the layout picker, both of which seat without
+        // touching it: the first poll after a group switch then saw a count it
+        // had never seated, re-seated, and wiped the very manual pane drag the
+        // gate exists to protect.
+        lastSeatedLiveCount = members.length;
         // Seat a registered team by its REGISTERED ORDER, holding a slot for a
         // member that is not live yet — and anchor the head to slot 0.
         //
@@ -4432,19 +4481,42 @@
     }
 
     /**
-     * Read a group's stored layout. Manual groups carry it on the group object
-     * (group.layout); derived groups carry it in groupPrefs.layouts[id]. Returns
-     * null when no layout has been stored for the group.
+     * Read a group's stored layout PREFERENCE. Manual groups carry it on the group
+     * object (group.layout); derived groups carry it in groupPrefs.layouts[id].
+     * Returns AUTO_LAYOUT, a LAYOUT_MODES value, or null when nothing is stored.
+     *
+     * Validated against STORABLE_GROUP_LAYOUTS, not LAYOUT_MODES: 'auto' is a legal
+     * stored value and rejecting it here would silently demote every auto group to
+     * the no-preference path, which happens to behave the same — a fallback
+     * indistinguishable from the real answer, and no error to find it by.
      */
     function getStoredGroupLayout(group) {
-        if (group.source === 'manual' && group.layout && LAYOUT_MODES.includes(group.layout)) {
+        if (group.source === 'manual' && group.layout && STORABLE_GROUP_LAYOUTS.includes(group.layout)) {
             return group.layout;
         }
         const stored = groupPrefs.layouts && groupPrefs.layouts[group.id];
-        if (typeof stored === 'string' && LAYOUT_MODES.includes(stored)) {
+        if (typeof stored === 'string' && STORABLE_GROUP_LAYOUTS.includes(stored)) {
             return stored;
         }
         return null;
+    }
+
+    /**
+     * Write a group's layout preference — AUTO_LAYOUT or a LAYOUT_MODES value — to
+     * wherever that group keeps it. The mirror of getStoredGroupLayout, and the only
+     * writer: manual groups carry it on the row, derived groups in groupPrefs.
+     *
+     * Does NOT persist; the caller owns that, matching the layout picker's existing
+     * single saveLayoutSettings() at the end of its handler.
+     */
+    function setStoredGroupLayout(group, value) {
+        if (!group || !STORABLE_GROUP_LAYOUTS.includes(value)) { return; }
+        if (group.source === 'manual') {
+            group.layout = value;
+        } else {
+            if (!groupPrefs.layouts) { groupPrefs.layouts = {}; }
+            groupPrefs.layouts[group.id] = value;
+        }
     }
 
     /**
@@ -4459,7 +4531,9 @@
      */
     function layoutForGroupSwitch(group) {
         const stored = getStoredGroupLayout(group);
-        if (stored && LAYOUT_MODES.includes(stored)) { return stored; }
+        // A concrete stored mode is a CAP the operator asked for and wins outright.
+        // AUTO_LAYOUT (and no preference at all) falls through to roster sizing below.
+        if (stored && stored !== AUTO_LAYOUT && LAYOUT_MODES.includes(stored)) { return stored; }
         // Size for the full authored roster, not just the live subset. fleetList can
         // be stale at switch time (the 5 s poll has not caught up to a recent spawn),
         // so getGroupMembers — which filters by liveness — can under-count and produce
@@ -6095,8 +6169,25 @@
      * unscoped .btn-layout query used to catch #btn-clear-all.
      */
     function syncLayoutPickerUI() {
+        // AUTO is a preference about the locked group, so it needs a group to be
+        // about. With nothing locked it is disabled rather than inert-but-clickable:
+        // a button that accepts a click and does nothing is the shape of every
+        // "why did that not work" report on this toolbar.
+        const group = activeGroupId ? getAllGroups().find(g => g.id === activeGroupId) : null;
+        const isAuto = !!group && getStoredGroupLayout(group) === AUTO_LAYOUT;
         document.querySelectorAll('.layout-picker .btn-layout').forEach(btn => {
-            btn.classList.toggle('active', btn.getAttribute('data-layout') === currentLayout);
+            const mode = btn.getAttribute('data-layout');
+            if (mode === AUTO_LAYOUT) {
+                btn.classList.toggle('active', isAuto);
+                btn.disabled = !group;
+                btn.title = group
+                    ? "Size this group's grid to its roster — grows and shrinks with the membership"
+                    : 'Lock a group or enter a team to size its grid automatically';
+                return;
+            }
+            // The resolved mode stays lit under AUTO on purpose: the operator asked
+            // for "whatever fits", and the grid they are looking at is the answer.
+            btn.classList.toggle('active', mode === currentLayout);
         });
     }
 

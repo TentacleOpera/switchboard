@@ -142,3 +142,11 @@ if (failed > 0) { process.exit(1); }
 ---
 
 **Recommendation:** Complexity 2 → **Send to Intern**.
+
+## Review Findings
+
+Files changed: `src/webview/terminals.js` (`DEFAULT_FILL_GRID_MODE = '2x2'` at :2021, used at :1200) and the new `src/test/terminal-fill-grid-default-contract.test.js`. The named-constant hardening the plan listed as optional was taken, so the LAYOUTS coupling is grep-able rather than a bare literal. Verified the constant is a real `LAYOUTS` key and that the TDZ is safe — the `const` is declared at :2021 but read only inside the `btnFillGrid` click handler, which cannot run during module init; the populate loop at :1191 is the only `for (const mode of LAYOUT_MODES)` in the file, so the ordering assertion is unambiguous. `npm run test:contract:terminal-fill-grid-default` passes 3/3 and is invoked by CI at `.github/workflows/integration-tests.yml:1500`. No regression: `currentLayout` has no other reader that depended on this assignment, and `fillGrid()` re-reads the dropdown at submit.
+
+## Deferred Findings
+
+- NIT `src/webview/terminals.js:1200` — the operator's fill-grid mode choice is still ephemeral per open; a future pass could persist last-used instead of always resetting to 2x2.
