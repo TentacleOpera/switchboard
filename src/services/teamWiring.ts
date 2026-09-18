@@ -1502,6 +1502,27 @@ const SEED_MEMBER_MIGRATION_DEFAULTS: Record<string, string> = {
     relationship: 'reports-to-head',
 };
 
+/**
+ * Group-level keys the SEED gained after rows had already been persisted, and
+ * which a pre-upgrade row therefore does not carry. Same tolerance as `machine`
+ * above, and for the same reason: a strict key-set match reads every row written
+ * before the key existed as AUTHORED, `hasAuthoredTeams` then reports a seed-only
+ * root as authored, and `listTeamsInRoots` stops there — the phantom-seed bug
+ * this predicate exists to prevent.
+ *
+ * `listTeamsInRoots` reads `terminals.agentGroups` RAW and never seeds, so a root
+ * the operator has not opened since the upgrade still holds the pre-upgrade shape
+ * and the one-shot reset has not touched it. Both shapes are live at once.
+ *
+ * ABSENCE is tolerated; a DIFFERENT value is not. An operator who renamed the
+ * team, retyped its prompt, changed its pair intensity or flipped its in-use
+ * switch has authored it, and must still fail the match.
+ */
+const SEED_LATE_GROUP_KEYS: readonly string[] = [
+    'purpose', 'prompt', 'headPrompt', 'pairProgramming',
+    'acceptedKinds', 'acceptedKindsSource', 'enabled', 'enabledSource',
+];
+
 export function isUntouchedSeed(group: any): boolean {
     if (!group || typeof group !== 'object') { return false; }
     if (group.id !== SEEDED_AGENT_GROUP.id) { return false; }
@@ -1554,8 +1575,17 @@ export function isUntouchedSeed(group: any): boolean {
     // phantom-seed bug). `migrateAgentGroups` stamps the key on read, so both
     // shapes are live at once.
     if ((group.machine || 'local') !== (SEEDED_AGENT_GROUP.machine || 'local')) { return false; }
-    const gKeys = Object.keys(group).filter(k => k !== 'members' && k !== 'machine').sort().join(',');
-    const sKeys = Object.keys(SEEDED_AGENT_GROUP).filter(k => k !== 'members' && k !== 'machine').sort().join(',');
+    // The late-added seed keys: tolerated when ABSENT (a row persisted before the
+    // key existed), required to MATCH when present (an edited value is the
+    // operator's authorship). Compared by JSON so `acceptedKinds` — an array —
+    // compares by value rather than by identity.
+    for (const key of SEED_LATE_GROUP_KEYS) {
+        if (!(key in group)) { continue; }
+        if (JSON.stringify(group[key]) !== JSON.stringify(SEEDED_AGENT_GROUP[key])) { return false; }
+    }
+    const excluded = (k: string) => k === 'members' || k === 'machine' || SEED_LATE_GROUP_KEYS.indexOf(k) >= 0;
+    const gKeys = Object.keys(group).filter(k => !excluded(k)).sort().join(',');
+    const sKeys = Object.keys(SEEDED_AGENT_GROUP).filter(k => !excluded(k)).sort().join(',');
     return gKeys === sKeys;
 }
 

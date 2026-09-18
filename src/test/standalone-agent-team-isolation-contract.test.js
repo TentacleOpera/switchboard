@@ -191,17 +191,25 @@ test('member rows are read by data-field, not by element index', () => {
 
 console.log('\n--- Team start reports commandless seats ---');
 
-test('instantiateAgentGroupCore pre-flights startup commands and returns commandlessRoles', () => {
-    const body = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
+// The pre-flight moved OUT of instantiateAgentGroupCore into the exported
+// `resolveCommandlessRoles`, so the setup surface can ask the same question
+// BEFORE a start (a first-run user needs "Coding needs `coder` and `intern`"
+// before clicking, not after). The invariants did not move — they are asserted
+// against the extracted function, plus the fact that the core still calls it, so
+// the report and the start refusal cannot drift apart.
+test('resolveCommandlessRoles pre-flights startup commands and the core returns commandlessRoles', () => {
+    const body = functionBody(agentGroupInstantiationTs, 'export async function resolveCommandlessRoles(');
     assert.ok(
         /GlobalIntegrationConfigService\.getAgentStartupCommands\(teamMachineId\)/.test(body),
-        'instantiateAgentGroupCore must read GlobalIntegrationConfigService.getAgentStartupCommands(teamMachineId) — '
+        'resolveCommandlessRoles must read GlobalIntegrationConfigService.getAgentStartupCommands(teamMachineId) — '
         + 'the advisory has to resolve from the SAME machine the spawn path will read, or it reports the local set '
         + 'for a team pinned elsewhere (plan: agents-are-saved-per-machine-and-a-team-picks-one)'
     );
+    const core = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
     assert.ok(
-        /commandlessRoles\s*=/.test(body),
-        'instantiateAgentGroupCore must compute commandlessRoles'
+        /commandlessRoles\s*=\s*await\s+resolveCommandlessRoles\(group\)/.test(core),
+        'instantiateAgentGroupCore must compute commandlessRoles through resolveCommandlessRoles — one function, '
+        + 'so the setup-surface report and the start refusal can never disagree'
     );
     assert.ok(
         /commandlessRoles\??:\s*string\[\]/.test(agentGroupInstantiationTs),
@@ -209,8 +217,8 @@ test('instantiateAgentGroupCore pre-flights startup commands and returns command
     );
 });
 
-test('instantiateAgentGroupCore pre-flight skips shared members and never reads a per-member command', () => {
-    const body = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
+test('the commandless pre-flight skips shared members and never reads a per-member command', () => {
+    const body = functionBody(agentGroupInstantiationTs, 'export async function resolveCommandlessRoles(');
     assert.ok(
         /m\?\.scope\s*===\s*'shared'/.test(body),
         'the pre-flight must skip members with scope: "shared" — a shared member reusing a live terminal is never re-injected'

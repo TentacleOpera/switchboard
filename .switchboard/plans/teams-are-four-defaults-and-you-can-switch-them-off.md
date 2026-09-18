@@ -720,3 +720,67 @@ Contract suites pinned to the retired model were retargeted, not weakened
 `teams-tab-no-start`, `queue-pipeline`, `shell-terminal-strip`); per the run
 directives, compilation and the automated verification suites were not executed as
 the plan's verification pass — the checks remain written down above.
+
+## Review Findings
+
+Reviewed the implementation in `a047eef2` against this plan; the five defaults, the in-use
+switch, the `unassigned` deletion, catalogue A's removal and the derived recommended set all
+verify at runtime (5 rows, correct ids/rosters/kinds, `enabledSource: 'default'` stamped, no
+`scope: 'shared'` member, exactly `coder, intern, lead, planner, researcher, reviewer`).
+Four regressions were found and fixed: `isUntouchedSeed` (`src/services/teamWiring.ts`) did a
+strict group key-set match that the eight new seed keys broke, which made every pre-upgrade
+`feature-implementation` row read as *authored* and resurrected the phantom-seed bug in
+`listTeamsInRoots` (it reads raw and the one-shot reset never touches an unopened root); and
+three CI-gated suites still pinned the deleted `SHIPPED_TEAM_TYPES` or the pre-flight that moved
+out of `instantiateAgentGroupCore` — `src/test/team-scoped-role-routing.test.js`,
+`src/services/__tests__/agentPromptBuilder.test.ts` and
+`src/test/standalone-agent-team-isolation-contract.test.js`, all retargeted to the surviving
+catalogue and the extracted `resolveCommandlessRoles`, not weakened.
+`npm run compile-tests` is clean and the eight team-touching contract suites now pass
+(`team-scoped-routing` 68/68, `agent-machines` all, `standalone-agent-isolation` 23/23,
+`team-autostart-scope` 23/23, `teams-tab-no-start` 9/9, `shell-terminal-strip` 75/75,
+`coding-head-prompt` all, `terminal-groups-headrole` 8/8); the failures remaining in
+`standing-orders-marker`, `stage-marker-commit`, `queue-pipeline`, `default-prompt-previews` and
+the other five in `reviewer-prompt-behaviour` were each traced by blame to earlier commits and
+are not this change.
+The verdict on Changes 6 and 7 is **provisional**: neither the pair band nor the work-kind
+routing has an automated check that discriminates on its correctness — `pairBand`,
+`acceptedKinds` and `recommendedAgentRoles` appear in no test, and the only
+`resolveImplementationHead` assertions are source-text regexes that accept the old resolver name
+too — and the Manual section was not executed in this pass.
+
+## Deferred Findings
+
+- MAJOR — The Band A fan-out leg cannot reach the Coding team's intern in either host.
+  `_dispatchWithPairProgrammingIfNeeded` builds the seat prompt with `pairBand: 'A'` /
+  `pairBandSource: 'team-seat'` and hands it to `executeCommand('switchboard.dispatchToCoderTerminal')`,
+  a command registered only in `src/extension.ts:2022` and never in `switchboardCommandRegistry`,
+  so in standalone it hits the vscodeShim's warn-once dead end; where it *is* registered,
+  `dispatchToCoderTerminal` resolves role `'coder'` board-wide and `_resolveAgentTerminalForPlan`
+  skips interns outright in pair mode. Pre-existing for standalone, but this plan is what makes
+  the head resolution reach a coder-headed team, so the new band machinery is built and still
+  unreachable. Fixing it means registering a new command seam in the standalone host and
+  re-targeting the delivery leg at the team's own seat — a destination decision beyond this
+  plan's Change 6. `src/services/KanbanProvider.ts:8296`,
+  `src/services/TaskViewerProvider.ts:14005`, `src/services/TaskViewerProvider.ts:12388`.
+- NIT — `void pairBandSource;` computes the band's source and discards it; the builder never
+  renders or logs it (the dispatch site does). Dead as written. `src/services/agentPromptBuilder.ts:2008`
+- NIT — `readTeamAcceptedKinds`' docblock says `'default'` means "the team declares nothing", but
+  every seeded default declares kinds *with* source `'default'`; only `value === null` separates
+  the two. `src/services/teamWiring.ts:748`
+- NIT — The rail builds from `_agentGroupsCache`, filled asynchronously and skipped entirely when
+  `isKanbanDock`, so the first fleet push after load renders an empty strip until the 5s poll
+  converges; the retired module constant guaranteed slots immediately. `src/webview/terminals.js:1836`
+- NIT — The reset marker is read before the write chain and written after it, so two windows
+  loading concurrently can both reset, and a second window that read "not ran" first can wipe
+  edits made in between. `src/services/KanbanProvider.ts:5514`
+- NIT — Planning and Review carry no explicit `pairProgramming`, against this plan's
+  "written explicitly on every default that has an intended intensity" rule; harmless only
+  because `resolveTeamPairProgrammingForTerminal` forces `'off'` on a team with no coder/intern
+  seat. `src/services/teamWiring.ts:759`
+- NIT — The in-use switch writes optimistically with no rollback key (unlike team creation), so a
+  failed `saveAgentGroup` leaves the tab showing a state the store does not hold until the next
+  `getAgentGroups`. `src/webview/agent-control.js:1348`
+- NIT — `dynamicComplexityRoutingState` was added to the connect-time resync, which is outside
+  this plan's scope; verified benign (idempotent webview handler, no second sender on this path).
+  `src/services/KanbanProvider.ts:1769`

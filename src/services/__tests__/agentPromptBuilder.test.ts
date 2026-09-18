@@ -837,15 +837,23 @@ suite('agentPromptBuilder', () => {
             // Its only home is the Completion Tested column. Intent checking inside a
             // review team is the LEAD's job (category 4 of its triage), so a
             // reviewer+tester team has nothing for the tester to do.
+            // Retargeted from agent-control.js's SHIPPED_TEAM_TYPES, which is deleted:
+            // there is ONE team catalogue now, DEFAULT_TEAM_DEFINITIONS in
+            // teamWiring.ts. The invariant is unchanged — no shipped team seats a
+            // tester — it is just asserted where the teams actually ship.
             const fs = require('fs');
             const path = require('path');
-            const html = fs.readFileSync(
-                path.resolve(__dirname, '..', '..', '..', 'src', 'webview', 'agent-control.js'), 'utf8');
-            const start = html.indexOf('const SHIPPED_TEAM_TYPES');
-            const templates = html.slice(start, html.indexOf('\n        ];', start));
-            assert.ok(start > 0 && templates.length > 0, 'SHIPPED_TEAM_TYPES must exist');
+            const teamWiring = fs.readFileSync(
+                path.resolve(__dirname, '..', '..', '..', 'src', 'services', 'teamWiring.ts'), 'utf8');
+            const start = teamWiring.indexOf('export const DEFAULT_TEAM_DEFINITIONS');
+            const end = teamWiring.indexOf('export const DEFAULT_TEAM_IDS', start);
+            const templates = start >= 0 && end > start ? teamWiring.slice(start, end) : '';
+            assert.ok(templates.length > 0, 'DEFAULT_TEAM_DEFINITIONS must exist and be boundable');
+            assert.ok(!/SHIPPED_TEAM_TYPES\s*=/.test(fs.readFileSync(
+                path.resolve(__dirname, '..', '..', '..', 'src', 'webview', 'agent-control.js'), 'utf8')),
+                'agent-control.js must declare no second team catalogue');
             assert.ok(!/role:\s*'tester'/.test(templates),
-                'no team template may seat a tester — the stage is a column, not a team role');
+                'no shipped team may seat a tester — the stage is a column, not a team role');
         });
 
         test('the stage prompt states both acceptance criteria', () => {

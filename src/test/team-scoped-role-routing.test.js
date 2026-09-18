@@ -992,20 +992,28 @@ async function item9() {
         // incomplete" hole this gate exists to close.
         assert.ok(NEW_REVIEW_TEAM_HEAD_PROMPT.includes('"seatBlock":false'),
             'NEW_REVIEW_TEAM_HEAD_PROMPT must include seatBlock:false in its ptySendPrompt payload');
-        const reviewPresetStart = agentControlJs.indexOf("name: 'Review'");
-        assert.ok(reviewPresetStart > 0, "Review preset not found in agent-control.js");
-        const reviewPreset = agentControlJs.slice(reviewPresetStart, agentControlJs.indexOf("name: 'Multi-agent planning'", reviewPresetStart));
-        assert.ok(reviewPreset.includes('"seatBlock":false'),
-            'Review team preset headPrompt must include seatBlock:false in its ptySendPrompt payload');
-        // The Review preset has reviewer seats and NO coder seat, so
+        // This used to slice agent-control.js's SHIPPED_TEAM_TYPES Review entry and
+        // assert the SAME two properties on that second copy. That catalogue is
+        // deleted (one catalogue: DEFAULT_TEAM_DEFINITIONS in teamWiring.ts), so the
+        // assertion moved to the surviving one — and the invariant it now pins is
+        // stronger: the Review default must REFERENCE the constant rather than carry
+        // a copy of it, which is what made "two catalogues disagreed" possible.
+        const reviewDefaultStart = teamWiringTs.indexOf("id: 'review-team'");
+        assert.ok(reviewDefaultStart > 0, "the 'review-team' default was not found in teamWiring.ts");
+        const reviewDefault = teamWiringTs.slice(
+            reviewDefaultStart, teamWiringTs.indexOf("id: 'multi-agent-planning'", reviewDefaultStart));
+        assert.ok(/headPrompt:\s*NEW_REVIEW_TEAM_HEAD_PROMPT\s*,/.test(reviewDefault),
+            "the 'review-team' default must reference NEW_REVIEW_TEAM_HEAD_PROMPT, not hand-copy it — "
+            + 'a second copy is the two-catalogues-disagreeing trap');
+        // The Review team has reviewer seats and NO coder seat, so
         // wireSpawnedTeam can never substitute {coder} (it only matches
         // def.role === 'coder'). The placeholder would survive into the
         // installed standing order and the head would POST to a terminal
         // literally named "{coder}" every round, failing silently.
         assert.ok(!NEW_REVIEW_TEAM_HEAD_PROMPT.includes('{coder}'),
             'NEW_REVIEW_TEAM_HEAD_PROMPT must not use {coder} — the Review team has no coder seat to substitute');
-        assert.ok(!reviewPreset.includes('{coder}'),
-            'Review team preset headPrompt must not use {coder} — the Review team has no coder seat to substitute');
+        assert.ok(!reviewDefault.includes('{coder}'),
+            "the 'review-team' default must not use {coder} — the Review team has no coder seat to substitute");
     });
 
     await test('migrateAgentGroups repairs structure and never rewrites a persisted head prompt', () => {
@@ -1032,10 +1040,23 @@ async function item9() {
             'the pre-triage review-prompt snapshot must stay deleted');
     });
 
-    await test('agent-control.js: Review team preset exists in SHIPPED_TEAM_TYPES with reviewer headRole and reviewer members', () => {
-        assert.ok(agentControlJs.includes("name: 'Review'"));
-        assert.ok(agentControlJs.includes("headRole: 'reviewer'"));
-        assert.ok(agentControlJs.includes("{ role: 'reviewer', count: 3, scope: 'per-team', relationship: 'reports-to-head' }"));
+    await test("teamWiring.ts: the 'review-team' default is reviewer-headed with reviewer seats", () => {
+        // Retargeted from agent-control.js's SHIPPED_TEAM_TYPES, which is deleted.
+        // There is ONE catalogue now, so the Review team's shape is asserted where it
+        // actually ships. The roster is two reviewer seats (the shipped default), not
+        // the gallery preset's three.
+        const start = teamWiringTs.indexOf("id: 'review-team'");
+        assert.ok(start > 0, "the 'review-team' default was not found in teamWiring.ts");
+        const block = teamWiringTs.slice(start, teamWiringTs.indexOf("id: 'multi-agent-planning'", start));
+        assert.ok(/name:\s*'Review'/.test(block), "the 'review-team' default must be named 'Review'");
+        assert.ok(/headRole:\s*'reviewer'/.test(block), "the 'review-team' default must be reviewer-headed");
+        assert.ok(/\{\s*role:\s*'reviewer',\s*count:\s*2,\s*label:\s*''\s*\}/.test(block),
+            "the 'review-team' default must seat two reviewers");
+        assert.ok(
+            !/SHIPPED_TEAM_TYPES\s*=/.test(agentControlJs),
+            'agent-control.js must declare no second team catalogue — the list you choose from and the '
+            + 'list pushed onto you must be the same list'
+        );
     });
 }
 
