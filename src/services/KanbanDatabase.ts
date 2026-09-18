@@ -2510,6 +2510,11 @@ export class KanbanDatabase {
 
     private readonly _dbPath: string;
     private _db: SqlJsDatabase | null = null;
+    // Cached presence of the in-database archive tables; schema is fixed for a process lifetime.
+    private _archiveTablesPresent: boolean | undefined = undefined;
+    private _archiveColumnCache = new Map<string, string>();
+    // Reused across scans; reset() between binds. Freed with the database.
+    private _archivedFileStmt: ReturnType<SqlJsDatabase['prepare']> | null = null;
     private _initPromise: Promise<boolean> | null = null;
     private _lastInitError: string | null = null;
     private _writeTail: Promise<void> = Promise.resolve();
@@ -6028,77 +6033,117 @@ export class KanbanDatabase {
     }
 
     /**
-     * Move a plan from the hot store to the cold store. Write-cold → verify → delete-hot.
-     * Serialized through the hot instance's write chain so a concurrent read resolves via
-     * dedup-on-read (hot wins) and never sees a half-moved plan. Returns true on success.
+     * Move a plan out of the board and into the in-database archive.
+     *
+     * One database, one transaction. The two-file version could not get this right:
+     * `plan_events` holds a NO ACTION foreign key to `plans`, and the cold store
+     * copied no child rows, so deleting a plan that had ever emitted an event was
+     * refused. Every card anyone actually worked on ended up copied-but-not-deleted,
+     * and because `runPartitionSweep` treats a double-homed row as a legitimate
+     * mid-sweep state, nothing surfaced. Deleting children first, inside the
+     * transaction, is the fix; atomicity removes the copy/verify/delete crash window
+     * along with it, so there is no longer a state where a plan is in both stores or
+     * in neither.
      */
     public async archiveToCold(planId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
-        const plan = await this.getPlanByPlanId(planId);
-        if (!plan) return false; // not in hot — maybe already cold
-        const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
-        // createIfMissing, NOT ensureReady: `getArchiveInstance` only constructs the
-        // handle, and `ensureReady` refuses to create a database that does not exist
-        // ("not auto-creating"). Nothing else on this path writes the archive file, so
-        // with `ensureReady` here the FIRST archival on any board returned false and the
-        // cold store was never created — which made the whole archive tier, and every
-        // read that spans it, unreachable in practice.
-        if (!(await cold.createIfMissing()) || !cold._db) return false;
-        // Write to cold (upsert). The cold instance's _persist is coalesced; flush after.
-        const ok = await cold.upsertPlans([plan]);
-        if (!ok) {
-            console.warn(`[KanbanDatabase] archiveToCold: cold upsert failed for ${planId}`);
+        if (!this._hasArchiveTables()) {
+            console.warn(`[KanbanDatabase] archiveToCold: archive tables absent — keeping ${planId} on the board`);
             return false;
         }
-        await cold.flushPersist();
-        // Verify the row landed in cold before deleting from hot.
-        const verified = await cold.getPlanByPlanId(planId);
-        if (!verified) {
-            console.warn(`[KanbanDatabase] archiveToCold: cold verify failed for ${planId} — keeping hot row`);
+        const planCols = this._archiveColumns('plans');
+        const eventCols = this._archiveColumns('plan_events');
+        if (!planCols) return false;
+        // Move the file BEFORE committing the row move, and roll it back if the
+        // transaction fails. The two cannot share a transaction, so the ordering is
+        // chosen for its failure direction: crashing here leaves a LIVE row whose file
+        // has moved -- a broken pointer, repairable and invisible to importers because
+        // the row still exists. The opposite order would leave an ARCHIVED row whose
+        // file is still in `plans/`, which is precisely the resurrectable state this
+        // design exists to prevent.
+        const liveFile = this._planFileOf('plans', planId);
+        const movedFile = this._movePlanFileForArchive(liveFile, true);
+        this._db.run('BEGIN');
+        try {
+            // Parent before child: plan_events_archive references plans_archive.
+            this._db.run(
+                `INSERT OR REPLACE INTO plans_archive (${planCols}) SELECT ${planCols} FROM plans WHERE plan_id = ?`,
+                [planId]
+            );
+            if (movedFile) {
+                this._db.run('UPDATE plans_archive SET plan_file = ? WHERE plan_id = ?', [movedFile, planId]);
+            }
+            if (eventCols) {
+                this._db.run(
+                    `INSERT OR REPLACE INTO plan_events_archive (${eventCols}) SELECT ${eventCols} FROM plan_events WHERE plan_id = ?`,
+                    [planId]
+                );
+                // Children first, or the foreign key refuses the delete below.
+                this._db.run('DELETE FROM plan_events WHERE plan_id = ?', [planId]);
+            }
+            this._db.run('DELETE FROM plans WHERE plan_id = ?', [planId]);
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+            // Put the file back, or the live row is left pointing at a file that moved.
+            if (movedFile) { this._movePlanFileForArchive(movedFile, false); }
+            console.error(`[KanbanDatabase] archiveToCold failed for ${planId}:`, error);
             return false;
         }
-        // A card has ENTERED the Archive (verified above), so any remembered "not in
-        // Archive" may now be a lie. This is the only event that can falsify one, and
-        // clearing here — BEFORE the hot delete, which can fail — is what makes the
-        // negative cache in lookupPlanRecord safe.
         this.invalidateArchiveAbsenceCache();
-        // Delete from hot. Route through _persistedUpdate so the coalesced persist fires.
-        const removed = await this._persistedUpdate(
-            'DELETE FROM plans WHERE plan_id = ?',
-            [planId]
-        );
-        return removed;
+        return this._persist();
     }
 
     /**
-     * Restore a plan from the cold store back to hot (any read/edit/move of a cold plan
-     * restores it). Write-hot → verify → delete-cold. Returns the restored record or null.
+     * Promote an archived plan back onto the board (any read/edit/move of an archived
+     * plan promotes it). The exact inverse of `archiveToCold`, in one transaction.
+     *
+     * Promotion is the requirement the storage-topology plan singled out as the one
+     * most likely to be skipped, and skipping it loses cards off the board. In one
+     * database it is cheap enough that there is no excuse: a row move, children
+     * carried, no verify step and no window in which the card exists nowhere.
      */
     public async restoreToHot(planId: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
-        const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
-        if (!(await cold.ensureReady()) || !cold._db) return null;
-        const plan = await cold.getPlanByPlanId(planId);
-        if (!plan) return null; // not in cold
-        // If already in hot (transient double-home), dedup-on-read: hot wins, just drop cold.
+        if (!this._hasArchiveTables()) return null;
+        // Already on the board: nothing to promote.
         const alreadyHot = await this.getPlanByPlanId(planId);
-        if (alreadyHot) {
-            await cold._persistedUpdate('DELETE FROM plans WHERE plan_id = ?', [planId]);
-            return alreadyHot;
-        }
-        const ok = await this.upsertPlans([plan]);
-        if (!ok) {
-            console.warn(`[KanbanDatabase] restoreToHot: hot upsert failed for ${planId}`);
+        if (alreadyHot) return alreadyHot;
+        const planCols = this._archiveColumns('plans');
+        const eventCols = this._archiveColumns('plan_events');
+        if (!planCols) return null;
+        // Bring the file back into the live tree first, mirroring archiveToCold. A crash
+        // between the move and the commit leaves an ARCHIVED row whose file sits in
+        // `plans/` -- the resurrectable state -- so this is the one direction that needs
+        // the reconcile pass; it is still preferable to a promoted card with no file.
+        const archivedFile = this._planFileOf('plans_archive', planId);
+        const restoredFile = this._movePlanFileForArchive(archivedFile, false);
+        this._db.run('BEGIN');
+        try {
+            this._db.run(
+                `INSERT OR REPLACE INTO plans (${planCols}) SELECT ${planCols} FROM plans_archive WHERE plan_id = ?`,
+                [planId]
+            );
+            if (restoredFile) {
+                this._db.run('UPDATE plans SET plan_file = ? WHERE plan_id = ?', [restoredFile, planId]);
+            }
+            if (eventCols) {
+                this._db.run(
+                    `INSERT OR REPLACE INTO plan_events (${eventCols}) SELECT ${eventCols} FROM plan_events_archive WHERE plan_id = ?`,
+                    [planId]
+                );
+                this._db.run('DELETE FROM plan_events_archive WHERE plan_id = ?', [planId]);
+            }
+            this._db.run('DELETE FROM plans_archive WHERE plan_id = ?', [planId]);
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+            if (restoredFile) { this._movePlanFileForArchive(restoredFile, true); }
+            console.error(`[KanbanDatabase] restoreToHot failed for ${planId}:`, error);
             return null;
         }
-        await this.flushPersist();
-        const verified = await this.getPlanByPlanId(planId);
-        if (!verified) {
-            console.warn(`[KanbanDatabase] restoreToHot: hot verify failed for ${planId} — keeping cold row`);
-            return null;
-        }
-        await cold._persistedUpdate('DELETE FROM plans WHERE plan_id = ?', [planId]);
-        return verified;
+        await this._persist();
+        return this.getPlanByPlanId(planId);
     }
 
     /**
@@ -6368,14 +6413,18 @@ export class KanbanDatabase {
     public async getPlanByPlanIdUnion(planId: string, restoreToHotStore: boolean = false): Promise<KanbanPlanRecord | null> {
         const hot = await this.getPlanByPlanId(planId);
         if (hot) return hot;
-        if (!KanbanDatabase.hasArchiveInstance(this._workspaceRoot)) return null;
-        const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
-        const coldRec = await cold.getPlanByPlanId(planId);
-        if (coldRec && restoreToHotStore) {
-            const restored = await this.restoreToHot(coldRec.planId);
-            return restored ?? coldRec;
+        if (!this._db || !this._hasArchiveTables()) return null;
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans_archive WHERE plan_id = ? LIMIT 1`,
+            [planId]
+        );
+        const archived = this._readRows(stmt);
+        const archivedRec = archived.length > 0 ? archived[0] : null;
+        if (archivedRec && restoreToHotStore) {
+            const restored = await this.restoreToHot(archivedRec.planId);
+            return restored ?? archivedRec;
         }
-        return coldRec;
+        return archivedRec;
     }
 
     /**
@@ -6383,12 +6432,11 @@ export class KanbanDatabase {
      * know what's already imported).
      */
     public async getPlanFileSetUnion(): Promise<Set<string>> {
-        const hot = await this.getPlanFileSet();
-        if (!KanbanDatabase.hasArchiveInstance(this._workspaceRoot)) return hot;
-        const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
-        const coldSet = await cold.getPlanFileSet();
-        for (const f of coldSet) hot.add(f);
-        return hot;
+        const known = await this.getPlanFileSet();
+        for (const f of await this.getArchivedPlanFiles(await this.getWorkspaceId() ?? '')) {
+            known.add(f);
+        }
+        return known;
     }
 
     /**
@@ -6397,20 +6445,19 @@ export class KanbanDatabase {
      */
     public async getDistinctProjectsUnion(workspaceId: string): Promise<string[]> {
         const projects = new Set<string>();
-        const collect = (db: KanbanDatabase) => {
+        const collect = (db: KanbanDatabase, table: string) => {
             if (!db._db) return;
             try {
                 const stmt = db._db.prepare(
-                    `SELECT DISTINCT project FROM plans WHERE workspace_id = ? AND project IS NOT NULL AND project != ''`,
+                    `SELECT DISTINCT project FROM ${table} WHERE workspace_id = ? AND project IS NOT NULL AND project != ''`,
                     [workspaceId]
                 );
                 try { while (stmt.step()) projects.add(String(stmt.getAsObject().project)); } finally { stmt.free(); }
             } catch { /* best-effort */ }
         };
-        if ((await this.ensureReady()) && this._db) collect(this);
-        if (KanbanDatabase.hasArchiveInstance(this._workspaceRoot)) {
-            const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
-            if (await cold.ensureReady()) collect(cold);
+        if ((await this.ensureReady()) && this._db) {
+            collect(this, 'plans');
+            if (this._hasArchiveTables()) collect(this, 'plans_archive');
         }
         return Array.from(projects);
     }
@@ -6467,17 +6514,20 @@ export class KanbanDatabase {
      * affordance). Returns cold-only rows ordered by updated_at DESC.
      */
     public async getCompletedPlansCold(workspaceId: string, limit: number = 100, offset: number = 0): Promise<KanbanPlanRecord[]> {
-        if (!KanbanDatabase.hasArchiveInstance(this._workspaceRoot)) return [];
-        const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
-        if (!(await cold.ensureReady()) || !cold._db) return [];
-        const stmt = cold._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans
-             WHERE workspace_id = ? AND status = 'completed'
+        if (!(await this.ensureReady()) || !this._db) return [];
+        if (!this._hasArchiveTables()) return [];
+        // No status filter: membership in plans_archive IS the archived predicate. The
+        // old cold store filtered `status = 'completed'`, which was a standing trap --
+        // the V10 migration rewrites 'archived' to 'completed', so the filter was load
+        // bearing in one direction and silently wrong in the other.
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans_archive
+             WHERE workspace_id = ?
              ORDER BY updated_at DESC
              LIMIT ? OFFSET ?`,
             [workspaceId, limit, offset]
         );
-        return cold._readRows(stmt);
+        return this._readRows(stmt);
     }
 
     /**
@@ -8347,11 +8397,20 @@ export class KanbanDatabase {
 
     /**
      * Delete every coding_rounds row for a feature. Called from the feature-delete
-     * path (KanbanProvider._deleteFeature) to prevent orphaned round records: SQLite
-     * FK enforcement is OFF in this codebase (PRAGMA foreign_keys is not set to ON),
-     * so an ON DELETE CASCADE on coding_rounds.feature_id would be a silent no-op.
-     * This explicit cleanup is the only thing standing between a deleted feature and
-     * a round row that points at a feature_id that no longer exists. Best-effort:
+     * path (KanbanProvider._deleteFeature) to prevent orphaned round records:
+     * `coding_rounds.feature_id` carries no foreign key at all, so there is nothing
+     * for SQLite to cascade. This explicit cleanup is the only thing standing between
+     * a deleted feature and a round row pointing at a feature_id that no longer
+     * exists.
+     *
+     * Note for anyone tempted to add a constraint instead: FK enforcement is ON, not
+     * off. `BetterSqliteDriver` execs `PRAGMA foreign_keys = ON` for every read-write
+     * connection (sqliteDriver.ts), so a declared constraint would take effect --
+     * including NO ACTION, which refuses the parent delete rather than cascading. An
+     * earlier comment here asserted the opposite and would have led a reader to
+     * assume constraints are inert in this codebase; they are not, and a NO ACTION
+     * foreign key on plan_events is what once made archiving refuse every worked
+     * card. Best-effort:
      * a failure warns but does not block the feature delete (the feature row is
      * tombstoned regardless).
      */
@@ -9096,6 +9155,189 @@ export class KanbanDatabase {
             [workspaceId]
         );
         return this._readRows(stmt);
+    }
+
+    /**
+     * `plan_file` values of archived plans, as stored (relative or absolute, unresolved).
+     *
+     * This exists for callers that must answer "does the board already know this
+     * file?" without loading archived rows. The plan watcher is the caller that
+     * matters: it decides a plan file is new by asking whether any row claims it,
+     * and an archived plan's row is no longer in `plans`. Without this, on the
+     * first scan of a session every archived plan's file reads as new and is
+     * re-ingested -- which re-inflates the very table the archive exists to keep
+     * small, and on a board with thousands of archived plans exhausts the heap
+     * before the scan finishes.
+     *
+     * Returns empty on a database predating the archive table rather than
+     * throwing, so an un-migrated board degrades to the old behaviour instead of
+     * failing to start.
+     */
+    public async getArchivedPlanFiles(workspaceId: string): Promise<string[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        if (!this._hasArchiveTables()) return [];
+        const stmt = this._db.prepare(
+            `SELECT plan_file FROM plans_archive WHERE workspace_id = ? AND plan_file IS NOT NULL AND plan_file <> ''`,
+            [workspaceId]
+        );
+        const files: string[] = [];
+        try {
+            while (stmt.step()) {
+                files.push(stmt.getAsObject().plan_file as string);
+            }
+        } catch (e) {
+            console.error('getArchivedPlanFiles failed:', e);
+        } finally {
+            stmt.free();
+        }
+        return files;
+    }
+
+    /**
+     * Column names common to `table` and `table_archive`, cached.
+     *
+     * Built from PRAGMA rather than hardcoded because a hardcoded list is exactly
+     * how the previous two-file archive drifted: the cold `plan_events` was created
+     * missing a column the hot table had, so every archived event silently lost it.
+     * Intersecting at runtime means a column added to one side and not the other is
+     * skipped instead of raising, and the move still moves everything both sides hold.
+     */
+    private _archiveColumns(table: string): string {
+        const cached = this._archiveColumnCache.get(table);
+        if (cached) return cached;
+        if (!this._db) return '';
+        const cols = (t: string): Set<string> => {
+            const out = new Set<string>();
+            const st = this._db!.prepare(`PRAGMA table_info(${t})`);
+            try { while (st.step()) { out.add(st.getAsObject().name as string); } }
+            finally { st.free(); }
+            return out;
+        };
+        const hot = cols(table);
+        const arc = cols(`${table}_archive`);
+        const shared = [...hot].filter(c => arc.has(c));
+        const list = shared.map(c => `"${c}"`).join(', ');
+        this._archiveColumnCache.set(table, list);
+        return list;
+    }
+
+    /**
+     * Is this plan file claimed by an archived plan?
+     *
+     * A point lookup against `idx_plans_archive_plan_file`, not a fetch of every
+     * archived path. The difference matters on the caller that needs it: the plan
+     * watcher asks this only about files it has just noticed, so the cost scales
+     * with new files (usually one) and is independent of how large the archive has
+     * grown. Fetching the whole set instead would put an unbounded read back on the
+     * watcher's path -- a smaller instance of exactly the shape that made archived
+     * plans re-ingest and exhaust the heap.
+     *
+     * Matches on the stored value and on the workspace-relative form, because
+     * `plan_file` is written relative on some vintages and absolute on others.
+     */
+    public async isPlanFileArchived(workspaceId: string, planFileRelative: string, planFileAbsolute?: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (!this._hasArchiveTables()) return false;
+        if (!this._archivedFileStmt) {
+            this._archivedFileStmt = this._db.prepare(
+                `SELECT 1 FROM plans_archive
+                  WHERE workspace_id = ? AND (plan_file = ? OR plan_file = ?)
+                  LIMIT 1`
+            );
+        }
+        try {
+            // `get` binds, steps and resets in one call, so the cached statement stays
+            // reusable across scans without manual reset bookkeeping.
+            const row = this._archivedFileStmt.get([
+                workspaceId,
+                planFileRelative,
+                planFileAbsolute ?? planFileRelative
+            ]);
+            return row !== undefined;
+        } catch (e) {
+            console.error('isPlanFileArchived failed:', e);
+            return false;
+        }
+    }
+
+    /**
+     * Archived plan files live in `.switchboard/archive/`, a sibling of `plans/` and
+     * `features/` -- deliberately outside every directory the importers walk.
+     *
+     * This is the structural half of archiving, and it is the half that matters. Three
+     * separate code paths discover plans by reading the plans directory, and a fourth
+     * can be added by anyone: the periodic scan, the native fs watcher, and the
+     * file-derived bulk importer, which sweeps the whole directory on every plan
+     * creation. Each one, on finding a file with no row in `plans`, concludes the file
+     * is new and mints a row for it. Guarding them one at a time is unbounded work with
+     * no completion signal -- it was tried, and the unguarded third path resurrected
+     * 1,767 archived cards onto the board on 2026-09-18.
+     *
+     * Moving the file out of the swept tree ends the whole class: an importer cannot
+     * resurrect a file it never sees, however many importers there are.
+     *
+     * Returns the new workspace-relative path, or null when there was nothing to move.
+     */
+    private _movePlanFileForArchive(planFileRelative: string, toArchive: boolean): string | null {
+        if (!planFileRelative) return null;
+        const rel = planFileRelative.replace(/\\/g, '/');
+        const pairs: Array<[string, string]> = [
+            ['.switchboard/plans/', '.switchboard/archive/plans/'],
+            ['.switchboard/features/', '.switchboard/archive/features/'],
+        ];
+        let from = '', to = '';
+        for (const [live, arch] of pairs) {
+            const src = toArchive ? live : arch;
+            const dst = toArchive ? arch : live;
+            if (rel.startsWith(src)) { from = src; to = dst; break; }
+        }
+        if (!from) return null;
+        const target = to + rel.substring(from.length);
+        const absSrc = path.resolve(this._workspaceRoot, rel);
+        const absDst = path.resolve(this._workspaceRoot, target);
+        try {
+            if (!fs.existsSync(absSrc)) {
+                // Already moved (idempotent retry), or the row outlived its file. Report
+                // the archive-side path either way so the row is self-consistent.
+                return fs.existsSync(absDst) ? target : null;
+            }
+            fs.mkdirSync(path.dirname(absDst), { recursive: true });
+            fs.renameSync(absSrc, absDst);
+            return target;
+        } catch (error) {
+            console.error(`[KanbanDatabase] plan file move failed (${rel} -> ${target}):`, error);
+            return null;
+        }
+    }
+
+    /** Workspace-relative `plan_file` for a row in either table, or '' when absent. */
+    private _planFileOf(table: string, planId: string): string {
+        if (!this._db) return '';
+        const stmt = this._db.prepare(`SELECT plan_file FROM ${table} WHERE plan_id = ? LIMIT 1`);
+        try {
+            const row = stmt.get([planId]) as { plan_file?: string } | undefined;
+            return String(row?.plan_file || '');
+        } catch { return ''; }
+        finally { try { stmt.free(); } catch { /* ignore */ } }
+    }
+
+    /** True when the in-database archive tables are present. Cached: schema does not change at runtime. */
+    private _hasArchiveTables(): boolean {
+        if (this._archiveTablesPresent !== undefined) return this._archiveTablesPresent;
+        if (!this._db) return false;
+        let present = false;
+        const stmt = this._db.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='plans_archive'"
+        );
+        try {
+            present = stmt.step();
+        } catch {
+            present = false;
+        } finally {
+            stmt.free();
+        }
+        this._archiveTablesPresent = present;
+        return present;
     }
 
     public async getSubtasksByFeatureId(featurePlanId: string): Promise<KanbanPlanRecord[]> {

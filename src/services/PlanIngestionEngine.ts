@@ -936,6 +936,7 @@ export class PlanIngestionEngine {
                 existingPlans.map(p => p.planFile.replace(/\\/g, '/'))
                     .filter(p => path.isAbsolute(p))
             );
+
             const now = Date.now();
             const lastScan = this._lastScanTime.get(workspaceRoot) || 0;
             this._lastScanTime.set(workspaceRoot, now);
@@ -948,6 +949,18 @@ export class PlanIngestionEngine {
                 const stats = await fs.promises.stat(entryPath);
                 if (stats.mtimeMs < lastScan) { continue; }
                 if (now - stats.mtimeMs < 500) { continue; }
+
+                // Last gate before ingestion: an archived plan's row has left `plans`,
+                // but its file is still on disk, so it reaches here looking new. Ingesting
+                // it would undo the archive and re-inflate the table the archive exists to
+                // bound -- at a few thousand archived plans that exhausts the heap before
+                // the scan finishes, which is what it did.
+                //
+                // Asked here, per file, rather than by pre-fetching every archived path:
+                // only files that would otherwise be ingested pay for it, so the cost
+                // tracks new files rather than archive size. Steady state never reaches
+                // this line at all -- the `filesToProcess` diff returns above.
+                if (await db.isPlanFileArchived(workspaceId, relativePath, normalizedPath)) { continue; }
 
                 this._host.logger.appendLine(`[GlobalPlanWatcher] Periodic scan found new file: ${relativePath}`);
                 this._debounceHandleFile(entryPath, workspaceRoot);

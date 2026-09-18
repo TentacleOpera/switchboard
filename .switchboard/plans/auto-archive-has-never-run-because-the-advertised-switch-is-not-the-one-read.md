@@ -163,3 +163,27 @@ Key risks: unifying the settings could silently reset an explicit user toggle; a
 
 ### Manual
 - On the Pi, read the effective state and confirm it matches what the UI claims.
+
+## Status update 2026-09-18 — the store dependency is satisfied; a new prerequisite appeared
+
+**The blocking dependency is resolved.** This card says it must not pre-empt `fbdddc53`,
+because "turning it on today would write 2,552 rows into a store whose placement is still
+being decided". The placement is now decided and shipped: the archive is the `plans_archive` /
+`plan_events_archive` tables **inside the board database**, not a separate file. So this
+card's step 2 -- "leave the effective default off until `fbdddc53` fixes where the archive
+lives" -- has had its condition met, and step 1 (make the two settings one setting) is
+unblocked.
+
+**But do not turn it on yet.** A second defect makes the switch archive the wrong rows:
+"done" has four incompatible definitions on the live board, measured 2026-09-18. See
+`b14b5eba` (A Card Moved to COMPLETED Lands in a State the Board Cannot Render) for the
+counts -- `status='completed'` selects 1 card, `kanban_column='COMPLETED'`
+selects 32 of which 31 are `status='deleted'`, and `completed_at` selects 39 none of
+which are in the COMPLETED column.
+
+**New dependency:** `b14b5eba` must land first. Order is: one notion of done -> this switch ->
+the sweep policy.
+
+Also note the operator has since changed the product intent: COMPLETED is to behave as the
+bin (archive on move, card disappears), not a two-week dwell. That replaces the policy in
+`ccffc96a`; see the new bin card.

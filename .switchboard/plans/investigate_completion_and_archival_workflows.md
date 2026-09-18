@@ -214,3 +214,21 @@ The investigation is complete when all deliverables are produced and the reviewe
 ## Recommended Agent
 
 Send to any agent (documentation task, complexity 4)
+
+## Partially answered 2026-09-18
+
+Several of the open questions here now have measured answers; see the cards rather than
+re-investigating:
+
+- **Does archiving run?** No, and it never had -- `a064cf90`. The advertised switch defaults
+  on and is never read; the effective one defaults off and had never been written.
+- **Where does archived data go?** As of 2026-09-18, the `plans_archive` /
+  `plan_events_archive` tables in the board database. The separate `-archive.db` file is
+  retired to `.migrated.bak`. This reverses `fbdddc53`'s separate-database decision.
+- **Why did archiving appear to do nothing?** `archivetocold` copied rows but could not
+  delete them -- `b409a30b`, now fixed.
+- **What does "completed" mean?** Four incompatible things -- `b14b5eba`.
+
+Remaining genuinely open: what should happen to a card's plan **file** when the card is
+archived (it stays on disk today), and whether archived cards should be promotable from the
+ARCHIVES view.

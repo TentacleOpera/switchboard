@@ -198,3 +198,36 @@ Reviewed `c3561c23`. Fixed three material defects. The Implementation Summary's 
 - NIT — `PlanningPanelProvider.getCompletedPlans(workspaceId, completedLimit)` is still count-capped rather than windowed, the pattern the plan calls "display-only… the cap has never reduced memory". Not a board read path, so out of the invariant's scope: `src/services/PlanningPanelProvider.ts:1641`, `src/services/PlanningPanelProvider.ts:7841`.
 - NIT — `.claude/settings.json`'s allow-list still grants `Bash(sqlite3 *)` and `Bash(duckdb *)` even though no skill invokes either any more, and the un-narrowed `sqlite3` grant is write-capable against the board file. The read-endpoints plan's redirect note assigns the narrowing to `skills-posix-only-tooling.md`, so it is left there: `src/services/ClaudeCodeMirrorService.ts:107`.
 - NIT — `schema-workspace-id-invariant.test.js` aborted once in ~10 runs with a native better-sqlite3 `Statement::~Statement()` teardown assertion, in a section that prepares raw statements without finalizing them. Reproduces at the committed tree; it is a flaky CI gate, not a regression: `src/test/schema-workspace-id-invariant.test.js:173`.
+
+## Decision reversed 2026-09-18 (operator) — Archive is a table set, not a separate database
+
+This plan's Archive row -- "derived from the target, **separate database**" -- no longer
+holds. On operator decision the archive is now `plans_archive` and `plan_events_archive`
+**inside the board database**. Runtime and Board are unchanged; the three-store *shape* is
+kept, but Archive is a boundary within one file rather than a second file.
+
+**Why the reversal is consistent with this plan's own analysis.** Both original arguments
+for a second *file* are already retired in the text above: the `sql.js` per-write cost ("the
+argument for two *files* does not survive the sidecar plan") and the libSQL replica volume
+("Void 2026-09-11"). What was left was a size-and-locality argument, and the same analysis
+says the unbounded board read "is a query-bound problem, fixed by a time window, **not by
+relocating rows to another file**". A table nobody queries costs almost nothing resident under
+a real binding, so one file achieves the bounded working set the plan wanted.
+
+**What the second file actually cost**, before it was retired:
+
+- A production outage on 2026-09-18. `PlanIngestionEngine` had no knowledge of the second
+  store, so all 1,880 archived plans whose files remained on disk read as new on every session
+  start and were re-ingested -- exhausting a 1.9 GB heap and aborting the host. The union
+  helper written for exactly this, `getPlanFileSetUnion`, had zero callers.
+- Schema drift: the cold `plan_events` was created without a column the hot table had, so the
+  8,506 archived events lost those values irrecoverably.
+- Cross-store moves that could not be transactional, which is what left 2,216 cards
+  copied-but-not-deleted (`b409a30b`).
+
+The risks this plan named under "Complex / Risky" are answered rather than mitigated: rotation
+is now transactional because there is one database, and promotion out of Archive is a row move
+in a single transaction.
+
+Still live from this plan: one operator choice, retiring the ten path mechanisms, Runtime keyed
+by machine, and DuckDB demoted to opt-in. Only the Archive *placement* row changes.

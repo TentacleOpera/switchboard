@@ -1658,10 +1658,10 @@ Start by checking which documents exist, then present the menu.`;
                 console.warn('[PlanningPanel] Failed to query Kanban DB for tuning plans:', root, err);
             }
 
-            // Query cold SQLite archive for historical plans
+            // Archived plans live in the board database's archive table, not a second file.
             try {
-                if (KanbanDatabase.archiveAvailable(root)) {
-                    const coldDb = KanbanDatabase.getArchiveInstanceIfPresent(root);
+                {
+                    const coldDb = KanbanDatabase.forWorkspace(root);
                     if (coldDb) {
                         const workspaceId = await this._getWorkspaceId(root);
                         const coldPlans = await coldDb.getCompletedPlansCold(workspaceId, 500);
@@ -3760,7 +3760,7 @@ Start by checking which documents exist, then present the menu.`;
                     const workspaceItems = this._buildKanbanWorkspaceItems();
                     for (const root of allRoots) {
                         try {
-                            const archiveDb = KanbanDatabase.getArchiveInstanceIfPresent(root);
+                            const archiveDb = KanbanDatabase.forWorkspace(root);
                             if (!archiveDb) continue;
                             const workspaceId = await this._getWorkspaceId(root);
                             const plans = await archiveDb.getCompletedPlansCold(workspaceId, 500, 0);
@@ -3828,8 +3828,8 @@ Start by checking which documents exist, then present the menu.`;
                 try {
                     const wsRoot = typeof msg.workspaceRoot === 'string' ? msg.workspaceRoot : '';
                     const root = wsRoot || this._getAllowedRoots().values().next().value || '';
-                    const archivePath = KanbanDatabase.resolveArchiveDbPath(root);
-                    const prompt = `Follow the \`archive\` protocol (resolve via \`switchboard api GET /protocol/archive\`) to query the Switchboard archive for workspace: ${root}.\n\nThe archive is a SQLite cold store at ${archivePath}. Use sqlite3 (read-only) to query it.\n\nWhat would you like to find?`;
+                    const archivePath = KanbanDatabase.forWorkspace(root).dbPath;
+                    const prompt = `Follow the \`archive\` protocol (resolve via \`switchboard api GET /protocol/archive\`) to query the Switchboard archive for workspace: ${root}.\n\nThe archive is the \`plans_archive\` table in the board database at ${archivePath} (its events are in \`plan_events_archive\`). Use sqlite3 (read-only) to query it.\n\nWhat would you like to find?`;
                     await this._seams().clipboard.writeText(prompt);
                     const payload = { type: 'archivesPromptCopied', prompt };
                     this.postMessageToProjectWebview(payload);

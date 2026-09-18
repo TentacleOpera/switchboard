@@ -127,3 +127,25 @@ Find that cause before building — if it is a second defect, the new rule inher
 ## Outstanding Questions
 
 - **[user]** Does archival move the plan **file** out of `.switchboard/plans/` (so the directory and the scanner's recognition set stop growing), or is it a status change only? — proceeding on the assumption that the file SHOULD move (otherwise the archive is cosmetic and the plans directory keeps growing), but the move is reversible and the operator should confirm because it changes the on-disk footprint and the git-tracked surface. `ArchiveManager` currently has no `unlink`/`rename`/`copyFile`, so a file move is net-new code.
+
+## Superseded in part 2026-09-18 — the dwell window is replaced by bin semantics
+
+The operator has decided COMPLETED behaves as **the bin**: moving a card there archives it
+immediately and it disappears from the board, with an ARCHIVES view to see what is in there.
+That replaces this card's central mechanism -- a startup pass over `COMPLETED` rows whose
+`column_entered_at` is two or more weeks old. There is no dwell period under bin semantics.
+
+What survives from this card and should be carried into the bin card:
+
+- **Features and subtasks must archive together or not at all.** Still correct, and more
+  urgent under immediate archiving: a feature binned while its subtasks stay live is worse
+  than either state alone.
+- The `column_entered_at` observation (populated on all COMPLETED rows, rewritten on every
+  transition) remains the reliable transition timestamp -- notably more reliable than
+  `completed_at`, which is empty on all 32 COMPLETED cards as of 2026-09-18.
+
+What is void: the two-week window, and the "cold store does not exist yet / first run creates
+it" step -- the archive is now tables in the board database, created by migration.
+
+A startup sweep is still wanted as a **backstop** for cards that reached COMPLETED before bin
+semantics shipped (32 on the board today). Scope this card down to that backfill.
