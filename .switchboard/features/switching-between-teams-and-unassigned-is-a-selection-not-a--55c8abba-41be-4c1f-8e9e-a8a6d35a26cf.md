@@ -26,9 +26,9 @@ Moving between teams, and between a team and the unassigned fleet, should be a s
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Unassigned Is Reachable From The Rail, And Entering It Seats Only Unassigned Terminals](../plans/team-switching-is-a-rebuild-and-unassigned-is-unreachable.md) — **CREATED** — ID: 0e13233b-6069-4a48-919c-b7fcaa6d88d5
-- [ ] [A Warm Set Keeps a Scope's Sockets Open, So Switching Back Is Not a Replay](../plans/a-warm-set-keeps-a-scopes-sockets-open-so-switching-back-is-not-a-replay.md) — **CREATED** — ID: 22833067-d3a5-4d57-8630-b07bbd250737
-- [ ] [The Warm-Set Size Is Operator Configuration, and Its Read Says Where It Came From](../plans/the-warm-set-size-is-operator-configuration-and-its-read-says-where-it-came-from.md) — **CREATED** — ID: d30e7543-dc9c-4cf2-b5d6-0d2715283bb2
+- [ ] [Unassigned Is Reachable From The Rail, And Entering It Seats Only Unassigned Terminals](../plans/team-switching-is-a-rebuild-and-unassigned-is-unreachable.md) — **PLAN REVIEWED** — ID: 0e13233b-6069-4a48-919c-b7fcaa6d88d5
+- [ ] [A Warm Set Keeps a Scope's Sockets Open, So Switching Back Is Not a Replay](../plans/a-warm-set-keeps-a-scopes-sockets-open-so-switching-back-is-not-a-replay.md) — **PLAN REVIEWED** — ID: 22833067-d3a5-4d57-8630-b07bbd250737
+- [ ] [The Warm-Set Size Is Operator Configuration, and Its Read Says Where It Came From](../plans/the-warm-set-size-is-operator-configuration-and-its-read-says-where-it-came-from.md) — **PLAN REVIEWED** — ID: d30e7543-dc9c-4cf2-b5d6-0d2715283bb2
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -71,4 +71,60 @@ shipped behaviour is context these subtasks must preserve — in particular the
 
 **File contention:** all three subtasks touch `src/webview/terminals.js` and must
 be sequenced against each other.
+
+## Team Dispatch Instructions
+
+### Unassigned Is Reachable From The Rail, And Entering It Seats Only Unassigned Terminals
+
+- **Seat:** coder
+- **Acceptance:**
+  - The rail renders an Unassigned button always (zero teams or three running),
+    carrying the unassigned count, posting `{ type: 'switchToUnassigned' }`.
+  - From a team view, the rail button and the "← All" tab produce identical
+    grids: exactly `getUnassignedTerminalNames()`, sized
+    `smallestLayoutFitting(count)` — no empty panes, no team members.
+  - `exitTeamScope` contains no `setLayoutMode(layoutForFleetCount(` and no
+    seating loop; `seatUnassignedFleet` is called by both `clearGroupLock` and
+    `enterUnassignedScope`.
+  - `enterUnassignedScope` retains the `savedGroups` merge around
+    `loadLayoutSettings`; zero unassigned yields one empty pane, no error.
+- **Must not touch:** `src/extension.ts` and the legacy host (standalone-only
+  scope). Do not introduce the `__unassigned__` pseudo-group or teach
+  `findGroupForTerminalName` / `getAllGroups` / `getGroupMembers` to return it.
+  Do not drop `exitTeamScope`'s `loadLayoutSettings` scope-key remap.
+  `handleLockedTerminalClick` belongs to a different plan — leave it.
+
+### A Warm Set Keeps a Scope's Sockets Open, So Switching Back Is Not a Replay
+
+- **Seat:** lead
+- **Acceptance:**
+  - Gate before building: instrument one switch and compare replay time against
+    `renderPaneGrid` time; if replay is not dominant, re-aim rather than ship.
+  - Team A → B → A at cap 2: the second entry to A opens no new WebSocket and
+    shows no replay-gap toast; A → B → C → A evicts A, which reconnects with
+    scrollback intact.
+  - A warm terminal keeps `entry.ws` and `entry.lastSeq` but shows
+    `sizeVoteActive === false`, and its renderer is released on box loss and
+    reacquired on return with no network round trip.
+  - Stopping a warm team drops its ledger slot; a transient 0x0 reflow does not
+    suspend a seated terminal; every cap read goes through `getWarmScopeCap()`.
+- **Must not touch:** `isTerminalRendered`'s internals (the visibility
+  predicate stays pure — warmth is a separate arm at the call site), the
+  `panelVisibility` handler, `suspendTerminalStream`'s internals (call it,
+  never reimplement a socket close), `loadSetting`, and the extension host.
+
+### The Warm-Set Size Is Operator Configuration, and Its Read Says Where It Came From
+
+- **Seat:** intern
+- **Acceptance:**
+  - A Scope Warmth `.tmux-section` in `#config-tab-body` round-trips the value
+    through `saveSetting`, and the read logs `source` as `'config'`,
+    `'default'`, or `'unavailable'`.
+  - Unavailable warms 1 (logged); absent warms 2; out-of-range or non-numeric
+    clamps to 1–6 with the clamp logged.
+  - Lowering the cap below the live warm count evicts the excess through
+    `suspendTerminalStream`, oldest first.
+- **Must not touch:** `loadSetting`'s signature or its other callers;
+  `TEAM_NAMESPACED_KEYS` (`terminals.warmScopeCap` must not be added to it);
+  no confirmation dialogs of any kind; the extension host.
 

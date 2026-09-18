@@ -48,11 +48,43 @@ panel was open.
    permanently.
 3. **The peak is the blocker, not the baseline.** 488 MB survives on 1 GB. 749 MB does not, and
    that is before the OS, and with only nine seats.
-4. **What it does NOT say:** how much of the 214 MB is live retention versus churn. RSS cannot
-   distinguish them. `resident-memory-budget-for-low-memory-hosts` already established the method
-   — a forced GC over the inspector, which split a 3,446 MB host into 2,807 MB live and 639 MB
-   reclaimed. That measurement has to come first here, because it decides which of the changes
-   below is the one that matters.
+4. **The split, measured 2026-09-18 — it is churn, and there is no retainer.** Change 1's probe
+   (`SWITCHBOARD_BURST_GC_SPLIT=1` + `--expose-gc`, `KanbanProvider._recordBurstGcSplit`) ran for
+   4h02m across 181 board builds on the Pi with seats live. The run straddles a bulk archive of
+   this board's completed cards, which cut rows materialised per build from 2,752 to 659 — so it
+   is also a natural experiment in Change 3.
+
+   | | 2,430-2,752 cards (n=95) | 659 cards (n=86) |
+   | :--- | ---: | ---: |
+   | churn, median | 19 MB | **6 MB** |
+   | churn, peak | 155 MB | **56 MB** |
+   | live retained | 72-196 MB (range 124) | **98-117 MB (range 19)** |
+   | RSS post-GC, median | 449 MB | **328 MB** |
+   | RSS post-GC, peak | 532 MB | **463 MB** |
+
+   Three conclusions, and they decide the changes below:
+
+   - **The burst is churn and it scales with rows materialised.** Cards fell 4.2x and churn fell
+     3.2x — near-linear. Peak churn 155 MB -> 56 MB.
+   - **There is no retainer to find.** Live retention becomes a flat floor once the input shrinks:
+     median 111 MB over the first half of the post-archive window and 114 MB over the second, with
+     RSS median 327 -> 328 MB. Flat for 2h15m. The wide 72-196 MB swing beforehand was card
+     payloads being built and dropped, not accumulation.
+   - **So Change 3 is the change that matters** and Change 2 is second-order, exactly as Change 2's
+     own revision says. The cause was row count.
+
+   **Caveat on these figures.** The probe forces a full GC after every build, so conclusion 2 of
+   this section — the ratcheting floor — cannot be observed in this run by construction. The
+   churn-versus-retention split is unaffected, because that is what the forced GC exists to
+   measure. An unarmed run is still what gives the honest RSS trajectory for a 1 GB host.
+
+   **Why this arrived late.** The windowing shipped on 2026-09-14 (`8300a014`) and was inert on
+   this board: `getBoardWorkingSet` windows dormant *active* cards, while the 2,098 rows actually
+   inflating each build were *completed* ones arriving via `getCompletedPlansInHotWindow` — all
+   inside the 45-day hot window because a bulk operation on 2026-09-09 rewrote their `updated_at`.
+   The mechanism was correct and the data defeated it. Removing the rows is what let the mechanism
+   show its effect, which is the dependency `archivetocold-leaves-its-child-rows-behind-so-any-worked-card-is-unarchivable.md`
+   and `auto-archive-has-never-run-because-the-advertised-switch-is-not-the-one-read.md` now carry.
 
 ### Why the existing plans do not cover this
 
@@ -224,9 +256,9 @@ and shrinking payloads only delays it.
   `--expose-gc` (already required by `test:contract:db-relocation-split` and siblings in
   `package.json`).
 - **Recording:** Write the three numbers (heap-before, heap-after-GC, RSS-after-GC) and the
-  churn-vs-retention verdict into this plan's Goal section, replacing the "What it does NOT say"
-  paragraph. A plan that optimises without this is guessing, which is how a 4 GB budget got
-  written for a host that needed to fit 1 GB.
+  churn-vs-retention verdict into this plan's Goal section. **Done 2026-09-18** — 181 builds over
+  4h02m, table and conclusions recorded in the Goal above. Verdict: churn, scaling with rows
+  materialised; no retainer; Change 3 is the change that matters.
 - **Edge cases:** The burst is ~100 s in; a timer-based probe will measure rest. The probe must
   not perturb the host (the resident-memory plan's verification asserts < 5 MB perturbation).
 

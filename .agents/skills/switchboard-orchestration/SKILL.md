@@ -1,3 +1,10 @@
+---
+name: switchboard-orchestration
+description: The complete HTTP contract for driving Switchboard from outside the webview — for a fleet coding/review agent in a Mission Control worktree, an external Mission Control driving the whole board, or a team member reading the local board. LocalApiServer is the sole writer.
+allowed-tools: Bash
+user-invokable: false
+---
+
 # Skill: Switchboard Orchestration HTTP Surface
 
 This is the **complete** HTTP contract for driving Switchboard from outside the VS Code webview —

@@ -1,3 +1,10 @@
+---
+name: external-team-lead
+description: How a non-terminal external agent (Antigravity, Cursor, Zed, IDE chat, or any chat agent with localhost CLI and filesystem access) operates as lead of a team of terminal worker agents in Switchboard.
+allowed-tools: Bash
+user-invokable: false
+---
+
 # Skill: External Team Lead Mode
 
 This skill defines how a non-terminal external agent (Antigravity, Cursor, Zed, IDE chat, or any chat agent with localhost CLI and filesystem access) operates as the lead of a team of terminal worker agents in Switchboard.

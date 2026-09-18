@@ -1,3 +1,10 @@
+---
+name: worktree-cleanup
+description: Mark a worktree merged and clean it up (kind-aware) via LocalApiServer — requires the Switchboard extension running (no direct-DB fallback).
+allowed-tools: Bash
+disable-model-invocation: true
+---
+
 # Worktree Cleanup
 
 ## When to Use

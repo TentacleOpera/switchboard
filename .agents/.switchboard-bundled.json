@@ -1,6 +1,6 @@
 {
   "version": "1.7.13",
-  "projectedAt": "2026-09-17T06:40:11.059Z",
+  "projectedAt": "2026-09-18T08:29:22.253Z",
   "files": [
     "personas/coder.md",
     "personas/grumpy.md",
@@ -72,6 +72,13 @@
     "switchboard-mission-control-http",
     "switchboard-mission-control-internal",
     "tuning",
-    "web-research"
+    "web-research",
+    "skills/external-team-lead/SKILL.md.bak",
+    "skills/improve-feature/SKILL.md.bak",
+    "skills/kanban_operations/SKILL.md.bak",
+    "skills/manage-features/SKILL.md.bak",
+    "skills/query-kanban/SKILL.md.bak",
+    "skills/switchboard-orchestration/SKILL.md.bak",
+    "skills/worktree-cleanup/SKILL.md.bak"
   ]
 }

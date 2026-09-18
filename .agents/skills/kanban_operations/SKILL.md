@@ -1,3 +1,10 @@
+---
+name: kanban-operations
+description: Move kanban cards and query kanban state via scripts — requires a running Switchboard host (LocalApiServer).
+allowed-tools: Bash
+disable-model-invocation: true
+---
+
 > ⚠️ **MANUAL FALLBACK ONLY** — The `move-card.js` script is an override/recovery mechanism. Do NOT run it automatically during standard workflow routing. Use it ONLY when the user has explicitly requested a card move. The `get-state.js` script is read-only and may be used freely.
 
 # Kanban Operations

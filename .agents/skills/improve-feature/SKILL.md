@@ -1,3 +1,11 @@
+---
+name: improve-feature
+description: Improve a Switchboard feature — a container of subtask plans — by making the subtask set coherent: improve each subtask, detect inconsistencies between them, then restructure (merge overlapping, delete superseded, rewrite contradictory, split oversized). Use improve-plan for a single plan instead.
+allowed-tools: Bash
+user-invokable: false
+disable-model-invocation: true
+---
+
 # Improve Feature
 
 Use this workflow when the target is a Switchboard **feature** (a container of subtask plans), not a single plan. Its job is to make the subtask **set** coherent: improve every subtask, detect inconsistencies between them, and then **restructure** — merge overlapping plans, delete superseded ones, rewrite contradictory ones, split oversized ones.

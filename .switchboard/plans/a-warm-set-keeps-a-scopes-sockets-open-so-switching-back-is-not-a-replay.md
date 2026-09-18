@@ -52,6 +52,15 @@ it. The retention policy below is the fix, and with it one document is enough.
 - **Tags:** frontend, performance, ux
 - **Project:** Browser Switchboard
 
+## User Review Required
+
+None blocking. One gate is a *measurement*, not a decision: the Adversarial
+Synthesis requires instrumenting one switch (replay time vs `renderPaneGrid`
+time) before building — if replay is not dominant this subtask is re-aimed, not
+shipped on faith. The cap's interim value (constant `2`) and its seam
+(`getWarmScopeCap()`) are settled by the configuration subtask, which replaces
+the constant.
+
 ## Scope: standalone only
 
 `src/webview/terminals.js` and `src/webview/terminalViewport.js` — the browser
@@ -66,17 +75,80 @@ divergence.
 `warmScopes` — an ordered list of scope ids (`null` for unassigned, or a team's
 `groupId`), most-recently-viewed first, capped at the configured size.
 
+The cap is read through **one named seam**, `getWarmScopeCap()` — a constant
+`2` until the configuration subtask replaces its body with the tagged read.
+Eviction and the ledger push both consult it; nothing else may hard-code the
+number, or the later swap has to go hunting.
+
+The ledger mutates only at scope-entry, and only in the call that *wins*:
+`enterTeamScope` pushes after its post-await `teamScopeId === groupId` re-check
+(`terminals.js:11745`), and the unassigned entry pushes `null` after its
+equivalent `teamScopeId === null` re-check — `enterUnassignedScope` once the
+unassigned-entry subtask has landed (`exitTeamScope` until then). A losing call
+that wakes late must not touch the ledger.
+
 ### 2. Split the suspend predicate
 
-The reconcile's decision changes from `isTerminalRendered(name)` to
-`isTerminalRendered(name) || isInWarmScope(name)`.
+The reconcile's trailing loop (`terminals.js:6649-6668`) gains a third arm:
+
+```js
+if (isTerminalRendered(name)) {
+    viewport.resumeTerminalStream(entry);   // no-op for a warm entry — it was never suspended
+    viewport.ensureSizeVote(entry);          // no-op unless the vote was withdrawn below
+} else if (isInWarmScope(name)) {
+    viewport.releaseSizeVote(entry);
+    viewport.armRendererRelease(entry);
+} else {
+    viewport.suspendTerminalStream(entry);
+}
+```
+
+`isInWarmScope(name)` resolves the terminal's scope **live at reconcile time** —
+`const g = findGroupForTerminalName(name); const scope = (g &&
+isSpawnedTeamGroup(g)) ? g.id : null;` — then tests ledger membership. No cached
+per-terminal scope: a terminal grouped into a team while its old scope is warm
+must follow the team, and one ungrouped must follow `null`. Membership
+resolution is the same question `getUnassignedTerminalNames` already asks, per
+terminal.
 
 A terminal in a warm scope keeps its socket and its `entry.lastSeq`. It does
-**not** keep the renderer: `armRendererRelease`'s 5 s timer still runs, because
-a WebGL context held by an invisible surface is the thing the 1 GB work was
-actually protecting, and reacquiring one repaints from xterm's own buffer with
-no network round trip. The socket is the expensive half, and warmth buys only
-that.
+**not** keep two other things suspend would have taken, and giving them back is
+explicit, not incidental:
+
+- **The size vote.** `suspendTerminalStream` calls `releaseSizeVote` before
+  closing the socket because `client.reportedSize` is sticky server-side
+  (`terminalViewport.js:416-420`): a client that goes hidden stops sending and
+  its final size keeps clamping the shared pty **until the socket closes**.
+  Warmth is exactly that case — the socket stays open, so without an explicit
+  `releaseSizeVote(entry)` a warm terminal's stale vote clamps the pty for every
+  other viewer of it (a pop-out, the dock) for as long as the scope stays warm.
+  The vote is withdrawn on the way out and re-cast on re-entry by
+  `ensureSizeVote` (`terminalViewport.js:445`) — whose docblock exists for
+  precisely this ("re-cast a withdrawn vote"). The `ensureSizeVote` call in the
+  rendered arm above is what covers re-entry: `resumeTerminalStream`
+  early-returns on `!entry.suspended` and never reaches its own re-vote.
+- **The renderer.** It must go back — a WebGL context held by an invisible
+  surface is the thing the 1 GB work was actually protecting — but not through
+  the suspend path, which never runs for a warm entry.
+
+> **Superseded:** "`armRendererRelease`'s 5 s timer still runs" as the release
+> mechanism for warm terminals.
+> **Reason:** That timer is armed *inside* `suspendTerminalStream`, which the
+> warm arm deliberately bypasses — so under the original wording nothing would
+> ever arm it. The release actually comes from two existing paths that do not
+> go through suspend: each container's debounced ResizeObserver
+> (`terminals.js:1493`) funnels into `reconcileRendererForVisibility`
+> (`terminalViewport.js:681`), which swaps WebGL→canvas the moment the box is
+> gone; and the `panelVisibility` hide path (`terminals.js:1461-1465`) arms the
+> 5 s timer on every entry when the whole panel is hidden. Arming
+> `armRendererRelease` in the warm arm above is belt-and-braces on top — it is
+> idempotent and re-reads `isRendered` before acting.
+> **Replaced with:** The warm arm calls `releaseSizeVote` + `armRendererRelease`
+> explicitly; the RO/`reconcileRendererForVisibility` path then does the actual
+> context release on box loss, and reacquisition on return repaints from
+> xterm's own buffer with no network round trip.
+
+The socket is the expensive half, and warmth buys only that.
 
 ### 3. Correct the single-owner comment
 
@@ -92,12 +164,22 @@ Layout settings for a warm scope are held in memory and not re-fetched on
 re-entry, removing the blocking `await loadLayoutSettings()` from the warm path.
 The cold path keeps it unchanged.
 
+This applies to **both** entry points — `enterTeamScope` and, once the
+unassigned-entry subtask has landed, `enterUnassignedScope` (which holds the
+same `await loadLayoutSettings()` at its step 3). A warm `null` scope re-entered
+through the rail button or "← All" must not round-trip either.
+
 ### 5. Eviction
 
-Evicting a scope past the cap suspends its terminals through
-`suspendTerminalStream` — the same path as today, never a bespoke close. A scope
-whose group is no longer registered is dropped from the ledger, or it holds a
-slot forever.
+When a push takes the ledger past `getWarmScopeCap()`, the tail scope is
+evicted and its terminals go through `suspendTerminalStream` — the same path as
+today, never a bespoke close. Membership is resolved live, the same way
+`isInWarmScope` resolves it: iterate `terminalsMap`, compute each entry's scope,
+suspend those matching the evicted id. No stored member list — one that was
+snapshotted at entry goes stale the moment a terminal is grouped or exits.
+
+A scope whose group is no longer registered is dropped from the ledger, or it
+holds a slot forever.
 
 ## Complexity Audit
 
@@ -146,11 +228,27 @@ slot forever.
 **Dependencies & conflicts**
 - **Depends on nothing in this feature**, but is best landed after the
   unassigned-entry subtask so that "unassigned" is already a scope the ledger
-  can name.
-- **Warm-set configuration subtask** supplies the cap. This subtask can land
-  first with the cap hard-coded to 2.
+  can name — and so the ledger push for `null` hooks `enterUnassignedScope`,
+  the single entry path that subtask creates, rather than today's
+  `exitTeamScope`.
+- **Warm-set configuration subtask** supplies the cap. This subtask lands first
+  with the cap behind `getWarmScopeCap()` returning `2`; that subtask replaces
+  the seam's body with the tagged read and wires cap-changed eviction. Nothing
+  else may read or hard-code the number.
 - No pending plan competes for `terminals.js` here — the stale-fleet work has
   already shipped (`47c1deca`).
+
+## Dependencies
+
+- `team-switching-is-a-rebuild-and-unassigned-is-unreachable.md` — lands first.
+  Creates `enterUnassignedScope`, the single unassigned-entry path this
+  subtask's ledger push for `null` hooks, and the warm-layout skip at §4
+  targets.
+- `the-warm-set-size-is-operator-configuration-and-its-read-says-where-it-came-from.md`
+  — lands after. Replaces `getWarmScopeCap()`'s constant with the tagged read;
+  this subtask must leave exactly one seam for it to replace.
+- `47c1deca` (shipped) — the `lastSeatedLiveCount`-gated re-seat at
+  `terminals.js:2579` is existing behaviour to preserve, not pending work.
 
 ## Adversarial Synthesis
 
@@ -168,19 +266,45 @@ was a COMPLETED fix for exactly that shape. Mitigation: warm state holds sockets
 and layout only. The roster, group membership and fleet list continue to come
 from the live fetch on every entry, warm or cold.
 
-## Verification
+## Verification Plan
+
+### Automated Tests
 
 - Team A → B → A with warm set 2: the second entry to A opens **no new
   WebSocket** (assert on connection count, not on wall clock) and shows no
   replay-gap toast.
 - Team A → B → C → A with warm set 2: A was evicted, reconnects, and its
   scrollback is intact.
-- A warm scope's renderer is released after 5 s and reacquired on return with no
-  network round trip.
+- A warm scope's renderer is released once its containers lose their box and
+  reacquired on return with no network round trip.
+- A warm terminal's size vote is withdrawn on scope exit
+  (`entry.sizeVoteActive === false` while `entry.ws` stays open) and re-cast on
+  re-entry — a second viewer of the same pty is not clamped by the warm scope's
+  last viewport.
 - Stop a team while it is warm: the ledger drops it and no slot is held.
 - A grid reflow that transiently measures 0x0 does not evict or suspend a seated
   terminal.
+- Two rapid scope entries land on the second scope and the ledger names only
+  the winner.
 - `npm run compile-tests` before any `test:contract:*` script.
+
+### Goal Invariants
+
+1. `warmScopes` exists in `src/webview/terminals.js` as an MRU-ordered list of
+   scope ids (`null` or team `groupId`), and every bound check reads
+   `getWarmScopeCap()` — no other site hard-codes the number.
+2. The reconcile's trailing loop keeps `isTerminalRendered(name)` as the resume
+   predicate and adds `isInWarmScope(name)` as a distinct warm arm —
+   `isTerminalRendered` itself is unchanged. *(Negative — visibility is not
+   redefined.)*
+3. A terminal whose scope is warm retains `entry.ws` open across the switch and
+   shows `entry.sizeVoteActive === false` while warm. *(Paired — socket kept,
+   vote released.)*
+4. Eviction of a scope routes its terminals through `suspendTerminalStream`;
+   no warm-path code closes a socket directly. *(Negative — no bespoke close.)*
+5. The "SINGLE owner of `entry.suspended`" docblock at `terminals.js:390-397`
+   no longer claims there is no second reason — the reason is recorded on the
+   entry or the comment is corrected.
 
 ## No migration
 

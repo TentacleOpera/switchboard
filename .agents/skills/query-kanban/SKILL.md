@@ -1,3 +1,10 @@
+---
+name: query-kanban
+description: Read kanban board state via the LocalApiServer read endpoints, reached through the Switchboard CLI. Requires a running Switchboard host (extension or standalone); unavailable in cloud or tracker-only sessions, where it reports that and stops rather than reading the database file.
+allowed-tools: Bash
+user-invokable: false
+---
+
 # Query Kanban
 
 Read kanban board state. **READ-ONLY** — this skill never writes. Card moves go through

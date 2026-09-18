@@ -30,16 +30,20 @@ command surface reaches through `createTerminalView`. So **the button is in the
 command view's DOM already**, wired to `term.scrollToBottom()` with a viewport
 `scroll` listener that shows and hides it.
 
-But `.jump-to-latest` is styled in **`terminals.css` only** — four rules — and
+But `.jump-to-latest` is styled in **`terminals.css` only** — three rules
+(`terminals.css:554`–`:574`, plus a z-index comment at `:1645`) — and
 `command.html` does not load that stylesheet:
 
-| surface | stylesheets |
-|---|---|
-| `terminals.html` | xterm.css, **terminals.css**, statusCards.css |
-| `command.html` | xterm.css, statusCards.css |
+| surface | loads terminalViewport.js | loads terminals.css |
+|---|---|---|
+| `terminals.html` | yes | **yes** |
+| `command.html` | yes | no |
+| `dock.html` | yes (`dock.js:563` calls `createTerminalView`) | no |
 
-So on `/command` the control renders as an unstyled, unpositioned default button
-with no show/hide treatment — present in the tree, useless on screen. The shared
+Two of the three embedders ship the button unstyled; only the desktop panel is
+correct. So on `/command` the control renders as an unstyled, unpositioned
+default button with no show/hide treatment — present in the tree, useless on
+screen. The shared
 module was written to be embedder-independent; its **presentation was not**, and
 nothing catches the half that did not come along.
 
@@ -108,9 +112,11 @@ the change is which container they sit in, not whether they exist.
 
 ### Routine
 
-- Sending `/clear` and `/model` to a seat. The command surface already writes to
-  the pty — `terminalViewport.encodeInputFrame` plus the entry's socket, the same
-  path the key bar uses for control sequences.
+- Sending `/clear` and `/model` to a seat. Not the socket — the verbs:
+  `POST /terminals/verb/ptyClearTerminal` and `POST /terminals/verb/ptySendModel`,
+  the exact calls the panel's buttons make (`terminals.js:10753`, `:10773`).
+  `command.js` already reaches this surface (`ptyListTerminals` at `:704`/`:804`,
+  `sendToTerminal` at `:832`, `ptyStartTeam` at `:1503`), so no new plumbing.
 - A paste control that reads the clipboard and writes the text to the seat. The
   key bar already synthesises input the soft keyboard cannot produce; paste is
   the same shape with a different source.
@@ -123,10 +129,16 @@ the change is which container they sit in, not whether they exist.
   embedder, and today nothing enforces that. Copying four rules into
   `command.html` closes this instance and leaves the next one to be discovered
   the same way.
-- **`/clear` is not just text.** `terminals.js` routes clearing through a policy
-  (`ptyClearPolicy.ts`) and a per-terminal send lock, and `clearBeforePrompt`
-  interacts with dispatch. A naive "write `/clear\n` to the socket" from a second
-  surface can race a dispatch that is mid-paste into the same seat.
+- **`/clear` is not just text — and on this surface it is not even the same
+  channel.** The panel's clear button calls `POST /terminals/verb/ptyClearTerminal`
+  (`terminals.js:10753`), which runs the server-side per-family strategy in
+  `ptyClearPolicy.ts` — including **respawning** devin-family seats — and drops
+  the seat-block/work-context caches (`TaskViewerProvider.ts` verb seam). A
+  `sendToTerminal` with `'/clear'` text routes down the raw `ptyWrite` branch and
+  skips the family strategy; a raw `entry.ws.send(encodeInputFrame('/clear\r'))`
+  skips even the cache-drop arm. `clearBeforePrompt` interacts with dispatch, so
+  a naive write from a second surface can also race a dispatch mid-paste into
+  the same seat.
 - **Paste on iOS needs a real editable field.** `terminals.js` carries three
   comments to this effect — a visible, editable textarea is what makes iOS offer
   its paste callout; a synthetic `navigator.clipboard.readText()` is refused
@@ -141,8 +153,13 @@ the change is which container they sit in, not whether they exist.
 ### Race Conditions
 
 - A `/clear` sent from the command surface while a dispatch is mid-delivery into
-  the same seat must not interleave. The existing per-terminal send lock is the
-  precedent and must be honoured from this surface too, not re-implemented.
+  the same seat must not interleave. There is no client-side send lock to
+  re-implement — the coordination is server-side (the verb seam drops the
+  seat-block and work-context caches, and `ptyClearTerminal` runs the family
+  strategy atomically). Going through the verb inherits all of it; a raw socket
+  write inherits none. Reuse the panel's press-feedback shape too —
+  `withClearingFeedback` disables the button for the ~600 ms a clear takes,
+  which also guards the double-tap double-respawn case on touch.
 
 ### Security
 
@@ -187,10 +204,12 @@ nothing on the exact surface it was added for; (4) four controls are added to a
 surface whose scarcest resource is vertical space, and the terminal becomes
 unusable in portrait for the sake of buttons used once a session.
 **Mitigations:** move the shared module's styling into the module's own
-responsibility rather than each embedder's stylesheet; route clearing through the
-existing policy and send lock; build paste on a real editable field per the
-existing plan's findings; measure visible rows before and after on a phone and
-the 10" iPad in portrait.
+responsibility (injected styles — CSP permits `style-src 'unsafe-inline'`, and a
+stylesheet link is the step a fourth embedder will forget); route clearing
+through the `ptyClearTerminal` verb so the family strategy, respawn and cache
+drops are inherited rather than re-implemented; build paste on a real editable
+field feeding `term.paste()` per the existing plan's findings; measure visible
+rows before and after on a phone and the 10" iPad in portrait.
 
 ## Proposed Changes
 
@@ -203,11 +222,18 @@ only `terminals.css` styles it, and `command.html` does not load that file.
 either by injecting its own scoped styles at init, or by shipping a stylesheet
 every embedder loads alongside the script. Copying rules into `command.html` is
 the cheap fix and leaves the class of bug in place; the module owning its own
-presentation closes it.
+presentation closes it. Both mechanisms are viable under the served CSP —
+`style-src 'unsafe-inline'` is granted (`headlessPanelHtml.ts`), so an injected
+`<style>` is not blocked. Prefer injection: a stylesheet link is exactly the
+step a fourth embedder will forget again. Move the three rules out of
+`terminals.css` into the module's injected block so there is one definition,
+not two that can drift.
 
 **Edge cases.** `terminals.css` already styles `.jump-to-latest`; whichever
 mechanism is chosen must not produce two competing definitions on the panel that
-currently works.
+currently works — hence moving the rules, not duplicating them. `dock.html` is
+the third embedder and is equally unstyled today; the fix covers it for free,
+and the contract below should assert all embedders, not just `/command`.
 
 ### `command.html` + `command.js` — the three missing controls
 
@@ -216,17 +242,34 @@ clear, model or paste.
 
 **Logic.** Add a compact control row to the terminal viewer:
 
-- **Clear** — sends `/clear` through the existing clear policy and per-terminal
-  send lock, not a raw socket write.
-- **Model** — sends `/model`. The key bar already supplies the arrow keys the
-  resulting menu needs, so this composes with work that has already landed.
-- **Paste** — reads the clipboard on an explicit gesture and writes to the seat,
-  built on a real editable field per the existing paste plan's iOS findings.
+- **Clear** — `POST /terminals/verb/ptyClearTerminal {name}`, the same call the
+  panel's `paneClearBtn` makes (`terminals.js:10753`). The verb is what runs the
+  `ptyClearPolicy.ts` family strategy — including the devin-seat respawn — and
+  drops the seat caches. Never `sendToTerminal` with `'/clear'` text (raw
+  ptyWrite branch, no family strategy) and never
+  `entry.ws.send(encodeInputFrame('/clear\r'))`. Disable-and-relabel for ~600 ms
+  on press, matching `withClearingFeedback`.
+- **Model** — `POST /terminals/verb/ptySendModel {name}` (`terminals.js:10773`).
+  The key bar already supplies the arrow keys the resulting menu needs, so this
+  composes with work that has already landed.
+- **Paste** — on an explicit gesture, focus a **runtime-created** `<textarea>`
+  (`document.createElement`, not markup — the served-HTML contract asserts zero
+  editable elements), let the operator's own paste gesture deliver a `paste`
+  event, and hand the text to the seat via `entry.term.paste(text)` — the
+  bracketed-paste/attribution path the sibling plan makes load-bearing, NOT
+  `ws.send` and NOT `terminals.js`'s keystroke framing. `sendTerminalInput`'s
+  "NEVER term.paste" comment is about single keystrokes reaching a TUI; a paste
+  payload is the opposite case.
 
 **Edge cases.** The row must not consume the space the terminal needs in
 portrait; measure visible rows before and after. Controls act on the seat the
 viewer currently shows — the seat switcher can change it underneath, so the
-target must be read at press time, not captured at render.
+target must be read at press time, not captured at render. The viewer holds
+exactly one entry in `terminalTerminalsMap` (the switcher destroys the prior
+view), so read that entry's name at press time — the same pattern
+`sendTerminalInput` (`:2318`) already uses. A Clear landing on a devin seat
+respawns the agent process — the toast/`withClearingFeedback` affordance is how
+the operator learns that happened; keep it.
 
 ### A contract that catches the next silent half-feature
 
@@ -235,9 +278,12 @@ other does not, and no test could see it. That is the same shape as the
 capability-hidden controls found elsewhere on the board.
 
 **Logic.** Assert that every class `terminalViewport.js` attaches to DOM it
-creates has a style rule reachable from every page that loads the module. A
-control present in the tree with no styling is a silent half-feature, and this is
-the cheapest place to catch it.
+creates has a style rule reachable from every page that loads the module —
+`terminals.html`, `command.html`, and `dock.html` (two of the three are unstyled
+today). A control present in the tree with no styling is a silent half-feature,
+and this is the cheapest place to catch it. If the fix lands as module-injected
+styles, the contract inverts: assert the module injects a rule for every class
+it creates, and assert no embedder stylesheet duplicates them.
 
 **Edge cases.** Classes styled inline or by a framework need an exemption list
 rather than silent tolerance, or the check decays into noise.
@@ -249,12 +295,27 @@ rather than silent tolerance, or the check decays into noise.
 1. Every class `terminalViewport.js` creates is styled in every page that loads
    the module — `.jump-to-latest` on `/command` is the regression case.
 2. The command surface's terminal viewer exposes clear, model and paste controls.
-3. Clear routes through the existing clear policy and send lock, not a raw write.
-4. Paste requires an explicit user gesture and does not log its content.
+3. Clear routes through `POST /terminals/verb/ptyClearTerminal` — assert the
+   verb call exists in `command.js` and that neither `sendToTerminal` with
+   `'/clear'` nor an `encodeInputFrame('/clear` write does.
+4. Paste requires an explicit user gesture, delivers via `term.paste(`, and does
+   not log its content — assert no `clipboard.readText` and no `ws.send` of the
+   pasted payload in the paste path.
 5. Each control targets the seat the viewer is showing at press time, after a
    seat switch.
-6. `mobile-command-route-contract.test.js` continues to pass — no polling, no
-   board fetch, no `setInterval`.
+> **Superseded:** "6. `mobile-command-route-contract.test.js` continues to pass —
+> no polling, no board fetch, no `setInterval`."
+> **Reason:** The suite is **already red** — 6 pre-existing failures from work
+>   that landed after the contract was written (a fifth `agent` sub-nav
+>   destination, editable elements in the served HTML, the `ws.send` input path,
+>   a `setInterval` status poll, a `dispatchedTerminal` read the push writer
+>   never emits). "Continues to pass" is unachievable today.
+> **Replaced with:** `mobile-command-route-contract.test.js` introduces **no new
+>   failures** — record the 6 pre-existing failures as the baseline and diff the
+>   run against it. In particular: add no `setInterval`, no `/kanban/plans`
+>   (non-priority) fetch, no `fetchBoardCards`; and keep the paste `<textarea>`
+>   runtime-created rather than markup, so the (stale, already-failing)
+>   zero-editable-elements assertion is not entrenched further.
 
 ### Goal Invariants
 
@@ -283,4 +344,6 @@ rather than silent tolerance, or the check decays into noise.
 
 ---
 
-**Recommendation: Send to Lead Coder.** (Complexity 4.)
+> **Superseded:** "**Recommendation: Send to Lead Coder.** (Complexity 4.)"
+> **Reason:** The rubric maps 4–6 to Coder; Lead Coder starts at 7.
+> **Replaced with:** **Recommendation: Send to Coder.** (Complexity 4.)

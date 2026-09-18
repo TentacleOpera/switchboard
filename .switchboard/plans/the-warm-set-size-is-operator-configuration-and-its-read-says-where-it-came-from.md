@@ -33,6 +33,12 @@ and have nothing anywhere telling them their setting never loaded.
 - **Tags:** frontend, ui, config
 - **Project:** Browser Switchboard
 
+## User Review Required
+
+None. Default `2`, range `1–6`, and "unavailable warms 1" are the plan's own
+decisions, each justified in the body against the CLAUDE.md fallback rule they
+implement.
+
 ## Scope: standalone only
 
 `src/webview/terminals.html` and `src/webview/terminals.js` — the browser
@@ -43,10 +49,16 @@ is out of scope.
 
 ### 1. A Scope Warmth section in the Config tab
 
-`terminals.html:251` (`#config-tab-body`) already hosts PTY Fleet Persistence,
-PTY Host Status and Stop Fleet as `.tmux-section` blocks. Add a fourth in the
-same idiom: a numeric control, **default 2**, range **1–6**, with a hint stating
-the cost in plain terms — each warm scope holds its seats' connections open.
+`terminals.html:252` (`#config-tab-body`) already hosts PTY Fleet Persistence,
+PTY Host Status and Stop Fleet as `.tmux-section` blocks (`:253`, `:266`,
+`:276`). Add a fourth in the same idiom: a numeric control, **default 2**,
+range **1–6**, with a hint stating the cost in plain terms — each warm scope
+holds its seats' connections open.
+
+Clarification: the key is `terminals.warmScopeCap` (new, never shipped) and it
+must **not** be added to `TEAM_NAMESPACED_KEYS` (`terminals.js:2118`) — the cap
+is a property of the panel's socket budget, not of a team, and a namespaced key
+would read a different cap per scope.
 
 No confirm gate, no "are you sure" on the way out of a high value. Per CLAUDE.md
 this codebase does not have those, and `window.confirm` is a silent no-op in a
@@ -63,6 +75,12 @@ Add a reader that returns `{ value, source }` with `source` one of:
 
 The source is logged where the value is used, so "which read answered?" is
 answerable after the fact.
+
+The consumer is `getWarmScopeCap()` — the single seam the warm-set subtask
+leaves behind. This subtask replaces its constant `2` with the tagged read
+(parse, clamp 1–6 with the clamp logged, map `source` to the table below) and
+wires the control's change event to re-read + evict. Nothing else reads the
+key.
 
 This does **not** rewrite `loadSetting` for its other callers. Those are layout
 reads on presentation paths where a quiet default is fine, and changing all of
@@ -105,12 +123,18 @@ overcommits memory on a box that has none, and looks exactly like success.
 
 **Dependencies & conflicts**
 - **Depends on the warm-set subtask** for the ledger it configures. That subtask
-  can land first with the cap hard-coded to 2; this one replaces the constant
-  with the configured read.
+  lands first with the cap behind `getWarmScopeCap()` returning `2`; this one
+  replaces the seam's body with the tagged read and wires cap-changed eviction.
 - No conflict with the unassigned-entry subtask.
 
 **Security**
 - None. Existing `getSetting`/`setSetting` verbs, no new endpoint.
+
+## Dependencies
+
+- `a-warm-set-keeps-a-scopes-sockets-open-so-switching-back-is-not-a-replay.md`
+  — hard prerequisite. Owns `warmScopes`, `getWarmScopeCap()` and the eviction
+  path this subtask drives; without it there is nothing to configure.
 
 ## Adversarial Synthesis
 
@@ -125,7 +149,9 @@ The narrower risk is scope creep into `loadSetting` itself. Held off
 deliberately: this subtask adds a second reader beside it rather than changing
 the semantics of every layout read in the panel.
 
-## Verification
+## Verification Plan
+
+### Automated Tests
 
 - Set the cap to 1 in the Config tab, reload: the value round-trips and the read
   logs `source: 'config'`.
@@ -135,6 +161,22 @@ the semantics of every layout read in the panel.
 - Write a non-numeric value directly: it clamps, and the clamp is logged.
 - Lower the cap from 4 to 2 with 4 scopes warm: two are evicted immediately.
 - `npm run compile-tests` before any `test:contract:*` script.
+
+### Goal Invariants
+
+1. `loadSettingTagged` exists in `src/webview/terminals.js` and returns
+   `{ value, source }` with `source` ∈ `'config' | 'default' | 'unavailable'` —
+   the transport outcome and the payload outcome are distinguished.
+2. `loadSetting`'s signature and its other callers are unchanged — only the
+   warm-set read is routed through the tagged reader. *(Negative — no silent
+   semantic change to layout reads.)*
+3. `getWarmScopeCap()` contains no literal `2` fallback divorced from the tagged
+   read — every value it returns carries a `source`, and `'unavailable'` yields
+   `1`. *(Negative — the unlogged silent default is gone; paired with 1.)*
+4. `terminals.warmScopeCap` is absent from `TEAM_NAMESPACED_KEYS`
+   (`terminals.js:2118`).
+5. A Scope Warmth `.tmux-section` exists in `#config-tab-body`
+   (`terminals.html`) and persists through the existing `saveSetting` path.
 
 ## No migration
 

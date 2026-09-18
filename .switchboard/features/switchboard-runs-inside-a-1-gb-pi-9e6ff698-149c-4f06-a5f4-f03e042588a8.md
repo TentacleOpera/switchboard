@@ -23,7 +23,7 @@ The standalone host runs a real team on a 1 GB device within a stated 800 MB pea
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Two Configurations: Board Only, and Board Plus Agents](../plans/two-configurations-board-only-and-board-plus-agents.md) — **CODE REVIEWED** — ID: c76ca59b-5ad5-4684-bbd8-0124e85aebde
-- [ ] [The Board Must Fit a 1 GB Pi, and It Is the Peak That Does Not](../plans/the-board-must-fit-a-1gb-pi-and-the-peak-is-what-does-not.md) — **CODE REVIEWED** — ID: 8b7e5490-ebb5-4782-8467-592cdd03c2c4
+- [ ] [The Board Must Fit a 1 GB Pi, and It Is the Peak That Does Not](../plans/the-board-must-fit-a-1gb-pi-and-the-peak-is-what-does-not.md) — **COMPLETED** — ID: 8b7e5490-ebb5-4782-8467-592cdd03c2c4
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

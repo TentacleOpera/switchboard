@@ -1,3 +1,9 @@
+---
+name: manage-features
+description: Create, group, and rearrange Switchboard features — Create (remote file write, no extension needed), Create from Plans (create-feature.js, requires the extension running), Group (scan/cluster/propose), Rearrange (split/move/merge subtasks without rewriting content).
+allowed-tools: Bash
+---
+
 # Manage Features
 
 Create, group, and rearrange Switchboard features. This skill consolidates four

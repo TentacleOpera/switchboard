@@ -73,6 +73,22 @@ runner and must not inherit a mission's rule.
 So this is assembly, not invention: take the `ready` set, sort it with the function that already
 encodes the precedence, dispatch the top one. The only genuinely new surface is `--complexity`.
 
+**One caller class the problem analysis missed: prompt-injected seats.** `switchboard next` is not
+only typed by operators and called by in-process queue machinery — three prompt sites instruct
+*agents* to run it at a shell:
+
+- `teamWiring.ts:666` (team head prompt): *"run node \"<cliPath>\" next (or switchboard next); if it
+  returns a dispatched card, work it; if it returns dispatched: null, report that the queue is
+  empty and stop."*
+- `teamWiring.ts:684` (review team head prompt): same pattern after a passed review.
+- `PlanIngestionEngine.ts:2056` (queue-stall nudge): *"Make the call: run `node "<cliPath>" next`"*
+  — injected into a stalled head's terminal by the queue watch.
+
+These callers rely on `SWITCHBOARD_TERMINAL` (host-injected per seat) and on `next` popping that
+team's STAGING queue. Re-pointing the bare word `next` at board-priority dispatch without giving
+these prompts a new word makes every prompted head dispatch the board's top card — unseat-attributed,
+team-agnostic — the moment this lands.
+
 ### What already works and must not be disturbed
 
 - **`dispatch`.** `next` selects a card and then behaves exactly as `dispatch` does. No second
@@ -83,10 +99,15 @@ encodes the precedence, dispatch the top one. The only genuinely new surface is 
   priority order-by; a third copy inside `next` would be the same defect again.
 - **Missions.** Untouched. A mission's committed sequence is not reordered by stars, and this plan
   does not change that — it only stops `next` behaving as though the board were one.
+- **The seat pop itself.** `_runQueuePop`, `dispatchNextFromQueue`, the `_queueNextChain`
+  serialisation, the queue/done handler, the schedule timer, the Run-queue button and the handoff
+  all keep their exact behaviour. Only the *name* seats type to reach it changes (see Proposed
+  Changes §3).
 
 ### Non-goals
 
-- **Deprecating `STAGING`.** Tracked elsewhere. This plan stops `next` depending on it; it does not
+- **Deprecating `STAGING`.** Tracked elsewhere (the `staging-column-*` and
+  `feature_plan_…triage-staging-column…` plans). This plan stops `next` depending on it; it does not
   remove the column.
 - **Changing what `dispatch` does** once it has a card.
 - **Changing mission queue ordering.**
@@ -95,18 +116,18 @@ encodes the precedence, dispatch the top one. The only genuinely new surface is 
 ## Metadata
 
 **Feature:** (unassigned)
-- **Complexity:** 5
+- **Complexity:** 6
 - **Tags:** cli, backend, kanban
 
 ## User Review Required
 
 - **[RESOLVED 2026-09-17] No random tiebreak — most recent wins.** Operator: *"no need for fancy
-  tiebreak, just choose the most recent."* That is already step 3 of `compareByPrecedence`
-  (`column_entered_at DESC`), so there is **no tiebreak code to write**. `next` is deterministic:
-  the same board dispatches the same card.
+  tiebreak, just choose the most recent."* That is step 3+ of `compareByPrecedence`
+  (`column_entered_at DESC`, then `createdAt DESC`), so there is **no tiebreak code to write**.
+  `next` is deterministic: the same board dispatches the same card.
 - **[RESOLVED 2026-09-17] `priority` is the urgency field.** So `compareByPrecedence(..., 'priority')`
-  implements the intended order end to end — starred, then priority, then most recent. `next` writes
-  no ordering of its own.
+  implements the intended order end to end — starred, then priority, then the existing fallbacks.
+  `next` writes no ordering of its own.
 - **[RESOLVED 2026-09-17] `--complexity` is a general match** against the complexity bands the
   product already has. Dispatch routes on them today: *"default bands 1–4 intern / 5–6 coder / 7+
   lead; honors custom routing maps"* (`LocalApiServer.ts:3440`). `--complexity` resolves through that
@@ -118,24 +139,41 @@ encodes the precedence, dispatch the top one. The only genuinely new surface is 
 ### Routine
 
 - Filtering the ready set and sorting it with an existing comparator.
-- Handing the chosen card to the existing dispatch path.
-- Removing `--from` and the `SWITCHBOARD_TERMINAL` requirement from `cmdNext`.
+- Handing the chosen card to the existing dispatch path (`performKanbanDispatch` — the in-process
+  method behind `POST /kanban/dispatch`, `LocalApiServer.ts:3312`).
+- Re-pointing three prompt strings from `next` to the renamed seat command.
 
 ### Complex / Risky
 
-- **`next` currently has callers that are not operators.** `_runQueuePop` is called in-process by the
-  schedule timer, the `Run queue` button, the handoff, and the seat-paced `queue/done` handler, all
-  through one serialisation point. Those callers want the *existing* seat-and-team behaviour. This
-  plan changes the **CLI command**, and must not silently re-point those callers at board-priority
-  selection — that would reorder work for every team on the board.
+- **`next` currently has callers that are not operators — and one class was invisible to a code
+  audit.** `_runQueuePop` is called in-process by the schedule timer, the `Run queue` button, the
+  handoff, and the seat-paced `queue/done` handler, all through one serialisation point. Those
+  callers want the *existing* seat-and-team behaviour. This plan changes the **CLI command**, and
+  must not silently re-point those callers at board-priority selection — that would reorder work
+  for every team on the board.
 
-  The honest shape is that `switchboard next` stops calling `queue/next` and calls a new
-  priority-selection path instead, leaving `queue/next` to its in-process callers until STAGING's
-  deprecation deals with them.
+  On top of the in-process callers, **agent prompts instruct seats to type `switchboard next`**
+  (teamWiring ×2, PlanIngestionEngine ×1 — cited in Problem analysis). No amount of endpoint care
+  helps if the word a head was taught now means something else. The honest shape is a **rename**:
+  the seat-pop CLI surface keeps its code and gets a new name (`pop`), the prompts are updated to
+  it, and `next` is freed to be the operator command.
 
-- **`--complexity` must resolve through the board's routing map**, not a copy of the bands. The
-  bands are configurable; a hardcoded `1-4 / 5-6 / 7+` in `next` would filter differently from the
-  way the same board routes a dispatch, on the same card, in the same command.
+- **`--complexity` must resolve through the board's routing map, not a copy of the bands — and not
+  the live-pool-degraded copy either.** The bands are configurable; a hardcoded `1-4 / 5-6 / 7+` in
+  `next` would filter differently from the way the same board routes a dispatch, on the same card,
+  in the same command. The subtler trap: the wired `resolveRoutedRole` seam
+  (`bootstrap.ts:5101`, `LocalApiServer.ts:672`) calls `KanbanProvider.resolveRoutedRole(score)`
+  with `degradeLivePool` defaulting to **true** (`KanbanProvider.ts:1940`) — it answers "where would
+  this card go *right now*", which silently depends on which seats happen to be live. A band filter
+  is a card property, not a dispatch outcome; it must resolve the **preferred** role
+  (`resolveRoutedRole(score, project, false)` — custom map + pair-mode bypass, no live-pool
+  degradation), or `--complexity intern` returns an empty set whenever no intern seat is up, on a
+  board full of intern-band cards.
+
+- **The dependency gate cannot live in the CLI.** `isDependencyReady` resolves predecessors through
+  `_dependencyReadinessSource` (`LocalApiServer.ts:6459`), which unions the hot board with the cold
+  archive (`getPlanByPlanIdUnion`). The CLI has no archive access — `GET /kanban/plans` is windowed.
+  Selection therefore belongs server-side, in a new endpoint, not in `cmdNext`.
 
 ## Edge-Case & Dependency Audit
 
@@ -144,115 +182,226 @@ encodes the precedence, dispatch the top one. The only genuinely new surface is 
 - **Two operators run `next` at once.** Both select before either dispatches, and the same card goes
   twice. The board already tolerates this — *"V81: the board never refuses a dispatch… a duplicate
   dispatch is valid; it overwrites the advisory owner"* — so this is not a correctness failure, but
-  `next` should report the card it dispatched so the second operator sees what happened.
+  `next` should report the card it dispatched so the second operator sees what happened. The new
+  endpoint does NOT need `_queueNextChain` serialisation for correctness (that chain exists to
+  protect the pop's owner-stamp ordering, not the board); enqueuing on it anyway is harmless and
+  keeps "one dispatch at a time" true if a pop is in flight — cheap insurance, recommended.
 
 ### Side Effects
 
 - **An empty candidate set must be ordinary.** No ready cards, or none matching the filters, is a
-  normal outcome, not an error: say so plainly and exit 0. Treating it as a failure makes an idle
-  board look broken.
-- **Removing `--from` is a breaking change** for anyone driving `next` by hand today. It is also the
-  point of the plan. Say so in the help text rather than accepting it silently.
+  normal outcome, not an error: the endpoint returns `200` `{success:true, dispatched:null,
+  reason}` — the same shape `queue/next` already returns for an empty queue — and the CLI prints a
+  plain message and exits 0. Treating it as a failure makes an idle board look broken. (Note:
+  `ready` exits 2 on empty; `next` deliberately follows the `queue/next` 200-null contract instead —
+  the command *did* run, there was simply nothing to dispatch.)
+- **A seat that still types `switchboard next` after this lands** gets an operator dispatch, not a
+  queue pop. That is the intended semantics of the command — but it is exactly why the prompt
+  migration in §3 is load-bearing, and why `pop` must ship in the same change.
+- **Removing `--from` from `next` is a breaking change** for anyone driving it by hand today. It is
+  also the point of the plan. Passing `--from` must be a usage error that names `pop`, not a silent
+  ignore.
+- **`isDependencyReady` lookup faults hold the card, per the pop's rule** (`LocalApiServer.ts:4105`):
+  a fault BLOCKS the card it happened on — the gate exists to refuse, so its failure mode is
+  refusal. A fault on one card must not empty the whole candidate set.
 
 ### Dependencies & Conflicts
 
-- Sequences with the `STAGING` deprecation but does not block on it — `next` stops reading STAGING
-  either way.
-- Standalone only, per the cutover rule.
+- Sequences with the `STAGING` deprecation (`staging-column-2-frontend-dispatch-cleanup`,
+  `staging-column-3-skills-docs-tests`, `feature_plan_20260827161635_triage-staging-column-…`) but
+  does not block on it — `next` stops reading STAGING either way. What happens to `queue/next` when
+  STAGING goes is deliberately left to those plans; its in-process callers keep a working source
+  until then.
+- **Composition-root scope:** the new endpoint lives in `LocalApiServer` (shared service — it lands
+  in both hosts automatically). The new `resolveRoutingBand` seam is wired in `bootstrap.ts`
+  (standalone) only, per the cutover rule: the CLI that consumes it is standalone-only, and on a
+  host without the seam a `--complexity` request must fail loudly (400), never silently widen to
+  "no filter". `cmdNext`/`cmdPop` are `cli.ts` — standalone only.
+- **The orchestration protocol** (`bundledProtocols.ts` HTTP-surface skill) documents
+  `POST /kanban/queue/next` — unchanged by this plan. The new endpoint should be added to that
+  endpoint table so external agents can find it (the authoritative `GET /catalog` picks it up
+  automatically; the hand-written table does not).
+
+## Dependencies
+
+- None blocking. Sequences with the STAGING-deprecation plans listed under Dependencies & Conflicts.
 
 ## Adversarial Synthesis
 
-The risk is that `next` and `queue/next` share a name and a history but not a purpose, and a coder
-collapsing them would re-point the schedule timer, the queue button and the handoff at board-wide
-priority selection — reordering work for every team. The mitigation is stated in Complex/Risky: the
-CLI command gets its own selection path; the in-process callers keep theirs.
-
-The second risk is a third copy of the ordering rules. There are already two that do not know about
-the shipped priority order-by. `next` calls `compareByPrecedence` or it is wrong.
+Key risks: (1) the seat-pop surface is name-coupled — `switchboard next` is baked into agent prompts
+(teamWiring ×2, the queue-stall nudge), so repurposing the bare word without shipping `pop` and
+migrating the prompts makes every prompted head dispatch the board's top card unseat-attributed;
+(2) `--complexity` resolved through the *wired* `resolveRoutedRole` seam silently degrades against
+the live seat pool — a band filter must use the non-degraded preferred role or it returns different
+answers minute to minute; (3) a third copy of the ordering rules. Mitigations: `pop` ships in the
+same diff with the prompts repointed; a new non-degrading `resolveRoutingBand` seam; selection calls
+`compareByPrecedence` and `isDependencyReady` or it is wrong.
 
 ## Proposed Changes
 
-### 1. `next` selects by board priority over the ready set
+### 1. `POST /kanban/dispatch/next` — select by board priority, then dispatch
 
-Candidate set: the `READY_COLUMNS` set (`PLAN REVIEWED`, `CREATED`), subtasks excluded — the same
-set `ready` lists. Narrowed by `--project` and `--complexity` when given.
+New route in `LocalApiServer.ts` (register beside `/kanban/queue/next` at ~`:14456`; handler beside
+`_handleKanbanQueueNext` at ~`:4325`). Body: `{ workspaceRoot?, project?, complexity? }`. Auth:
+`_checkAuth(req, true)`, same as the queue/next handler.
 
-Order with `compareByPrecedence(..., mode: 'priority')` and take the first: starred first, then
-priority (the urgency field), then `column_entered_at` descending — most recent wins a tie.
+Selection, in order:
 
-That comparator is the **entire** selection rule. `next` writes no ordering logic, no tiebreak and no
-randomisation; it filters, sorts with the existing function, and dispatches `[0]`.
+1. Board rows via `this._resolveBoard(db)` (the same windowed read `GET /kanban/plans` uses,
+   `:10489`) after `const db = await this._options.getKanbanDatabase?.(workspaceRoot)` → 503 when
+   absent, mirroring `_runQueuePop`'s guard.
+2. Candidates: `kanbanColumn ∈ READY_COLUMNS`, `featureId` empty, and `!completedAt`.
+   *(Clarification — the completed-card exclusion mirrors the pop's `isQueueable` at `:4123`; a
+   completed card stranded in a ready column is not dispatchable work. `ready` does not filter it
+   because `ready` only lists; `next` acts.)*
+3. `project` filter: exact match on `p.project`, same semantics as `filterPlans` (`cli.ts:698`).
+4. `complexity` filter (when given): the flag value is a **band name** — `intern`, `coder`, or
+   `lead` (case-insensitive; anything else → 400). A card matches when its **preferred routing
+   role** equals the band: `resolveRoutingBand(parseComplexityScore(String(p.complexity)),
+   p.project)`, where the new seam is `resolveRoutedRole(score, project, /*degradeLivePool*/ false)`
+   — custom routing map + pair-mode bypass applied, live-pool degradation NOT applied (see Complex /
+   Risky: the filter is a card property, not a dispatch outcome). An unparseable/unknown complexity
+   resolves to `lead`, matching `resolveAutoDispatchColumn`'s `isUnknown → lead` rule
+   (`KanbanProvider.ts:10413`) so `--complexity lead` sees the same set dispatch would route to
+   lead. **If `complexity` is given and the seam is absent → 400** — a routing read must never
+   silently widen to "no filter" (fallback rule).
+5. Dependency gate — a **filter, not a refusal**, exactly as the pop does (`:4079-4116`): build
+   `_dependencyReadinessSource(db, board)` once; per candidate, `isDependencyReady(planId,
+   { ...base, onBlocked })`; blocked cards are collected with their `blockedBy` name; a lookup fault
+   holds that card only. A card with no rows in `plan_dependencies` is always a candidate
+   (NULL-inert — one empty query per card, nothing else changes).
+6. Order survivors with `compareByPrecedence(a, b, 'PLAN REVIEWED', 'priority')` and take `[0]`.
+   The column argument is a constant — both candidate columns are non-STAGING, so the STAGING
+   branches never fire and the constant only documents "this is board order, not mission order".
 
-Dispatch the chosen card through the existing dispatch path. Report which card was chosen and why —
-star, priority and date — so an operator can see the selection rather than guess it.
+   *(Clarification — the full chain in `'priority'` mode is starred → priority → `column_order`
+   (NULL first = "just arrived") → `column_entered_at` DESC → `createdAt` DESC
+   (`kanbanOrdering.ts:84-182`). "Then most recent" in the Goal is shorthand: a manually-arranged
+   card outranks a same-star same-priority rival regardless of recency. That IS the board's own
+   precedence — the operator sees it on screen — so the comparator is used unchanged and nothing is
+   special-cased.)*
+7. Dispatch the winner in-process: `performKanbanDispatch(workspaceRoot, planId, /*rawColumn*/
+   undefined)` → omitted column = `'auto'` = complexity routing, byte-for-byte `dispatch`'s default.
+   No `originTerminal`, no `targetTerminalOverride` — team-scoped resolution falls back to
+   workspace-wide with the miss named in `teamRouting`, exactly as an operator `dispatch` does.
+8. Response: on dispatch, pass through `performKanbanDispatch`'s status and payload, plus a
+   `selection` field naming *why* — `{ planId, topic, starred, priority, columnEnteredAt,
+   considered, skippedBlocked: [{planId, blockedBy}] }` — so a second racing operator sees what
+   happened. On empty: `200` `{success:true, dispatched:null, reason:'nothing ready'}`; when every
+   candidate was dependency-blocked, `reason:'dependency-blocked'` + `dependencyBlocked:{planId,
+   blockedBy}` naming the highest-precedence blocker (the pop's contract at `:4160`, verbatim).
 
-### 2. `next` is not seat-scoped
+### 2. `resolveRoutingBand` — a non-degrading score→role seam
 
-Remove `--from` and the `SWITCHBOARD_TERMINAL` requirement from the CLI command. `next` no longer
-refuses without a seat identity, because it no longer attributes a pop to a requester — it
-dispatches the way `dispatch` does.
+- `LocalApiServer.ts` options interface (~`:672`, beside `resolveRoutedRole`):
+  `resolveRoutingBand?: (score: number, project?: string | null) => 'lead' | 'coder' | 'intern'`
+  with a comment that it is the **preferred** role — custom map + pair bypass, never live-pool
+  degradation — and that the sibling `resolveRoutedRole` option must not be reused for this filter
+  because it degrades by default.
+- `bootstrap.ts` (~`:5101`, beside `resolveRoutedRole`):
+  `resolveRoutingBand: (score, project) => kanbanProvider.resolveRoutedRole(score, project ?? undefined, false)`.
+  Standalone only — documented at the options site as intentionally absent from the legacy host
+  (the CLI consumer is standalone-only; an absent seam + `--complexity` fails loudly at the
+  endpoint).
+- `READY_COLUMNS` is currently a `cli.ts` local (`:690`). Hoist it to `kanbanOrdering.ts` as an
+  exported const (the module whose header already documents board-vs-mission precedence) and import
+  it in both `cli.ts` and `LocalApiServer.ts` — one definition of "ready to dispatch" shared by
+  `ready`, `next`, and the endpoint, per "no second definition" in What already works.
 
-`queue/next` and its in-process callers are untouched by this change.
+### 3. `pop` — the seat surface keeps its code and gets a new name
 
-### 3. A declared dependency excludes a card; an absent one never blocks
+> **Superseded:** "Remove `--from` and the `SWITCHBOARD_TERMINAL` requirement from the CLI command."
+> **Reason:** Deleting the seat-identity logic outright strands the prompt-injected callers
+> (teamWiring ×2, PlanIngestionEngine nudge): heads are *taught* to run `switchboard next`, and a
+> `next` that ignores seat identity would have them dispatch the board's top card mid-feature,
+> unseat-attributed. The identity requirement is still correct — for the *pop* it protects.
+> **Replaced with:** the seat-identity block, the `--from` flag and the `POST /kanban/queue/next`
+> call move **unchanged** into a new `cmdPop` (`switchboard pop [--from <seat>] [--json]`). `cmdNext`
+> keeps none of it.
 
-Where a card has a dependency recorded in `plan_dependencies` and its predecessor has not completed,
-that card is not a candidate — `next` skips it and takes the next in precedence. A card with **no**
-declared dependency is always a candidate.
+- `cli.ts`: rename the existing `cmdNext` body (identity resolution `:2362-2394`, the
+  `queue/next` POST `:2404-2408`, the seat-flavoured reporting `:2419-2432`) to `cmdPop`; wire
+  `process.argv[2] === 'pop'` beside `:4687`.
+- New `cmdNext`: parse `--project`, `--complexity <band>`, `--json`; reject `--from`/`--from=` and
+  any unknown flag with a usage error (exit 5) that names `pop` for the seat case; ignore
+  `SWITCHBOARD_TERMINAL` entirely (a seat env var must not flip the command's meaning — the command
+  is deterministic). `POST /kanban/dispatch/next` with `{workspaceRoot, project?, complexity?}`;
+  status → `dispatchExitCode` (unchanged — it already maps every status `performKanbanDispatch`
+  emits); on `dispatched: null` print the `reason` plainly and exit 0; on success print the card
+  and the `selection` rationale (star, priority, entered-at, skipped-blocked count).
+- Subcommand registries to update: `KNOWN_SUBCOMMANDS` (~`:3709`), `HEAP_REEXEC_EXEMPT_SUBCOMMANDS`
+  (~`:3663` — `pop` is a client command, exempt like `next`/`done`), the `subcommandTargetsCwd`
+  guard (`:3814` — add `pop`), `usage()` (`:35` — `next [--project <name>] [--complexity <band>]
+  [--json]` and a new `pop [--from <seat>] [--json]` line; the help text should say in one line
+  that `pop` is what `next` used to be).
+- **Prompt migration (same diff):** `teamWiring.ts:666`, `teamWiring.ts:684`,
+  `PlanIngestionEngine.ts:2056` — `next` → `pop` in all three. The
+  `switchboard-orchestration`/HTTP-surface skill's `POST /kanban/queue/next` row is unchanged; add
+  a `POST /kanban/dispatch/next` row to its board-mutations table.
+- Contract tests asserting `next` requires `SWITCHBOARD_TERMINAL` or calls `queue/next` are
+  repointed at `pop`; new `next` tests cover the selection contract below.
 
-This must be a **filter, not a refusal.** The existing pop makes the same distinction and says why:
-refusing on the chosen card would 409 the whole call and never reach the independent work behind it.
-`next` has the same obligation — one blocked card must not stop the command returning a different,
-dispatchable one.
+### 4. Filter order is fixed: narrow first, then order
 
-Dependencies are optional and frequently absent. `isDependencyReady` in `kanbanOrdering` is the
-shared readiness rule and is NULL-inert: with no rows in `plan_dependencies` this costs one empty
-query and changes nothing. **Missing dependency data is not a blocker and must never be treated as
-one** — an undeclared dependency reads as "no dependency", which is the correct and safe default
-here, because the operator dispatching by hand had no gate either.
-
-### 4. `--project` and `--complexity` narrow the search
-
-`--project` matches `dispatch`'s existing flag. `--complexity` is new; semantics per User Review.
-
-Both filter the candidate set **before** ordering, so narrowing never changes the precedence among
-what survives.
+`--project` and `--complexity` filter the candidate set **before** the dependency gate and the sort,
+so narrowing never changes the precedence among what survives — and a narrowed-out card's broken
+dependency lookup can never hold back an unrelated run.
 
 ## Verification Plan
 
 ### Automated Tests
 
 - **A starred card outranks an unstarred one** with higher priority and a newer date.
-- **Among starred cards, higher urgency wins**; among equals, newer wins.
+- **Among starred cards, higher urgency wins**; among equals, the comparator's own fallbacks decide
+  (manual `column_order`, then `column_entered_at` DESC) — assert against the comparator, not a
+  re-implementation of it.
 - **Ties go to the most recent**, and `next` is deterministic: repeated runs against an unchanged
   board choose the same card.
 - **No seat identity is required.** `next` with no `SWITCHBOARD_TERMINAL` and no `--from` dispatches.
-- **`--from` is gone**, and passing it is a usage error rather than a silent no-op.
-- **STAGING is not consulted.** A board whose only cards are in STAGING yields "nothing to dispatch".
-- **Filters apply before ordering**: `--project` narrowing does not change the relative order of what
-  remains.
+- **`SWITCHBOARD_TERMINAL` set changes nothing** — `next` run inside a seat env dispatches the
+  board's top ready card, not that seat's queue.
+- **`--from` is gone from `next`**, and passing it is a usage error naming `pop`.
+- **`pop` keeps the old contract**: requires `SWITCHBOARD_TERMINAL`/`--from` (exit 5 otherwise),
+  POSTs `/kanban/queue/next`, and the three prompt sites (teamWiring ×2, PlanIngestionEngine nudge)
+  name `pop`, not `next`.
+- **STAGING is not consulted by `next`.** A board whose only cards are in STAGING yields "nothing to
+  dispatch" (exit 0) — and `pop` still pops them.
+- **Filters apply before ordering**: `--project` narrowing does not change the relative order of
+  what remains.
+- **`--complexity <band>` uses the configured map, not the live pool**: with a custom routing map,
+  band membership follows the map; with an intern-band card on the board and no live intern seat,
+  `--complexity intern` still selects it (non-degraded preferred role). Unknown complexity counts as
+  `lead`. An invalid band value is a usage error.
 - **A blocked dependency skips, it does not fail**: a board whose top-precedence card has an
-  incomplete predecessor dispatches the next eligible card, not an error.
+  incomplete predecessor dispatches the next eligible card and the response names the skipped card
+  and its blocker; when ALL candidates are blocked, `200` + `dependencyBlocked` names the
+  highest-precedence blocker.
 - **No dependency rows is business as usual**: an empty `plan_dependencies` table changes nothing
   about which card is chosen.
-- **Empty is not an error**: no candidates exits 0 with a plain message.
+- **Empty is not an error**: no candidates → `dispatched: null`, exit 0, plain message.
 - **One ordering implementation**: the selection path calls `compareByPrecedence` and does not
-  re-implement precedence.
-- **`queue/next` is unchanged**: its in-process callers still get seat-and-team behaviour.
+  re-implement precedence; `READY_COLUMNS` has exactly one definition, imported by both `cli.ts` and
+  `LocalApiServer.ts`.
+- **`queue/next` is unchanged**: its in-process callers (schedule timer, Run-queue button, handoff,
+  `queue/done`) still get seat-and-team behaviour through `_runQueuePop`.
+- **Dispatch is dispatch**: the endpoint's dispatch leg is `performKanbanDispatch` — complexity
+  routing, gate pre-flight, and the verify-against-DB response all come from the one path.
 
 ### Goal Invariants
 
 - `next` dispatches the card an operator applying the board's own priority order would have picked.
 - A card whose declared dependency is unmet is skipped; a card with no declared dependency is never
   skipped.
-- `next` never requires a seat, a team or a queue.
-- Everything after card selection is `dispatch`'s behaviour.
+- `next` never requires a seat, a team or a queue — and never reads `SWITCHBOARD_TERMINAL`.
+- A seat's pop surface still exists (as `pop`), still requires seat identity, and every shipped
+  prompt that teaches it names `pop`.
+- Everything after card selection is `dispatch`'s behaviour (`performKanbanDispatch`).
 - Stars order the board; missions are unaffected.
-- No second ordering implementation exists.
+- No second ordering implementation exists; "ready" has one column-set definition.
 - An empty board is an ordinary outcome.
 
-## Outstanding Questions
+## Recommendation
 
-- **What happens to `queue/next` when STAGING goes?** Out of scope here, but its in-process callers
-  will need a source. This plan deliberately leaves them alone rather than guessing.
-(none outstanding)
+**Send to Coder** — complexity 6: assembly of existing machinery across CLI + server + prompts, with
+two well-named traps (the live-pool-degrading role resolver; the prompt-injected seat callers) that
+the plan now pins down explicitly.
