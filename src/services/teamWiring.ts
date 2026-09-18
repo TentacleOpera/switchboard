@@ -989,6 +989,13 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         name: 'Multi-agent planning',
         headRole: 'planner',
         machine: 'local',
+        // Its OWN jet, not the planner one. This team and `planning-team` are both
+        // `planner`-headed and are meant to run AT THE SAME TIME — one for bulk
+        // planning, this one for harder work the operator oversees by hand. Art
+        // keyed on head role alone drew them identically, so the rail and the
+        // TEAMS tab said "same team" about two teams that are not. `jet` is the
+        // team's identity; `icon` (operator-picked) still overrides it.
+        jet: 'multi-agent-planning',
         // Peer planners, not a research pool. Three planner seats draft the SAME
         // problem independently and the head reconciles the drafts. A planner
         // member cannot recursively spawn a planner team — the auto-start guard is

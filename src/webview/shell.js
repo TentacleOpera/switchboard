@@ -651,9 +651,26 @@
                 const icon = document.createElement('img');
                 icon.className = 'strip-term-icon strip-team-icon pixel-art';
                 const role = String(team.headRole || '').toLowerCase();
+                // Art resolution, in priority order:
+                //   1. iconUri  — the operator picked art for THIS team.
+                //   2. jet      — the team's own shipped jet, when it has one.
+                //   3. head role jet — the default for teams that declare neither.
+                // Step 2 exists because two teams may share a head role and still
+                // be different teams: Planning and Multi-agent planning are both
+                // `planner`-headed and are meant to run together, so role-keyed art
+                // alone drew them identically.
+                const jet = String(team.jet || '').toLowerCase();
                 icon.src = team.iconUri
+                    || (jet ? '/static/icons/team-' + encodeURIComponent(jet) + '.svg' : '')
                     || '/static/icons/team-' + (ROLE_JETS.indexOf(role) >= 0 ? role : 'lead') + '.svg';
                 icon.alt = '';
+                // A declared jet that 404s must not leave a broken glyph — fall
+                // back to the role jet, which is always one of the five shipped.
+                icon.addEventListener('error', () => {
+                    const roleSrc = '/static/icons/team-'
+                        + (ROLE_JETS.indexOf(role) >= 0 ? role : 'lead') + '.svg';
+                    if (icon.src.indexOf(roleSrc) === -1) { icon.src = roleSrc; }
+                }, { once: true });
                 btn.appendChild(icon);
             }
 

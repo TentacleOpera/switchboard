@@ -1228,12 +1228,12 @@
                 img.addEventListener('error', () => {
                     // Swap in the role portrait SVG so a 404 (deleted PNG,
                     // bad pack ref) degrades gracefully — no broken glyph.
-                    const fallback = teamsTabRolePortraitEl(group.headRole, size);
+                    const fallback = teamsTabTeamJetEl(group, size);
                     img.replaceWith(fallback);
                 });
                 return img;
             }
-            return teamsTabRolePortraitEl(group.headRole, size);
+            return teamsTabTeamJetEl(group, size);
         }
 
         /**
@@ -1252,25 +1252,43 @@
          * BEHAVIOUR, and a portrait does not).
          */
         const TEAMS_TAB_ROLE_JETS = ['lead', 'coder', 'planner', 'reviewer', 'intern'];
-        function teamsTabJetSrc(role) {
+        function teamsTabRoleJetSrc(role) {
             const r = String(role || '').toLowerCase();
             return '/static/icons/team-'
                 + (TEAMS_TAB_ROLE_JETS.indexOf(r) >= 0 ? r : 'lead') + '.svg';
         }
+        /**
+         * The jet for a TEAM — its own when it declares one, else its head role's.
+         * A team's `jet` is its identity: two teams may share a head role and still
+         * be different teams (Planning and Multi-agent planning are both
+         * `planner`-headed and are meant to run together), so role-keyed art alone
+         * drew them identically on both surfaces.
+         */
+        function teamsTabJetSrc(group) {
+            const jet = String((group && group.jet) || '').toLowerCase();
+            if (jet) { return '/static/icons/team-' + encodeURIComponent(jet) + '.svg'; }
+            return teamsTabRoleJetSrc(group && group.headRole);
+        }
 
-        function teamsTabRolePortraitEl(role, size) {
+        function teamsTabTeamJetEl(group, size) {
             // The JET FIRST — the shipped defaults carry no `icon`, so this is the
             // arm that actually renders every default team, and it must match the
             // rail. Falls through to the agent portrait and then the inline SVG if
-            // the jet ever 404s.
+            // the jet ever 404s. Takes the GROUP, not the role, so a team's own
+            // `jet` wins over its head role's.
+            const role = group && group.headRole;
             const jet = document.createElement('img');
-            jet.src = teamsTabJetSrc(role);
-            jet.alt = `${role || 'agent'} portrait`;
+            jet.src = teamsTabJetSrc(group);
+            jet.alt = `${(group && group.name) || role || 'agent'} jet`;
             jet.width = size;
             jet.height = size;
             jet.className = 'teams-card-portrait pixel-art';
             jet.style.flex = 'none';
             jet.addEventListener('error', () => {
+                // A declared jet that 404s degrades to the head-role jet before
+                // giving up on jets entirely — same ladder the rail uses.
+                const roleSrc = teamsTabRoleJetSrc(role);
+                if (jet.src.indexOf(roleSrc) === -1) { jet.src = roleSrc; return; }
                 jet.replaceWith(teamsTabRoleAgentPortraitEl(role, size));
             });
             return jet;
@@ -2434,6 +2452,11 @@
                 ...(Array.isArray(prevGroup?.acceptedKinds) ? { acceptedKinds: [...prevGroup.acceptedKinds] } : {}),
                 ...(prevGroup?.acceptedKindsSource ? { acceptedKindsSource: prevGroup.acceptedKindsSource } : {}),
                 ...(prevGroup?.purpose ? { purpose: prevGroup.purpose } : {}),
+                // The team's own jet is its IDENTITY, not an editor field — this
+                // literal drops every key it does not name, so a rename would
+                // silently collapse Multi-agent planning back onto the shared
+                // planner jet and make it look like the Planning team again.
+                ...(prevGroup?.jet ? { jet: prevGroup.jet } : {}),
             };
             // Replace or append. A NEW team is pushed optimistically so the card
             // redraws immediately; `teamsTabPendingAdoptId` is the rollback key,

@@ -1994,6 +1994,12 @@
                 name,
                 head: headName,
                 headRole,
+                // The team's OWN jet, when it declares one. Relayed separately from
+                // `iconUri` (the operator's pick) so the shell can apply the same
+                // priority both surfaces use: operator icon, then team jet, then
+                // head-role jet. Two teams can share a head role and still be
+                // different teams, so role-keyed art alone is not an identity.
+                jet: def.jet || '',
                 iconUri: iconUri || '',
                 running,
                 dispatched: (running && liveGroup) ? Boolean(_teamInFlight.get(liveGroup.id)) : false,

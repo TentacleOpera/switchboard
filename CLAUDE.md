@@ -131,6 +131,41 @@ two have genuinely diverged, stop and ask.
 - **`dist/` is not inert, though.** The standalone host runs from it (`node dist/standalone/cli.js`, and the `switchboard` CLI binary under `dist/<platform>/`), and `test:contract:pty-host-blackbox` spawns the Go pty host from it. So "nothing is served from `dist/`" is false — it is simply not what you review.
 - Contract suites run against `out/`, not `dist/`: run `npm run compile-tests` before any `test:contract:*` script or you are testing the previous build.
 
+## A green review is not a working board. ASK THE RUNNING HOST.
+
+Reviewing `src/` tells you the diff matches the plan. It does not tell you the
+product works, and the two come apart constantly. Before reporting any verdict on
+behaviour, **query the live board** — it is at `http://127.0.0.1:7777` whenever
+Switchboard is up, and it answers in one curl.
+
+Precedent (2026-09-19). The five-defaults change was reviewed against the plan,
+landed eight green contract suites, and was reported as goal-achieved while the
+operator was looking at the *old* teams. Three separate reasons, none of them
+visible in a diff:
+
+- **The host was running stale bytes.** `dist/standalone/cli.js` had been rebuilt
+  44 minutes *after* the node process started. Node reads the bundle once; writing
+  it under a live process changes nothing. `ps -eo lstart` on the host versus the
+  bundle's mtime is the check, and a restart is the fix.
+- **A webview surface lost its only host-free fallback.** The TEAMS gallery used to
+  draw five hard-coded shipped types, so a missed `agentGroups` response was
+  invisible. Deleting that second catalogue turned "always populated" into
+  "silently blank whenever the one fire-and-forget request is missed" — and the
+  request is posted once, on tab activation, with no retry.
+- **Two surfaces drew different art for the same team.** The rail used
+  `team-<headRole>.svg`; the TEAMS tab reached for `agent-<role>.png` and an inline
+  `<use>` portrait and never for the jet. Both "passed review" because neither
+  plan nor test ever said they had to agree.
+
+So: **when a change has a UI, open the UI.** `curl` the verbs the surface calls,
+check the served bundle is the one you built, and confirm the process predates
+nothing. "The suites are green" is evidence about the code, never about the board.
+
+Corollary — **an empty list is a claim, and it needs a source.** "The host has not
+answered yet" and "there is genuinely nothing" must never render the same string.
+That is the fallback rule above applied to a read that returns a collection, and
+it is the failure mode a passing test suite is least likely to catch.
+
 ## Users & migrations
 
 - The dividing line is whether the state **shipped in a released version**:
