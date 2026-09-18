@@ -2317,9 +2317,27 @@
             // Validate stored layouts against STORABLE_GROUP_LAYOUTS so a hand-edited
             // or stale setting cannot inject an unknown layout id. Storable, not
             // rendered: a derived group's preference may be 'auto'.
+            //
+            // `layouts` is the RETIRED key — sizes chosen by the logic this change
+            // replaced. It is still carried through the loader so the shape of the
+            // stored object is preserved, but getStoredGroupLayout no longer reads it;
+            // `layoutPrefs` is the live one. A derived group with only a `layouts`
+            // entry therefore reads as having no preference, which sizes from its
+            // membership — the clean slate, reached by not reading rather than by
+            // rewriting.
             const savedLayouts = (savedGroupPrefs.layouts && typeof savedGroupPrefs.layouts === 'object')
                 ? Object.fromEntries(
                     Object.entries(savedGroupPrefs.layouts)
+                        .filter(([_, v]) => typeof v === 'string' && STORABLE_GROUP_LAYOUTS.includes(v))
+                )
+                : {};
+            // MUST be carried here: groupPrefs is rebuilt from this whitelist on every
+            // load, so a key the initialiser omits is silently dropped on the next
+            // save. That is how an operator's AUTO pick would survive exactly until
+            // they reloaded the panel.
+            const savedLayoutPrefs = (savedGroupPrefs.layoutPrefs && typeof savedGroupPrefs.layoutPrefs === 'object')
+                ? Object.fromEntries(
+                    Object.entries(savedGroupPrefs.layoutPrefs)
                         .filter(([_, v]) => typeof v === 'string' && STORABLE_GROUP_LAYOUTS.includes(v))
                 )
                 : {};
@@ -2352,6 +2370,7 @@
                 pinned: Array.isArray(savedGroupPrefs.pinned) ? savedGroupPrefs.pinned.filter(id => typeof id === 'string') : [],
                 orders: (savedGroupPrefs.orders && typeof savedGroupPrefs.orders === 'object') ? savedGroupPrefs.orders : {},
                 layouts: savedLayouts,
+                layoutPrefs: savedLayoutPrefs,
                 extras: savedExtras,
                 kanbanPanes: savedKanbanPanes,
                 // Opt-in and stays opt-in: absent or non-true reads as false.
@@ -4482,19 +4501,29 @@
 
     /**
      * Read a group's stored layout PREFERENCE. Manual groups carry it on the group
-     * object (group.layout); derived groups carry it in groupPrefs.layouts[id].
-     * Returns AUTO_LAYOUT, a LAYOUT_MODES value, or null when nothing is stored.
+     * object (group.layoutPref); derived groups carry it in groupPrefs.layoutPrefs[id].
+     * Returns AUTO_LAYOUT, a LAYOUT_MODES value, or null when nothing is stored —
+     * and null sizes from the roster, exactly as AUTO_LAYOUT does.
+     *
+     * NOT `group.layout` / `groupPrefs.layouts`. Those hold sizes decided by the
+     * one-shot spawn-time and picker logic this change replaces, and they are the
+     * numbers that logic got wrong — a team frozen at the pane count it had on its
+     * first day. Reading a new field instead retires all of them at once, with no
+     * migration pass, no re-run flag and nothing to undo: absence already means auto,
+     * so every existing group is auto on its next load. `group.layout` survives only
+     * because the load-time filters still require a valid one for the row to load at
+     * all; nothing reads it for sizing.
      *
      * Validated against STORABLE_GROUP_LAYOUTS, not LAYOUT_MODES: 'auto' is a legal
-     * stored value and rejecting it here would silently demote every auto group to
-     * the no-preference path, which happens to behave the same — a fallback
-     * indistinguishable from the real answer, and no error to find it by.
+     * stored value and rejecting it here would silently demote an explicitly-chosen
+     * auto to the no-preference path — which behaves the same, so the demotion would
+     * never surface, and the operator's choice would simply stop being recorded.
      */
     function getStoredGroupLayout(group) {
-        if (group.source === 'manual' && group.layout && STORABLE_GROUP_LAYOUTS.includes(group.layout)) {
-            return group.layout;
+        if (group.source === 'manual' && group.layoutPref && STORABLE_GROUP_LAYOUTS.includes(group.layoutPref)) {
+            return group.layoutPref;
         }
-        const stored = groupPrefs.layouts && groupPrefs.layouts[group.id];
+        const stored = groupPrefs.layoutPrefs && groupPrefs.layoutPrefs[group.id];
         if (typeof stored === 'string' && STORABLE_GROUP_LAYOUTS.includes(stored)) {
             return stored;
         }
@@ -4512,10 +4541,10 @@
     function setStoredGroupLayout(group, value) {
         if (!group || !STORABLE_GROUP_LAYOUTS.includes(value)) { return; }
         if (group.source === 'manual') {
-            group.layout = value;
+            group.layoutPref = value;
         } else {
-            if (!groupPrefs.layouts) { groupPrefs.layouts = {}; }
-            groupPrefs.layouts[group.id] = value;
+            if (!groupPrefs.layoutPrefs) { groupPrefs.layoutPrefs = {}; }
+            groupPrefs.layoutPrefs[group.id] = value;
         }
     }
 

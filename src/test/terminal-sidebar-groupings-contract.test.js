@@ -523,11 +523,11 @@ test('the layout picker authors the locked group\'s layout and re-pages it', () 
     );
     const store = block(terminalsJs, 'function setStoredGroupLayout(group, value) {', 'function layoutForGroupSwitch(');
     assert.ok(
-        /groupPrefs\.layouts\[group\.id\] = value/.test(store),
-        'a derived group\'s picked layout must be stored in groupPrefs.layouts'
+        /groupPrefs\.layoutPrefs\[group\.id\] = value/.test(store),
+        'a derived group\'s picked layout must be stored in groupPrefs.layoutPrefs'
     );
     assert.ok(
-        /group\.layout = value/.test(store),
+        /group\.layoutPref = value/.test(store),
         'a manual group\'s picked layout must be stored on the group object'
     );
     assert.ok(
@@ -1184,7 +1184,7 @@ test('the seated live count is stamped by seatActiveGroupPage, not by the fetch 
  * roster. The code was present and dead. Only executing it against a real team-group
  * shape distinguishes "the fallback exists" from "the fallback runs".
  */
-function makeLayoutResolver(groupPrefsLayouts) {
+function makeLayoutResolver(groupPrefsLayoutPrefs) {
     const src = block(terminalsJs, '    function getStoredGroupLayout(group) {', '    function findGroupForTerminalName(');
     const factory = new Function('deps', `
         const LAYOUT_MODES = deps.LAYOUT_MODES;
@@ -1203,7 +1203,7 @@ function makeLayoutResolver(groupPrefsLayouts) {
         LAYOUT_MODES: ['1', '2h', '2v', '1x3', '2x2', '2x3', '3x3'],
         AUTO_LAYOUT: 'auto',
         STORABLE_GROUP_LAYOUTS: ['auto', '1', '2h', '2v', '1x3', '2x2', '2x3', '3x3'],
-        groupPrefs: { layouts: groupPrefsLayouts || {} },
+        groupPrefs: { layoutPrefs: groupPrefsLayoutPrefs || {} },
         getGroupMembers: (g) => (g.__live || []),
         smallestLayoutFitting: (n) => (LADDER.find(([, slots]) => slots >= n) || ['3x3'])[0],
     });
@@ -1211,13 +1211,22 @@ function makeLayoutResolver(groupPrefsLayouts) {
 
 // A spawned team as teamWiring actually persists it: source 'manual', a full roster in
 // order/members, and only two of the four live because the fleet poll has not caught up.
-function teamGroup(layout) {
+function teamGroup(layoutPref) {
     return {
-        id: 'team_lead_1', name: 'lead-1', source: 'manual', layout,
+        id: 'team_lead_1', name: 'lead-1', source: 'manual', layout: 'auto', layoutPref,
         members: ['lead-1', 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-intern'],
         order: ['lead-1', 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-intern'],
         __live: ['lead-1', 'lead-1-coder-1'],
     };
+}
+
+// A group exactly as it exists on disk BEFORE this change: a concrete size chosen by
+// the replaced logic, sitting in `layout`, and no `layoutPref` at all.
+function preAutoTeamGroup(layout) {
+    const g = teamGroup(undefined);
+    delete g.layoutPref;
+    g.layout = layout;
+    return g;
 }
 
 test("auto: a team on 'auto' sizes to its full roster, not to the live subset", () => {
@@ -1245,13 +1254,13 @@ test('auto: the preference round-trips for manual and derived groups alike', () 
     const r = makeLayoutResolver(prefs);
     const manual = teamGroup('2x3');
     r.setStoredGroupLayout(manual, 'auto');
-    assert.strictEqual(manual.layout, 'auto', 'a manual group carries the preference on the row');
+    assert.strictEqual(manual.layoutPref, 'auto', 'a manual group carries the preference on the row');
     assert.strictEqual(r.getStoredGroupLayout(manual), 'auto');
     assert.strictEqual(r.layoutForGroupSwitch(manual), '2x2', 'and the grid follows the roster immediately');
 
     const derived = { id: 'dg_role_planner', source: 'role', __live: ['p1', 'p2', 'p3'] };
     r.setStoredGroupLayout(derived, 'auto');
-    assert.strictEqual(prefs['dg_role_planner'], 'auto', 'a derived group keeps it in groupPrefs.layouts');
+    assert.strictEqual(prefs['dg_role_planner'], 'auto', 'a derived group keeps it in groupPrefs.layoutPrefs');
     assert.strictEqual(
         r.layoutForGroupSwitch(derived), '1x3',
         'a derived group has no authored roster, so auto sizes to its live membership'
@@ -1272,6 +1281,63 @@ test("auto: an unknown stored layout is rejected rather than trusted", () => {
         'a hand-edited or stale layout id must not reach setLayoutMode'
     );
     assert.strictEqual(r.layoutForGroupSwitch(teamGroup('9x9')), '2x2', 'and the roster sizes it instead');
+});
+
+test('auto: every group that predates this change reads as auto, with no migration', () => {
+    // The clean slate, and the reason there is no migration pass, no one-shot flag and
+    // nothing to undo. Every stored size was produced by the sizing logic this change
+    // replaces, so none of them is worth carrying: the preference moved to a field
+    // those rows do not have, and an absent preference already sizes from the roster.
+    const r = makeLayoutResolver();
+    for (const stale of ['1', '2h', '2v', '1x3', '2x2', '2x3', '3x3']) {
+        const g = preAutoTeamGroup(stale);
+        assert.strictEqual(
+            r.getStoredGroupLayout(g), null,
+            `a pre-change row's layout:'${stale}' must not be read back as a preference`
+        );
+        assert.strictEqual(
+            r.layoutForGroupSwitch(g), '2x2',
+            `a 4-member team stored as '${stale}' must open on its roster, not on the old size`
+        );
+    }
+    // Same for a derived group whose only entry is under the retired key.
+    const r2 = makeLayoutResolver();
+    const derived = { id: 'dg_role_planner', source: 'role', __live: ['p1', 'p2', 'p3'] };
+    assert.strictEqual(r2.getStoredGroupLayout(derived), null);
+    assert.strictEqual(r2.layoutForGroupSwitch(derived), '1x3');
+});
+
+test('auto: a pick made AFTER the change sticks — the slate is wiped once, not every load', () => {
+    // The hazard a flip-the-values migration would have carried: loadLayoutSettings
+    // re-runs on every team-scope entry, so anything that rewrites stored sizes in
+    // place would overwrite a cap the operator chose since. Retiring the old field
+    // cannot re-run, because there is nothing to run.
+    const r = makeLayoutResolver();
+    const g = preAutoTeamGroup('2h');
+    assert.strictEqual(r.layoutForGroupSwitch(g), '2x2', 'starts on the roster');
+    r.setStoredGroupLayout(g, '2h');
+    assert.strictEqual(g.layout, '2h', 'the retired field is left exactly as it was');
+    assert.strictEqual(r.layoutForGroupSwitch(g), '2h', 'and a deliberate cap now wins');
+    assert.strictEqual(
+        r.getStoredGroupLayout(g), '2h',
+        'the pick is read back from the live field, so a reload cannot silently drop it'
+    );
+});
+
+test('auto: groupPrefs.layoutPrefs survives the loader whitelist', () => {
+    // groupPrefs is rebuilt from an explicit whitelist on every load, so a key the
+    // initialiser omits is dropped on the next save. Omitting layoutPrefs would make a
+    // derived group's AUTO pick last exactly until the panel reloaded.
+    const init = block(terminalsJs, 'const savedGroupPrefs = await loadSetting(', 'if (LAYOUT_MODES.includes(savedMode))');
+    assert.ok(
+        /layoutPrefs: savedLayoutPrefs,/.test(init),
+        'the groupPrefs initialiser must carry layoutPrefs'
+    );
+    assert.ok(
+        /Object\.entries\(savedGroupPrefs\.layoutPrefs\)/.test(init)
+        && /STORABLE_GROUP_LAYOUTS\.includes\(v\)/.test(init),
+        'stored layoutPrefs values must be validated against the storable set'
+    );
 });
 
 test("auto: the stored-layout whitelists accept 'auto' or every auto group vanishes", () => {

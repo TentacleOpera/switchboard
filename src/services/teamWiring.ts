@@ -1733,13 +1733,16 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     const groupMembers = opts.externalHead
         ? [...childNames]
         : [headName, ...childNames];
-    // A fresh team defaults to AUTO: its grid follows its roster, which is what a
-    // team is. Sizing it once at spawn is what froze a grown team at its old pane
-    // count — and because the picker writes this same field, a computed size was
-    // indistinguishable from an operator who had deliberately chosen one. 'auto' is
-    // a value only this path and the picker write, so the two intents stay separable.
-    // Existing rows are NOT rewritten (see the merge below): their stored layout may
-    // be a real operator choice, and there is no way to tell after the fact.
+    // No team is sized at spawn any more. Deciding a pane count once, from the roster
+    // as it stood that second, is what froze a grown team at its first day's size; the
+    // panel now resolves a team's grid from its roster every time it is entered.
+    //
+    // This field is written only to keep the row loadable — the panel's two load
+    // filters still require a valid `layout` — and 'auto' is the honest value for it:
+    // no fixed size. The operator's actual preference lives in `layoutPref`, which
+    // only the layout picker writes, so a deliberate cap and an absent choice are
+    // finally distinguishable. A row without `layoutPref` sizes from its roster, which
+    // is every row that predates this change.
     const layout = TERMINALS_AUTO_LAYOUT;
     // Persisted so a reader can tell "members[0] is the head" from "the head is not a
     // seat at all". Without it the terminals panel crowns members[0] — which for an

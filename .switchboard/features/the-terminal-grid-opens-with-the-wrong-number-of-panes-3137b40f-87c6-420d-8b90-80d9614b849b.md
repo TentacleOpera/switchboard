@@ -48,6 +48,8 @@ cannot be silently dropped at load. Every suite's failure set is byte-identical 
 parent commit, and the new panel coverage is behavioural rather than source-text.
 
 The CRITICAL and MAJOR entries under `## Deferred Findings` above are resolved by this
-work; the NITs stand. One decision is left open for the author: existing team rows keep
-their stored layout rather than being migrated to `'auto'`, because a stored value cannot
-be told apart from a deliberate operator choice after the fact.
+work; the NITs stand. Per the author, existing groups get a clean slate rather than
+keeping their stored sizes: the preference moved to `layoutPref`/`layoutPrefs`, fields no
+existing row has, and an absent preference already sizes from the roster — so every group
+is auto on its next load with no migration pass and no re-run flag. The retired
+`layout`/`layouts` values stay on disk unread, only so rows still satisfy the load filters.

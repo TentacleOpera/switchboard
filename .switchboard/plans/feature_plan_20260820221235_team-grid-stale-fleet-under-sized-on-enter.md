@@ -370,8 +370,18 @@ behavioural where it matters — `makeLayoutResolver` lifts the real `getStoredG
 and `layoutForGroupSwitch` out of the panel and runs them against a real team-group shape,
 because source-text assertions are exactly what failed to catch the original dead code.
 
-**Open decision for the author:** existing team rows are **not** rewritten to `'auto'`.
-Their stored layout may be a real operator choice and there is no way to tell after the
-fact, so migrating would destroy user data to fix a default. Existing teams keep today's
-behaviour until someone clicks AUTO. If you would rather they all flip, it is a one-line
-migration in `loadLayoutSettings` — say so and it is a small follow-up.
+**Clean slate — author decision, no migration.** Every stored size was produced by the
+sizing logic this change replaces, so none of them is carried. The preference moved to a
+field those rows do not have — `group.layoutPref` for manual groups,
+`groupPrefs.layoutPrefs[id]` for derived — and an absent preference already sizes from
+the roster. So every pre-existing group is auto on its next load with **no migration
+pass, no one-shot flag and nothing to undo**. `group.layout` and `groupPrefs.layouts` are
+retired in place: still carried so rows stay loadable (both load filters require a valid
+`layout`), never read for sizing again.
+
+This shape was chosen over flipping the stored values because `loadLayoutSettings` re-runs
+on every team-scope entry — anything that rewrote sizes in place would need a durable
+one-shot flag, or it would overwrite a cap the operator had picked *since* the migration,
+on a timer, forever. Retiring the field cannot re-run, because there is nothing to run.
+Two tests pin exactly that: a pre-change row reads as no-preference for all seven stored
+modes, and a pick made afterwards is read back from the live field.
