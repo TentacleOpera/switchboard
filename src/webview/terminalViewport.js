@@ -1043,8 +1043,20 @@
         if (entry.batchQueue.length === 0) { return; }
         const combined = entry.batchQueue.join('');
         entry.batchQueue = [];
+        writeLiveChars(entry, combined);
+    }
+
+    /**
+     * The single seam where live output meets xterm: write + ack accounting via
+     * onWriteParsed + throw accounting. Both the batched flush and the lone-frame
+     * fast path go through here so the predictive-echo work hooks ONE place —
+     * do not add a second term.write call site for live output. writeReplay
+     * deliberately keeps its own path: replay is not live output, carries the
+     * suppression window, and is not billed to the ack ledger the same way.
+     */
+    function writeLiveChars(entry, text) {
         try {
-            entry.term.write(combined, () => onWriteParsed(entry, combined.length));
+            entry.term.write(text, () => onWriteParsed(entry, text.length));
         } catch (err) {
             entry.writeThrowCount = (entry.writeThrowCount || 0) + 1;
             console.error(`[Terminals] term.write failed for terminal ${entry.name}:`, err);
@@ -1205,6 +1217,7 @@
             ackSuppressChars: 0,
             bytesWritten: 0,
             writeThrowCount: 0,
+            fastPathWrites: 0,
             largestInputDataLen: 0,
             totalInputChars: 0,
             reconnectTimer: null,
@@ -2051,14 +2064,13 @@
                         writeReplay(entry, text);
                         return;
                     }
-                    entry.batchQueue.push(text);
                     // Live frame (not a replay — the awaitingReplayFrame branch
                     // returned above). Stamp the silence-signal timers: lastFrameAt
                     // on every live frame (heartbeats keep it fresh, proving the
                     // pty is alive); lastPrintableAt only when a glyph is painted,
                     // so a 12 fps no-op heartbeat never resets it. A printable
                     // frame also clears any standing "working, no output"
-                    // affordance immediately.
+                    // affordance immediately. Runs on BOTH write paths below.
                     const now = Date.now();
                     if (!entry.firstFrameAt) { entry.firstFrameAt = now; }
                     entry.lastFrameAt = now;
@@ -2068,6 +2080,27 @@
                             if (deps.workingSilenceShown.has(entry.name)) { deps.clearWorkingSilence(entry.name); }
                         }
                     }
+                    // Fast path: a lone small frame with nothing queued and no flush
+                    // already pending skips the shared rAF (~8–17 ms) that batching
+                    // would hold it for. Every guard is an ordering guarantee:
+                    // non-empty batchQueue or a pendingBatchEntries membership means
+                    // this entry has bytes ahead of this frame; suppressAnswerback
+                    // means a replay write is mid-parse and live bytes must queue
+                    // behind it inside WriteBuffer.
+                    if (entry.batchQueue.length === 0
+                        && !pendingBatchEntries.has(entry)
+                        && text.length < 512
+                        && !entry.suppressAnswerback
+                        && entry.term && !entry.disposed && !entry.suspended) {
+                        // scheduleBatchFlush is what normally arms the startup
+                        // curtain — the fast path bypasses it, so bump directly or
+                        // a lone-echo terminal never arms the curtain.
+                        deps.bumpStartupCurtain(entry.name);
+                        entry.fastPathWrites = (entry.fastPathWrites || 0) + 1;
+                        writeLiveChars(entry, text);
+                        return;
+                    }
+                    entry.batchQueue.push(text);
                     scheduleBatchFlush(entry);
                     return;
                 }
@@ -2083,7 +2116,6 @@
                         entry.lastSeq = frame.seq;
                     }
                     const rawData = base64ToUtf8(frame.data);
-                    entry.batchQueue.push(rawData);
                     // Same live-frame stamping as the binary path above.
                     const now = Date.now();
                     if (!entry.firstFrameAt) { entry.firstFrameAt = now; }
@@ -2094,6 +2126,19 @@
                             if (deps.workingSilenceShown.has(entry.name)) { deps.clearWorkingSilence(entry.name); }
                         }
                     }
+                    // Same fast path as the binary arm — a downgrade-tab's lone
+                    // echo must not keep paying the rAF either.
+                    if (entry.batchQueue.length === 0
+                        && !pendingBatchEntries.has(entry)
+                        && rawData.length < 512
+                        && !entry.suppressAnswerback
+                        && entry.term && !entry.disposed && !entry.suspended) {
+                        deps.bumpStartupCurtain(entry.name);
+                        entry.fastPathWrites = (entry.fastPathWrites || 0) + 1;
+                        writeLiveChars(entry, rawData);
+                        return;
+                    }
+                    entry.batchQueue.push(rawData);
                     scheduleBatchFlush(entry);
                 } else if (frame.t === 'hello') {
                     // Chars the server replayed but did NOT bill to this connection's

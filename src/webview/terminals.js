@@ -11382,6 +11382,7 @@
                 replayGapped: terminalReplayGaps.has(name),
                 bytesWritten: entry.bytesWritten || 0,
                 writeThrowCount: entry.writeThrowCount || 0,
+                fastPathWrites: entry.fastPathWrites || 0,
                 largestInputDataLen: entry.largestInputDataLen || 0,
                 totalInputChars: entry.totalInputChars || 0
             };
