@@ -11383,6 +11383,12 @@
                 bytesWritten: entry.bytesWritten || 0,
                 writeThrowCount: entry.writeThrowCount || 0,
                 fastPathWrites: entry.fastPathWrites || 0,
+                // Link measurements — null when unobserved, never a
+                // fabricated number: an old host that never answers {t:'ping'}
+                // reads as null, which is what distinguishes "no measurement"
+                // from "0 ms RTT".
+                lastRttMs: entry.lastRttMs ?? null,
+                flushWindowMs: entry.flushWindowMs ?? null,
                 largestInputDataLen: entry.largestInputDataLen || 0,
                 totalInputChars: entry.totalInputChars || 0
             };

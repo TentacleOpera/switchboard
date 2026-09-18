@@ -190,6 +190,34 @@ type fleet struct {
 	logDir         string
 	logState       map[string]*sessionLog
 	controllerSeat map[string]any
+	// pendingOutput is the per-terminal coalescing queue: pty chunks wait
+	// here for the shared flush tick (or an immediate flush) before becoming
+	// one seq, one ring entry and one WS frame per client. Entries live for
+	// the terminal's lifetime — allocated at create, deleted at close/rename.
+	pendingOutput map[string]*pendingBuf
+	// flushWindowMs is the last resolved coalescing window per terminal —
+	// cached so a change (attach, detach, new RTT observation) can be
+	// detected and pushed to clients as {t:'flushWindow'}.
+	flushWindowMs map[string]int64
+	// flushTicker/flushStop are the ONE fleet-level flush tick — armed while
+	// any terminal has queued output, disarmed when the pending set empties.
+	// No per-terminal timers: the tick runs at the window floor and skips
+	// terminals whose notBefore is still in the future.
+	flushTicker *time.Ticker
+	flushStop   chan struct{}
+}
+
+// ensureOutputMapsLocked lazily initialises the coalescing maps. A fleet not
+// built by main() — the test harness constructs its own literal — must not
+// panic on a nil-map write in create, routeOutput, reresolveFlushWindow or
+// rename. Caller holds f.mu (write lock).
+func (f *fleet) ensureOutputMapsLocked() {
+	if f.pendingOutput == nil {
+		f.pendingOutput = make(map[string]*pendingBuf)
+	}
+	if f.flushWindowMs == nil {
+		f.flushWindowMs = make(map[string]int64)
+	}
 }
 
 func randomToken() string {
@@ -365,10 +393,12 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 	if controlMode {
 		t.parseState = &ParseState{}
 	}
+	f.ensureOutputMapsLocked()
 	f.terminals[name] = t
 	f.clients[name] = make(map[*wsClient]struct{})
 	f.rings[name] = nil
 	f.nextSeq[name] = 0
+	f.pendingOutput[name] = &pendingBuf{}
 	// Generation 0 — the seat's first pty. A respawn bumps it.
 	go f.readOutput(name, file, t.generation)
 	// Spawn-time routing verification for a seat with NO control stream. A
@@ -444,12 +474,17 @@ func (f *fleet) readOutput(name string, file *os.File, gen int) {
 					f.routeOutput(name, string(held))
 				}
 			}
+			// An exit drain must not wait out a coalescing window — the final
+			// bytes flush synchronously, ahead of the exit frame.
+			f.flushPending(name)
 			f.mu.Lock()
 			if t := f.terminals[name]; t != nil {
 				t.status = "exited"
 			}
 			clients := f.clients[name]
 			delete(f.clients, name)
+			delete(f.pendingOutput, name)
+			delete(f.flushWindowMs, name)
 			f.mu.Unlock()
 			for client := range clients {
 				_ = client.writeJSON(map[string]any{"t": "exit", "code": 0})
@@ -913,13 +948,213 @@ func (f *fleet) broadcastControl(name, event string, fields []string) {
 	}
 }
 
+// ─── Output coalescing ────────────────────────────────────────────────────
+//
+// The window is sized to the LINK, not to a 60 Hz renderer: floor 6 ms (right
+// for loopback), ceiling 40 ms (a tailnet-scale link never waits longer), and
+// the resolved value is the MAX RTT reported by the terminal's attached
+// clients — the slowest link sets the pace. Max, not mean: a remote client
+// must not be throttled to a local one's link, and a local client must not
+// wait on a remote one's window invisibly. It is the same class of explicit
+// trade-off the retired gateway's reconcileTerminalSize made for size votes.
+const (
+	flushWindowFloorMs   = 6
+	flushWindowCeilingMs = 40
+	flushTickMs          = flushWindowFloorMs
+	// A lone chunk under this size bypasses the window entirely — a keystroke
+	// echo is a handful of bytes and holding it for coalescing buys nothing.
+	loneFrameMaxBytes = 512
+	// Per-flush byte cap: one firehose cannot build an unbounded frame.
+	// Leftovers stay queued and drain on the next tick — the same shape as
+	// the retired gateway's MAX_FLUSH_BYTES leftovers rule.
+	maxFlushBytes = 128 * 1024
+)
+
+// pendingBuf is one terminal's coalescing queue. parts/bytes/notBefore are
+// accessed ONLY under f.mu (routeOutput's read goroutine and the tick
+// goroutine both touch them). flushMu serializes an entire drain+write so two
+// racing flushes — an immediate one on the read goroutine and the shared tick
+// — cannot interleave on the wire: a client drops any seq it has already
+// seen, so an overtaken frame is data loss, not a benign reorder.
+type pendingBuf struct {
+	parts     []string
+	bytes     int
+	notBefore time.Time
+	flushMu   sync.Mutex
+}
+
+// resolveFlushWindowLocked returns the coalescing window for a terminal in
+// milliseconds: the floor, stretched toward the ceiling by the slowest
+// attached client's measured RTT. A client with rttMs == 0 is unmeasured and
+// contributes the floor — an all-unmeasured terminal resolves to the floor,
+// which is also the loopback case. Caller holds f.mu.
+func (f *fleet) resolveFlushWindowLocked(name string) int64 {
+	window := int64(flushWindowFloorMs)
+	for client := range f.clients[name] {
+		if client.rttMs > window {
+			window = client.rttMs
+		}
+	}
+	if window > flushWindowCeilingMs {
+		window = flushWindowCeilingMs
+	}
+	return window
+}
+
+// reresolveFlushWindow recomputes a terminal's window after anything that can
+// move it — attach, detach, a new RTT observation. On a change it caches the
+// value and pushes {t:'flushWindow'} to every client: a tuning value that
+// changes behaviour and cannot be read back is the shape of bug this codebase
+// keeps paying for.
+func (f *fleet) reresolveFlushWindow(name string) {
+	f.mu.Lock()
+	// A departed terminal leaves nothing to retune — and without this check a
+	// removeClient racing the exit/close teardown would re-create a
+	// flushWindowMs entry for a name that is already gone.
+	if f.terminals[name] == nil {
+		f.mu.Unlock()
+		return
+	}
+	window := f.resolveFlushWindowLocked(name)
+	if f.flushWindowMs[name] == window {
+		f.mu.Unlock()
+		return
+	}
+	f.ensureOutputMapsLocked()
+	f.flushWindowMs[name] = window
+	clients := make([]*wsClient, 0, len(f.clients[name]))
+	for client := range f.clients[name] {
+		clients = append(clients, client)
+	}
+	f.mu.Unlock()
+	for _, client := range clients {
+		if err := client.writeJSON(map[string]any{"t": "flushWindow", "ms": window}); err != nil {
+			_ = client.conn.Close()
+			f.removeClient(name, client)
+		}
+	}
+}
+
+// armFlushTickLocked starts the ONE fleet-level flush tick. Called with a
+// chunk queued and f.mu held; a no-op when the tick is already armed.
+func (f *fleet) armFlushTickLocked() {
+	if f.flushTicker != nil {
+		return
+	}
+	f.flushTicker = time.NewTicker(flushTickMs * time.Millisecond)
+	stop := make(chan struct{})
+	f.flushStop = stop
+	ticker := f.flushTicker
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				f.flushAllPending()
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+// disarmFlushTickLocked stops the tick. The goroutine exits via the stop
+// channel rather than leaking on a stopped ticker channel.
+func (f *fleet) disarmFlushTickLocked() {
+	if f.flushTicker == nil {
+		return
+	}
+	f.flushTicker.Stop()
+	close(f.flushStop)
+	f.flushTicker = nil
+	f.flushStop = nil
+}
+
 // routeOutput feeds decoded terminal bytes to the three consumers: the log
-// tee, the scrollback ring, and the browser (binary WS frames). This is the
-// body the old publish() had, factored out so the control-mode demux can call
-// it with decoded output instead of raw bytes.
+// tee, the scrollback ring, and the browser (binary WS frames). The log tee
+// is fed per chunk here; the ring append, seq advance and per-client write
+// all happen per FLUSH inside flushPending, so a coalesced burst still gets
+// one seq and one ring entry (the client's seq/lastSeq gap logic is
+// unchanged).
+//
+// The lone-frame bypass is the load-bearing half of the window: a single
+// small chunk on an empty queue flushes immediately, so a keystroke echo
+// never waits on a timer. The window only ever delays QUEUED output — chunks
+// that arrive while a burst is already forming.
 func (f *fleet) routeOutput(name, data string) {
 	f.logOutput(name, data)
 	f.mu.Lock()
+	f.ensureOutputMapsLocked()
+	buf := f.pendingOutput[name]
+	if buf == nil {
+		buf = &pendingBuf{}
+		f.pendingOutput[name] = buf
+	}
+	buf.parts = append(buf.parts, data)
+	buf.bytes += len(data)
+	lone := len(buf.parts) == 1 && len(data) < loneFrameMaxBytes
+	full := buf.bytes >= maxFlushBytes
+	if !lone {
+		// The adaptive window applies ONLY when a queue is forming
+		// (len(parts) > 1). A lone chunk of 512+ bytes is bulk output, not
+		// keystroke echo — it does not bypass — but with no queue forming it
+		// gets no notBefore either: it waits for the next tick (the floor)
+		// rather than the resolved window, and its brief sit is what lets
+		// following chunks join into a coalesced burst.
+		if !full && len(buf.parts) > 1 && buf.notBefore.IsZero() {
+			// Anchor the window at burst start. Refreshing it per chunk
+			// would let a sustained stream push the deadline forever — the
+			// hold on a queued burst is bounded at one window.
+			buf.notBefore = time.Now().Add(time.Duration(f.resolveFlushWindowLocked(name)) * time.Millisecond)
+		}
+		// Armed for the `full` case too: a cap-triggered flush can leave
+		// leftovers, and they drain on the next tick — without the tick
+		// armed they would sit until the next chunk arrived.
+		f.armFlushTickLocked()
+	}
+	f.mu.Unlock()
+	if lone || full {
+		f.flushPending(name)
+	}
+}
+
+// flushPending drains one terminal's pending queue into a single binary
+// frame per client. Called by routeOutput for the immediate cases (lone
+// frame, byte cap) and by flushAllPending for windowed output; it ignores
+// notBefore — due-ness is the caller's decision, so the exit path can drain
+// synchronously without waiting out a window.
+func (f *fleet) flushPending(name string) {
+	f.mu.RLock()
+	buf := f.pendingOutput[name]
+	f.mu.RUnlock()
+	if buf == nil {
+		return
+	}
+	buf.flushMu.Lock()
+	defer buf.flushMu.Unlock()
+	f.mu.Lock()
+	if len(buf.parts) == 0 {
+		f.mu.Unlock()
+		return
+	}
+	// Drain up to maxFlushBytes. The first part always goes even when it
+	// alone exceeds the cap — a single oversize chunk must not stall.
+	var b strings.Builder
+	total := 0
+	n := 0
+	for n < len(buf.parts) {
+		if n > 0 && total+len(buf.parts[n]) > maxFlushBytes {
+			break
+		}
+		total += len(buf.parts[n])
+		b.WriteString(buf.parts[n])
+		n++
+	}
+	data := b.String()
+	buf.parts = append([]string(nil), buf.parts[n:]...)
+	buf.bytes -= total
+	// Cleared after every drain: leftover parts (cap) become immediately due,
+	// and the next queued burst re-anchors its own window.
+	buf.notBefore = time.Time{}
 	f.nextSeq[name]++
 	event := outputEvent{Seq: f.nextSeq[name], Data: data}
 	f.rings[name] = append(f.rings[name], event)
@@ -952,15 +1187,53 @@ func (f *fleet) routeOutput(name, data string) {
 	}
 }
 
+// flushAllPending is the shared tick's pass over the fleet: flush every
+// terminal whose queued output is due, then disarm the tick when nothing is
+// queued anywhere.
+func (f *fleet) flushAllPending() {
+	now := time.Now()
+	f.mu.RLock()
+	due := make([]string, 0, len(f.pendingOutput))
+	for name, buf := range f.pendingOutput {
+		// A cleared notBefore (zero) is always due — that is the leftover-
+		// after-cap case, which must not wait out a fresh window.
+		if len(buf.parts) > 0 && !buf.notBefore.After(now) {
+			due = append(due, name)
+		}
+	}
+	f.mu.RUnlock()
+	for _, name := range due {
+		f.flushPending(name)
+	}
+	f.mu.Lock()
+	pending := false
+	for _, buf := range f.pendingOutput {
+		if len(buf.parts) > 0 {
+			pending = true
+			break
+		}
+	}
+	if !pending {
+		f.disarmFlushTickLocked()
+	}
+	f.mu.Unlock()
+}
+
 func (f *fleet) removeClient(name string, client *wsClient) {
 	f.mu.Lock()
 	if clients := f.clients[name]; clients != nil {
 		delete(clients, client)
 	}
 	f.mu.Unlock()
+	// A departing high-RTT client relaxes the window for whoever remains.
+	f.reresolveFlushWindow(name)
 }
 
 func (f *fleet) close(name string, killTmuxView bool) bool {
+	// Queued output flushes synchronously before the terminal's state is
+	// deleted — the last bytes must not wait out a coalescing window, and
+	// must not write into a map entry that is already gone.
+	f.flushPending(name)
 	f.mu.Lock()
 	t := f.terminals[name]
 	clients := f.clients[name]
@@ -968,6 +1241,8 @@ func (f *fleet) close(name string, killTmuxView bool) bool {
 	delete(f.clients, name)
 	delete(f.rings, name)
 	delete(f.nextSeq, name)
+	delete(f.pendingOutput, name)
+	delete(f.flushWindowMs, name)
 	f.mu.Unlock()
 	for client := range clients {
 		_ = client.writeJSON(map[string]any{"t": "exit", "code": 0})
@@ -1519,6 +1794,11 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 		delete(f.rings, name)
 		f.nextSeq[alias] = f.nextSeq[name]
 		delete(f.nextSeq, name)
+		f.ensureOutputMapsLocked()
+		f.pendingOutput[alias] = f.pendingOutput[name]
+		delete(f.pendingOutput, name)
+		f.flushWindowMs[alias] = f.flushWindowMs[name]
+		delete(f.flushWindowMs, name)
 		f.renameLog(name, alias)
 		return map[string]any{"success": true, "name": alias}, nil
 	case "ptySetControllerSeat":
@@ -1551,7 +1831,7 @@ func main() {
 		}
 	}
 	root, _ = filepath.Abs(root)
-	f := &fleet{root: root, token: randomToken(), terminals: map[string]*terminal{}, clients: map[string]map[*wsClient]struct{}{}, rings: map[string][]outputEvent{}, nextSeq: map[string]uint64{}, logDir: filepath.Join(root, ".switchboard", "logs"), logState: map[string]*sessionLog{}}
+	f := &fleet{root: root, token: randomToken(), terminals: map[string]*terminal{}, clients: map[string]map[*wsClient]struct{}{}, rings: map[string][]outputEvent{}, nextSeq: map[string]uint64{}, logDir: filepath.Join(root, ".switchboard", "logs"), logState: map[string]*sessionLog{}, pendingOutput: map[string]*pendingBuf{}, flushWindowMs: map[string]int64{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/terminal", f.handleWebSocket)
 	mux.HandleFunc("/api/pty/", func(w http.ResponseWriter, r *http.Request) {

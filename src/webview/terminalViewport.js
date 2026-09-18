@@ -1138,6 +1138,7 @@
         if (!entry) { return; }
         entry.disposed = true;
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        if (entry.rttProbeInterval) { clearInterval(entry.rttProbeInterval); entry.rttProbeInterval = null; }
         cancelRendererRelease(entry);
         pendingBatchEntries.delete(entry);
         entry.exited = true;
@@ -1222,6 +1223,9 @@
             totalInputChars: 0,
             reconnectTimer: null,
             reconnectDelay: 500,
+            rttProbeInterval: null,
+            lastRttMs: null,
+            flushWindowMs: null,
             resizeObserver: null,
             pendingObserver: null,
             scrollDisposable: null,
@@ -1869,6 +1873,8 @@
             try { entry.ws.close(); } catch { /* ignore */ }
             entry.ws = null;
         }
+        // onclose was detached above, so the probe cannot clear itself.
+        if (entry.rttProbeInterval) { clearInterval(entry.rttProbeInterval); entry.rttProbeInterval = null; }
         // Release the renderer — a status pane paints no terminal pixels, and a
         // WebGL context held by an invisible surface is one the visible panes
         // cannot get. entry.term is NOT disposed; its buffer survives.
@@ -1987,6 +1993,9 @@
         // The server issues a fresh ClientState with no reportedSize, so a stale true
         // here would make ensureSizeVote suppress the first report on the new socket.
         entry.sizeVoteActive = false;
+        // The RTT probe belongs to the socket that just went away — and
+        // onclose was detached above, so it cannot clear its own interval.
+        if (entry.rttProbeInterval) { clearInterval(entry.rttProbeInterval); entry.rttProbeInterval = null; }
 
         let wsUrl = `${deps.ptyHostOrigin}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
         // Connection-scoped, not per-frame: this document is a single-terminal pop-out
@@ -2033,6 +2042,14 @@
             // is the xterm construction default rather than anything the operator can
             // see. fitAndReportSize sends nothing unless there is a real box to measure.
             fitAndReportSize(entry);
+            // Application-level RTT probe — feeds the pty host's link-aware
+            // coalescing window. Interval-based (not tied to output) so the
+            // window adapts even while the pane is quiet. A server too old to
+            // know {t:'ping'} simply never answers: lastRttMs stays null and
+            // the window stays at the floor — identical to today.
+            entry.rttProbeInterval = setInterval(() => {
+                try { ws.send(JSON.stringify({ t: 'ping', ts: Date.now() })); } catch { /* socket closing */ }
+            }, 3000);
         };
 
         ws.onmessage = (event) => {
@@ -2140,6 +2157,17 @@
                     }
                     entry.batchQueue.push(rawData);
                     scheduleBatchFlush(entry);
+                } else if (frame.t === 'pong') {
+                    // Answer to the {t:'ping'} probe — measure the link and
+                    // report it back so the host can size its coalescing
+                    // window to the slowest attached client.
+                    entry.lastRttMs = Date.now() - frame.ts;
+                    try { ws.send(JSON.stringify({ t: 'rtt', ms: entry.lastRttMs })); } catch { /* socket closing */ }
+                } else if (frame.t === 'flushWindow') {
+                    // The host's resolved coalescing window — stored for the
+                    // diagnostic dump, not acted on. Older clients ignore
+                    // this frame entirely.
+                    entry.flushWindowMs = frame.ms;
                 } else if (frame.t === 'hello') {
                     // Chars the server replayed but did NOT bill to this connection's
                     // credit ledger. See onWriteParsed.
@@ -2157,6 +2185,10 @@
                     // that died before its replay arrived cannot leak into the next
                     // connection (cleared in the connectWs teardown).
                     entry.replayGap = frame.replayGap === true;
+                    // The host's resolved coalescing window at attach time —
+                    // a late-attaching client learns it here instead of
+                    // waiting for the next change push.
+                    if (typeof frame.flushWindow === 'number') { entry.flushWindowMs = frame.flushWindow; }
                     // The ring evicted output this connection never saw, so what is
                     // already on screen is not contiguous with what is about to be
                     // written. Splicing the two produces a transcript that READS
@@ -2269,6 +2301,9 @@
         };
 
         ws.onclose = () => {
+            // The probe belongs to this socket — cleared before the exited
+            // early-return so a dead terminal's interval cannot outlive it.
+            if (entry.rttProbeInterval) { clearInterval(entry.rttProbeInterval); entry.rttProbeInterval = null; }
             entry.pendingAttribution = null;
             if (entry.exited) { return; }
             // Same strand as ws.onopen: a socket that died mid-paste will never get

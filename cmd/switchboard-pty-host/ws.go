@@ -48,6 +48,8 @@ type wsMessage struct {
 	Data string `json:"data"`
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
+	Ts   int64  `json:"ts"`
+	Ms   int64  `json:"ms"`
 }
 
 // One concurrent writer per connection is gorilla/websocket's documented contract.
@@ -57,6 +59,10 @@ type wsMessage struct {
 type wsClient struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
+	// rttMs is the client's last reported round-trip in milliseconds, written
+	// by the {t:'rtt'} control frame under f.mu. Zero means unmeasured — the
+	// client contributes the coalescing floor, never stretches the window.
+	rttMs int64
 }
 
 func (c *wsClient) writeMessage(messageType int, data []byte) error {
@@ -93,8 +99,16 @@ func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	f.clients[name][client] = struct{}{}
 	replay := append([]outputEvent(nil), f.rings[name]...)
+	// Resolved while f.mu is already held: hello reports the current
+	// coalescing window so a late-attaching client learns it without waiting
+	// for a change to push one.
+	flushWindow := f.resolveFlushWindowLocked(name)
 	f.mu.Unlock()
 	defer func() { f.removeClient(name, client); _ = conn.Close() }()
+	// A new client can only relax the resolved window (it attaches
+	// unmeasured), but the check is cheap and keeps "window changed →
+	// clients told" true for every transition that can move it.
+	f.reresolveFlushWindow(name)
 	// hello + ONE coalesced binary replay frame — the shape terminals.js is built
 	// for (see setupClient in terminalWsGateway.ts, the reference implementation).
 	//
@@ -129,6 +143,7 @@ func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	_ = conn.WriteJSON(map[string]any{
 		"t": "hello", "name": name, "seq": f.next(name),
 		"replayChars": utf16Len(replayText),
+		"flushWindow": flushWindow,
 	})
 	if replayText != "" {
 		_ = conn.WriteMessage(websocket.BinaryMessage, encodeOutputFrame(replaySeq, replayText))
@@ -174,6 +189,20 @@ func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case "ack":
 			// Acknowledgements are accepted for wire compatibility. Output replay
 			// is bounded by the ring; live writes remain serialized by the PTY lock.
+		case "ping":
+			// Application-level RTT probe. gorilla's own ping/pong carries no
+			// timestamp the client can read, so the measurement rides a JSON
+			// frame: echo the client's ts straight back.
+			_ = client.writeJSON(map[string]any{"t": "pong", "ts": message.Ts})
+		case "rtt":
+			// The client's measured round trip, feeding the coalescing window.
+			// A client could lie about its RTT and only ever stretch its own
+			// terminal's window — never past the ceiling — so no validation
+			// beyond the clamp in resolveFlushWindowLocked.
+			f.mu.Lock()
+			client.rttMs = message.Ms
+			f.mu.Unlock()
+			f.reresolveFlushWindow(name)
 		}
 	}
 }
