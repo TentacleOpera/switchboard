@@ -106,6 +106,25 @@ short breaks delivery and guessing long costs seconds.
 Fallbacks on **presentation** paths (a label, a placeholder, an avatar) are fine. The test is whether
 a wrong value silently changes *behaviour*.
 
+## All work lands on `main`. NO EXCEPTIONS.
+
+Commit to `main`. Do not create a branch, do not switch to one, and do not
+commit onto a branch you happen to find checked out — **check `git rev-parse
+--abbrev-ref HEAD` before your first commit** and stop if it is not `main`.
+
+This is a single-operator repo with agents committing into one tree. A branch
+does not isolate anything here: the working tree is shared, so a branch only
+splits the *history* while every agent keeps editing the same files. The result
+is commits stranded off `main` that nobody notices until someone reads the log.
+That has already happened — `archive-in-board-database` collected three commits
+this way.
+
+If you find yourself on a branch with commits that belong on `main`, do not
+discard anything. When `main` is an ancestor, it is a fast-forward:
+`git branch -f main <branch> && git checkout main`, in that order — moving the
+pointer first means the checkout never reverts files under a dirty tree. If the
+two have genuinely diverged, stop and ask.
+
 ## Build
 
 - **Treat `src/` as the source of truth for review.** Do NOT audit, check, or flag `dist/` staleness during reviews or verification — a stale `dist/` is never the finding.

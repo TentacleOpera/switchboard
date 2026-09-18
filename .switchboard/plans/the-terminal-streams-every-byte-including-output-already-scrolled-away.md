@@ -62,10 +62,28 @@ reach this path via the raw socket splice, so one Go implementation serves both 
 
 ### 0. Restore the send queue and pressure signal (prerequisite)
 
-The live `publish()` sends every pty data event as its own frame with no queue and no backpressure.
+> **Mostly built elsewhere — re-scope before dispatching (2026-09-18).** `The Go PTY
+> host has no coalescing window — add a link-aware one` (`e05303a4`, feature
+> `94aa8b26`) adds to `cmd/switchboard-pty-host` exactly the substrate this change was
+> written to build: a per-terminal send queue (`pendingOutput`/`pendingBuf`), a
+> coalescing window clamped 6–40 ms and sized from the slowest attached client's
+> measured RTT, one fleet-level flush tick, a `maxFlushBytes` cap with leftovers
+> draining on the next tick, and a lone-frame bypass so a keystroke echo is never held.
+>
+> **Do not dispatch this plan until `e05303a4` has landed**, or both build the same
+> queue in the same file. Once it has, what remains of change 0 is only the part
+> `e05303a4` does not add: **high/low-water marks**, i.e. the pressure signal itself.
+> `e05303a4` decides *when* to flush; it does not measure whether the viewer is keeping
+> up. Change 1 still needs that trigger.
+>
+> Re-read `main.go` before rewriting this section — describe what is actually there,
+> not what this paragraph predicts.
+
+The live `publish()` sent every pty data event as its own frame with no queue and no backpressure.
 The screen-model coalescing in change 1 triggers "only under pressure," and pressure needs a queue and
-a water mark. Re-introduce a coalescing window, a per-terminal send queue, and high/low-water marks in
-Go (the retired `terminalWsGateway.ts` had `OUTPUT_FLUSH_MS`, `MAX_FLUSH_BYTES`, `HIGH/LOW_WATER_*`).
+a water mark. The queue and window arrive with `e05303a4` (above); this change adds the high/low-water
+marks on top of them (the retired `terminalWsGateway.ts` had `OUTPUT_FLUSH_MS`, `MAX_FLUSH_BYTES`,
+`HIGH/LOW_WATER_*` — the first two now have Go equivalents, the water marks do not).
 This is in-scope as the prerequisite, not a separate card — without it, change 1 has no trigger.
 
 ### 1. Drop output that has been superseded before it is sent

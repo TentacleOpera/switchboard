@@ -4,7 +4,23 @@
 
 ## Goal
 
-Three plans on the same root cause: the terminal streams and stores every byte, including output that has already scrolled away, blank runs and repeated lines — and a remote keystroke round-trips before it echoes. The feature addresses the volume and readability of what a seat emits and what a reader gets back, across two layers: the on-disk log (a screen recording that no filter can turn into a conversation) and the live wire (every byte sent, every keystroke waited on). The live surfaces are in the Go pty host (`cmd/switchboard-pty-host`) for logging and sending, and in the shared client viewport (`src/webview/terminalViewport.js`) for echo — both composition roots reach the Go host via `PtyHostSupervisor`, so the server-side work lands once for both.
+Plans on the same root cause: the terminal streams and stores every byte, including output that has already scrolled away, blank runs and repeated lines. The feature addresses the volume and readability of what a seat emits and what a reader gets back, across two layers: the on-disk log (a screen recording that no filter can turn into a conversation) and the live wire (every byte sent). The live surfaces are in the Go pty host (`cmd/switchboard-pty-host`) for logging and sending — both composition roots reach the Go host via `PtyHostSupervisor`, so the server-side work lands once for both.
+
+> **Input latency left this feature (2026-09-18).** This feature was written around
+> *output volume* and *input latency* together. The input-latency half — predictive
+> local echo — now belongs to **Typing on a Remote Board Should Not Wait on the Link**
+> (`94aa8b26`), which owns `A Remote Terminal Round-Trips Every Keystroke — Add
+> Predictive Local Echo` (`1ee5b5fa`) along with the client fast-path and Go
+> coalescing-window plans. The board has reflected the move for some time; this file's
+> prose had not, and still carried a dispatch block demanding an RTT gate on
+> prediction — a gate `94aa8b26` deliberately removed on 2026-09-17. Anyone
+> dispatching from that stale text would have rebuilt the thing that was deleted. It is
+> gone from here. **This feature is output-side only.**
+>
+> Two subtasks in the auto-generated list below — `Terminal Buffer Snapshot API`
+> (`a2eb60fa`) and `Terminal Logs Record Every Repaint, Not Every Event`
+> (`b6bc1534`) — are not described in the prose above and have no dispatch block.
+> They need both before this feature is dispatched.
 
 ### Dropped subtask — read the agent's own transcript
 
@@ -13,14 +29,20 @@ A fourth subtask — reading each CLI's native on-disk JSONL transcript instead 
 ## How the Subtasks Achieve This
 
 - **Terminal logs keep every blank run and every immediately-repeated line**: collapses blank runs and adjacent-duplicate lines in the live Go log writer (`log.go`), cutting a session log ~13% at no fidelity cost. Contributes the volume fix for the log, and the practical benefit an orchestrator model sees today.
-- **A Remote Terminal Round-Trips Every Keystroke — Add Predictive Local Echo**: adds a client-side prediction layer in `terminalViewport.js` that renders a typed character immediately and reconciles against the PTY's authoritative echo. Contributes the input-latency fix: typing stops feeling like the link.
 - **The Terminal Streams Every Byte, Including Output That Has Already Scrolled Away**: coalesces superseded output against a screen model on the Go send side under backpressure, so a ten-thousand-line build transmits one screen update, not ten thousand lines. Contributes the output-volume fix: the viewer stops waiting on a backlog of bytes it will never read.
 
 ## Dependencies & sequencing
 
 - **Subtasks are independent on the file level** and can land in any order; the sequencing below is a soft preference, not a hard dependency.
-- **Ship `The Terminal Streams Every Byte…` before `…Add Predictive Local Echo` (soft).** Output-volume coalescing drains the backlog that keystroke-echo latency sits behind; addressing the output side first reduces the queue the input side is measured against. They are different layers (Go server vs client xterm.js) and can proceed in parallel.
-- **Prerequisite guard:** the output-coalescing plan's prerequisite (restoring the send queue and backpressure the retired TS gateway had) must land as its change 0 before the screen model has a trigger.
+- **Prerequisite guard:** the output-coalescing plan's prerequisite (restoring the send queue and backpressure the retired TS gateway had) must land before the screen model has a trigger.
+- **That prerequisite is being built elsewhere (2026-09-18).** `The Go PTY host has no
+  coalescing window — add a link-aware one` (`e05303a4`, in feature `94aa8b26`) adds the
+  per-terminal send queue, the coalescing window and the flush tick to
+  `cmd/switchboard-pty-host` — substantially change 0 of
+  `The Terminal Streams Every Byte…`. **Do not dispatch `ac14e43b` until `e05303a4`
+  has landed**, or two plans build the same send queue in the same file. Once it has,
+  `ac14e43b` re-scopes to the screen model plus the high/low water marks `e05303a4`
+  does not add. See the note at the head of that plan.
 
 ## Team Dispatch Instructions
 
@@ -32,21 +54,13 @@ A fourth subtask — reading each CLI's native on-disk JSONL transcript instead 
   - ~13% fewer bytes on a captured duplicate-heavy stream; the change is in `log.go` and both hosts get it via the Go pty host.
 - **Must not touch:** the ANSI stripper, the fence-safety logic, the 10 MiB rotation cap; do not add carriage-return collapse (separate scope).
 
-### A Remote Terminal Round-Trips Every Keystroke — Add Predictive Local Echo
-- **Seat:** Lead Coder (Complexity 7)
-- **Acceptance:**
-  - On a 50 ms+ RTT link a typed character renders before the PTY echo arrives and the display converges on the PTY's output; a wrong prediction resolves without a visible flicker.
-  - No prediction at a password prompt, in alternate-screen mode, or mid-escape-sequence; backspace/arrows/control keys leave no stray predicted character; a large paste produces no per-character predictions.
-  - A local board (1 ms RTT) has prediction inactive and behaves byte-for-byte as today; the layer lives in `terminalViewport.js` only, not duplicated in `terminals.js`.
-- **Must not touch:** the server-side send path (owned by the output-coalescing subtask); the PTY remains the source of truth — a prediction never overrides authoritative echo.
-
 ### The Terminal Streams Every Byte, Including Output That Has Already Scrolled Away
 - **Seat:** Lead Coder (Complexity 7)
 - **Acceptance:**
   - A ten-thousand-line command leaves the viewer's final screen byte-identical to a full replay, while transmitting a small fraction of the bytes.
   - A terminal keeping up transmits byte-for-byte (coalescing inactive below the water mark); a progress bar animates rather than jumping.
   - The session log contains the complete byte stream regardless of coalescing; the coalescing/backpressure layer and the screen model both live in `cmd/switchboard-pty-host`.
-- **Must not touch:** the session log (logging is not a viewport — the full stream is always logged); the client-side prediction layer (separate subtask); do not alter output on a healthy link.
+- **Must not touch:** the session log (logging is not a viewport — the full stream is always logged); the client-side prediction layer and the client batch machinery in `terminalViewport.js` (both owned by feature `94aa8b26`, not by this one); do not alter output on a healthy link.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
