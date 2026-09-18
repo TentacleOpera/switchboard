@@ -52,7 +52,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveAutomatedDispatchExclusions, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { readBuildRenderOptions } from './buildTarget';
 import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName, killTmuxSession, killTmuxSessionGroup } from '../standalone/tmuxBackend';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
@@ -9135,6 +9135,33 @@ Each plan file must include:
      * therefore yields the same key regardless of how many Switchboard workspaces
      * dispatch to it — which is what the persistent rotation cursor keys off.
      */
+    /**
+     * Live terminal names that must not receive an automated dispatch, with the
+     * rule that excluded each. Resolved fresh per call — team liveness changes
+     * under us and a cached answer would route work to a seat that has gone.
+     *
+     * Non-throwing: a DB or roster failure yields an EMPTY exclusion set, which
+     * is today's behaviour rather than a dispatch outage. The tradeoff is
+     * deliberate and one-directional — failing open can over-include a seat for
+     * one dispatch; failing closed would stop the board dispatching at all.
+     */
+    private async _automatedDispatchExclusions(
+        workspaceRoot: string
+    ): Promise<{ excluded: Set<string>; reasons: Map<string, string> }> {
+        try {
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (!db) { return { excluded: new Set(), reasons: new Map() }; }
+            const liveNames = new Set<string>();
+            for (const e of this.getFleetLiveness() || []) {
+                if (e && e.friendlyName && e.status !== 'exited') { liveNames.add(e.friendlyName); }
+            }
+            return await resolveAutomatedDispatchExclusions({ db, liveNames });
+        } catch (err) {
+            console.warn('[TaskViewerProvider] automated-dispatch exclusions failed (failing open):', err);
+            return { excluded: new Set(), reasons: new Map() };
+        }
+    }
+
     public async getRoleTerminalSet(
         role: string,
         workspaceRoot: string,
@@ -9142,9 +9169,23 @@ Each plan file must include:
     ): Promise<{ terminals: string[]; locationKey: string }> {
         const aliveTerminals = await this._getAliveAutobanTerminalRegistry(workspaceRoot, opts);
         const normalizedRole = this._normalizeAutobanPoolRole(role);
+        // A team may declare itself out of the automated pool. This is the ONLY
+        // place the bulk role fan-out learns its terminal set, so it is also what
+        // sizes the batch: `plans.slice(0, terminals.length)` in
+        // _distributePlannerDispatch. Leaving a hands-on team's seats in here does
+        // not merely target them — it inflates the batch the operator asked to be
+        // capped at one card per available seat.
+        const { excluded, reasons } = await this._automatedDispatchExclusions(workspaceRoot);
         const entries = Object.entries(aliveTerminals)
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
             .filter(([, info]) => !this._isAutobanBackupTerminalInfo(info))
+            .filter(([name]) => {
+                if (!excluded.has(name)) { return true; }
+                console.log(
+                    `[TaskViewerProvider] role pool '${normalizedRole}': excluding '${name}' — ${reasons.get(name)}`
+                );
+                return false;
+            })
             .sort(([a], [b]) => a.localeCompare(b));
         const terminals = entries.map(([name]) => name);
         const worktreePaths = new Set(
@@ -12358,7 +12399,21 @@ Each plan file must include:
             const normalizedRole = this._normalizeAgentKey(role);
             const res = await this._ptyHostVerb('ptyListTerminals', {});
             if (res?.success && Array.isArray(res.terminals)) {
+                // This first-match is team-blind — it takes whichever terminal of
+                // the role appears first. With two teams of one head role live,
+                // that can be a seat on a team that declares itself hands-on-only,
+                // whose seats must never receive an automated dispatch. Filter
+                // before matching rather than after, so the SECOND eligible
+                // terminal is still found instead of the resolver giving up.
+                const { excluded, reasons } = await this._automatedDispatchExclusions(workspaceRoot);
                 const match = res.terminals.filter((t: any) => t.status === 'active')
+                    .filter((t: any) => {
+                        if (!t || !excluded.has(t.friendlyName)) { return true; }
+                        console.log(
+                            `[TaskViewerProvider] resolve '${normalizedRole}': skipping '${t.friendlyName}' — ${reasons.get(t.friendlyName)}`
+                        );
+                        return false;
+                    })
                     .find((t: any) => this._normalizeAgentKey(t.role) === normalizedRole);
                 if (match) { return match.friendlyName; }
             }

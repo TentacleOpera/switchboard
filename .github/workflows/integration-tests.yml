@@ -473,6 +473,18 @@ jobs:
       - name: Team-scoped reviewer routing (origin precedence, teamRouting, override honoured)
         run: npm run test:contract:team-scoped-routing
 
+      # Two `planner`-headed teams ship and are meant to run AT THE SAME TIME:
+      # planning-team for bulk work, multi-agent-planning for harder work the
+      # operator drives by hand. The planner pool filtered on ROLE ALONE, so with
+      # both live the bulk fan-out pooled every planner on the board — the peer
+      # drafters got unrelated queue items, and the advance-batch size (which IS
+      # terminals.length) was inflated by seats that must never be targets.
+      # Pins the three operator-stated cases and the fact that BOTH resolvers
+      # consult the exclusions. Loads compiled helpers from out/, so it must stay
+      # AFTER "Compile test outputs".
+      - name: Team automated-dispatch policy (pooled vs hands-on-only teams)
+        run: npm run test:contract:team-automated-dispatch
+
       # The standalone Review team is where review LIVES now that the coding team has
       # no reviewer seat. Pins the read-only review turn, the batch-of-two reviewer
       # prompt, fix apportionment, and — the reason this gate is wired rather than run

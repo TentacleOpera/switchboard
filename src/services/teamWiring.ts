@@ -705,6 +705,138 @@ export function readTeamAcceptedKinds(group: any): { value: TeamWorkKind[] | nul
 }
 
 /**
+ * How a team takes part in AUTOMATED board dispatch — drag-and-drop onto a
+ * column, command-console dispatch, the queue pop, the bulk role fan-out.
+ *
+ * It does NOT govern the copy-prompt buttons: those put a prompt on the
+ * clipboard for the operator to paste into a head by hand, and every team is
+ * reachable that way regardless of this field. The distinction is the point —
+ * a team can be hands-on-only without becoming unusable.
+ *
+ *  - `'pool'` — head and seats join the role pool. The ordinary team.
+ *  - `'head-only-when-sole'` — the seats NEVER receive a dispatch, and the head
+ *    receives one only when no `'pool'` team of the same head role is live. This
+ *    is the peer-planner shape: three seats drafting ONE problem in parallel,
+ *    which unrelated queue items break outright rather than merely crowd.
+ *  - `'never'` — neither head nor seats are ever an automated target.
+ */
+export type TeamAutomatedDispatch = 'pool' | 'head-only-when-sole' | 'never';
+
+/**
+ * Read the dispatch policy, tagged with WHO decided it. This is a routing read,
+ * so an absent field must not read like a configured one: absence is `'pool'`
+ * with source `'unknown'`, and every shipped default states its policy outright.
+ */
+export function readTeamAutomatedDispatch(
+    group: any
+): { value: TeamAutomatedDispatch; source: 'config' | 'default' | 'unknown' } {
+    const raw = group && group.automatedDispatch;
+    const valid = raw === 'pool' || raw === 'head-only-when-sole' || raw === 'never';
+    if (!valid) { return { value: 'pool', source: 'unknown' }; }
+    const source = group.automatedDispatchSource === 'config'
+        ? 'config' as const
+        : group.automatedDispatchSource === 'default'
+            ? 'default' as const
+            : 'unknown' as const;
+    return { value: raw, source };
+}
+
+/**
+ * The live terminal names that must NOT receive an automated dispatch, each with
+ * the rule that excluded it — so "why did this seat not get the card?" is
+ * answerable after the fact rather than inferred from an empty pool.
+ *
+ * Head-versus-seat is decided from the live `terminals.groups` row, not from the
+ * definition's roster: the row's `name` IS the head's terminal name (set by
+ * `wireSpawnedTeam`) and its `members` are the live seat names, so a team that
+ * spawned with fewer seats than its roster declares is still read correctly.
+ *
+ * `'head-only-when-sole'` releases its head only when no `'pool'` team shares its
+ * head role AND is live — which is the "only Multi-agent planning is up" case,
+ * where plans should reach its head one at a time rather than fail.
+ */
+export async function resolveAutomatedDispatchExclusions(opts: {
+    db: any;
+    /** Live terminal names — the caller's liveness view, never re-derived here. */
+    liveNames: Set<string> | string[];
+}): Promise<{ excluded: Set<string>; reasons: Map<string, string> }> {
+    const excluded = new Set<string>();
+    const reasons = new Map<string, string>();
+    const { db } = opts;
+    const live = opts.liveNames instanceof Set ? opts.liveNames : new Set(opts.liveNames || []);
+    if (!db) { return { excluded, reasons }; }
+
+    let groups: any[] = [];
+    try {
+        const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+        groups = Array.isArray(raw) ? [...raw] : [];
+    } catch { return { excluded, reasons }; }
+    try {
+        const bare = await db.getConfigJson('terminals.groups', []) as any[];
+        if (Array.isArray(bare) && bare.length > 0) {
+            const seen = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+            for (const g of bare) {
+                if (g && typeof g.id === 'string' && !seen.has(g.id)) { groups.push(g); seen.add(g.id); }
+            }
+        }
+    } catch { /* best effort */ }
+    if (groups.length === 0) { return { excluded, reasons }; }
+
+    // Resolve every live team group to its definition once.
+    const resolved: Array<{ group: any; def: any; policy: TeamAutomatedDispatch; head?: string }> = [];
+    for (const g of groups) {
+        if (!g || !isSpawnedTeamGroup(g)) { continue; }
+        // `wireSpawnedTeam` writes `head` and `name` to the SAME value, but only
+        // `head` is the declared field. Fall back to `name` for any row written
+        // before it existed: without this a legacy row resolves no head, the team
+        // is skipped, and the exclusion silently does nothing — which looks
+        // exactly like "this team was allowed to dispatch".
+        const head = teamHeadName(g) || (typeof g.name === 'string' && g.name ? g.name : undefined);
+        if (!head || !live.has(head)) { continue; }
+        let def: any = null;
+        try { def = await resolveDefinitionForGroup(db, g); } catch { def = null; }
+        resolved.push({ group: g, def, policy: readTeamAutomatedDispatch(def).value, head });
+    }
+
+    // Which head roles have a live `'pool'` team? That is what releases a
+    // `'head-only-when-sole'` head — or holds it back.
+    const pooledHeadRoles = new Set<string>();
+    for (const r of resolved) {
+        if (r.policy !== 'pool') { continue; }
+        const role = r.def && typeof r.def.headRole === 'string' ? r.def.headRole.toLowerCase() : '';
+        if (role) { pooledHeadRoles.add(role); }
+    }
+
+    for (const r of resolved) {
+        if (r.policy === 'pool') { continue; }
+        const def = r.def || {};
+        const teamLabel = def.name || def.id || r.group.id;
+        const members: string[] = Array.isArray(r.group.members) ? r.group.members : [];
+        // Seats: excluded under BOTH non-pool policies, unconditionally.
+        for (const m of members) {
+            if (!m || m === r.head) { continue; }
+            excluded.add(m);
+            reasons.set(m, `seat of '${teamLabel}' (automatedDispatch=${r.policy}) — its seats never receive automated dispatch`);
+        }
+        if (r.policy === 'never') {
+            if (r.head) {
+                excluded.add(r.head);
+                reasons.set(r.head, `head of '${teamLabel}' (automatedDispatch=never)`);
+            }
+            continue;
+        }
+        // 'head-only-when-sole': the head is a target only when nothing pooled
+        // shares its head role.
+        const role = typeof def.headRole === 'string' ? def.headRole.toLowerCase() : '';
+        if (role && pooledHeadRoles.has(role) && r.head) {
+            excluded.add(r.head);
+            reasons.set(r.head, `head of '${teamLabel}' (automatedDispatch=head-only-when-sole) — a pooled '${role}'-headed team is live and takes the dispatch`);
+        }
+    }
+    return { excluded, reasons };
+}
+
+/**
  * Durable commit instruction appended to every team-head standing order.
  * This is NOT the per-dispatch GIT POLICY block (branch/push/safety clauses
  * are composed per-dispatch by buildGitPolicyBlock). This is the durable
@@ -904,6 +1036,9 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             + 'other agents may be working the same tree.',
         enabled: true,
         enabledSource: 'default',
+        // Pooled: head and seats are ordinary automated-dispatch targets.
+        automatedDispatch: 'pool',
+        automatedDispatchSource: 'default',
     },
     {
         id: 'feature-implementation',
@@ -930,6 +1065,9 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         headPrompt: NEW_CODING_HEAD_PROMPT,
         enabled: true,
         enabledSource: 'default',
+        // Pooled: head and seats are ordinary automated-dispatch targets.
+        automatedDispatch: 'pool',
+        automatedDispatchSource: 'default',
     },
     {
         id: 'coding-team',
@@ -960,6 +1098,9 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         headPrompt: CODING_TEAM_HEAD_PROMPT,
         enabled: true,
         enabledSource: 'default',
+        // Pooled: head and seats are ordinary automated-dispatch targets.
+        automatedDispatch: 'pool',
+        automatedDispatchSource: 'default',
     },
     {
         id: 'review-team',
@@ -983,6 +1124,9 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT,
         enabled: true,
         enabledSource: 'default',
+        // Pooled: head and seats are ordinary automated-dispatch targets.
+        automatedDispatch: 'pool',
+        automatedDispatchSource: 'default',
     },
     {
         id: 'multi-agent-planning',
@@ -1023,6 +1167,14 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         // its switch, or there is no way back on.
         enabled: false,
         enabledSource: 'default',
+        // Its SEATS never receive an automated dispatch, and its head only when
+        // no pooled `planner`-headed team is live. Three peer planners draft ONE
+        // problem in parallel; handing them unrelated queue items does not merely
+        // crowd the team, it breaks the topology. The operator drives this team by
+        // hand — the kanban copy-prompt buttons put the planning prompt on the
+        // clipboard and it is pasted into the head, which this field never gates.
+        automatedDispatch: 'head-only-when-sole',
+        automatedDispatchSource: 'default',
     },
 ];
 
@@ -1525,10 +1677,7 @@ const SEED_MEMBER_MIGRATION_DEFAULTS: Record<string, string> = {
  * team, retyped its prompt, changed its pair intensity or flipped its in-use
  * switch has authored it, and must still fail the match.
  */
-const SEED_LATE_GROUP_KEYS: readonly string[] = [
-    'purpose', 'prompt', 'headPrompt', 'pairProgramming',
-    'acceptedKinds', 'acceptedKindsSource', 'enabled', 'enabledSource',
-];
+const SEED_STRUCTURAL_KEYS: readonly string[] = ['members', 'machine'];
 
 export function isUntouchedSeed(group: any): boolean {
     if (!group || typeof group !== 'object') { return false; }
@@ -1586,14 +1735,30 @@ export function isUntouchedSeed(group: any): boolean {
     // key existed), required to MATCH when present (an edited value is the
     // operator's authorship). Compared by JSON so `acceptedKinds` — an array —
     // compares by value rather than by identity.
-    for (const key of SEED_LATE_GROUP_KEYS) {
+    // Compare BY VALUE against the seed, in both directions. This replaced a
+    // hand-maintained allowlist of "keys the seed gained late", which had to be
+    // extended by hand every time a default grew a field and broke this predicate
+    // silently in between — twice in one day (enabled/enabledSource/acceptedKinds,
+    // then jet/automatedDispatch). The rule below needs no maintenance:
+    //
+    //   - a seed key ABSENT on the group   → tolerated (a row persisted before the
+    //     key existed; listTeamsInRoots reads raw and never re-seeds, so those rows
+    //     stay live indefinitely)
+    //   - a seed key PRESENT but different → the operator authored it → not a seed
+    //   - a key on the group the seed does not have → the operator added it
+    //
+    // `members` and `machine` are handled above with their own tolerances.
+    const structural = (k: string) => SEED_STRUCTURAL_KEYS.indexOf(k) >= 0;
+    for (const key of Object.keys(SEEDED_AGENT_GROUP)) {
+        if (structural(key)) { continue; }
         if (!(key in group)) { continue; }
         if (JSON.stringify(group[key]) !== JSON.stringify(SEEDED_AGENT_GROUP[key])) { return false; }
     }
-    const excluded = (k: string) => k === 'members' || k === 'machine' || SEED_LATE_GROUP_KEYS.indexOf(k) >= 0;
-    const gKeys = Object.keys(group).filter(k => !excluded(k)).sort().join(',');
-    const sKeys = Object.keys(SEEDED_AGENT_GROUP).filter(k => !excluded(k)).sort().join(',');
-    return gKeys === sKeys;
+    for (const key of Object.keys(group)) {
+        if (structural(key)) { continue; }
+        if (!(key in SEEDED_AGENT_GROUP)) { return false; }
+    }
+    return true;
 }
 
 /** A candidate root carries operator intent only if it has at least one team
