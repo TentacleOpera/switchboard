@@ -89,6 +89,19 @@ export interface AgentMachine {
     transport: 'local' | 'ssh' | 'mosh';
     /** `user@host` (or host alias). Empty for `local`. */
     transportPrefix: string;
+    /**
+     * Absolute path of the agent CLI on the remote machine. Added by
+     * `a-remote-seat-reaches-the-board-over-http-not-a-tunnel`; consumed by the
+     * sibling cliPath subtask — this field is config surface only for now.
+     */
+    cliPath?: string;
+    /**
+     * Working directory the remote command `cd`s into before exec. Unset → the
+     * remote lands in `$HOME` (visible, recoverable). Rendered by
+     * `renderSpawnCommand` — `ssh` gets `cd <wd> && …`, `mosh` wraps in
+     * `sh -c` because post-`--` is exec'd, not shelled.
+     */
+    remoteCwd?: string;
 }
 
 /** The always-present default machine. */
@@ -695,35 +708,98 @@ export class GlobalIntegrationConfigService {
     }
 
     /**
+     * Env keys a remote spawn may carry, inlined as `env K='V' …` ahead of the
+     * inner CLI (plan: a-remote-seat-reaches-the-board-over-http-not-a-tunnel).
+     * The composed command is TYPED into a pty — it lands in scrollback, on
+     * `handle.startupCommand`, and in the spawn log — so this set is closed and
+     * `SWITCHBOARD_API_TOKEN` is deliberately absent: a credential never crosses
+     * in a typed command. Tailnet membership is the remote seat's auth.
+     * Iteration order is the render order — deterministic for tests.
+     */
+    private static readonly SEAT_ENV_ALLOWLIST: readonly string[] = [
+        'SWITCHBOARD_TERMINAL',
+        'SWITCHBOARD_AGENT_INSTANCE_ID',
+        'SWITCHBOARD_SERVER_URL',
+        'SWITCHBOARD_WORKSPACE_ROOT',
+    ];
+
+    /**
+     * Render `env K='V' … ` (trailing space) for the allowlisted keys present in
+     * `seatEnv`, in SEAT_ENV_ALLOWLIST order. A caller-passed key outside the
+     * set is dropped AND logged — never rendered. Returns '' when nothing
+     * renderable was passed.
+     */
+    private static _renderSeatEnvPrefix(seatEnv: Record<string, string> | undefined): string {
+        if (!seatEnv) { return ''; }
+        const parts: string[] = [];
+        for (const key of this.SEAT_ENV_ALLOWLIST) {
+            const value = seatEnv[key];
+            if (value === undefined || value === null) { continue; }
+            parts.push(`${key}='${String(value).replace(/'/g, "'\\''")}'`);
+        }
+        for (const key of Object.keys(seatEnv)) {
+            if (!this.SEAT_ENV_ALLOWLIST.includes(key)) {
+                console.warn(`[GlobalIntegrationConfigService] seat env key '${key}' is not in the renderable allowlist — dropped from the composed command.`);
+            }
+        }
+        return parts.length ? `env ${parts.join(' ')} ` : '';
+    }
+
+    /**
      * Render the spawn command for a machine's transport. The inner CLI is the
      * per-machine `machineStartupCommands[machineId][role]` value; the rendered
      * command is what the spawn layer types into the pty.
      *
-     * - `local` (empty prefix): the inner CLI unchanged.
-     * - `ssh`: `ssh <prefix> '<cli>'` — the CLI is single-quote-wrapped as one
-     *   remote argument. Inner single quotes are escaped (`'\''`).
-     * - `mosh`: `mosh <prefix> -- <cli>` — `--` separates mosh args from the
-     *   remote command.
+     * - `local` (empty prefix): the inner CLI unchanged — the pty env already
+     *   carries SWITCHBOARD_*, so `seatEnv` is ignored for local machines.
+     * - `ssh`: `ssh <prefix> '<remote>'` where `<remote>` is
+     *   `cd <remoteCwd> && env K='V' … <cli>` (each clause omitted when unset).
+     *   The whole remote command is single-quote-wrapped as one argument; inner
+     *   single quotes are escaped (`'\''`).
+     * - `mosh`: `mosh <prefix> -- env K='V' … <cli>` — post-`--` argv is exec'd
+     *   by the remote, so `env` does the assignment. With a `remoteCwd` the
+     *   remote side wraps in `sh -c 'cd <wd> && …'` because `cd` is a shell
+     *   builtin and cannot be exec'd.
+     *
+     * `seatEnv` carries seat identity and board routing for a remote seat —
+     * ssh/mosh do not forward the pty's environment, so it is inlined into the
+     * command the host composes. Only SEAT_ENV_ALLOWLIST keys render; anything
+     * else (a credential, say) is dropped with a warning.
      *
      * Returns the inner CLI unchanged when the machine is `local` or unknown
      * (a missing machine id is a runtime failure the operator handles, not a
      * config gate — falling back to the inner CLI keeps the seat runnable).
      */
-    public static renderSpawnCommand(innerCli: string, machine: AgentMachine | undefined): string {
+    public static renderSpawnCommand(innerCli: string, machine: AgentMachine | undefined, seatEnv?: Record<string, string>): string {
         if (!innerCli) { return innerCli; }
         if (!machine || machine.transport === 'local' || !machine.transportPrefix) {
+            if (seatEnv && machine && machine.transport !== 'local' && !machine.transportPrefix) {
+                console.warn(`[GlobalIntegrationConfigService] machine '${machine.id}' is '${machine.transport}' but has no transportPrefix — seat env could not be delivered.`);
+            }
             return innerCli;
         }
         const prefix = machine.transportPrefix;
+        const envPrefix = this._renderSeatEnvPrefix(seatEnv);
+        const cdClause = machine.remoteCwd ? `cd '${machine.remoteCwd.replace(/'/g, "'\\''")}' && ` : '';
         if (machine.transport === 'ssh') {
-            const escaped = innerCli.replace(/'/g, "'\\''");
-            return `ssh ${prefix} '${escaped}'`;
+            const remote = `${cdClause}${envPrefix}${innerCli}`;
+            return `ssh ${prefix} '${remote.replace(/'/g, "'\\''")}'`;
         }
         if (machine.transport === 'mosh') {
-            return `mosh ${prefix} -- ${innerCli}`;
+            // Post-`--` is exec'd, not shelled: `env` (a binary) delivers the
+            // vars, but `cd` needs a shell — wrap in `sh -c` when a remoteCwd
+            // is set.
+            if (machine.remoteCwd) {
+                const script = `${cdClause}${envPrefix}${innerCli}`;
+                return `mosh ${prefix} -- sh -c '${script.replace(/'/g, "'\\''")}'`;
+            }
+            return `mosh ${prefix} -- ${envPrefix}${innerCli}`;
         }
         // Unknown transport — do not concat blindly (a dumb `<prefix> <cli>`
         // breaks one of the two known transports). Fall back to the inner CLI.
+        if (envPrefix) {
+            console.warn(`[GlobalIntegrationConfigService] machine '${machine.id}' uses unknown transport '${machine.transport}' — seat env could not be delivered.`);
+        }
         return innerCli;
     }
 

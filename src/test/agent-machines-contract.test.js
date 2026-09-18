@@ -282,6 +282,140 @@ async function run() {
         assert.ok(/timeout: 10000/.test(probe), 'the probe must carry an overall ceiling');
     });
 
+    // ── 9. Remote-seat env inlining — identity and board URL ride in argv ─
+    // Plan: a-remote-seat-reaches-the-board-over-http-not-a-tunnel. ssh/mosh do
+    // not forward the pty's environment, so the host inlines `env K=V …` into
+    // the composed command. The command is typed, stored and logged — a
+    // credential in it is a persistent leak, so the renderable set is closed.
+
+    const seatEnv = {
+        SWITCHBOARD_TERMINAL: 'Coding-coder-1',
+        SWITCHBOARD_AGENT_INSTANCE_ID: 'inst-123',
+        SWITCHBOARD_SERVER_URL: 'http://100.64.0.1:7777',
+        SWITCHBOARD_WORKSPACE_ROOT: '/home/patrick/switchboard',
+    };
+    const sshMachine = { id: 'tower', name: 'Tower', transport: 'ssh', transportPrefix: 'user@tower' };
+    const moshMachine = { id: 'pi', name: 'Pi', transport: 'mosh', transportPrefix: 'user@pi' };
+
+    check('ssh inlines env inside the single-quoted remote arg, in allowlist order', () => {
+        assert.strictEqual(
+            Svc.renderSpawnCommand('claude', sshMachine, seatEnv),
+            "ssh user@tower 'env SWITCHBOARD_TERMINAL='\\''Coding-coder-1'\\'' SWITCHBOARD_AGENT_INSTANCE_ID='\\''inst-123'\\'' SWITCHBOARD_SERVER_URL='\\''http://100.64.0.1:7777'\\'' SWITCHBOARD_WORKSPACE_ROOT='\\''/home/patrick/switchboard'\\'' claude'");
+    });
+
+    check('mosh inlines env after -- (argv preserved to the remote exec)', () => {
+        assert.strictEqual(
+            Svc.renderSpawnCommand('claude', moshMachine, seatEnv),
+            "mosh user@pi -- env SWITCHBOARD_TERMINAL='Coding-coder-1' SWITCHBOARD_AGENT_INSTANCE_ID='inst-123' SWITCHBOARD_SERVER_URL='http://100.64.0.1:7777' SWITCHBOARD_WORKSPACE_ROOT='/home/patrick/switchboard' claude");
+    });
+
+    check('local ignores seatEnv — the pty env already carries it', () => {
+        assert.strictEqual(Svc.renderSpawnCommand('claude', LOCAL_AGENT_MACHINE, seatEnv), 'claude');
+        assert.strictEqual(Svc.renderSpawnCommand('claude', sshMachine), "ssh user@tower 'claude'",
+            'no seatEnv renders exactly the pre-env-inlining command');
+    });
+
+    check('a smuggled credential NEVER renders — allowlist drops it', () => {
+        const out = Svc.renderSpawnCommand('claude', sshMachine,
+            { ...seatEnv, SWITCHBOARD_API_TOKEN: 'sekrit-token-value' });
+        assert.ok(!out.includes('SWITCHBOARD_API_TOKEN'),
+            'the token KEY must never appear in a typed command (scrollback + handle field + log line)');
+        assert.ok(!out.includes('sekrit-token-value'),
+            'the token VALUE must never appear in a typed command');
+        assert.ok(out.includes('SWITCHBOARD_TERMINAL'), 'allowlisted env still renders alongside the drop');
+    });
+
+    check('the renderable allowlist is closed and excludes the credential', () => {
+        const src = read('src/services/GlobalIntegrationConfigService.ts');
+        const decl = src.slice(src.indexOf('SEAT_ENV_ALLOWLIST'), src.indexOf('];', src.indexOf('SEAT_ENV_ALLOWLIST')));
+        for (const key of ['SWITCHBOARD_TERMINAL', 'SWITCHBOARD_AGENT_INSTANCE_ID', 'SWITCHBOARD_SERVER_URL', 'SWITCHBOARD_WORKSPACE_ROOT']) {
+            assert.ok(decl.includes(`'${key}'`), `${key} must be renderable`);
+        }
+        assert.ok(!decl.includes('SWITCHBOARD_API_TOKEN'), 'the credential must not be renderable');
+    });
+
+    check('env values with spaces and quotes are single-quote-escaped', () => {
+        const out = Svc.renderSpawnCommand('claude', moshMachine, { SWITCHBOARD_WORKSPACE_ROOT: "/a b's" });
+        assert.strictEqual(out, "mosh user@pi -- env SWITCHBOARD_WORKSPACE_ROOT='/a b'\\''s' claude",
+            'an unquoted space would split the env assignment into a command name');
+    });
+
+    check('remoteCwd renders cd ahead of env for ssh', () => {
+        const out = Svc.renderSpawnCommand('claude', { ...sshMachine, remoteCwd: '/srv/work' }, seatEnv);
+        const cdIdx = out.indexOf('cd ');
+        const envIdx = out.indexOf('env SWITCHBOARD_TERMINAL');
+        const cliIdx = out.lastIndexOf('claude');
+        assert.ok(cdIdx > "ssh".length && envIdx > cdIdx && cliIdx > envIdx,
+            `expected cd <wd> && env … <cli> order inside the remote arg, got: ${out}`);
+    });
+
+    check('mosh wraps the remote in sh -c when remoteCwd is set (post-`--` is exec, cd is a builtin)', () => {
+        const out = Svc.renderSpawnCommand('claude', { ...moshMachine, remoteCwd: '/srv/work' }, seatEnv);
+        assert.ok(out.startsWith('mosh user@pi -- sh -c '), `expected sh -c wrap, got: ${out}`);
+        assert.ok(/cd .*&& env /.test(out), 'cd <wd> && env … must be inside the sh -c script');
+        // Without a remoteCwd there is no shell — env (a binary) is exec'd.
+        assert.ok(!Svc.renderSpawnCommand('claude', moshMachine, seatEnv).includes('sh -c'));
+    });
+
+    check('AgentMachine carries cliPath and remoteCwd (new config surface)', () => {
+        const src = read('src/services/GlobalIntegrationConfigService.ts');
+        const decl = src.slice(src.indexOf('export interface AgentMachine'), src.indexOf('}', src.indexOf('export interface AgentMachine')));
+        assert.ok(/cliPath\?: string/.test(decl), 'cliPath must be an optional field');
+        assert.ok(/remoteCwd\?: string/.test(decl), 'remoteCwd must be an optional field');
+    });
+
+    check('the projection builds seatEnv for remote machines only — and the token is never in it', () => {
+        const src = read('src/services/goPtyFleetProjection.ts');
+        const block = src.slice(src.indexOf('let seatEnv'), src.indexOf('const innerCli'));
+        assert.ok(/machine\.transport !== 'local'/.test(block), 'seatEnv must be gated on a non-local machine');
+        assert.ok(/SWITCHBOARD_TERMINAL: name/.test(block), 'seatEnv carries the seat name');
+        assert.ok(/SWITCHBOARD_AGENT_INSTANCE_ID: agentInstanceId/.test(block), 'seatEnv carries the host-generated instance id');
+        assert.ok(/SWITCHBOARD_SERVER_URL: boardEndpoint/.test(block), 'seatEnv carries the resolved board URL');
+        assert.ok(/SWITCHBOARD_WORKSPACE_ROOT: this\.workspaceRoot/.test(block), 'seatEnv carries the workspace root');
+        assert.ok(!/SWITCHBOARD_API_TOKEN/.test(block), 'seatEnv must never carry the credential');
+        assert.ok(/renderSpawnCommand\(innerCli, machine, seatEnv\)/.test(src),
+            'the composed command must receive the env');
+    });
+
+    check('a remote spawn with no board endpoint throws, naming `switchboard tailnet`', () => {
+        const src = read('src/services/goPtyFleetProjection.ts');
+        assert.ok(/setBoardEndpointResolver/.test(src), 'the resolver seam must exist');
+        // The source escapes the backticks inside the template literal, so the
+        // file contains \`switchboard tailnet\` — match the escaped form.
+        assert.ok(/is remote but the board has no tailnet listener — run \\`switchboard tailnet\\`/.test(src),
+            'a loopback-only board + remote machine must fail loudly, naming the posture');
+    });
+
+    check('the host-generated agentInstanceId is sent in the create payload (same id in pty env and inlined env)', () => {
+        const go = read('src/services/goPtyFleetProjection.ts');
+        const reqStart = go.indexOf("this.supervisor.request('ptyCreateTerminal'");
+        const payload = go.slice(reqStart, go.indexOf('});', reqStart));
+        assert.ok(/agentInstanceId,/.test(payload), 'the payload must carry the host-generated id');
+        const main = read('cmd/switchboard-pty-host/main.go');
+        assert.ok(/strField\(payload, "agentInstanceId"\)/.test(main) && /agentID = existing/.test(main),
+            'the Go host must honour a caller-supplied agentInstanceId over its generated one');
+    });
+
+    check('bootstrap wires the board-endpoint resolver to the tailnet listener', () => {
+        const src = read('src/standalone/bootstrap.ts').replace(/\s+/g, ' ');
+        assert.ok(/ptyFleetService\.setBoardEndpointResolver\(/.test(src),
+            'the standalone host must tell the fleet which URL a remote seat dials');
+        assert.ok(/isTailnetPolicy\(bindPolicy\) \? `http:\/\/\$\{bindPolicy\.tailnetAddress\}:\$\{port\}` : null/.test(src),
+            'the resolver must answer the tailnet-listener URL and null under a loopback-only bind');
+        assert.ok(!/serve/i.test(src.slice(src.indexOf('setBoardEndpointResolver'), src.indexOf('setBoardEndpointResolver') + 300)),
+            'the `tailscale serve` URL must never be the seat endpoint — its proxy lands on loopback and would 401');
+    });
+
+    check('the env-wrapped composed string still never reaches cli derivation (load-bearing now it starts with `env `)', () => {
+        for (const rel of ['src/standalone/ptyFleetService.ts', 'src/services/goPtyFleetProjection.ts']) {
+            const src = read(rel);
+            assert.ok(!/deriveCliFamily\(composed/.test(src) && !/deriveCliIdentity\(composed/.test(src),
+                `${rel} must not derive family or identity from the composed command`);
+            assert.ok(!/deriveCliFamily\(startupCommandComposed/.test(src),
+                `${rel} must not derive family from startupCommandComposed`);
+        }
+    });
+
     console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILED`}\n`);
     process.exit(failures === 0 ? 0 : 1);
 }

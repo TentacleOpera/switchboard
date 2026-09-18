@@ -104,6 +104,18 @@ export class GoPtyFleetProjection {
         this._claudeInlineRenderingResolver = resolver;
     }
 
+    /**
+     * Host-supplied: the board URL a remote seat should dial — the tailnet
+     * listener (`http://<tailnetAddress>:<port>`), or null under a
+     * loopback-only bind. Resolved at spawn so "which board did this seat
+     * get?" is answerable from the log; a remote machine with no endpoint is
+     * a loud spawn failure, never a seat silently dialling its own loopback.
+     */
+    private _boardEndpointResolver?: () => string | null;
+    public setBoardEndpointResolver(resolver: () => string | null): void {
+        this._boardEndpointResolver = resolver;
+    }
+
     public setControllerSeatResolver(resolver: () => { terminalName?: string } | null | undefined): void {
         this._controllerSeatResolver = resolver;
         void this.supervisor.request('ptySetControllerSeat', { seat: resolver() ?? null }).catch(() => { /* best-effort */ });
@@ -222,6 +234,12 @@ export class GoPtyFleetProjection {
         } else {
             machine = LOCAL_AGENT_MACHINE;
         }
+        // Generated HOST-SIDE (not left to the Go host's randomToken) so the id
+        // is known at command-composition time and can ride inside the remote
+        // spawn as SWITCHBOARD_AGENT_INSTANCE_ID. The Go host honours a
+        // caller-supplied `agentInstanceId` (main.go), so the local pty env and
+        // the inlined remote env carry the SAME id.
+        const agentInstanceId = crypto.randomUUID();
         let effectiveStartupCommand = startupCommand;
         let effectiveStartupSource: string;
         if (effectiveStartupCommand) {
@@ -236,10 +254,37 @@ export class GoPtyFleetProjection {
                 effectiveStartupSource = 'none';
             }
         }
+        // Remote-seat env inlining (plan: a-remote-seat-reaches-the-board-over-
+        // http-not-a-tunnel). ssh/mosh do not forward the pty's environment
+        // (SendEnv needs AcceptEnv in the remote's sshd_config, which the host
+        // cannot guarantee), so a remote seat learns who it is and where the
+        // board is from an `env K=V …` prefix inlined into the command the
+        // host composes — NOT from the SWITCHBOARD_* vars the Go host sets on
+        // the LOCAL pty, which die at the transport boundary. No credential is
+        // ever inlined: a request arriving on the tailnet listener is trusted
+        // before any token is read (LocalApiServer._isTailnetSocket), so
+        // tailnet membership IS the remote seat's auth. A null endpoint means
+        // the board binds loopback only — a remote seat under it would dial
+        // its own loopback and get "no instance", so the spawn fails loudly
+        // and names the fix rather than producing a half-reachable seat.
+        let seatEnv: Record<string, string> | undefined;
+        if (machine.transport !== 'local') {
+            const boardEndpoint = this._boardEndpointResolver ? this._boardEndpointResolver() : null;
+            if (!boardEndpoint) {
+                throw new Error(`Machine '${machineId}' is remote but the board has no tailnet listener — run \`switchboard tailnet\` and retry.`);
+            }
+            seatEnv = {
+                SWITCHBOARD_TERMINAL: name,
+                SWITCHBOARD_AGENT_INSTANCE_ID: agentInstanceId,
+                SWITCHBOARD_SERVER_URL: boardEndpoint,
+                SWITCHBOARD_WORKSPACE_ROOT: this.workspaceRoot,
+            };
+            console.log(`[GoPtyFleetProjection] remote seat '${name}' (machine '${machineId}'): SWITCHBOARD_SERVER_URL=${boardEndpoint} (source: tailnet listener bind)`);
+        }
         // inner = per-machine CLI; composed = what the pty types. For `local`
         // (or no transport prefix) they are identical.
         const innerCli = effectiveStartupCommand;
-        const composedCli = innerCli ? GlobalIntegrationConfigService.renderSpawnCommand(innerCli, machine) : undefined;
+        const composedCli = innerCli ? GlobalIntegrationConfigService.renderSpawnCommand(innerCli, machine, seatEnv) : undefined;
 
         // ── tmux as a SUPPLEMENT to the fleet, not a replacement ────────────────
         // The seat stays a Go-host PTY; that PTY runs a tmux client. The board keeps
@@ -500,6 +545,11 @@ export class GoPtyFleetProjection {
             cwd: effectiveCwd,
             worktreePath,
             parentInstanceId: parentInstanceId ?? undefined,
+            // Host-generated so the same id is inlined into a remote seat's
+            // composed command (seatEnv above) AND set on the local pty env by
+            // the Go host. A respawn replays the composed string verbatim, so
+            // the remote env re-delivers itself without re-reading live config.
+            agentInstanceId,
             hidden: opts?.hidden === true,
             claudeInlineRendering,
             apiToken: this.apiToken,

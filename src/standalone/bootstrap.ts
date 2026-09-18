@@ -5866,6 +5866,21 @@ Each plan file must include:
         }
     }
 
+    // Remote-seat board endpoint seam (plan: a-remote-seat-reaches-the-board-
+    // over-http-not-a-tunnel). A seat spawned on another machine dials the
+    // TAILNET LISTENER — tailnet membership is its credential (LocalApiServer
+    // trusts the tailnet socket before any token is read), so the resolver
+    // returns the raw tailnet address, never the `tailscale serve` URL whose
+    // proxy lands on loopback and would 401 a seat that deliberately carries
+    // no credential. The raw address is preferred over MagicDNS: rename-proof,
+    // and the listener identifies itself by the socket's local address either
+    // way. Null under a loopback-only bind — the fleet turns that into a loud
+    // spawn failure naming `switchboard tailnet`. Standalone-only: the
+    // extension host is out of scope per the cutover, and its absence there is
+    // intended state, not divergence.
+    ptyFleetService.setBoardEndpointResolver(() =>
+        isTailnetPolicy(bindPolicy) ? `http://${bindPolicy.tailnetAddress}:${port}` : null);
+
     // ── Delegate-children import at startup ──────────────────────────
     // Run importDelegatesIntoTeams once at boot, BEFORE any terminal can be
     // spawned (a survivor scheduler job can fire on the first tick below). The import
