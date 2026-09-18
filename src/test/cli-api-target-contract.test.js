@@ -487,6 +487,149 @@ async function run() {
         assert.strictEqual(loadRemotesConfig(p), null);
     });
 
+    // ── 6. Call-site conversion (plan: every-node-command-dials-the-resolved-target-not-loopback) ──
+
+    check('apiRequest never constructs a literal loopback URL — baseUrl comes from the target', () => {
+        const cli = read('src/standalone/cli.ts');
+        const body = cli.slice(cli.indexOf('function apiRequest('), cli.indexOf('function apiGet('));
+        assert.ok(!/127\.0\.0\.1/.test(body), 'apiRequest still builds a loopback URL from a port');
+        assert.ok(/target\.baseUrl/.test(body), 'apiRequest does not dial target.baseUrl');
+        assert.ok(/target\.workspaceRoot/.test(body), 'apiRequest does not read target.workspaceRoot');
+        assert.ok(/target\.auth\.token/.test(body), 'apiRequest does not read target.auth.token');
+        assert.ok(/startsWith\('https:'\)/.test(body), 'apiRequest does not pick https for an https baseUrl');
+    });
+
+    await acheck('a write carries target.workspaceRoot — a caller-supplied root cannot override it', async () => {
+        // cli.ts runs main() at load — transpile the real apiRequest out and
+        // run it against a live loopback server, capturing the posted body.
+        const tsc = require('typescript');
+        const src = read('src/standalone/cli.ts');
+        function extractFn(name) {
+            const start = src.indexOf(`function ${name}(`);
+            assert.ok(start > -1, `${name} not found in cli.ts`);
+            const end = src.indexOf('\n}\n', start);
+            assert.ok(end > start, `${name} body not closed`);
+            return src.slice(start, end + 2);
+        }
+        const compiled = tsc.transpileModule(
+            `${extractFn('apiRequest')}\nmodule.exports = { apiRequest };`,
+            { compilerOptions: { module: 'commonjs', target: 'es2020' } }
+        ).outputText;
+        const mod = { exports: {} };
+        new Function('module', 'http', 'https', compiled)(mod, http, https);
+        const { apiRequest } = mod.exports;
+        let capturedBody = '';
+        let capturedAuth = '';
+        let capturedUrl = '';
+        const srv = http.createServer((req, res) => {
+            capturedUrl = req.url;
+            capturedAuth = req.headers.authorization || '';
+            req.on('data', c => capturedBody += c.toString());
+            req.on('end', () => { res.end('{}'); });
+        });
+        await new Promise(r => srv.listen(0, '127.0.0.1', r));
+        try {
+            const port = srv.address().port;
+            const target = {
+                baseUrl: `http://127.0.0.1:${port}`,
+                workspaceRoot: '/srv/remote-board',
+                rootSource: 'health-roots',
+                auth: { token: 'tok123', source: 'env:SWITCHBOARD_API_TOKEN' },
+                source: 'flag:--server',
+                isRemote: true,
+            };
+            // The payload carries a STALE local root — the target root must win.
+            const res = await apiRequest(target, 'POST', '/kanban/dispatch', { workspaceRoot: '/local/laptop', plan: 'x' });
+            assert.strictEqual(res.status, 200);
+            const sent = JSON.parse(capturedBody);
+            assert.strictEqual(sent.workspaceRoot, '/srv/remote-board',
+                'write payload must carry target.workspaceRoot, not a caller-supplied root');
+            assert.strictEqual(capturedAuth, 'Bearer tok123');
+            // And a read carries the same root as a query param.
+            capturedBody = '';
+            await apiRequest(target, 'GET', '/kanban/plans', undefined, { column: 'X' });
+            assert.ok(capturedUrl.includes(`workspaceRoot=${encodeURIComponent('/srv/remote-board')}`),
+                `read query must carry target.workspaceRoot, got ${capturedUrl}`);
+        } finally {
+            srv.close();
+        }
+    });
+
+    await acheck('a remote target never reads the client cwd token file — the local credential is not leaked', async () => {
+        const cwd = tmpdir();
+        fs.mkdirSync(path.join(cwd, '.switchboard'), { recursive: true });
+        fs.writeFileSync(path.join(cwd, '.switchboard', 'api-server-token.txt'), 'local-board-token\n');
+        const t = await resolveApiTarget({
+            server: 'http://labcom.example.net:7777',
+            env: {}, clientCwd: cwd,
+            remotesPath: path.join(tmpdir(), 'a.json'),
+            fetchHealth: healthy(['/r']), discoverLocal: noLocal,
+        });
+        assert.deepStrictEqual(t.auth, { token: null, source: 'tailnet-listener-trusted' },
+            'a remote target must not attach the LOCAL board token from the client cwd');
+        // And the same file IS read for a local target.
+        const local = await resolveApiTarget({
+            env: {}, clientCwd: cwd,
+            remotesPath: path.join(tmpdir(), 'a.json'),
+            fetchHealth: healthy([]), discoverLocal: async () => ({ port: 7777, via: 'probe' }),
+        });
+        assert.deepStrictEqual(local.auth, { token: 'local-board-token', source: 'token-file' });
+    });
+
+    check('connection flags are spliced before verb detection — --remote before the verb works', () => {
+        const cli = read('src/standalone/cli.ts');
+        const spliceIdx = cli.indexOf('connFlags = extractConnectionFlags(process.argv)');
+        const firstArgIdx = cli.indexOf('const firstArg = process.argv[2]');
+        const knownIdx = cli.indexOf('const KNOWN_SUBCOMMANDS = new Set([');
+        const heapIdx = cli.indexOf('const heapFirstArg = process.argv[2]');
+        assert.ok(spliceIdx > -1, 'extractConnectionFlags is never invoked on process.argv');
+        assert.ok(firstArgIdx > -1 && knownIdx > -1 && heapIdx > -1, 'main() structure changed — re-pin this test');
+        assert.ok(spliceIdx < heapIdx, 'the splice must run BEFORE the heap re-exec gate reads argv[2]');
+        assert.ok(spliceIdx < firstArgIdx, 'the splice must run BEFORE firstArg verb detection');
+        assert.ok(firstArgIdx > knownIdx, 'firstArg is read before KNOWN_SUBCOMMANDS — check ordering');
+        for (const flag of ["'--remote'", "'--server'", "'--endpoint'", "'--workspace-root'", "'--token-file'"]) {
+            assert.ok(cli.includes(flag), `extractConnectionFlags missing ${flag}`);
+        }
+    });
+
+    check('local-only verbs refuse under a remote target, naming the cause and the recovery', () => {
+        const cli = read('src/standalone/cli.ts');
+        const setIdx = cli.indexOf('LOCAL_ONLY_REMOTE_VERBS');
+        assert.ok(setIdx > -1, 'no local-only refusal list exists');
+        for (const verb of ["'stop'", "'logs'", "'service'", "'init'", "'scaffold'", "'control-plane'", "'secrets'", "'token'", "'export'", "'import'", "'launcher-state'", "'probe'", "'heap-snapshot'", "'controller'", "'setup'", "'local'", "'tailnet'"]) {
+            assert.ok(cli.includes(verb), `refusal list missing ${verb}`);
+        }
+        const refusal = cli.slice(cli.indexOf('function refuseRemoteTargetVerb'), cli.indexOf('async function tryResolveBoardTarget'));
+        assert.ok(/is local-only/.test(refusal), 'refusal does not name the cause');
+        assert.ok(/Run it on the machine that hosts the board/.test(refusal), 'refusal does not name the recovery step');
+        // The gate runs before ANY verb dispatch.
+        const gateIdx = cli.indexOf('if (remoteTargetRequested()) {');
+        const plansIdx = cli.indexOf("process.argv[2] === 'plans'");
+        assert.ok(gateIdx > -1 && plansIdx > -1 && gateIdx < plansIdx, 'the remote gate must run before verb dispatch');
+    });
+
+    check('remote requests distinguish connect-phase timeout from inactivity timeout', () => {
+        const cli = read('src/standalone/cli.ts');
+        const body = cli.slice(cli.indexOf('function apiRequest('), cli.indexOf('function apiGet('));
+        assert.ok(/target\.isRemote/.test(body), 'remote path does not branch on target.isRemote');
+        assert.ok(/connectTimer/.test(body), 'no connect-phase timer exists');
+        assert.ok(/connect phase timed out/.test(body), 'connect timeout does not name the phase');
+        assert.ok(/'connect'/.test(body), 'socket connect event is not awaited');
+        assert.ok(/'Request timed out'/.test(body), 'inactivity timeout message missing');
+    });
+
+    check('every remote-capable command resolves through the shared seam, none re-derive a port', () => {
+        const cli = read('src/standalone/cli.ts');
+        for (const fn of ['cmdPlans', 'cmdReady', 'cmdDispatch', 'cmdClear', 'cmdFleet', 'cmdVerb', 'cmdApi', 'cmdDone', 'cmdAccept', 'cmdNext', 'cmdReports', 'cmdBoardConsole', 'cmdAbout']) {
+            const start = cli.indexOf(`function ${fn}(`);
+            assert.ok(start > -1, `${fn} not found`);
+            const end = cli.indexOf('\n}\n', start);
+            const body = cli.slice(start, end);
+            assert.ok(/(tryResolveBoardTarget|resolveBoardTarget)\(/.test(body), `${fn} does not resolve through the shared target seam`);
+            assert.ok(!/findRunningInstance\(/.test(body), `${fn} still derives a port via findRunningInstance — it must dial the resolved target`);
+        }
+    });
+
     console.log(failures === 0 ? '\nALL PASSED\n' : `\n${failures} FAILED\n`);
     process.exit(failures === 0 ? 0 : 1);
 }

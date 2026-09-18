@@ -18,6 +18,8 @@ import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackH
 import { detectTailnetAddress, resolveMagicDnsNames, readCertDomains, detectServeConfigMapping } from '../utils/tailnetDetect';
 import { resolveTailnetOrigin } from '../utils/tailnetOrigin';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
+import { resolveApiTarget, fetchHealthJson, loadRemotesConfig, NoLocalBoardError, type ApiTarget, type HealthJson } from './apiTarget';
+import { stateFile } from '../utils/stateHome';
 import { BANNER_ART_TRUECOLOR, BANNER_ART_256, BANNER_ART_ASCII } from '../generated/bannerArt';
 import { getInotifyWatchCount, getOpenFdCount } from './planIngestionHost';
 import { runController, type ControllerRuntimeConfig } from './controller/controller';
@@ -107,6 +109,21 @@ Aliases for secrets commands:
   notion    -> switchboard.notion.apiToken
   stitch    -> switchboard.stitch.apiKey
   apiToken  -> switchboard.apiToken
+
+Connection flags (board commands — may appear before OR after the verb):
+  --remote <name|url>        Reach another machine's board: a name from
+                             ~/.switchboard/remotes.json, or a URL (same as
+                             --server). Env: SWITCHBOARD_REMOTE.
+  --server, --endpoint <url> Reach a board by URL (http://host:port or
+                             https://host for tailscale-serve). Env:
+                             SWITCHBOARD_SERVER_URL.
+  --workspace-root <path>    The workspace root ON THE SERVER (not a local
+                             path). Env: SWITCHBOARD_WORKSPACE_ROOT.
+  --token-file <path>        Read the API token from a file. Env for a token
+                             value: SWITCHBOARD_API_TOKEN.
+  A named remote that cannot be reached is an error, never a fallback to the
+  local board. Local-only verbs (stop, token, secrets, service, probe, …)
+  refuse under a remote target — run them on the machine that hosts the board.
 
 Options:
   --workspace <path>   Workspace root to serve or init (default: cwd)
@@ -539,33 +556,42 @@ interface ApiResponse {
 }
 
 /**
- * Generic HTTP request against the running server with auth headers attached.
+ * Generic HTTP request against the resolved board target with auth headers
+ * attached (plan: every-node-command-dials-the-resolved-target-not-loopback).
+ *
+ * The TARGET owns the endpoint and the root. `baseUrl` may be https — a
+ * `tailscale serve` endpoint terminates TLS in front of the board's http
+ * listener. `workspaceRoot` is never a separate argument: it comes from
+ * `target.workspaceRoot`, so a read and the write that follows it carry the
+ * same root by construction — a caller-supplied root is how a remote seat
+ * used to send its local cwd to another machine's board.
  *
  * `workspaceRoot` routing (load-bearing):
  * Routes `workspaceRoot` by method family: query param for read-like methods (GET, DELETE),
- * body field for write-like methods (POST, PUT, PATCH).
+ * body field for write-like methods (POST, PUT, PATCH). The injected target
+ * root wins over any `workspaceRoot` key already in the payload — a stale
+ * caller-supplied root must not override the resolved one.
  * Rejects on network error or timeout — callers handle the rejection.
  */
 function apiRequest(
-    port: number,
+    target: ApiTarget,
     method: string,
     pathname: string,
-    workspaceRoot: string,
     payload?: unknown,
     query?: Record<string, string>,
     timeoutMs: number = 15000
 ): Promise<ApiResponse> {
-    const token = discoverAuthToken(workspaceRoot);
+    const token = target.auth.token;
     const upperMethod = (method || 'GET').toUpperCase();
     const isReadLike = upperMethod === 'GET' || upperMethod === 'DELETE';
-    let url = `http://127.0.0.1:${port}${pathname}`;
+    let url = `${target.baseUrl}${pathname}`;
 
     if (isReadLike) {
         // `workspaceRoot` is NOT optional on the read path. `_resolveDbFromQuery`
         // falls back to the host's own selected root when the param is absent — on
         // the extension host that is a DIFFERENT board from the one the CLI's cwd
         // names.
-        const params: Record<string, string> = { ...(query || {}), workspaceRoot };
+        const params: Record<string, string> = { ...(query || {}), workspaceRoot: target.workspaceRoot };
         const qs = new URLSearchParams(params).toString();
         if (qs) { url += (url.includes('?') ? '&' : '?') + qs; }
     } else if (query) {
@@ -575,10 +601,13 @@ function apiRequest(
 
     let finalPayload = payload;
     if (!isReadLike && typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
-        finalPayload = { workspaceRoot, ...(payload as Record<string, any>) };
+        // Target root LAST — it overrides any `workspaceRoot` key a caller
+        // left in the payload. A remote seat's local path must never win.
+        finalPayload = { ...(payload as Record<string, any>), workspaceRoot: target.workspaceRoot };
     }
 
     const bodyStr = finalPayload === undefined ? '' : JSON.stringify(finalPayload);
+    const mod = target.baseUrl.startsWith('https:') ? https : http;
 
     return new Promise((resolve, reject) => {
         const headers: http.OutgoingHttpHeaders = {};
@@ -600,7 +629,7 @@ function apiRequest(
         // `Access-Control-Allow-Origin` only for an origin the bind policy
         // already allows — so a hostile page cannot forge it.
         headers['X-Switchboard-Client'] = 'switchboard-cli';
-        const req = http.request(url, { method: upperMethod, headers }, (res) => {
+        const req = mod.request(url, { method: upperMethod, headers }, (res) => {
             let body = '';
             res.on('data', (c: Buffer) => body += c.toString());
             res.on('end', () => {
@@ -613,25 +642,210 @@ function apiRequest(
             });
         });
         req.on('error', reject);
-        req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Request timed out')); });
+        if (target.isRemote) {
+            // Connect phase vs inactivity are different failures on a remote
+            // board. A remote prompt-delivery write legitimately holds the
+            // response for ~35s while a dead route never answers at all —
+            // `setTimeout` measures socket inactivity, so a connect that
+            // never resolves would hang forever. The connect phase gets its
+            // own wall-clock timer whose message names the phase AND the
+            // target; once connected, the normal inactivity timeout applies.
+            let connectTimer: NodeJS.Timeout | undefined;
+            const armInactivity = (): void => {
+                if (connectTimer) { clearTimeout(connectTimer); connectTimer = undefined; }
+                req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Request timed out')); });
+            };
+            req.on('socket', (socket) => {
+                if (socket.connecting) { socket.once('connect', armInactivity); }
+                else { armInactivity(); }
+            });
+            req.on('response', armInactivity);
+            req.on('error', () => { if (connectTimer) { clearTimeout(connectTimer); connectTimer = undefined; } });
+            connectTimer = setTimeout(() => {
+                try { req.destroy(); } catch { /* */ }
+                reject(new Error(`[switchboard] connect phase timed out after ${timeoutMs}ms reaching ${target.baseUrl} — the host did not answer (route down, wrong address, or board stopped)`));
+            }, timeoutMs);
+        } else {
+            req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Request timed out')); });
+        }
         if (bodyStr) { req.write(bodyStr); }
         req.end();
     });
 }
 
 /**
- * HTTP GET against the running server with auth headers attached.
+ * HTTP GET against the resolved board target with auth headers attached.
  * Rejects on network error or timeout — callers handle the rejection.
  */
-function apiGet(port: number, pathname: string, workspaceRoot: string, query?: Record<string, string>): Promise<ApiResponse> {
-    return apiRequest(port, 'GET', pathname, workspaceRoot, undefined, query);
+function apiGet(target: ApiTarget, pathname: string, query?: Record<string, string>): Promise<ApiResponse> {
+    return apiRequest(target, 'GET', pathname, undefined, query);
 }
 
 /**
- * HTTP POST against the running server with auth headers and a JSON body.
+ * HTTP POST against the resolved board target with auth headers and a JSON body.
  */
-function apiPost(port: number, pathname: string, workspaceRoot: string, payload: unknown, timeoutMs?: number): Promise<ApiResponse> {
-    return apiRequest(port, 'POST', pathname, workspaceRoot, payload, undefined, timeoutMs);
+function apiPost(target: ApiTarget, pathname: string, payload: unknown, timeoutMs?: number): Promise<ApiResponse> {
+    return apiRequest(target, 'POST', pathname, payload, undefined, timeoutMs);
+}
+
+// ─── Resolved-target plumbing (plan: every-node-command-dials-the-resolved-target-not-loopback) ───
+
+/**
+ * Connection flags spliced out of `process.argv` at the top of `main()` by
+ * `extractConnectionFlags` — BEFORE verb detection. Module-level because
+ * every command function resolves through `resolveBoardTarget` and none of
+ * them should re-implement the precedence chain.
+ */
+interface ConnectionFlags {
+    remote?: string;
+    server?: string;
+    workspaceRoot?: string;
+    tokenFile?: string;
+}
+let connFlags: ConnectionFlags = {};
+
+/**
+ * Pull the connection flags out of argv IN PLACE, before verb detection.
+ * They may appear anywhere — `switchboard --remote labcom plans` and
+ * `switchboard plans --remote labcom` are equivalent (Go parity —
+ * extractConnectionFlags in cmd/switchboard/main.go runs before dispatch).
+ * A flag with no following value is a usage error, not a silent default.
+ * `--token` (a raw token VALUE in argv) is deliberately absent — never add it.
+ */
+function extractConnectionFlags(argv: string[]): ConnectionFlags {
+    const out: ConnectionFlags = {};
+    const FLAGS: Record<string, keyof ConnectionFlags> = {
+        '--remote': 'remote',
+        '--server': 'server',
+        '--endpoint': 'server',
+        '--workspace-root': 'workspaceRoot',
+        '--token-file': 'tokenFile',
+    };
+    for (let i = 2; i < argv.length; i++) {
+        const a = argv[i];
+        let key = FLAGS[a];
+        if (key) {
+            const value = argv[i + 1];
+            if (value === undefined) {
+                console.error(`[switchboard] ${a} requires a value.`);
+                process.exit(1);
+            }
+            out[key] = value;
+            argv.splice(i, 2);
+            i--;
+            continue;
+        }
+        const eq = a.indexOf('=');
+        if (eq > 0) {
+            key = FLAGS[a.slice(0, eq)];
+            if (key) {
+                out[key] = a.slice(eq + 1);
+                argv.splice(i, 1);
+                i--;
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * True when the invocation names another machine's board — via a spliced
+ * flag, the env vars, or a configured `defaultRemote` in remotes.json. Used
+ * by the local-only refusal gate BEFORE any verb runs: a local verb under
+ * a remote target must refuse, not act on this machine's board anyway.
+ */
+function remoteTargetRequested(): boolean {
+    if (connFlags.remote || connFlags.server) { return true; }
+    if ((process.env.SWITCHBOARD_REMOTE ?? '').trim() || (process.env.SWITCHBOARD_SERVER_URL ?? '').trim()) { return true; }
+    const def = (loadRemotesConfig(stateFile('remotes.json'))?.defaultRemote ?? '').trim();
+    return def.length > 0;
+}
+
+/**
+ * How the remote target was named — for refusal and error messages. The
+ * operator edits the flag/env/config this string names.
+ */
+function remoteTargetName(): string {
+    if (connFlags.remote) { return `--remote ${connFlags.remote}`; }
+    if (connFlags.server) { return `--server ${connFlags.server}`; }
+    if ((process.env.SWITCHBOARD_REMOTE ?? '').trim()) { return `SWITCHBOARD_REMOTE=${process.env.SWITCHBOARD_REMOTE}`; }
+    if ((process.env.SWITCHBOARD_SERVER_URL ?? '').trim()) { return `SWITCHBOARD_SERVER_URL=${process.env.SWITCHBOARD_SERVER_URL}`; }
+    return 'the configured default remote in remotes.json';
+}
+
+/**
+ * Local-only verbs — they act on THIS machine's host process, filesystem,
+ * or listeners and cannot honour a remote target. Running one anyway is
+ * the silent-cross-machine outcome the ApiTarget work exists to prevent:
+ * `switchboard --remote labcom stop` must not signal a local PID.
+ */
+const LOCAL_ONLY_REMOTE_VERBS = new Set([
+    'local', 'tailnet', 'service', 'stop', 'logs', 'init', 'scaffold',
+    'control-plane', 'secrets', 'token', 'export', 'import',
+    'launcher-state', 'probe', 'heap-snapshot', 'controller', 'setup',
+]);
+
+function refuseRemoteTargetVerb(verb: string): never {
+    console.error(`[switchboard] '${verb}' is local-only — it acts on this machine's board, and a remote target (${remoteTargetName()}) cannot apply.`);
+    console.error(`[switchboard] Run it on the machine that hosts the board, or re-run without the remote target to use this machine's local board.`);
+    return exitFlushed(1);
+}
+
+/**
+ * Resolve the board this command talks to, returning null only when no
+ * LOCAL board is running (NoLocalBoardError — the one case that maps to the
+ * caller's own offline path). Every other resolution failure — unreachable
+ * remote, unnamed remote, missing root, stale root, unreadable token file —
+ * is printed with its named cause and exits 1.
+ */
+async function tryResolveBoardTarget(workspaceRoot: string): Promise<ApiTarget | null> {
+    try {
+        return await resolveApiTarget({
+            remote: connFlags.remote,
+            server: connFlags.server,
+            workspaceRoot: connFlags.workspaceRoot,
+            tokenFile: connFlags.tokenFile,
+            clientCwd: workspaceRoot,
+            env: process.env,
+        });
+    } catch (err) {
+        if (err instanceof NoLocalBoardError) { return null; }
+        console.error(`[switchboard] ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+    }
+}
+
+/**
+ * Same resolution, but a missing LOCAL board emits the shared offline
+ * guidance (the established `{ running: false }`-adjacent contract for
+ * board commands). This is the seam every remote-capable command resolves
+ * through — one call, the full precedence chain, no per-site re-derivation.
+ */
+async function resolveBoardTarget(workspaceRoot: string, opts: { json?: boolean } = {}): Promise<ApiTarget> {
+    const target = await tryResolveBoardTarget(workspaceRoot);
+    if (target === null) {
+        emitOfflineGuidance(opts.json === true);
+    }
+    return target;
+}
+
+/**
+ * Wrap a locally-discovered port as an ApiTarget for the LOCAL-ONLY paths
+ * that still resolve via findRunningInstance — `stop`, `token show`,
+ * `launcher-state`, `heap-snapshot`, serve/detach internals. The remote
+ * refusal gate makes these unreachable under a remote target; the wrapper
+ * exists so the shared apiRequest signature stays target-shaped everywhere.
+ */
+function localTarget(port: number, workspaceRoot: string): ApiTarget {
+    const token = discoverAuthToken(workspaceRoot, connFlags.tokenFile);
+    return {
+        baseUrl: `http://127.0.0.1:${port}`,
+        workspaceRoot,
+        rootSource: 'local:cwd',
+        auth: token ? { token, source: 'local-discovery' } : { token: null, source: 'none' as const },
+        source: 'local:port-file',
+        isRemote: false,
+    };
 }
 
 /**
@@ -667,7 +881,7 @@ function extractPlans(raw: any): any[] {
     return [];
 }
 
-async function resolvePrefix(port: number, workspaceRoot: string, prefix: string): Promise<{ planId: string } | { ambiguous: string[] } | null> {
+async function resolvePrefix(target: ApiTarget, prefix: string): Promise<{ planId: string } | { ambiguous: string[] } | null> {
     // If it's already a full UUID, return it directly.
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(prefix)) {
         return { planId: prefix.toLowerCase() };
@@ -676,7 +890,7 @@ async function resolvePrefix(port: number, workspaceRoot: string, prefix: string
     if (cleanPrefix.length < 3) {
         return null; // too short to resolve
     }
-    const res = await apiGet(port, '/kanban/plans', workspaceRoot);
+    const res = await apiGet(target, '/kanban/plans');
     if (res.status !== 200) { return null; }
     const plans = extractPlans(res.json());
     if (plans.length === 0) { return null; }
@@ -1140,12 +1354,12 @@ async function cmdAbout(workspaceRoot: string, jsonFlag: boolean): Promise<void>
             arch: process.arch,
             workspaceRoot,
         };
-        const port = await findRunningInstance(workspaceRoot);
-        if (port !== null) {
-            payload.serverUrl = `http://127.0.0.1:${port}`;
+        const target = await tryResolveBoardTarget(workspaceRoot);
+        if (target !== null) {
+            payload.serverUrl = target.baseUrl;
             payload.running = true;
             try {
-                const health = await getHealthJson(port);
+                const health = await fetchHealthJson(target.baseUrl);
                 payload.pid = health.pid;
                 payload.terminalCount = health.terminalCount ?? 0;
                 payload.terminals = health.terminals ?? [];
@@ -1157,12 +1371,12 @@ async function cmdAbout(workspaceRoot: string, jsonFlag: boolean): Promise<void>
         exitFlushed(0);
     }
     console.log(banner(version));
-    const port = await findRunningInstance(workspaceRoot);
-    if (port !== null) {
-        console.log(`Active Server:    http://127.0.0.1:${port} (Local)`);
+    const target = await tryResolveBoardTarget(workspaceRoot);
+    if (target !== null) {
+        console.log(`Active Server:    ${target.baseUrl} (${target.isRemote ? 'Remote' : 'Local'})`);
         try {
-            const health = await getHealthJson(port);
-            console.log(`Workspace:        ${health.selectedWorkspaceRoot ?? workspaceRoot}`);
+            const health = await fetchHealthJson(target.baseUrl);
+            console.log(`Workspace:        ${health.selectedWorkspaceRoot ?? target.workspaceRoot}`);
             const seats = health.terminals ?? [];
             console.log(`Active Fleet:     ${seats.length} seat${seats.length === 1 ? '' : 's'}${seats.length > 0 ? ' (' + seats.join(', ') + ')' : ''}`);
         } catch { /* */ }
@@ -1210,14 +1424,11 @@ async function cmdPlans(workspaceRoot: string, argv: string[]): Promise<void> {
         if (!a.startsWith('-') && !column) { column = a; continue; }
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
-        emitOfflineGuidance(jsonFlag);
-    }
+    const target = await resolveBoardTarget(workspaceRoot, { json: jsonFlag });
 
     const query: Record<string, string> = {};
     if (column) { query.column = column; }
-    const res = await apiGet(port, '/kanban/plans', workspaceRoot, query);
+    const res = await apiGet(target, '/kanban/plans', query);
     if (res.status === 401) {
         if (jsonFlag) { emitJson({ success: false, error: 'Authentication failed' }); }
         else { console.error('[switchboard] Authentication failed (401). The server requires a token.'); }
@@ -1289,15 +1500,12 @@ async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
         if (argv[i] === '--project') { project = argv[++i]; continue; }
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
-        emitOfflineGuidance(jsonFlag);
-    }
+    const target = await resolveBoardTarget(workspaceRoot, { json: jsonFlag });
 
     // Fetch plans from both ready columns and merge.
     const readyPlans: any[] = [];
     for (const col of READY_COLUMNS) {
-        const res = await apiGet(port, '/kanban/plans', workspaceRoot, { column: col });
+        const res = await apiGet(target, '/kanban/plans', { column: col });
         if (res.status === 401) {
             if (jsonFlag) { emitJson({ success: false, error: 'Authentication failed' }); }
             else { console.error('[switchboard] Authentication failed (401). The server requires a token.'); }
@@ -1356,7 +1564,7 @@ async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
         const selected = filtered[num - 1];
         const planId = String(selected?.planId || '');
         console.log(`[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
-        const code = await doDispatch(port, workspaceRoot, planId, 'auto');
+        const code = await doDispatch(target, planId, 'auto');
         exitFlushed(code);
     } finally {
         prompter.close();
@@ -1367,12 +1575,13 @@ async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
  * Core dispatch logic shared by `ready` picker, `dispatch` subcommand, and board console.
  * Calls POST /kanban/dispatch and returns the exit code. When `jsonFlag` is true,
  * emits the result as JSON on stdout (logs already routed to stderr by caller).
+ * The workspaceRoot field is injected by apiPost from the target — it is NOT
+ * restated here, so a remote seat cannot write its local path as the root.
  */
-async function doDispatch(port: number, workspaceRoot: string, planId: string, targetColumn: string, jsonFlag = false, seat?: string): Promise<number> {
-    const res = await apiPost(port, '/kanban/dispatch', workspaceRoot, {
+async function doDispatch(target: ApiTarget, planId: string, targetColumn: string, jsonFlag = false, seat?: string): Promise<number> {
+    const res = await apiPost(target, '/kanban/dispatch', {
         plan: planId,
         targetColumn,
-        workspaceRoot,
         ...(seat ? { seat } : {}),
     }, DELIVERY_BLOCKING_TIMEOUT_MS);
     const code = dispatchExitCode(res.status);
@@ -1418,13 +1627,10 @@ async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void>
         exitFlushed(5);
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
-        emitOfflineGuidance(jsonFlag);
-    }
+    const target = await resolveBoardTarget(workspaceRoot, { json: jsonFlag });
 
     // Resolve prefix to full planId.
-    const resolved = await resolvePrefix(port, workspaceRoot, ref);
+    const resolved = await resolvePrefix(target, ref);
     if (resolved === null) {
         if (jsonFlag) { emitJson({ success: false, error: `No plan matches prefix '${ref}'` }); }
         else { console.error(`[switchboard] No plan matches prefix '${ref}'.`); }
@@ -1445,7 +1651,7 @@ async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void>
 
     // If --project was given, verify the plan's project matches.
     if (project) {
-        const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+        const plansRes = await apiGet(target, '/kanban/plans');
         if (plansRes.status === 200) {
             const plans = extractPlans(plansRes.json());
             const plan = plans.find((p: any) => p?.planId === planId);
@@ -1457,7 +1663,7 @@ async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void>
         }
     }
 
-    const code = await doDispatch(port, workspaceRoot, planId, column, jsonFlag, seat);
+    const code = await doDispatch(target, planId, column, jsonFlag, seat);
     exitFlushed(code);
 }
 
@@ -1484,15 +1690,12 @@ async function cmdClear(workspaceRoot: string, argv: string[]): Promise<void> {
         exitFlushed(5);
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
-        emitOfflineGuidance(jsonFlag);
-    }
+    const boardTarget = await resolveBoardTarget(workspaceRoot, { json: jsonFlag });
 
     const targets: string[] = [];
     if (clearAll) {
         try {
-            const health = await getHealthJson(port);
+            const health = await fetchHealthJson(boardTarget.baseUrl);
             targets.push(...(health.terminals ?? []));
         } catch { /* */ }
         if (targets.length === 0) {
@@ -1506,7 +1709,7 @@ async function cmdClear(workspaceRoot: string, argv: string[]): Promise<void> {
 
     const results: Array<{ name: string; ok: boolean; error?: string }> = [];
     for (const name of targets) {
-        const res = await apiPost(port, '/terminals/verb/ptyClearTerminal', workspaceRoot, { name });
+        const res = await apiPost(boardTarget, '/terminals/verb/ptyClearTerminal', { name });
         const ok = res.status === 200;
         const data = res.json();
         results.push({ name, ok, error: ok ? undefined : String(data?.error || res.body) });
@@ -1673,7 +1876,7 @@ async function cmdHeapSnapshot(workspaceRoot: string, argv: string[]): Promise<v
     const payload: { destination?: string } = {};
     if (destination) { payload.destination = destination; }
 
-    const res = await apiPost(port, '/diagnostics/heap-snapshot', workspaceRoot, payload);
+    const res = await apiPost(localTarget(port, workspaceRoot), '/diagnostics/heap-snapshot', payload);
     const body = res.json();
     if (res.status !== 200 || !body?.success) {
         const errMsg = body?.error || `HTTP ${res.status}`;
@@ -1703,14 +1906,11 @@ async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
     const jsonFlag = argv.includes('--json');
     if (jsonFlag) { routeLogsToStderr(); }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
-        emitOfflineGuidance(jsonFlag);
-    }
+    const target = await resolveBoardTarget(workspaceRoot, { json: jsonFlag });
 
-    let health: Awaited<ReturnType<typeof getHealthJson>>;
+    let health: HealthJson;
     try {
-        health = await getHealthJson(port);
+        health = await fetchHealthJson(target.baseUrl);
     } catch {
         if (jsonFlag) { emitJson({ success: false, error: 'Could not reach server' }); }
         else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
@@ -1719,7 +1919,7 @@ async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
 
     // Fetch detailed terminal info via ptyListTerminals.
     let terminals: any[] = [];
-    const res = await apiPost(port, '/terminals/verb/ptyListTerminals', workspaceRoot, {});
+    const res = await apiPost(target, '/terminals/verb/ptyListTerminals', {});
     if (res.status === 200) {
         const data = res.json();
         // ptyListTerminals returns { success, terminals } or an array.
@@ -1729,9 +1929,11 @@ async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
     }
 
     if (jsonFlag) {
+        const u = new URL(target.baseUrl);
         emitJson({
             success: true,
-            port,
+            port: u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80),
+            url: target.baseUrl,
             pid: health.pid,
             terminalCount: health.terminalCount ?? 0,
             terminals,
@@ -1812,6 +2014,10 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
 
     const port = await findRunningInstance(workspaceRoot);
     if (port === null) { emitOfflineGuidance(jsonFlag); }
+    // Local-only verb — the remote refusal gate runs before dispatch, so a
+    // remote target never reaches this point. The local port is wrapped as a
+    // target so the shared apiRequest signature stays uniform.
+    const target = localTarget(port, workspaceRoot);
 
     const config: Partial<ControllerRuntimeConfig> = {};
     const intervalRaw = getFlag('--interval');
@@ -1850,7 +2056,7 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         return acc;
     }, []);
     if (supervisorFlag !== undefined || ceilingFlag !== undefined || tierFlags.length > 0) {
-        const current = await apiGet(port, '/controller/judgement', workspaceRoot);
+        const current = await apiGet(target, '/controller/judgement');
         const currentJson = current.json();
         const existing = (currentJson?.judgement && typeof currentJson.judgement === 'object') ? currentJson.judgement : {};
         const next: any = {
@@ -1875,7 +2081,7 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
                 costClass: costClass || 'free',
             });
         }
-        const put = await apiRequest(port, 'PUT', '/controller/judgement', workspaceRoot, { judgement: next });
+        const put = await apiRequest(target, 'PUT', '/controller/judgement', { judgement: next });
         if (put.status !== 200) {
             console.error(`[switchboard] failed to write judgement config: ${put.json()?.reason || put.status}`);
             exitFlushed(1);
@@ -1909,7 +2115,13 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         port,
         // The CLI's own request path — same auth, same CSRF marker, same
         // workspaceRoot routing as every other command. Not a second client.
-        apiRequest,
+        // Adapter, not apiRequest itself: ControllerApiRequest is port-shaped
+        // and retargeting the controller is a separate follow-up. The
+        // controller is local-only — the remote refusal gate makes this path
+        // unreachable under a remote target — so localTarget preserves its
+        // exact old behaviour.
+        apiRequest: (reqPort, method, pathname, reqRoot, payload, query, timeoutMs) =>
+            apiRequest(localTarget(reqPort, reqRoot), method, pathname, payload, query, timeoutMs),
         controllerId,
         teamId,
         once,
@@ -1960,8 +2172,8 @@ async function cmdVerb(workspaceRoot: string, argv: string[]): Promise<void> {
         }
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
+    const target = await tryResolveBoardTarget(workspaceRoot);
+    if (target === null) {
         if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
         else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
         exitFlushed(1);
@@ -1979,9 +2191,9 @@ async function cmdVerb(workspaceRoot: string, argv: string[]): Promise<void> {
     // refusals, never on a generic 502 — a blind retry could run a
     // side-effecting terminal verb twice.
     const VERB_NOT_HERE = /not implemented|unknown (terminal |pty )?verb|missing verb/i;
-    let res = await apiPost(port, `/terminals/verb/${encodeURIComponent(verbName)}`, workspaceRoot, payload);
+    let res = await apiPost(target, `/terminals/verb/${encodeURIComponent(verbName)}`, payload);
     if (res.status === 404 || (res.status >= 400 && VERB_NOT_HERE.test(String(res.json()?.error || '')))) {
-        res = await apiPost(port, `/kanban/verb/${encodeURIComponent(verbName)}`, workspaceRoot, payload);
+        res = await apiPost(target, `/kanban/verb/${encodeURIComponent(verbName)}`, payload);
     }
 
     if (jsonFlag) {
@@ -2106,14 +2318,11 @@ async function cmdApi(workspaceRoot: string, argv: string[]): Promise<void> {
         }
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
-        emitOfflineGuidance(jsonFlag);
-    }
+    const target = await resolveBoardTarget(workspaceRoot, { json: jsonFlag });
 
     let res: ApiResponse;
     try {
-        res = await apiRequest(port, upperMethod, rawPath, workspaceRoot, parsedBody, undefined, timeoutMs);
+        res = await apiRequest(target, upperMethod, rawPath, parsedBody, undefined, timeoutMs);
     } catch (err: any) {
         if (jsonFlag) { emitJson({ success: false, error: err?.message || 'Request failed' }); }
         else { console.error(`[switchboard] Request failed: ${err?.message || err}`); }
@@ -2209,8 +2418,8 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
         exitFlushed(5);
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
+    const target = await tryResolveBoardTarget(workspaceRoot);
+    if (target === null) {
         // Carry the resolved identity and the source that answered it even on
         // the offline path: "which seat did it think I was?" must be
         // answerable without a board, or a wrong SWITCHBOARD_TERMINAL is
@@ -2221,7 +2430,6 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
     }
 
     const body: Record<string, any> = {
-        workspaceRoot,
         from,
         outcome: (outcome?.toLowerCase() === 'failed') ? 'failed' : 'finished',
     };
@@ -2231,13 +2439,13 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
 
     let res;
     try {
-        res = await apiPost(port, '/kanban/queue/done', workspaceRoot, body, DELIVERY_BLOCKING_TIMEOUT_MS);
+        res = await apiPost(target, '/kanban/queue/done', body, DELIVERY_BLOCKING_TIMEOUT_MS);
     } catch (err: any) {
         // The server answered /health a moment ago and is gone now. Report it as
         // offline rather than letting main()'s catch print a stack trace at an
         // agent that has to read the outcome.
         if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
-        else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
+        else { console.error(`[switchboard] Switchboard did not answer at ${target.baseUrl}: ${err?.message || err}`); }
         exitFlushed(1);
         return;
     }
@@ -2330,8 +2538,8 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
         exitFlushed(5);
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
+    const target = await tryResolveBoardTarget(workspaceRoot);
+    if (target === null) {
         // Carry the resolved identity and the source that answered it even on
         // the offline path: "which lead did it think I was?" must be answerable
         // without a board, or a wrong SWITCHBOARD_TERMINAL is invisible until it
@@ -2342,17 +2550,16 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
     }
 
     const body: Record<string, any> = {
-        workspaceRoot,
         from,
         planId,
     };
 
     let res;
     try {
-        res = await apiPost(port, '/kanban/task/complete', workspaceRoot, body, DELIVERY_BLOCKING_TIMEOUT_MS);
+        res = await apiPost(target, '/kanban/task/complete', body, DELIVERY_BLOCKING_TIMEOUT_MS);
     } catch (err: any) {
         if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
-        else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
+        else { console.error(`[switchboard] Switchboard did not answer at ${target.baseUrl}: ${err?.message || err}`); }
         exitFlushed(1);
         return;
     }
@@ -2429,8 +2636,8 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
         exitFlushed(5);
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
+    const target = await tryResolveBoardTarget(workspaceRoot);
+    if (target === null) {
         if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
         else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
         exitFlushed(1);
@@ -2438,13 +2645,12 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
 
     let res;
     try {
-        res = await apiPost(port, '/kanban/queue/next', workspaceRoot, {
-            workspaceRoot,
+        res = await apiPost(target, '/kanban/queue/next', {
             from,
         }, DELIVERY_BLOCKING_TIMEOUT_MS);
     } catch (err: any) {
         if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
-        else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
+        else { console.error(`[switchboard] Switchboard did not answer at ${target.baseUrl}: ${err?.message || err}`); }
         exitFlushed(1);
         return;
     }
@@ -2512,8 +2718,8 @@ async function cmdReports(workspaceRoot: string, argv: string[]): Promise<void> 
         }
     }
 
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
+    const target = await tryResolveBoardTarget(workspaceRoot);
+    if (target === null) {
         if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
         else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
         exitFlushed(1);
@@ -2525,10 +2731,10 @@ async function cmdReports(workspaceRoot: string, argv: string[]): Promise<void> 
 
     let res;
     try {
-        res = await apiGet(port, '/kanban/reports', workspaceRoot, query);
+        res = await apiGet(target, '/kanban/reports', query);
     } catch (err: any) {
         if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
-        else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
+        else { console.error(`[switchboard] Switchboard did not answer at ${target.baseUrl}: ${err?.message || err}`); }
         exitFlushed(1);
         return;
     }
@@ -3202,8 +3408,7 @@ async function promptWithSigInt(prompter: { ask: (q: string) => Promise<string |
 }
 
 async function consoleBrowseCardsInColumn(
-    port: number,
-    workspaceRoot: string,
+    target: ApiTarget,
     selectedCol: string,
     prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
 ): Promise<void> {
@@ -3211,7 +3416,7 @@ async function consoleBrowseCardsInColumn(
         // Re-fetch on return (Requirement 5)
         let plansRes;
         try {
-            plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+            plansRes = await apiGet(target, '/kanban/plans');
         } catch (err: any) {
             console.error(`[switchboard] Could not fetch plans: ${err?.message || err}`);
             exitFlushed(1);
@@ -3267,19 +3472,18 @@ async function consoleBrowseCardsInColumn(
         const selected = allCards[pickNum - 1];
         const planId = String(selected?.planId || '');
         console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
-        await doDispatch(port, workspaceRoot, planId, 'auto');
+        await doDispatch(target, planId, 'auto');
     }
 }
 
 async function consoleBrowseByColumn(
-    port: number,
-    workspaceRoot: string,
+    target: ApiTarget,
     prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
 ): Promise<void> {
     for (;;) {
         let plansRes;
         try {
-            plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+            plansRes = await apiGet(target, '/kanban/plans');
         } catch (err: any) {
             console.error(`[switchboard] Could not fetch plans: ${err?.message || err}`);
             exitFlushed(1);
@@ -3318,13 +3522,12 @@ async function consoleBrowseByColumn(
         }
 
         const selectedCol = cols[colNum - 1];
-        await consoleBrowseCardsInColumn(port, workspaceRoot, selectedCol, prompter);
+        await consoleBrowseCardsInColumn(target, selectedCol, prompter);
     }
 }
 
 async function consoleSearch(
-    port: number,
-    workspaceRoot: string,
+    target: ApiTarget,
     prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
 ): Promise<void> {
     for (;;) {
@@ -3335,7 +3538,7 @@ async function consoleSearch(
 
         let plansRes;
         try {
-            plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+            plansRes = await apiGet(target, '/kanban/plans');
         } catch (err: any) {
             console.error(`[switchboard] Could not fetch plans: ${err?.message || err}`);
             exitFlushed(1);
@@ -3396,15 +3599,14 @@ async function consoleSearch(
             const selected = allMatches[pickNum - 1];
             const planId = String(selected?.planId || '');
             console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
-            await doDispatch(port, workspaceRoot, planId, 'auto');
+            await doDispatch(target, planId, 'auto');
             break;
         }
     }
 }
 
 async function consoleFilterByProject(
-    port: number,
-    workspaceRoot: string,
+    target: ApiTarget,
     prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
 ): Promise<void> {
     for (;;) {
@@ -3415,7 +3617,7 @@ async function consoleFilterByProject(
 
         let plansRes;
         try {
-            plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+            plansRes = await apiGet(target, '/kanban/plans');
         } catch (err: any) {
             console.error(`[switchboard] Could not fetch plans: ${err?.message || err}`);
             exitFlushed(1);
@@ -3477,20 +3679,19 @@ async function consoleFilterByProject(
             const selected = allFiltered[pickNum - 1];
             const planId = String(selected?.planId || '');
             console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
-            await doDispatch(port, workspaceRoot, planId, 'auto');
+            await doDispatch(target, planId, 'auto');
             break;
         }
     }
 }
 
 async function consoleInspectFleet(
-    port: number,
-    workspaceRoot: string,
+    target: ApiTarget,
     prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
 ): Promise<void> {
     let terminals: any[] = [];
     try {
-        const res = await apiPost(port, '/terminals/verb/ptyListTerminals', workspaceRoot, {});
+        const res = await apiPost(target, '/terminals/verb/ptyListTerminals', {});
         if (res.status === 200) {
             const data = res.json();
             if (Array.isArray(data)) { terminals = data; }
@@ -3540,14 +3741,17 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
     const prompter = openPrompter();
     try {
         for (;;) {
-            const port = await findRunningInstance(workspaceRoot);
-            if (port === null) {
+            // Re-resolve every iteration (Requirement 5): a board that
+            // restarted — or a remote that went away — is reflected on the
+            // next render, not pinned to the port found at entry.
+            const target = await tryResolveBoardTarget(workspaceRoot);
+            if (target === null) {
                 emitOfflineGuidance(false);
             }
 
-            let health: Awaited<ReturnType<typeof getHealthJson>>;
+            let health: HealthJson;
             try {
-                health = await getHealthJson(port);
+                health = await fetchHealthJson(target.baseUrl);
             } catch {
                 console.error('[switchboard] No running Switchboard instance for this workspace.');
                 exitFlushed(1);
@@ -3560,7 +3764,7 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
             // Board summary — fetch column counts.
             let boardSummary = '';
             try {
-                const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+                const plansRes = await apiGet(target, '/kanban/plans');
                 if (plansRes.status === 200) {
                     const plans = extractPlans(plansRes.json());
                     if (plans.length > 0) {
@@ -3586,8 +3790,8 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
             }
 
             console.log(banner(version));
-            console.log(`  Active Server:    http://127.0.0.1:${port}`);
-            console.log(`  Workspace:        ${health.selectedWorkspaceRoot ?? workspaceRoot}`);
+            console.log(`  Active Server:    ${target.baseUrl}`);
+            console.log(`  Workspace:        ${health.selectedWorkspaceRoot ?? target.workspaceRoot}`);
             console.log(`  Active Fleet:     ${seats.length} seat${seats.length === 1 ? '' : 's'}`);
             if (boardSummary) { console.log(''); console.log(boardSummary); }
             console.log('');
@@ -3606,24 +3810,24 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
             }
 
             if (answer === '1') {
-                await consoleBrowseByColumn(port, workspaceRoot, prompter);
+                await consoleBrowseByColumn(target, prompter);
                 continue;
             }
             if (answer === '2') {
-                await consoleSearch(port, workspaceRoot, prompter);
+                await consoleSearch(target, prompter);
                 continue;
             }
             if (answer === '3') {
-                await consoleFilterByProject(port, workspaceRoot, prompter);
+                await consoleFilterByProject(target, prompter);
                 continue;
             }
             if (answer === '4') {
-                await consoleInspectFleet(port, workspaceRoot, prompter);
+                await consoleInspectFleet(target, prompter);
                 continue;
             }
 
             // Not numeric — try as a plan prefix to dispatch directly.
-            const resolved = await resolvePrefix(port, workspaceRoot, answer);
+            const resolved = await resolvePrefix(target, answer);
             if (resolved === null) {
                 console.log(`[switchboard] No plan matches '${answer}'.`);
                 continue;
@@ -3635,7 +3839,7 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
             }
             const planId = (resolved as { planId: string }).planId;
             console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)}…`);
-            await doDispatch(port, workspaceRoot, planId, 'auto');
+            await doDispatch(target, planId, 'auto');
         }
     } finally {
         prompter.close();
@@ -3643,6 +3847,19 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
 }
 
 async function main() {
+    // ── Connection flags splice — BEFORE everything ──────────────
+    //
+    // --remote/--server/--endpoint/--workspace-root/--token-file name the
+    // board a command talks to and may appear anywhere in argv (Go parity —
+    // extractConnectionFlags runs before verb dispatch). They are pulled out
+    // HERE, before the heap re-exec gate and firstArg detection: leaving
+    // `--remote` at argv[2] would read as a serve-mode flag, and the serve
+    // path launches a LOCAL board — the single worst silent outcome for a
+    // seat that named another machine. The raw argv is preserved for the
+    // re-exec spawn so the child re-splices the same flags.
+    const rawArgv = process.argv.slice();
+    connFlags = extractConnectionFlags(process.argv);
+
     // ── Heap ceiling re-exec — NO DEFAULT. Opt-in only. ──
     //
     // There is deliberately no default value here. Two were tried and both were
@@ -3715,7 +3932,9 @@ async function main() {
         // Re-exec once with the flag so the board process runs with the required ceiling.
         const child = spawn(
             process.execPath,
-            [...process.execArgv, `--max-old-space-size=${effectiveHeapMb}`, ...process.argv.slice(1)],
+            // rawArgv — the connection flags were already spliced out of
+            // process.argv; the child must see them and re-splice itself.
+            [...process.execArgv, `--max-old-space-size=${effectiveHeapMb}`, ...rawArgv.slice(1)],
             {
                 stdio: 'inherit',
                 env: {
@@ -3749,7 +3968,7 @@ async function main() {
     const KNOWN_SUBCOMMANDS = new Set([
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
-        'plans', 'ready', 'dispatch', 'done', 'accept', 'next', 'reports', 'clear', 'fleet', 'probe', 'verb', 'api',
+        'plans', 'ready', 'dispatch', 'done', 'accept', 'next', 'reports', 'clear', 'fleet', 'probe', 'heap-snapshot', 'verb', 'api',
         'help', 'about', 'version', 'setup', 'launcher-state', 'service', 'controller',
         // Internal routing token — re-spawned by cmdMainMenu's CLI Mode to
         // enable Back without refactoring cmdBoardConsole's exit semantics.
@@ -3770,6 +3989,37 @@ async function main() {
         console.error('  Serve modes: switchboard local | switchboard tailnet');
         console.error('  Run \'switchboard --help\' for the full command list.');
         process.exit(1);
+    }
+
+    // ── Remote-target gate ────────────────────────────────────────
+    //
+    // A remote target (a spliced flag, SWITCHBOARD_REMOTE /
+    // SWITCHBOARD_SERVER_URL, or a configured defaultRemote) names ANOTHER
+    // machine's board. Two refusals fire here, before any verb runs:
+    //
+    // 1. Local-only verbs — anything that acts on THIS machine's host
+    //    process, filesystem, or listeners. `switchboard --remote labcom
+    //    stop` must not signal a local PID; running it anyway is the
+    //    silent-cross-machine outcome the ApiTarget work exists to prevent.
+    // 2. Serve flags — `--workspace`/`--port` configure a LOCAL listen or a
+    //    local probe port; they conflict with a remote target outright.
+    //
+    // Both messages name the cause AND the recovery step (invariant 5).
+    if (remoteTargetRequested()) {
+        if (firstArg && LOCAL_ONLY_REMOTE_VERBS.has(firstArg)) {
+            refuseRemoteTargetVerb(firstArg);
+        }
+        const restArgs = process.argv.slice(2);
+        if (restArgs.includes('--workspace') || restArgs.some(a => a.startsWith('--workspace='))) {
+            console.error(`[switchboard] --workspace names a local serve workspace and conflicts with a remote target (${remoteTargetName()}).`);
+            console.error('[switchboard] Drop --workspace, or drop the remote target to serve this machine\'s board.');
+            process.exit(1);
+        }
+        if (restArgs.includes('--port') || restArgs.some(a => a.startsWith('--port='))) {
+            console.error(`[switchboard] --port names a local listen/probe port and conflicts with a remote target (${remoteTargetName()}).`);
+            console.error('[switchboard] Drop --port, or drop the remote target to reach this machine\'s board.');
+            process.exit(1);
+        }
     }
     if (firstArg === 'tailnet') {
         serveMode = 'tailnet';
@@ -4430,7 +4680,7 @@ async function main() {
             console.log(`[switchboard] Stopping standalone server (instance ${health.host!.instanceId}, port ${port}) via /shutdown…`);
             let res: ApiResponse;
             try {
-                res = await apiPost(port, '/shutdown', workspaceRoot, {}, 10000);
+                res = await apiPost(localTarget(port, workspaceRoot), '/shutdown', {}, 10000);
             } catch (err) {
                 console.error(`[switchboard] /shutdown request failed: ${err instanceof Error ? err.message : String(err)}`);
                 console.error('[switchboard] The host may have already stopped, or the route is unreachable. Falling back is disabled for an identity-bearing standalone host — re-run after confirming the server is still up.');
@@ -4545,7 +4795,7 @@ async function main() {
         if (port !== null) {
             // Host is running — proxy the authoritative projection.
             try {
-                const res = await apiGet(port, '/launcher/state', workspaceRoot);
+                const res = await apiGet(localTarget(port, workspaceRoot), '/launcher/state');
                 if (res.status === 200) {
                     if (jsonFlag) { emitJson(res.json()); }
                     else { console.log(JSON.stringify(res.json(), null, 2)); }
@@ -4616,8 +4866,8 @@ async function main() {
         const jsonFlag = process.argv.slice(3).includes('--json');
         if (jsonFlag) { routeLogsToStderr(); }
 
-        const port = await findRunningInstance(workspaceRoot);
-        if (port === null) {
+        const target = await tryResolveBoardTarget(workspaceRoot);
+        if (target === null) {
             // `--json` keeps its established `{ running: false }` shape — that is
             // the machine contract and must not gain a hints array here. The
             // human path routes through the shared guidance instead of a bare
@@ -4629,9 +4879,9 @@ async function main() {
             emitOfflineGuidance(false);
         }
 
-        let health: Awaited<ReturnType<typeof getHealthJson>> | undefined;
+        let health: HealthJson | undefined;
         try {
-            health = await getHealthJson(port);
+            health = await fetchHealthJson(target.baseUrl);
         } catch {
             if (jsonFlag) { emitJson({ running: false }); }
             else { console.log('[switchboard] No running Switchboard instance for this workspace.'); }
@@ -4639,12 +4889,13 @@ async function main() {
         }
         if (!health) { exitFlushed(1); }
 
+        const targetUrl = new URL(target.baseUrl);
         const payload = {
             running: true,
             pid: health.pid,
-            port,
-            url: `http://127.0.0.1:${port}`,
-            workspaceRoot: health.selectedWorkspaceRoot ?? workspaceRoot,
+            port: targetUrl.port ? Number(targetUrl.port) : (targetUrl.protocol === 'https:' ? 443 : 80),
+            url: target.baseUrl,
+            workspaceRoot: health.selectedWorkspaceRoot ?? target.workspaceRoot,
             roots: health.roots,
             terminalCount: health.terminalCount ?? 0,
             terminals: health.terminals ?? [],
@@ -4654,7 +4905,7 @@ async function main() {
         if (jsonFlag) {
             emitJson(payload);
         } else {
-            console.log(`[switchboard] Running (PID ${health.pid}, port ${port})`);
+            console.log(`[switchboard] Running (PID ${health.pid}, ${target.baseUrl})`);
             console.log(`  URL:       ${payload.url}`);
             console.log(`  Workspace: ${payload.workspaceRoot}`);
             console.log(`  Terminals: ${payload.terminalCount}`);
@@ -4773,7 +5024,29 @@ async function main() {
     // serve commands; flags without a subcommand (e.g. `--hostname foo`)
     // still fall through to the serve path below for backward compatibility.
     if (!firstArg) {
+        if (remoteTargetRequested()) {
+            // Bare `switchboard --remote labcom`: the front-door menu's serve
+            // branches ([1] GUI start local/remote) cannot honour a remote
+            // target — the only meaningful branch is the board console
+            // against the resolved remote.
+            await cmdBoardConsole(workspaceRoot);
+            exitFlushed(0);
+        }
         await cmdMainMenu(workspaceRoot);
+    }
+
+    // ── Remote target + serve path = refuse ─────────────────────
+    //
+    // Every remote-capable verb and the bare-remote board-console branch
+    // have already claimed their invocations above. Anything that reaches
+    // the serve path under a remote target — `switchboard --remote labcom
+    // --detach`, `--hostname foo` — asked for another machine's board and
+    // is about to launch THIS machine's. That is the worst silent outcome
+    // in the file: refuse, never boot.
+    if (remoteTargetRequested()) {
+        console.error(`[switchboard] A remote target (${remoteTargetName()}) cannot start a local board — the serve path only ever launches on this machine.`);
+        console.error('[switchboard] Run the serve command on the machine that hosts the board, or run a board command (plans, status, …) here.');
+        process.exit(1);
     }
 
     // ── Server start path (local / tailnet / serve flags) ─────────

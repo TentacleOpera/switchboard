@@ -91,6 +91,8 @@ export interface HealthJson {
     pid?: number;
     roots?: string[];
     selectedWorkspaceRoot?: string | null;
+    terminals?: string[];
+    terminalCount?: number;
     [k: string]: unknown;
 }
 
@@ -134,6 +136,19 @@ export class StaleRemoteRootError extends Error {
     ) {
         super(`stored root '${storedRoot}' for remote '${remoteName}' is not advertised by the board (stale)`);
         this.name = 'StaleRemoteRootError';
+    }
+}
+
+/**
+ * Local discovery found no running board. This is the ONLY resolution
+ * failure that maps to the shared offline guidance — callers distinguish it
+ * by class, never by message matching. Every remote-tier failure is a plain
+ * Error with a named cause.
+ */
+export class NoLocalBoardError extends Error {
+    public constructor() {
+        super('no running Switchboard instance found for this workspace');
+        this.name = 'NoLocalBoardError';
     }
 }
 
@@ -392,7 +407,7 @@ export async function resolveApiTarget(opts: ResolveApiTargetOptions = {}): Prom
             // Local discovery — today's local path, untouched.
             const local = await discoverLocal(cwd);
             if (!local) {
-                throw new Error('no running Switchboard instance found for this workspace');
+                throw new NoLocalBoardError();
             }
             ep = {
                 baseUrl: `http://127.0.0.1:${local.port}`,
@@ -481,7 +496,12 @@ export async function resolveApiTarget(opts: ResolveApiTargetOptions = {}): Prom
             }
             auth = { token: v, source: 'flag:--token-file' };
         }
-        if (!auth) {
+        if (!auth && !isRemote) {
+            // The workspace token file is a filesystem read of the CLIENT's
+            // cwd — under a remote target it is the LOCAL board's credential,
+            // not the remote's. Reading it would leak the local token to
+            // another machine and mislabel the request. A remote target
+            // resolves its credential from env or --token-file only.
             try {
                 const v = fs.readFileSync(path.join(cwd, '.switchboard', 'api-server-token.txt'), 'utf8').trim();
                 if (v) { auth = { token: v, source: 'token-file' }; }
