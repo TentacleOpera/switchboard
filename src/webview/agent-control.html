@@ -1507,6 +1507,43 @@
             color: var(--text-secondary);
             margin-top: 2px;
         }
+        /* The in-use switch. A team that exists is not automatically a team that
+           plays; a switched-off team is GREYED WITH ITS SWITCH, never hidden and
+           never deleted, or there is no way back on. */
+        .teams-card-switch {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 4px;
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .teams-card.is-disabled {
+            opacity: 0.5;
+        }
+        /* The switch itself stays at full strength on a greyed card — it is the
+           way back on, so it must not look as switched-off as the team does. */
+        .teams-card.is-disabled .teams-card-switch {
+            opacity: 1;
+        }
+        /* The six roles the shipped ENABLED teams need. Derived host-side from
+           DEFAULT_TEAM_DEFINITIONS, never typed here. Informational, not a
+           warning: the other roles are available, just not the first-run path. */
+        .agents-tab-recommended-role {
+          font-size: 9px;
+          padding: 1px 5px;
+          border-radius: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+          white-space: nowrap;
+          flex-shrink: 0;
+          background: color-mix(in srgb, var(--accent-teal, #2ec4b6) 14%, transparent);
+          color: var(--accent-teal, #2ec4b6);
+          border: 1px solid color-mix(in srgb, var(--accent-teal, #2ec4b6) 30%, transparent);
+        }
         .teams-card-autostart {
             display: flex;
             align-items: center;

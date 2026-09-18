@@ -109,6 +109,52 @@ function seatNameFromTeamName(teamName?: string): string | undefined {
     return slug || undefined;
 }
 
+/**
+ * The roles a team would start into BARE SHELLS — every role it needs (head plus
+ * per-team members) that has no startup command on the team's machine.
+ *
+ * Advisory, NOT a gate. `injectStartupCommand` returns silently when a role
+ * resolves to nothing, so the seat spawns as a bare shell and the operator is
+ * told nothing. This mirrors that exact resolution rule so the report cannot
+ * drift from the behaviour it describes.
+ *
+ * Read ONCE per call, not per seat: the map is a file read and a commandless
+ * seat is a report, not a spawn decision, so a stale read is harmless.
+ *
+ * Machine threading: resolve from the TEAM's machine so the report matches what
+ * the spawn path will actually read. A team with no `machine` field defaults to
+ * `'local'` (the always-present machine).
+ *
+ * SHARED MEMBERS ARE SKIPPED, and that is why no shipped default carries one. A
+ * `scope: 'shared'` member reuses a live terminal and is never re-injected, so it
+ * needs no startup command AT SPAWN TIME — correct for this function's original
+ * caller, and wrong for a setup-surface report, where the question is "has this
+ * role been configured at all". The hole survives for operator-built teams that
+ * opt into shared scope; whoever needs it closed splits the two sets rather than
+ * deleting the skip, which would change what team start refuses on.
+ *
+ * Exported so the setup surface can ask the same question BEFORE a start — a
+ * first-run user needs "Coding needs `coder` and `intern`" before clicking, not
+ * after.
+ */
+export async function resolveCommandlessRoles(group: any): Promise<string[]> {
+    const members = Array.isArray(group?.members) ? group.members : [];
+    const teamMachineId = (typeof group?.machine === 'string' && group.machine) ? group.machine : 'local';
+    const startupCommands = (await GlobalIntegrationConfigService.getAgentStartupCommands(teamMachineId)) || {};
+    const hasCommand = (role: string) => typeof startupCommands[role] === 'string'
+        && startupCommands[role].trim().length > 0;
+
+    const candidates = new Set<string>([group?.headRole || 'lead']);
+    for (const m of members) {
+        // Per-member startupCommand is retired — every member resolves from the
+        // team's machine. A shared member that reuses a live terminal is never
+        // re-injected at all.
+        if (m?.scope === 'shared') { continue; }
+        if (typeof m?.role === 'string' && m.role) { candidates.add(m.role); }
+    }
+    return [...candidates].filter(r => !hasCommand(r));
+}
+
 export async function instantiateAgentGroupCore(
     opts: InstantiateAgentGroupOptions
 ): Promise<InstantiateAgentGroupResult> {
@@ -151,20 +197,11 @@ export async function instantiateAgentGroupCore(
     // Machine threading: resolve from the TEAM's machine so the report matches
     // what the spawn path will actually read. A team with no `machine` field
     // defaults to `'local'` (the always-present machine).
+    // The team's machine — head AND every delegate spawn on it. See the plan
+    // `agents-are-saved-per-machine-and-a-team-picks-one`. A team with no
+    // `machine` field defaults to `'local'` (the always-present machine).
     const teamMachineId = (typeof group?.machine === 'string' && group.machine) ? group.machine : 'local';
-    const startupCommands = (await GlobalIntegrationConfigService.getAgentStartupCommands(teamMachineId)) || {};
-    const hasCommand = (role: string) => typeof startupCommands[role] === 'string'
-        && startupCommands[role].trim().length > 0;
-
-    const candidates = new Set<string>([group?.headRole || 'lead']);
-    for (const m of members) {
-        // Per-member startupCommand is retired — every member resolves from the
-        // team's machine. A shared member that reuses a live terminal is never
-        // re-injected at all.
-        if (m?.scope === 'shared') { continue; }
-        if (typeof m?.role === 'string' && m.role) { candidates.add(m.role); }
-    }
-    const commandlessRoles = [...candidates].filter(r => !hasCommand(r));
+    const commandlessRoles = await resolveCommandlessRoles(group);
 
     // The head's seat name is the TEAM's name, sanitised into a seat name — not
     // the role. Deriving it from the role gave a head called `lead-1`, members

@@ -587,8 +587,14 @@
             child.remove();
         }
 
-        // ── Teams mode (the only mode) ───────────────────────────────
-        // Exactly three fixed slots (in stable definition order from the panel).
+        // ── Teams and groups (one strip, no mode switch) ─────────────
+        // The "exactly three fixed slots, defaults only" model is retired. The
+        // panel sends one entry per ENABLED team definition — default or
+        // operator-built, running or not — plus one per LIVE GROUP, in stable
+        // order. A disabled team sends no entry at all; that is what its switch
+        // does. Unassigned seats send no entry either: the rail is for named
+        // arrangements, and the terminals panel icon is the default for
+        // everything else.
         const teamsArr = Array.isArray(teams) ? teams : [];
 
         for (const team of teamsArr) {
@@ -597,13 +603,19 @@
             // Nothing in the client may use it to gate dispatches; the server's 409
             // remains the sole authority.
             const isDispatched = Boolean(team.running && team.dispatched);
+            // A group slot is NOT a team slot. It carries no definitionId, so it
+            // can never be started — and it must be told apart from a team at
+            // 22px, or the strip says two different things with one picture.
+            const isGroup = team.kind === 'group' || !team.definitionId;
             btn.className = 'strip-icon strip-team-btn'
+                + (isGroup ? ' is-group' : '')
                 + (team.running ? '' : ' is-dormant')
                 + (isDispatched ? ' is-dispatched' : '');
             btn.type = 'button';
 
-            btn.setAttribute('aria-label', team.name);
-            btn.dataset.tooltip = team.name;
+            const ariaName = isGroup ? `${team.name} (group)` : team.name;
+            btn.setAttribute('aria-label', ariaName);
+            btn.dataset.tooltip = ariaName;
 
             // ONE mark for every team. At 22px, four different pictures read as
             // noise rather than identity, so the rail uses the jet for all of
@@ -623,14 +635,27 @@
             // one silhouette — that is why the rail read as a blob rather than a plane.
             // team-<headRole>.svg is the same aircraft from the fleet-command art, with
             // its body/highlight/shadow intact and a colour per role.
+            //
+            // A GROUP does not borrow the team jet. A group has no head role to
+            // colour a jet by, and a group that looks like a team invites a click
+            // that tries to start it. It gets its own mark: a bracket glyph drawn
+            // in muted text, plus the `is-group` class the stylesheet dims.
             const ROLE_JETS = ['lead', 'coder', 'planner', 'reviewer', 'intern'];
-            const icon = document.createElement('img');
-            icon.className = 'strip-term-icon strip-team-icon pixel-art';
-            const role = String(team.headRole || '').toLowerCase();
-            icon.src = team.iconUri
-                || '/static/icons/team-' + (ROLE_JETS.indexOf(role) >= 0 ? role : 'lead') + '.svg';
-            icon.alt = '';
-            btn.appendChild(icon);
+            if (isGroup) {
+                const mark = document.createElement('span');
+                mark.className = 'strip-group-mark';
+                mark.textContent = '[]';
+                mark.setAttribute('aria-hidden', 'true');
+                btn.appendChild(mark);
+            } else {
+                const icon = document.createElement('img');
+                icon.className = 'strip-term-icon strip-team-icon pixel-art';
+                const role = String(team.headRole || '').toLowerCase();
+                icon.src = team.iconUri
+                    || '/static/icons/team-' + (ROLE_JETS.indexOf(role) >= 0 ? role : 'lead') + '.svg';
+                icon.alt = '';
+                btn.appendChild(icon);
+            }
 
             // Decorative: the button's aria-label already carries the full team
             // name, so a screen reader must not hear the letter twice.
@@ -669,6 +694,14 @@
                             }, location.origin);
                         } catch { /* ignore */ }
                     }
+                } else if (isGroup) {
+                    // A group has no definition to start, so the start arm is
+                    // unreachable from here BY CONSTRUCTION: falling through would
+                    // post a teamId that resolves to nothing. A group with no live
+                    // seat is not sent at all — there is no dormant group, and a
+                    // group is never made durable. If a user wants a lasting
+                    // arrangement, they start a team.
+                    selectPanel('terminals');
                 } else {
                     // Absent slot: start that team. Reuses the Agent Control
                     // panel's ptyStartTeam path. Disable the button while pending.

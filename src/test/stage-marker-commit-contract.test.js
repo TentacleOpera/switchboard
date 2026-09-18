@@ -58,9 +58,12 @@ const AGENT_PROMPT_BUILDER_SRC = SRC('services', 'agentPromptBuilder.ts');
 const KANBAN_PROVIDER_SRC = SRC('services', 'KanbanProvider.ts');
 const SHARED_DEFAULTS_SRC = SRC('webview', 'sharedDefaults.js');
 const TERMINALS_JS_SRC = SRC('webview', 'terminals.js');
-// The shipped team gallery (SHIPPED_TEAM_TYPES) lives in agent-control.js since
-// the tabs left kanban.html — see extract-agent-control-into-its-own-panel-file.md.
+// agent-control.js is read only to assert that it carries NO team catalogue and
+// no hand copy of a head prompt. The shipped gallery it used to hold
+// (SHIPPED_TEAM_TYPES) is deleted — there is one catalogue,
+// DEFAULT_TEAM_DEFINITIONS in teamWiring.ts.
 const AGENT_CONTROL_JS_SRC = SRC('webview', 'agent-control.js');
+const TEAM_WIRING_SRC = SRC('services', 'teamWiring.ts');
 
 let passed = 0;
 let failed = 0;
@@ -362,28 +365,30 @@ test('NEW_CODING_HEAD_PROMPT_CLIENT is retired from terminals.js — system prot
     );
 });
 
-test('the shipped agent-control.js headPrompt is byte-identical to NEW_CODING_HEAD_PROMPT', () => {
-    // agent-control.js's copy lives inside an object literal, so it ends at the
-    // first line that is not a `+ '…'` continuation, not at a `;`.
-    const lines = AGENT_CONTROL_JS_SRC.split('\n');
-    const start = lines.findIndex(l => l.includes("headPrompt: 'You lead this team."));
-    assert.ok(start >= 0, 'Coding team headPrompt not found in agent-control.js');
-    const chain = [lines[start].replace(/^\s*headPrompt:\s*/, '')];
-    for (let i = start + 1; i < lines.length && /^\s*\+\s*'/.test(lines[i]); i++) {
-        chain.push(lines[i].trim());
-    }
-    // eslint-disable-next-line no-eval
-    const shipped = eval('(' + chain.join('\n') + ')');
-    assert.strictEqual(shipped, NEW_CODING_HEAD_PROMPT,
-        'the migration writes NEW_CODING_HEAD_PROMPT while the gallery forks agent-control.js\'s copy — '
-        + 'a drift means migrated and freshly-adopted teams carry different text');
+test('there is ONE copy of the head prompt — the Feature team default references it', () => {
+    // There is no second copy to be byte-identical to any more. The webview
+    // gallery that carried one (`SHIPPED_TEAM_TYPES` in agent-control.js) is
+    // deleted, and the Feature team default REFERENCES NEW_CODING_HEAD_PROMPT by
+    // identifier. A drift is impossible when there is nothing to drift from.
+    assert.ok(!/SHIPPED_TEAM_TYPES\s*=/.test(AGENT_CONTROL_JS_SRC),
+        'agent-control.js must not declare a second team catalogue');
+    assert.ok(!/headPrompt: 'You lead this team\./.test(AGENT_CONTROL_JS_SRC),
+        'agent-control.js must not carry a hand copy of the head prompt');
+    assert.ok(/headPrompt:\s*NEW_CODING_HEAD_PROMPT\s*,/.test(TEAM_WIRING_SRC),
+        'the Feature team default must set headPrompt: NEW_CODING_HEAD_PROMPT');
 });
 
-test('the shipped Coding reviewer is reports-to-head, and no shipped member is a `reviewer` pair', () => {
-    assert.ok(/role: 'reviewer',[^}]*relationship: 'reports-to-head'/.test(AGENT_CONTROL_JS_SRC),
-        'the Coding reviewer must be reports-to-head — `reviewer` reinstates the board bypass');
-    assert.ok(!/relationship: 'reviewer'/.test(AGENT_CONTROL_JS_SRC),
-        'a shipped member declaring relationship: \'reviewer\' installs the hand-to-reviewer order on the lead');
+test('no shipped member is a `reviewer` pair, and no shipped default is shared-scope', () => {
+    assert.ok(!/relationship: 'reviewer'/.test(TEAM_WIRING_SRC),
+        'a shipped member declaring relationship: \'reviewer\' installs the hand-to-reviewer order on the head');
+    // `commandlessRoles` skips shared members, so a shared seat's role is
+    // reported by nothing — an unconfigured researcher would spawn as a bare
+    // shell with no surface naming it.
+    const dStart = TEAM_WIRING_SRC.indexOf('export const DEFAULT_TEAM_DEFINITIONS');
+    const dEnd = TEAM_WIRING_SRC.indexOf('export const DEFAULT_TEAM_IDS', dStart);
+    assert.ok(dStart >= 0 && dEnd > dStart, 'could not bound DEFAULT_TEAM_DEFINITIONS');
+    assert.ok(!TEAM_WIRING_SRC.slice(dStart, dEnd).includes("scope: 'shared'"),
+        'no shipped default may carry a scope: \'shared\' member');
 });
 
 test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {

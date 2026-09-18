@@ -417,8 +417,9 @@ test('every strip button builder sets a non-empty data-tooltip', () => {
     );
     const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function requestFleetState(');
     assert.ok(
-        section.includes('btn.dataset.tooltip = team.name'),
-        'team buttons must set data-tooltip to team.name'
+        section.includes('btn.dataset.tooltip = ariaName'),
+        'team buttons must set data-tooltip from ariaName — the team name, or the group '
+        + 'name suffixed "(group)" so the two kinds of slot are told apart in the tooltip too'
     );
 });
 
@@ -598,17 +599,23 @@ test('the member-count badge is fully removed', () => {
     assert.ok(!/strip-team-count/.test(shellHtml), 'the .strip-team-count CSS must not survive in shell.html');
 });
 
-test('the team button tooltip is just the team name', () => {
+test('the team button tooltip is just the team name (a group says so)', () => {
     const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    // The team button must set aria-label and data-tooltip to team.name only —
-    // no member count, no roster, no light state in the tooltip.
+    // The slot must set aria-label and data-tooltip to the name only — no member
+    // count, no roster, no light state in the tooltip. A GROUP slot adds
+    // "(group)" and nothing else: both kinds now sit in one strip, and a group
+    // that reads exactly like a team invites a click that tries to start it.
     assert.ok(
-        /btn\.setAttribute\('aria-label', team\.name\)/.test(fn),
-        'the team button aria-label must be just team.name'
+        /const ariaName = isGroup \? `\$\{team\.name\} \(group\)` : team\.name;/.test(fn),
+        'the slot name must be team.name, or team.name + " (group)" for a group slot'
     );
     assert.ok(
-        /btn\.dataset\.tooltip = team\.name/.test(fn),
-        'the team button data-tooltip must be just team.name'
+        /btn\.setAttribute\('aria-label', ariaName\)/.test(fn),
+        'the slot aria-label must be just that name'
+    );
+    assert.ok(
+        /btn\.dataset\.tooltip = ariaName/.test(fn),
+        'the slot data-tooltip must be just that name'
     );
     // The verbose labelText and roster constructions must be gone — the
     // memberCount variable was only used for the badge and the verbose label.
@@ -620,21 +627,33 @@ test('the team icon fallback skips the head brand mark', () => {
     const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     // When team.iconUri is empty, the shell must go straight to the jet
     // glyph — the headTerm.iconUri arm (brand mark) must be gone.
-    const iconBlock = block(fn, 'if (team.iconUri) {', "btn.addEventListener('click'");
+    // Bounded from the ROLE_JETS table, which now opens the team/group icon
+    // branch: a group gets its own bracket mark rather than borrowing the team
+    // jet, so the old `if (team.iconUri) {` anchor no longer opens the block.
+    const iconBlock = block(fn, "const ROLE_JETS = [", "btn.addEventListener('click'");
     assert.ok(
         !/headTerm\.iconUri/.test(iconBlock),
         'the head brand-mark arm must not come back — it communicates the wrong identity'
     );
     assert.ok(
-        /buildMaskedGlyph\('\/static\/icons\/nav-jet\.svg'\)/.test(iconBlock),
-        'every team button must render the shared jet glyph'
+        /'\/static\/icons\/team-' \+ \(ROLE_JETS\.indexOf\(role\) >= 0 \? role : 'lead'\) \+ '\.svg'/.test(iconBlock),
+        'a team button with no explicit pick must fall back to the role-coloured jet. It is drawn '
+        + 'as an <img>, not a masked glyph: a mask keeps only the alpha channel and flattens the '
+        + "aircraft's three shading layers into one silhouette"
     );
     // The rail shows ONE mark for all teams. A per-team picture is the variation
     // this surface is meant not to have, so `team.iconUri` must not be consulted
     // when choosing the glyph — teams are told apart by the corner initial.
     assert.ok(
-        /if\s*\(\s*team\.iconUri\s*\)/.test(iconBlock),
+        /icon\.src = team\.iconUri/.test(iconBlock),
         'an explicit team pick (jet or CLI brand) must be honoured by the rail'
+    );
+    // A group slot must NOT borrow the team jet. It has no head role to colour one
+    // by, and a group that looks like a team invites a click that would post a
+    // teamId resolving to nothing.
+    assert.ok(
+        /if \(isGroup\) \{/.test(iconBlock) && /strip-group-mark/.test(iconBlock),
+        'a group slot must render its own mark, not the role-coloured team jet'
     );
     assert.ok(
         /strip-team-initial/.test(iconBlock) && /team\.name[^;]*charAt\(0\)/.test(iconBlock),
@@ -1266,18 +1285,39 @@ test('no new server route is introduced for command execution', () => {
     assert.ok(!/\/cli\/run/.test(localApiServerTs), 'no /cli/run route may exist');
 });
 
-test('three fixed team slots in the rail and showStripToast kept alive', () => {
-    // 1. DEFAULT_TEAM_DEFINITIONS in teamWiring
+test('the rail renders every enabled team and every live group, and showStripToast is kept alive', () => {
+    // THE THREE-FIXED-SLOTS MODEL IS RETIRED. The rail used to emit exactly one
+    // slot per shipped default, from a module constant MIRRORING
+    // DEFAULT_TEAM_DEFINITIONS in the webview — so an operator-built team was
+    // never a rail slot, and a fourth default would not have been either. The
+    // mirror is deleted: a second copy of the seed in the webview is the
+    // two-catalogues trap, and the shipped set is five now, not three.
+    //
+    // 1. The five defaults are declared ONCE, in teamWiring.
     const teamWiringTs = fs.readFileSync(path.join(__dirname, '../services/teamWiring.ts'), 'utf8');
     assert.ok(teamWiringTs.includes('export const DEFAULT_TEAM_DEFINITIONS: any[] = ['),
         'DEFAULT_TEAM_DEFINITIONS must be exported from teamWiring.ts');
-    assert.ok(teamWiringTs.includes("id: 'planning-team'"), 'planning-team must be declared');
-    assert.ok(teamWiringTs.includes("id: 'feature-implementation'"), 'feature-implementation must be declared');
-    assert.ok(teamWiringTs.includes("id: 'review-team'"), 'review-team must be declared');
+    for (const id of ['planning-team', 'feature-implementation', 'coding-team', 'review-team', 'multi-agent-planning']) {
+        assert.ok(teamWiringTs.includes(`id: '${id}'`), `${id} must be declared`);
+    }
+    assert.ok(!terminalsJs.includes('const DEFAULT_TEAM_DEFINITIONS = ['),
+        'terminals.js must NOT keep a second copy of the seed — the rail reads the host-served '
+        + 'definitions (_agentGroupsCache) instead');
 
-    // 2. buildTeamsForShell emits 3 fixed slots in definition order
+    // 2. buildTeamsForShell emits one slot per ENABLED definition plus one per
+    //    live group. A disabled team has no slot; that is what the switch does.
     const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'const LAYOUTS = {');
-    assert.ok(fn.includes('DEFAULT_TEAM_DEFINITIONS'), 'buildTeamsForShell must iterate DEFAULT_TEAM_DEFINITIONS');
+    assert.ok(/for \(const def of \(_agentGroupsCache \|\| \[\]\)\)/.test(fn),
+        'buildTeamsForShell must iterate the host-served definitions, not a webview copy of the seed');
+    assert.ok(/def\.enabled === false/.test(fn),
+        'a switched-off team must get no rail slot — otherwise the switch is decorative and '
+        + 'clicking the slot starts a team the operator switched off');
+    assert.ok(/isSpawnedTeamGroup\(g\)\) \{ continue; \}/.test(fn),
+        'buildTeamsForShell must also emit one slot per LIVE GROUP (the grp_ rows FILL GRID and '
+        + 'SAVE AS GROUP create), skipping the spawned-team rows already bound to a team slot');
+    assert.ok(/kind: 'group'/.test(fn) && /definitionId: null/.test(fn),
+        'a group slot must be marked kind: \'group\' with NO definitionId — a group has no '
+        + 'definition to start, and posting its id as a teamId would resolve to nothing');
     assert.ok(/\n\s*running,/.test(fn) || fn.includes('running:'),
         'buildTeamsForShell must emit a running boolean on every slot');
     // A default team whose head is live but whose seats are not (e.g. seats
@@ -1297,9 +1337,10 @@ test('three fixed team slots in the rail and showStripToast kept alive', () => {
     assert.ok(shellJs.includes('function showStripToast(text) {'),
         'showStripToast must be present in shell.js for start-failure feedback');
 
-    // 5. The webview carries its own copy of the definitions (it cannot import
-    //    TypeScript). Two declarations of one team is the drift shape teamWiring
-    //    already carries scars from, so pin id + headRole across the boundary.
+    // 5. There is ONE declaration. The cross-boundary drift check is gone with the
+    //    webview mirror it compared against — the rail reads what the host serves,
+    //    so there is nothing left to drift. Pin the shipped set instead: five rows,
+    //    fixed ids, in rail order.
     const idsAndRoles = (src) => {
         const out = [];
         const re = /id:\s*'([a-z-]+)',\s*\n\s*name:\s*'[^']*',\s*\n\s*headRole:\s*'([a-z_]+)'/g;
@@ -1307,11 +1348,16 @@ test('three fixed team slots in the rail and showStripToast kept alive', () => {
         while ((m = re.exec(src)) !== null) { out.push(m[1] + ':' + m[2]); }
         return out;
     };
-    const tsDefs = idsAndRoles(block(teamWiringTs, 'export const DEFAULT_TEAM_DEFINITIONS: any[] = [', '];'));
-    const jsDefs = idsAndRoles(block(terminalsJs, 'const DEFAULT_TEAM_DEFINITIONS = [', '];'));
-    assert.strictEqual(tsDefs.length, 3, 'teamWiring.ts must declare exactly three default team definitions');
-    assert.deepStrictEqual(jsDefs, tsDefs,
-        'terminals.js DEFAULT_TEAM_DEFINITIONS has drifted from teamWiring.ts — id and headRole must match, in order');
+    const tsDefs = idsAndRoles(block(teamWiringTs, 'export const DEFAULT_TEAM_DEFINITIONS: any[] = [', '\n];'));
+    assert.deepStrictEqual(tsDefs, [
+        'planning-team:planner',
+        'feature-implementation:lead',
+        'coding-team:coder',
+        'review-team:reviewer',
+        'multi-agent-planning:planner',
+    ], 'the five defaults ship with fixed ids and head roles, in rail order. Two planner-headed '
+     + 'teams is deliberate and is not a conflict — nothing demotes, flags or hides a team for '
+     + 'declaring the same headRole as another.');
 });
 
 test('dispatched state reaches the rail and is rendered as a shape indicator', () => {

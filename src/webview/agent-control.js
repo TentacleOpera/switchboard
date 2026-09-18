@@ -562,6 +562,27 @@
         // the rollback key when the host fails to persist it.
         let teamsTabPickedKey = null;
         let teamsTabPendingAdoptId = null;
+        /** Ids of the five shipped defaults — sent by the host, derived from
+         *  DEFAULT_TEAM_DEFINITIONS. A default is undeletable and its delete
+         *  affordance is ABSENT (not a confirm gate — `window.confirm` is a
+         *  silent no-op in a webview, and confirm gates are banned outright). */
+        let teamsTabDefaultIds = new Set();
+        /** Roles the shipped ENABLED defaults need — the recommended agent set.
+         *  Derived host-side; a hard-coded copy here would drift the moment a
+         *  default's roster changed, and the failure would be silent. */
+        let agentsTabRecommendedRoles = new Set();
+        /** Per-team roles with no startup command: [{ teamId, teamName, roles }]. */
+        let teamsTabCommandlessByTeam = [];
+
+        function teamsTabIsDefault(group) {
+            return !!(group && group.id && teamsTabDefaultIds.has(group.id));
+        }
+
+        /** The in-use switch, read the way the host reads it: an absent flag is
+         *  enabled, and the SOURCE says whether anybody decided that. */
+        function teamsTabIsEnabled(group) {
+            return !group || group.enabled !== false;
+        }
 
         function agentsTabSanitizeCustomAgentId(value) {
           const normalized = String(value || '')
@@ -713,6 +734,45 @@
             agentsTabRefreshUnknownCliIndicators();
           }
         });
+
+        /**
+         * Mark the roles the shipped ENABLED defaults need — the six a new user
+         * configures and nothing else. The other roles stay available and
+         * configurable; they are simply not the first-run path.
+         *
+         * The set is DERIVED host-side (union of headRole + member roles across
+         * the enabled defaults) and arrives with the `agentGroups` message. It is
+         * never typed here: a hard-coded list drifts the moment a default's roster
+         * changes, and the failure is silent — a team whose new role nobody was
+         * told to configure. `intern` entering the set is the proof.
+         *
+         * Runs on every `agentGroups` push, so a default's roster change reaches
+         * the marks without a reload.
+         */
+        function agentsTabRefreshRecommendedRoleMarks() {
+          document.querySelectorAll('#agents-tab-content .startup-row').forEach(row => {
+            const input = row.querySelector('input[type="text"][data-role]')
+              || row.querySelector('.agents-tab-visible-toggle');
+            const role = input && input.dataset ? input.dataset.role : '';
+            let chip = row.querySelector('.agents-tab-recommended-role');
+            const show = !!role && agentsTabRecommendedRoles.has(role);
+            if (!show) {
+              if (chip) { chip.remove(); }
+              return;
+            }
+            if (!chip) {
+              chip = document.createElement('span');
+              chip.className = 'agents-tab-recommended-role';
+              chip.textContent = 'Needed by a shipped team';
+              chip.title = 'One of the roles the teams that ship enabled use. '
+                + 'Give it a startup command and those teams run; leave it blank and any team that '
+                + 'needs it starts a bare shell.';
+              const label = row.querySelector('label');
+              if (label && label.nextSibling) { row.insertBefore(chip, label.nextSibling); }
+              else { row.appendChild(chip); }
+            }
+          });
+        }
 
         function agentsTabRenderCustomAgentList() {
           const container = document.getElementById('agents-tab-custom-agent-list');
@@ -1005,171 +1065,23 @@
         // pump. The functions are renamed to teamsTab* to match their DOM home.
 
         /**
-         * Shipped team types — static definitions rendered on every install.
-         * The gallery forks a copy into the workspace's own teams on USE; the
-         * shipped definition is never mutated.
+         * There is ONE catalogue, and it is not here.
          *
-         * `scope` and `relationship` are the fields from the previous subtask.
-         * `relationship` values are LINK_PRESETS ids (src/services/linkPresets.ts,
-         * mirrored in terminals.js). `custom` is excluded — it is a UI sentinel
-         * with an empty template, not a relationship.
+         * `SHIPPED_TEAM_TYPES` used to live at this spot: five hand-written team
+         * types the gallery FORKED into the workspace on USE, minting a definition
+         * with a generated id. It disagreed with the host's own
+         * `DEFAULT_TEAM_DEFINITIONS` — the list you chose from and the list pushed
+         * onto you were different lists, which is why a board grew a lead-headed
+         * team the operator never created. "Batch planners" was the Planning team
+         * under a worse name and "Planning with analyst" was a role-config concern
+         * wearing a team costume.
+         *
+         * The five shipped defaults now arrive from the host like any other team,
+         * in `agentsTabAgentGroups`, and are marked by `teamsTabDefaultIds` (sent
+         * with the same message, DERIVED from DEFAULT_TEAM_DEFINITIONS — never
+         * re-typed here). "ADD TEAM" creates an empty custom definition; it does
+         * not fork a type.
          */
-        const SHIPPED_TEAM_TYPES = [
-            {
-                name: 'Batch planners',
-                headRole: 'planner',
-                members: [
-                    { role: 'researcher', count: 1, scope: 'shared', relationship: 'researcher' }
-                ],
-                purpose: 'Turns tickets and ideas into plans.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
-                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
-                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
-                    + 'Research the context for the plan — read the codebase, trace dependencies, and identify root causes. '
-                    + 'Report your findings to {child} for synthesis into the plan.\n'
-                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
-                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward. '
-                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
-                    + 'other agents may be working the same tree.'
-            },
-            {
-                name: 'Coding',
-                headRole: 'lead',
-                members: [
-                    { role: 'coder', count: 3, scope: 'per-team' },
-                    { role: 'reviewer', count: 1, scope: 'shared', relationship: 'reports-to-head' }
-                ],
-                purpose: 'Works a feature\'s subtasks one at a time, then sends the whole feature to review via one board dispatch.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
-                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
-                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
-                    + 'Work your assigned subtask to completion. The shared reviewer reviews finished work before it ships.\n'
-                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
-                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward. '
-                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
-                    + 'other agents may be working the same tree.',
-                headPrompt: 'You lead this team. Your coders work the subtasks of one feature. '
-                    + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
-                    + 'Read the plan, dispatch based on it, review against it — never modify its content. '
-                    + 'Each subtask carries '
-                    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-                    + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
-                    + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
-                    + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
-                    + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
-                    + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
-                    + 'review on the same subtask twice, do not send that subtask to that seat in that same context again. '
-                    + 'Work down this ladder and take the first rung that applies, naming the specific defects in every dispatch: '
-                    + '(1) clear that seat\'s context — POST /terminals/verb/ptyClearTerminal with {"name":"<the seat>"} — then '
-                    + 're-dispatch the subtask to it with a prompt naming exactly what to fix; a cleared seat is a fresh attempt, '
-                    + 'not a third one, and you may do this once per seat per subtask; (2) hand the subtask to an idle seat on your '
-                    + 'team that has not worked on it, clearing it first if it holds unrelated context; (3) escalate one rung along '
-                    + 'intern → coder → lead; (4) if the outstanding fix is small and localized, make it yourself; (5) only when every '
-                    + 'rung above is exhausted, stop and report to the human instead of dispatching again (or unattended: the host '
-                    + 'records the blocked card as a plan_events row — proceed to the next queue item). Say in your status report '
-                    + 'which rung you took and why. Never report a subtask blocked for want of a higher seat without having tried '
-                    + 'rungs 1, 2 and 4. When a coder reports a subtask finished, note it and '
-                    + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
-                    + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
-                    + 'cleared seat before rotation. When a coder finishes its turn, the system delivers a '
-                    + 'completion prompt into this terminal — you do not need to check, wait, or watch for it. '
-                    + 'Do not sleep, poll, loop, or run any timer to find out whether a coder is done. '
-                    + 'Dispatch what is dispatchable, close out what is closable, and end your turn. '
-                    + 'An idle lead is the correct resting state, not a failure. '
-                    + 'Do not send anything to the reviewer, and do not write review '
-                    + 'instructions — that is not your job. '
-                    + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
-                    + 'Never move a card to a new column yourself — that is not your role. '
-                    + 'When the work is complete, stage the files you changed by explicit path '
-                    + '— never `git add -A` or `git add .`. Then create a single commit with a '
-                    + 'descriptive message. '
-                    + 'run node "<cliPath>" accept --plan "<the subtask\'s planId>" '
-                    + 'against the API base named in your SWITCHBOARD STATUS line. '
-                    + 'The card stays where it is. Completion is asserted, never inferred from board position. '
-                    + 'run node "<cliPath>" next (or switchboard next); '
-                    + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-                    + 'empty and stop.'
-            },
-            {
-                name: 'Review',
-                headRole: 'reviewer',
-                members: [
-                    { role: 'reviewer', count: 3, scope: 'per-team', relationship: 'reports-to-head' }
-                ],
-                purpose: 'Reviews a feature across reviewer seats in read-only batches, triages findings, and fixes only what it reviewed.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
-                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
-                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
-                    + 'In the review turn, perform a read-only review of your assigned plans, append your findings under ## Review Findings to the plan files, and report back to {child}. Do not modify code during the review turn.\n'
-                    + 'When {child} apportions fixes back to you in the fix turn, implement the fixes for the plans you reviewed, run verification checks, and report back.\n'
-                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
-                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward. '
-                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
-                    + 'other agents may be working the same tree.',
-                headPrompt: 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
-                    + 'Never move a card to a new column yourself. '
-                    + 'You lead this review team. When a feature lands in your terminal, assign its subtask plans to your '
-                    + 'reviewer seats in batches of up to two per reviewer. The review turn is read-only: reviewers append '
-                    + 'their findings to the plan files and report back. When all reviewers report, triage findings into four '
-                    + 'categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
-                    + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
-                    + '(file-disjoint where possible) via node "<cliPath>" verb ptySendPrompt \'{"name":"<reviewer seat>","data":"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks (typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false}\'. '
-                    + 'Do not fix categories 1 or 4. Write one markdown artifact to the plans '
-                    + 'folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures. '
-                    + 'When review and fixes are complete, stage the files you changed by explicit path '
-                    + '— never `git add -A` or `git add .`. Then create a single commit with a '
-                    + 'descriptive message. '
-                    + 'When the review passes, run node "<cliPath>" next (or switchboard next); if it returns a dispatched card, work it; if it returns '
-                    + 'dispatched: null, report that the queue is empty and stop.'
-            },
-            {
-                name: 'Multi-agent planning',
-                headRole: 'planner',
-                members: [
-                    { role: 'researcher', count: 2, scope: 'per-team', relationship: 'researcher' },
-                    { role: 'analyst', count: 1, scope: 'per-team' }
-                ],
-                purpose: 'Fan-in investigation: multiple agents research from different angles, then synthesize.',
-                headPrompt: 'You lead this planning team. Synthesize your researchers\' findings into a single plan.'
-                    + ' When the plan is complete, stage the plan file by explicit path and create a single commit with a descriptive message.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
-                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
-                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
-                    + 'Investigate the problem from your angle — read code, trace dependencies, and identify risks. '
-                    + 'Report your findings to {child} for fan-in synthesis into a single plan.\n'
-                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
-                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward. '
-                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
-                    + 'other agents may be working the same tree.'
-            },
-            {
-                name: 'Planning with analyst',
-                headRole: 'planner',
-                members: [
-                    { role: 'analyst', count: 1, scope: 'per-team', relationship: 'reports-to-head' }
-                ],
-                purpose: 'A planner with a general-purpose analyst that handles code search and context-gathering, saving the lead\'s tokens for synthesis.',
-                headPrompt: 'You lead this planning team. Synthesize your analyst\'s findings into a single plan.'
-                    + ' When the plan is complete, stage the plan file by explicit path and create a single commit with a descriptive message.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
-                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
-                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
-                    + 'You are a general-purpose analyst for the planning lead. Your job is code search, dependency tracing, '
-                    + 'and context-gathering: read the codebase, trace imports and call sites, identify root causes, and report '
-                    + 'concise findings to {child}. Do not write plans yourself — your reports are input the lead synthesizes into '
-                    + 'the plan. When the lead dispatches a search or investigation task, do it thoroughly and report only what is '
-                    + 'relevant to the task.\n'
-                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
-                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward. '
-                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
-                    + 'other agents may be working the same tree.'
-            }
-        ];
 
         /**
          * Relationship presets for the member editor dropdown.
@@ -1340,10 +1252,13 @@
         const TEAMS_TAB_CELL = 32;
 
         /**
-         * Render the card row from a merged list: adopted teams first, then
-         * un-adopted shipped types (matched by name so an adopted type renders
-         * once, as its adopted team). Tracks the picked card and renders the
-         * flow panel below the row.
+         * Render the card row from ONE list: the workspace's teams — the five
+         * shipped defaults plus whatever the operator built. There is no second
+         * catalogue to merge in and no un-adopted type to render, so every card
+         * is a real definition with a real id.
+         *
+         * `adopted` stays on the entry shape because the rest of this file reads
+         * it; it is now always true.
          */
         function teamsTabRenderGallery() {
             if (_iconPaletteCache === null && !_iconPaletteRequested) {
@@ -1353,13 +1268,7 @@
             const container = document.getElementById('teams-gallery');
             if (!container) return;
             container.innerHTML = '';
-            const adoptedByName = new Map(agentsTabAgentGroups.map(g => [g.name, g]));
-            const cards = [
-                ...agentsTabAgentGroups.map(g => ({ group: g, adopted: true })),
-                ...SHIPPED_TEAM_TYPES
-                    .filter(t => !adoptedByName.has(t.name))
-                    .map(t => ({ group: t, adopted: false })),
-            ];
+            const cards = agentsTabAgentGroups.map(g => ({ group: g, adopted: true }));
             for (const entry of cards) {
                 container.appendChild(teamsTabGalleryCard(entry));
             }
@@ -1420,12 +1329,60 @@
             rosterDiv.textContent = teamsTabRosterStrip(group);
             card.appendChild(rosterDiv);
 
-            // Unassigned note for adopted teams that lost the auto-start claim
-            if (entry.adopted && group.unassigned) {
-                const noteDiv = document.createElement('div');
-                noteDiv.className = 'teams-card-note';
-                noteDiv.textContent = group.unassignedReason || 'Not the auto-start default for its head role.';
-                card.appendChild(noteDiv);
+            // ── The in-use switch ────────────────────────────────────────
+            // A team that exists is not automatically a team that plays. A
+            // disabled team is GREYED WITH ITS SWITCH — not hidden, not deleted —
+            // or there is no way back on. stopPropagation so flipping the switch
+            // does not also pick the card.
+            if (!teamsTabIsEnabled(group)) { card.classList.add('is-disabled'); }
+            const switchDiv = document.createElement('div');
+            switchDiv.className = 'teams-card-switch';
+            switchDiv.addEventListener('click', (e) => e.stopPropagation());
+            const switchLabel = document.createElement('label');
+            switchLabel.style.display = 'flex';
+            switchLabel.style.alignItems = 'center';
+            switchLabel.style.gap = '4px';
+            const switchInput = document.createElement('input');
+            switchInput.type = 'checkbox';
+            switchInput.checked = teamsTabIsEnabled(group);
+            switchInput.style.width = 'auto';
+            switchInput.style.margin = '0';
+            switchInput.addEventListener('change', () => {
+                const g = agentsTabAgentGroups.find(x => x.id === group.id);
+                if (!g) { return; }
+                g.enabled = switchInput.checked;
+                // The OPERATOR decided this, so the source says so — "off because
+                // it ships off" and "off because the operator switched it off"
+                // must never read the same on a membership read.
+                g.enabledSource = 'config';
+                teamsTabRenderAgentGroups();
+                teamsTabRenderGallery();
+                postKanbanMessage({ type: 'saveAgentGroup', group: { ...g } });
+            });
+            const switchText = document.createElement('span');
+            switchText.textContent = 'IN USE';
+            switchLabel.appendChild(switchInput);
+            switchLabel.appendChild(switchText);
+            switchDiv.appendChild(switchLabel);
+            card.appendChild(switchDiv);
+            if (!teamsTabIsEnabled(group)) {
+                const offNote = document.createElement('div');
+                offNote.className = 'teams-card-note';
+                offNote.textContent = group.enabledSource === 'default'
+                    ? 'Ships switched off. Switch it on to start it.'
+                    : 'Switched off. It keeps its definition and its seats; it just does not play.';
+                card.appendChild(offNote);
+            }
+            // Roles this team would start into BARE SHELLS. Reported BEFORE a
+            // start, which is when a first-run user needs it — team start reports
+            // the same thing, from the same host function, but by then the seats
+            // are already open.
+            const commandless = teamsTabCommandlessByTeam.find(e => e && e.teamId === group.id);
+            if (commandless && Array.isArray(commandless.roles) && commandless.roles.length > 0) {
+                const needDiv = document.createElement('div');
+                needDiv.className = 'teams-card-note';
+                needDiv.textContent = `${group.name} needs a startup command for: ${commandless.roles.join(', ')}`;
+                card.appendChild(needDiv);
             }
 
             // Worktree field — adopted teams only. Previously gated behind a
@@ -1644,21 +1601,15 @@
 
             panel.appendChild(svg);
 
-            // Action — ADOPT ONLY. Starting a team is the terminals panel's
-            // job: this panel has no terminal grid to seat one in, and the
-            // terminals panel's whole reaction to a backend team registration
-            // is reloadTerminalGroups(), which merges the group and seats
-            // nothing. A team started from here spawns off-screen.
+            // No ADOPT action. There is nothing to adopt — every card in this
+            // gallery is already one of the workspace's own teams. Starting a
+            // team is the terminals panel's job: this panel has no terminal grid
+            // to seat one in, and the terminals panel's whole reaction to a
+            // backend team registration is reloadTerminalGroups(), which merges
+            // the group and seats nothing. A team started from here spawns
+            // off-screen.
             const actionDiv = document.createElement('div');
             actionDiv.className = 'teams-flow-action';
-            if (!entry.adopted) {
-                const btn = document.createElement('button');
-                btn.className = 'agents-tab-custom-agent-item-btn';
-                btn.id = 'teams-flow-use-btn';
-                btn.textContent = 'USE';
-                btn.addEventListener('click', () => teamsTabAdopt(entry.group));
-                actionDiv.appendChild(btn);
-            }
             const hint = document.createElement('span');
             hint.className = 'teams-flow-hint';
             hint.textContent = 'Start it from the terminals panel.';
@@ -1671,38 +1622,23 @@
         }
 
         /**
-         * Fork a shipped type into the workspace's own teams and persist it.
-         * The card re-renders as an adopted team; starting it is the terminals
-         * panel's job. `teamsTabPendingAdoptId` is the rollback key, read by
-         * saveAgentGroupResult when the host fails to persist the fork.
+         * "ADD TEAM" opens the editor with no group (`teamsTabShowGroupForm(null)`)
+         * and the save below mints the definition. That is the whole creation path
+         * now: it makes an empty CUSTOM team, it does not fork a shipped type,
+         * because there are no shipped types to fork. The five defaults arrive
+         * from the host with the rest of `agentsTabAgentGroups`.
+         *
+         * A team the operator builds is written `enabled: true` with
+         * `enabledSource: 'config'` at creation, so the field is never absent and
+         * there is no absent-means-what question to answer later.
          */
-        function teamsTabAdopt(type) {
-            const forked = {
-                id: 'group-' + type.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36),
-                name: type.name,
-                headRole: type.headRole,
-                members: (type.members || []).map(m => ({ ...m })),
-                // §Pair-programming team scope: pair programming is a property of a
-                // team, on by default. The team field is intensity-only
-                // (off|on|aggressive); host routing is implicit in the roster.
-                pairProgramming: 'on',
-                ...(type.prompt ? { prompt: type.prompt } : {}),
-                ...(type.headPrompt ? { headPrompt: type.headPrompt } : {})
-            };
-            agentsTabAgentGroups.push(forked);
-            teamsTabPendingAdoptId = forked.id;
-            teamsTabPickedKey = forked.id;
-            teamsTabRenderAgentGroups();
-            teamsTabRenderGallery();
-            postKanbanMessage({ type: 'saveAgentGroup', group: forked });
-        }
 
         function teamsTabRenderAgentGroups() {
             const container = document.getElementById('agent-groups-list');
             if (!container) return;
             container.innerHTML = '';
             if (agentsTabAgentGroups.length === 0) {
-                container.innerHTML = '<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">No teams adopted. Use a type above or click "ADD TEAM".</div>';
+                container.innerHTML = '<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">No teams yet. Click "ADD TEAM" to build one.</div>';
                 return;
             }
             for (const group of agentsTabAgentGroups) {
@@ -1732,19 +1668,24 @@
                 : ppVal === 'off' ? 'pair: off'
                 : 'pair: on';
             detailDiv.textContent = `head: ${group.headRole} · ${memberSummary} · ${ppLabel}`;
-            // Unassigned team: not the auto-start default, but still startable
-            // explicitly (START button in the terminals panel). Informational,
-            // not a fault — muted text, not red.
-            if (group.unassigned) {
-                const unassignedDiv = document.createElement('div');
-                unassignedDiv.style.flexBasis = '100%';
-                unassignedDiv.style.fontSize = '10px';
-                unassignedDiv.style.color = 'var(--text-secondary)';
-                unassignedDiv.textContent = group.unassignedReason || 'Not the auto-start default for its head role. Start it explicitly from the terminals panel.';
-                row.appendChild(unassignedDiv);
+            // Switched off: informational, not a fault — muted text, not red.
+            // The definition and its seats are untouched; the team just does not
+            // play. There is no `unassigned` flag any more: it meant "not the
+            // auto-start default", auto-start is retired, and two flags that both
+            // look like "off" is the two-copies-disagreeing trap.
+            if (!teamsTabIsEnabled(group)) {
+                row.style.opacity = '0.55';
+                const offDiv = document.createElement('div');
+                offDiv.style.flexBasis = '100%';
+                offDiv.style.fontSize = '10px';
+                offDiv.style.color = 'var(--text-secondary)';
+                offDiv.textContent = group.enabledSource === 'default'
+                    ? 'Switched off — this team ships off. Switch it on from its card above.'
+                    : 'Switched off — switch it on from its card above.';
+                row.appendChild(offDiv);
             }
             // Member-less starter: show the explanatory copy.
-            if (members.length === 0 && !group.unassigned) {
+            if (members.length === 0) {
                 const hintDiv = document.createElement('div');
                 hintDiv.style.flexBasis = '100%';
                 hintDiv.style.fontSize = '10px';
@@ -1759,23 +1700,29 @@
             editBtn.className = 'agents-tab-custom-agent-item-btn';
             editBtn.textContent = 'EDIT';
             editBtn.addEventListener('click', () => teamsTabShowGroupForm(group));
-            const delBtn = document.createElement('button');
-            delBtn.className = 'agents-tab-custom-agent-item-btn delete';
-            delBtn.textContent = '×';
-            delBtn.addEventListener('click', () => {
-                // Delete immediately — no confirmation dialog (hard project rule).
-                agentsTabAgentGroups = agentsTabAgentGroups.filter(g => g.id !== group.id);
-                // Clear the flow panel if the deleted team was the picked card —
-                // otherwise the panel keeps a START button for a deleted id.
-                if (teamsTabPickedKey === group.id) {
-                    teamsTabPickedKey = null;
-                }
-                teamsTabRenderAgentGroups();
-                teamsTabRenderGallery();
-                postKanbanMessage({ type: 'deleteAgentGroup', groupId: group.id });
-            });
             actions.appendChild(editBtn);
-            actions.appendChild(delBtn);
+            // The five shipped defaults have NO delete affordance — absent, not
+            // disabled and certainly not a confirm gate (confirm gates are banned
+            // here, and `window.confirm` is a silent no-op in a webview anyway).
+            // The off switch on the card above is the replacement for deleting one.
+            if (!teamsTabIsDefault(group)) {
+                const delBtn = document.createElement('button');
+                delBtn.className = 'agents-tab-custom-agent-item-btn delete';
+                delBtn.textContent = '×';
+                delBtn.addEventListener('click', () => {
+                    // Delete immediately — no confirmation dialog (hard project rule).
+                    agentsTabAgentGroups = agentsTabAgentGroups.filter(g => g.id !== group.id);
+                    // Clear the flow panel if the deleted team was the picked card —
+                    // otherwise the panel keeps a START button for a deleted id.
+                    if (teamsTabPickedKey === group.id) {
+                        teamsTabPickedKey = null;
+                    }
+                    teamsTabRenderAgentGroups();
+                    teamsTabRenderGallery();
+                    postKanbanMessage({ type: 'deleteAgentGroup', groupId: group.id });
+                });
+                actions.appendChild(delBtn);
+            }
             row.appendChild(nameDiv);
             row.appendChild(actions);
             row.appendChild(detailDiv);
@@ -1917,11 +1864,13 @@
             agentsTabEditingGroupId = group ? group.id : null;
             document.getElementById('agent-groups-form-title').textContent = group ? `Edit: ${group.name}` : 'New Team';
             document.getElementById('agent-groups-name').value = group?.name || '';
-            // Mark claimed head roles in the dropdown — but do NOT disable them.
-            // A second team on the same head role is now authorable; it just
-            // becomes the auto-start loser (`unassigned`) and is startable
-            // explicitly. The " (claimed)" suffix stays as information so the
-            // operator knows which role already has an auto-start default.
+            // Mark head roles another team already uses — but do NOT disable them,
+            // and do NOT treat it as a conflict. Two teams sharing a head role is
+            // an ordinary configuration that nothing objects to: the shipped set
+            // has two `planner`-headed teams (Planning and Multi-agent planning).
+            // The " (in use)" suffix is information, not a warning. Nothing is
+            // demoted, flagged, hidden or refused for declaring the same headRole
+            // as another team.
             const headSel = document.getElementById('agent-groups-head-role');
             teamsTabRoleOptions(headSel, group?.headRole || 'lead');
             // Populate the machine selector (plan:
@@ -1943,16 +1892,16 @@
                     : 'local';
             }
             const claimedRoles = new Set(agentsTabAgentGroups
-                .filter(g => g.id !== group?.id && !g.unassigned)
+                .filter(g => g.id !== group?.id)
                 .map(g => g.headRole));
             // No `opt.disabled = false` reset: the static <option> markup is gone and
             // `teamsTabRoleOptions` builds every option fresh, so none is ever disabled.
             for (const opt of headSel.options) {
                 // Append-only on top of the label `teamsTabRoleOptions` set above. This
                 // is safe ONLY because `teamsTabRoleOptions` clears `selectEl.innerHTML`
-                // first, so no `(claimed)` suffix from a previous form-open survives.
-                // If that helper ever caches, this becomes `Phone-a-Friend (claimed) (claimed)`.
-                if (claimedRoles.has(opt.value)) { opt.textContent = `${opt.textContent} (claimed)`; }
+                // first, so no `(in use)` suffix from a previous form-open survives.
+                // If that helper ever caches, this becomes `Phone-a-Friend (in use) (in use)`.
+                if (claimedRoles.has(opt.value)) { opt.textContent = `${opt.textContent} (in use)`; }
             }
             const membersDiv = document.getElementById('agent-groups-members');
             if (!membersDiv) return;
@@ -1974,8 +1923,15 @@
             // 'on' for a new team and for a legacy team without the field.
             const ppSelect = document.getElementById('agent-groups-pair-programming');
             if (ppSelect) {
+                // The Coding team is offered `on`/`aggressive` and NOT `off`: its
+                // whole identity is the split, and two seats doing undifferentiated
+                // work is not this team. The operator can still switch the whole
+                // TEAM off — that is the control for "I do not want this".
+                const offOpt = ppSelect.querySelector('option[value="off"]');
+                if (offOpt) { offOpt.hidden = group?.id === 'coding-team'; }
                 const ppVal = group?.pairProgramming;
                 ppSelect.value = (ppVal === 'off' || ppVal === 'aggressive') ? ppVal : 'on';
+                if (group?.id === 'coding-team' && ppSelect.value === 'off') { ppSelect.value = 'on'; }
             }
             // Load the existing icon value (or clear for a new team) and render
             // the preview. The hidden input is the source of truth for save.
@@ -1994,7 +1950,11 @@
             // Reset the pair-programming select to the default ('on') for the next
             // team. teamsTabShowGroupForm re-loads the real value on edit.
             const ppReset = document.getElementById('agent-groups-pair-programming');
-            if (ppReset) { ppReset.value = 'on'; }
+            if (ppReset) {
+                const offOpt = ppReset.querySelector('option[value="off"]');
+                if (offOpt) { offOpt.hidden = false; }
+                ppReset.value = 'on';
+            }
             // Collapse the icon grid so a re-open starts clean.
             const grid = document.getElementById('agent-groups-icon-grid');
             if (grid) { grid.style.display = 'none'; }
@@ -2303,14 +2263,13 @@
                 }
             }
             const id = agentsTabEditingGroupId || ('group-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36));
-            // Do not carry over unassigned/unassignedReason — the migration
-            // re-evaluates collisions on next load. If the operator changed
-            // the head role to a free one, the team becomes active.
+            // `unassigned`/`unassignedReason` no longer exist — head-role
+            // collisions are not a thing, so there is nothing to carry or clear.
             const promptText = (document.getElementById('agent-groups-prompt')?.value || '').trim();
             const headPromptText = (document.getElementById('agent-groups-head-prompt')?.value || '').trim();
             // The worktree field is NOT an editor field — it is set on the
             // card. This literal rebuilds the group from scratch and drops
-            // every field it does not name (see the unassigned comment above),
+            // every field it does not name (this literal rebuilds from scratch),
             // so an EDIT+SAVE would silently clear the operator's worktree
             // without this carry. Read from the existing in-memory definition.
             const prevGroup = agentsTabEditingGroupId
@@ -2332,9 +2291,15 @@
             // form. Default 'on' (the select's first option) — a team is a lead
             // plus cheaper seats, and the default should use them.
             const ppSelectEl = document.getElementById('agent-groups-pair-programming');
-            const pairProgrammingVal = ppSelectEl
+            let pairProgrammingVal = ppSelectEl
                 ? (ppSelectEl.value === 'off' || ppSelectEl.value === 'aggressive' ? ppSelectEl.value : 'on')
                 : (prevGroup?.pairProgramming || 'on');
+            // The Coding team's split is NOT switchable off. A coder and an intern
+            // with no split are two seats doing undifferentiated work, which is not
+            // this team. The control for "I do not want this" is the team's own
+            // in-use switch. Enforced here as well as in the dropdown, so a stale
+            // form or a hand-edited select cannot write `off`.
+            if (id === 'coding-team' && pairProgrammingVal === 'off') { pairProgrammingVal = 'on'; }
             // Read the team's machine (plan:
             // agents-are-saved-per-machine-and-a-team-picks-one). A team picks
             // ONE machine; default to `local` when unset or pointing at a
@@ -2354,11 +2319,32 @@
                 ...(prevGroup?.startWorktree ? { startWorktree: prevGroup.startWorktree } : {}),
                 ...(prevGroup?.pacing ? { pacing: prevGroup.pacing } : {}),
                 ...(worktreeMode ? { worktreeMode } : {}),
+                // The in-use switch is a CARD control, not an editor field — this
+                // literal rebuilds the group from scratch and drops every field it
+                // does not name, so an EDIT+SAVE would silently switch a disabled
+                // team back on without this carry. A team with no stored value is
+                // written `true` / `'config'`: the operator just saved it, so the
+                // operator is the source. Never absent — there is then no
+                // absent-means-what question to answer on a membership read.
+                enabled: prevGroup && prevGroup.enabled === false ? false : true,
+                enabledSource: prevGroup && typeof prevGroup.enabledSource === 'string'
+                    ? prevGroup.enabledSource
+                    : 'config',
+                // Work kinds are not editable in this form yet (that is
+                // `a-team-declares-what-work-it-accepts`), so carry them rather
+                // than dropping a default's routing on an unrelated rename.
+                ...(Array.isArray(prevGroup?.acceptedKinds) ? { acceptedKinds: [...prevGroup.acceptedKinds] } : {}),
+                ...(prevGroup?.acceptedKindsSource ? { acceptedKindsSource: prevGroup.acceptedKindsSource } : {}),
+                ...(prevGroup?.purpose ? { purpose: prevGroup.purpose } : {}),
             };
-            // Replace or append
+            // Replace or append. A NEW team is pushed optimistically so the card
+            // redraws immediately; `teamsTabPendingAdoptId` is the rollback key,
+            // read by saveAgentGroupResult when the host fails to persist it.
+            // Without it a failed save leaves a card drawn for a team the host has
+            // never seen.
             const idx = agentsTabAgentGroups.findIndex(g => g.id === id);
             if (idx >= 0) { agentsTabAgentGroups[idx] = group; }
-            else { agentsTabAgentGroups.push(group); }
+            else { agentsTabAgentGroups.push(group); teamsTabPendingAdoptId = id; }
             teamsTabRenderAgentGroups();
             teamsTabRenderGallery();
             teamsTabHideGroupForm();
@@ -3894,6 +3880,20 @@
                 }
                 case 'agentGroups': {
                   agentsTabAgentGroups = msg.groups || [];
+                  // Derived host-side from DEFAULT_TEAM_DEFINITIONS and sent with
+                  // the groups — never re-typed here. A hard-coded copy drifts the
+                  // moment a default's roster changes, and the failure is silent:
+                  // a team whose new role nobody was told to configure.
+                  if (Array.isArray(msg.defaultTeamIds)) {
+                    teamsTabDefaultIds = new Set(msg.defaultTeamIds);
+                  }
+                  if (Array.isArray(msg.recommendedRoles)) {
+                    agentsTabRecommendedRoles = new Set(msg.recommendedRoles);
+                    agentsTabRefreshRecommendedRoleMarks();
+                  }
+                  if (Array.isArray(msg.commandlessByTeam)) {
+                    teamsTabCommandlessByTeam = msg.commandlessByTeam;
+                  }
                   // Standing Orders tab's team selector reads agentsTabAgentGroups;
                   // repopulate now that it is filled (the tab's hydration arm fires
                   // before this response arrives).
@@ -3989,26 +3989,25 @@
                   } else {
                     document.getElementById('agent-groups-error').textContent = msg.error || 'Failed to save agent group';
                   }
-                  // Adoption rollback. The optimistic push happens in
-                  // teamsTabAdopt so the card redraws immediately; if the host
-                  // failed to persist the fork, leaving it drawn shows an
-                  // adopted card for a team the host has never seen.
+                  // Creation rollback. The optimistic push happens in
+                  // teamsTabCreateCustomTeam so the card redraws immediately; if
+                  // the host failed to persist it, leaving it drawn shows a card
+                  // for a team the host has never seen.
                   if (teamsTabPendingAdoptId) {
                     const id = teamsTabPendingAdoptId;
                     teamsTabPendingAdoptId = null;
                     if (!msg.success) {
                       const idx = agentsTabAgentGroups.findIndex(g => g.id === id);
                       if (idx >= 0) {
-                        const reverted = agentsTabAgentGroups[idx];
                         agentsTabAgentGroups.splice(idx, 1);
-                        teamsTabPickedKey = 'type:' + reverted.name;
+                        teamsTabPickedKey = null;
                       }
                       teamsTabRenderAgentGroups();
                       teamsTabRenderGallery();
                       // After the re-render — teamsTabRenderFlow rebuilds the
                       // error span, so writing before it would be erased.
                       const errEl = document.getElementById('teams-flow-error');
-                      if (errEl) { errEl.textContent = msg.error || 'Failed to adopt team.'; }
+                      if (errEl) { errEl.textContent = msg.error || 'Failed to create team.'; }
                     }
                   }
                   break;

@@ -28,6 +28,21 @@ export interface CustomAgentAddons {
     accurateCodingEnabled?: boolean;
     pairProgrammingEnabled?: boolean;
     aggressivePairProgramming?: boolean;
+    /**
+     * WHICH HALF of the pair this seat takes — `'B'` Complex / Risky, `'A'` Routine.
+     * Resolved at dispatch from the team definition (head → B, seats → A), never
+     * inferred from the role string: a `coder` seat and a `coder` head are the same
+     * role and must receive different bands. Absent → the historical role mapping.
+     */
+    pairBand?: 'A' | 'B';
+    /** Which rule decided {@link pairBand}. `'role-default'` is the non-team path. */
+    pairBandSource?: 'team-head' | 'team-seat' | 'role-default';
+    /**
+     * The role of the OTHER half of the pair, for the prose that names it. Absent →
+     * the prose names no counterpart rather than hard-coding "Coder": a directive
+     * that names the wrong partner role is worse than one that names none.
+     */
+    pairCounterpartRole?: string;
     advancedReviewerEnabled?: boolean;
     reviewerConciseModeEnabled?: boolean;
     reviewerCompactPlanUpdateEnabled?: boolean;

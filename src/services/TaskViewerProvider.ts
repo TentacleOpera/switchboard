@@ -29620,7 +29620,10 @@ Each plan file must include:
                 // Source column: PLAN REVIEWED (or STAGING)
                 // Queue pop first, through `_runQueuePop` (the in-chain pop implementation)
                 if (apiServer && typeof apiServer._runQueuePop === 'function') {
-                    let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(wsRoot)) || '';
+                    // A queue pop is a PLAN dispatch — route by work kind so the
+                    // Coding team takes it rather than whichever lead is live.
+                    const routed = await this._kanbanProvider?.resolveImplementationHead(wsRoot, 'plan');
+                    let headTerminal = routed ? routed.head : '';
                     if (!headTerminal) {
                         const codingTerminals = this.getAliveCodingTerminalNames();
                         if (codingTerminals.length > 0) { headTerminal = codingTerminals[0]; }
@@ -29746,7 +29749,9 @@ Each plan file must include:
                         outcome = 'kanban provider unavailable';
                     }
                 } else if (apiServer && typeof apiServer.dispatchNextFromQueue === 'function') {
-                    let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(wsRoot)) || '';
+                    // A queue pop is a PLAN dispatch — route by work kind.
+                    const routed = await this._kanbanProvider?.resolveImplementationHead(wsRoot, 'plan');
+                    let headTerminal = routed ? routed.head : '';
                     if (!headTerminal) {
                         // No registered team head — fall back to any live coding seat.
                         // getAliveCodingTerminalNames() reads getFleetLiveness() ONLY, so

@@ -9,11 +9,14 @@
  *  3. Card movement is stated as unconditional, with no named exception.
  *  4. The completion post uses the subtask's planId, not the FEATURE planId.
  *  5. The prompt states POST /kanban/queue/next as the "ask for the next card" call.
- *  6. teamWiring.ts and agent-control.js copies are byte-identical. The terminals.js
- *     client mirror (NEW_CODING_HEAD_PROMPT_CLIENT) was retired when system
- *     protocol composition moved to delivery-time fragment composition. The
- *     shipped gallery copy lives in agent-control.js's SHIPPED_TEAM_TYPES since
- *     the tabs left kanban.html.
+ *  6. There is exactly ONE copy. The webview gallery that carried the second
+ *     (`SHIPPED_TEAM_TYPES` in agent-control.js) is deleted — there is one
+ *     catalogue now, `DEFAULT_TEAM_DEFINITIONS` in teamWiring.ts, and the Feature
+ *     team's row REFERENCES `NEW_CODING_HEAD_PROMPT` by identifier rather than
+ *     hand-copying it. So the assertion is no longer byte-identity between two
+ *     literals; it is that no second literal exists. The terminals.js client
+ *     mirror (NEW_CODING_HEAD_PROMPT_CLIENT) was retired when system protocol
+ *     composition moved to delivery-time fragment composition.
  *
  * Run with:
  *   node --require ./src/test/bootstrap/sandboxStateHome.js src/test/coding-head-prompt-contract.test.js
@@ -75,18 +78,32 @@ function run() {
         'terminals.js must NOT declare NEW_CODING_HEAD_PROMPT_CLIENT — the client mirror is retired'
     );
 
-    // Extract Coding headPrompt from agent-control.js (SHIPPED_TEAM_TYPES)
-    const khStart = AGENT_CONTROL_JS_SRC.indexOf("name: 'Coding'");
-    assert.ok(khStart >= 0, 'Coding team not found in agent-control.js');
-    const khHpAnchor = /headPrompt:\s*/.exec(AGENT_CONTROL_JS_SRC.slice(khStart));
-    assert.ok(khHpAnchor, 'Coding headPrompt not found in agent-control.js');
-    const khPrompt = readQuotedChain(AGENT_CONTROL_JS_SRC, khStart + khHpAnchor.index + khHpAnchor[0].length);
-    assert.ok(khPrompt, 'could not extract Coding headPrompt from agent-control.js');
+    // ── 1. ONE catalogue, ONE copy ───────────────────────────────────
 
-    // ── 1. Byte-identity across the 2 surviving source files ──────────
+    check('agent-control.js declares no SHIPPED_TEAM_TYPES catalogue', () => {
+        assert.ok(
+            !/SHIPPED_TEAM_TYPES\s*=/.test(AGENT_CONTROL_JS_SRC),
+            'agent-control.js must NOT declare a second team catalogue — the gallery renders '
+            + 'the workspace\'s own teams (the five shipped defaults plus operator-built ones), '
+            + 'and the list you choose from must not be a different list from the one pushed onto you'
+        );
+    });
 
-    check('NEW_CODING_HEAD_PROMPT in teamWiring.ts and Coding headPrompt in agent-control.js are byte-identical', () => {
-        assert.strictEqual(twPrompt, khPrompt, 'teamWiring.ts and agent-control.js must be byte-identical');
+    check('the Feature team default REFERENCES NEW_CODING_HEAD_PROMPT rather than copying it', () => {
+        const dStart = TEAM_WIRING_SRC.indexOf('export const DEFAULT_TEAM_DEFINITIONS');
+        assert.ok(dStart >= 0, 'DEFAULT_TEAM_DEFINITIONS not found in teamWiring.ts');
+        const dEnd = TEAM_WIRING_SRC.indexOf('export const DEFAULT_TEAM_IDS', dStart);
+        assert.ok(dEnd > dStart, 'could not bound DEFAULT_TEAM_DEFINITIONS');
+        const defs = TEAM_WIRING_SRC.slice(dStart, dEnd);
+        const fStart = defs.indexOf("id: 'feature-implementation'");
+        assert.ok(fStart >= 0, 'feature-implementation default not found');
+        const fEnd = defs.indexOf("id: 'coding-team'", fStart);
+        const featureRow = defs.slice(fStart, fEnd > fStart ? fEnd : defs.length);
+        assert.ok(
+            /headPrompt:\s*NEW_CODING_HEAD_PROMPT\s*,/.test(featureRow),
+            'the Feature team default must set headPrompt: NEW_CODING_HEAD_PROMPT — a hand copy '
+            + 'is a second literal that drifts, and the rewriter matches stale rows by indexOf'
+        );
     });
 
     check('NEW_CODING_HEAD_PROMPT_CLIENT is absent from terminals.js (client mirror retired)', () => {

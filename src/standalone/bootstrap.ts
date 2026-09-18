@@ -99,7 +99,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // The pure migrators are deliberately NOT imported here — see the note at the
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
-import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, resolveLiveGroupHeads, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, resolveLiveGroupHeads, isTeamEnabled, DEFAULT_TEAM_IDS, recommendedAgentRoles, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
 import { readBuildRenderOptions } from '../services/buildTarget';
 import { setStandingOrdersApplier } from '../services/standingOrdersDelivery';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from '../services/startupOrientation';
@@ -2324,8 +2324,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // here must not turn a successful stage into a failed verb.
                         if (verb === 'stageForQueue') {
                             try {
-                                const headTerminal = await kanbanProvider.resolveCodingHeadFromGroups(root);
-                                await ingestionEngine.armQueueWatch(root, headTerminal);
+                                // A queue pop is a PLAN dispatch — route by work
+                                // kind so the watch's head is the head the pop
+                                // would actually reach.
+                                const routed = await kanbanProvider.resolveImplementationHead(root, 'plan');
+                                await ingestionEngine.armQueueWatch(root, routed ? routed.head : null);
                             } catch (armErr) {
                                 log(opts, `armQueueWatch (stageForQueue) failed: ${armErr instanceof Error ? armErr.message : String(armErr)}`);
                             }
@@ -2372,7 +2375,21 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // verb must still not write to a board it was only asked to read, and must
                     // not re-run importDelegatesIntoTeams on every picker open (that is the
                     // boot pass's job, above at :2188-2192).
-                    const groups = await kanbanProvider.peekAgentGroups(root);
+                    const allGroups = await kanbanProvider.peekAgentGroups(root);
+                    // A switched-off team is NOT listed here. This verb feeds the
+                    // Command roster and the shell rail's definition cache, and a
+                    // disabled team holding a rail slot would make the switch
+                    // decorative — clicking it would start a team the operator
+                    // switched off. The Teams tab, which owns the switch, reads the
+                    // full list through the `agentGroups` message instead: filtering
+                    // there would hide the switch from the tab that owns it.
+                    const groups = allGroups.filter((g: any) => isTeamEnabled(g));
+                    if (groups.length !== allGroups.length) {
+                        console.log(
+                            `[bootstrap] ptyListAgentGroups: ${allGroups.length - groups.length} `
+                            + 'switched-off team(s) omitted from the roster.'
+                        );
+                    }
                     // Attach the live `head` seat name to each definition row so two teams
                     // sharing a headRole are distinguishable on the wire by their live head,
                     // not by claim order alone. Mirrors the extension-host ptyListAgentGroups
@@ -2387,7 +2404,17 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             return head ? { ...g, head } : g;
                         })
                         : groups;
-                    return { success: true, groups: groupsWithHead, sourceRoot: root };
+                    // Derived, never typed: the shipped default ids and the
+                    // recommended agent set both come from DEFAULT_TEAM_DEFINITIONS,
+                    // so a roster edit changes them by construction. The webviews
+                    // consume these rather than keeping their own copy.
+                    return {
+                        success: true,
+                        groups: groupsWithHead,
+                        sourceRoot: root,
+                        defaultTeamIds: [...DEFAULT_TEAM_IDS],
+                        recommendedRoles: recommendedAgentRoles(),
+                    };
                 }
 
                 case 'getHopState':
@@ -4510,7 +4537,14 @@ Each plan file must include:
     // provider. Returns null when no head is live; the sweep then notifies the
     // operator. Swallow-and-default, never throw into the sweep.
     ingestionEngine.setQueueHeadResolver(async (wsRoot) => {
-        try { return await kanbanProvider.resolveCodingHeadFromGroups(wsRoot); }
+        // The sweep is re-resolving the head for a QUEUE, and a queue pop is a
+        // plan dispatch — so it routes by work kind, the same way the pop does.
+        // Resolving by role order here would hand the watch a Feature-team lead
+        // the pop would never dispatch to.
+        try {
+            const routed = await kanbanProvider.resolveImplementationHead(wsRoot, 'plan');
+            return routed ? routed.head : null;
+        }
         catch { /* groups unavailable — null, sweep notifies the operator */ }
         return null;
     });

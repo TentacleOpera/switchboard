@@ -323,6 +323,37 @@ export interface PromptBuilderOptions {
      * the board-wide enum won (non-team path); `'default'` = both unset.
      */
     pairProgrammingSource?: 'team' | 'board' | 'default';
+    /**
+     * WHICH HALF of the pair this seat takes. `'B'` is Complex / Risky, `'A'` is
+     * Routine.
+     *
+     * The band used to be inferred from the ROLE STRING — `lead` → B, `coder` and
+     * `intern` → A — which is exactly the quiet-wrong-answer shape the repo bans:
+     * a `coder` SEAT on the Feature team and a `coder` HEAD on the Coding team are
+     * the same role string and must receive different bands. On a coder-headed
+     * team with an intern seat, role inference told BOTH seats to do only Routine
+     * work and nobody did the complex half.
+     *
+     * The band is now a dispatch input. The caller resolves it from the team
+     * definition — the team's HEAD takes Band B, its SEATS take Band A — and the
+     * builder renders the band it was handed instead of branching on the role.
+     */
+    pairBand?: 'A' | 'B';
+    /**
+     * Which rule decided {@link pairBand}. `'team-head'` / `'team-seat'` mean a
+     * team definition answered; `'role-default'` is the non-team path (board-level
+     * pair programming with no team definition to read) and keeps the historical
+     * lead→B / coder→A mapping. Logged at the dispatch site, as the
+     * pair-programming intensity resolution already is.
+     */
+    pairBandSource?: 'team-head' | 'team-seat' | 'role-default';
+    /**
+     * The role of the OTHER half of the pair, for the prose that names it. A
+     * directive that names the wrong partner role is worse than one that names
+     * none, so the prose says nothing when this is absent rather than hard-coding
+     * "Coder".
+     */
+    pairCounterpartRole?: string;
     /** Whether advanced regression analysis block is appended (reviewer role). */
     advancedReviewerEnabled?: boolean;
     /**
@@ -1950,6 +1981,42 @@ export function buildKanbanBatchPrompt(
     const accurateCodingEnabled = options?.accurateCodingEnabled ?? false;
     const pairProgrammingEnabled = options?.pairProgrammingEnabled ?? false;
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
+    // ── Pair band: a DISPATCH INPUT, not a role inference ────────────────
+    // The band the seat works. When the caller resolved it from the team
+    // definition (head → B, seat → A) that value is used verbatim. When it did
+    // not — the non-team path, board-level pair programming with no team to read
+    // — fall back to the historical role mapping and SAY SO via
+    // `pairBandSource: 'role-default'`, so "B because this seat heads its team"
+    // and "B because the role string says lead" are never the same read.
+    const pairBandSource: 'team-head' | 'team-seat' | 'role-default' =
+        options?.pairBandSource ?? 'role-default';
+    const pairBand: 'A' | 'B' = options?.pairBand
+        ?? (role === 'lead' ? 'B' : 'A');
+    // The other half's role, for the prose that names it. Absent → the prose
+    // names no counterpart rather than guessing "Coder".
+    const pairCounterpartRole = (typeof options?.pairCounterpartRole === 'string' && options.pairCounterpartRole)
+        ? options.pairCounterpartRole
+        : '';
+    const pairCounterpartLabel = pairCounterpartRole
+        ? pairCounterpartRole.charAt(0).toUpperCase() + pairCounterpartRole.slice(1).replace(/[_-]+/g, ' ')
+        : '';
+    void pairBandSource;
+    // The band directive this seat receives. ONE composer for every role branch:
+    // the band is a dispatch input, so the same two strings serve a `lead` head,
+    // a `coder` head, a `coder` seat and an `intern` seat. Two seats on one team
+    // can never both be told to do only the routine half, because the head is
+    // handed `'B'` and the seats `'A'` by the resolver, not by their role.
+    const pairBandInstruction = (): string => {
+        if (pairBand === 'A') { return 'Additional Instructions: only do Routine (Band A) work.'; }
+        const partner = pairCounterpartLabel ? `A ${pairCounterpartLabel} agent` : 'Another seat on your team';
+        const partnerShort = pairCounterpartLabel ? `The ${pairCounterpartLabel}` : 'That seat';
+        const partnerOwns = pairCounterpartLabel ? `the ${pairCounterpartLabel}'s` : 'their';
+        return `Note: ${partner} is concurrently handling the Routine tasks for these plans. `
+            + `You only need to do Complex (Band B) work. IMPORTANT: ${partnerShort} has JUST started and `
+            + `will NOT be finished yet — do NOT attempt to check or read their work at the start. `
+            + `Begin your Complex implementation immediately. Only check and integrate ${partnerOwns} Routine `
+            + `work as a final step before declaring completion, by which time they will have finished.`;
+    };
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? true;
     const reviewerConciseModeEnabled = options?.reviewerConciseModeEnabled ?? false;
     const reviewerCompactPlanUpdateEnabled = options?.reviewerCompactPlanUpdateEnabled ?? false;
@@ -2449,7 +2516,7 @@ For each plan:
 
         let leadBase = '';
         if (pairProgrammingEnabled) {
-            leadBase += `Note: A Coder agent is concurrently handling the Routine tasks for these plans. You only need to do Complex (Band B) work. IMPORTANT: The Coder has JUST started and will NOT be finished yet — do NOT attempt to check or read their work at the start. Begin your Complex implementation immediately. Only check and integrate the Coder's Routine work as a final step before declaring completion, by which time they will have finished.`;
+            leadBase += pairBandInstruction();
             if (aggressivePairProgramming) {
                 leadBase += `\n\nRoutine scope has been expanded in aggressive pair programming mode. During your final integration check, pay extra attention to any Routine changes that touch files you also modified.`;
             }
@@ -2540,7 +2607,7 @@ For each plan:
 
             let coderBase = '';
             if (pairProgrammingEnabled) {
-                coderBase += `Additional Instructions: only do Routine (Band A) work.`;
+                coderBase += pairBandInstruction();
             }
 
             let baseInstructions = resolveBaseInstructions('coder', coderBase, options);
@@ -2596,7 +2663,7 @@ For each plan:
 
         let coderBase = '';
         if (pairProgrammingEnabled) {
-            coderBase += `Additional Instructions: only do Routine (Band A) work.`;
+            coderBase += pairBandInstruction();
         }
 
         let baseInstructions = resolveBaseInstructions('coder', coderBase, options);
@@ -2636,7 +2703,7 @@ For each plan:
     if (role === 'intern') {
         let internBase = '';
         if (pairProgrammingEnabled) {
-            internBase += `Additional Instructions: only do Routine (Band A) work.`;
+            internBase += pairBandInstruction();
         }
 
         let baseInstructions = resolveBaseInstructions('intern', internBase, options);
@@ -2987,7 +3054,24 @@ export function buildCustomAgentPrompt(
     }
     if (addons?.includeInlineChallenge) prompt += `\n\n${INLINE_CHALLENGE_DIRECTIVE}`;
     if (addons?.accurateCodingEnabled) prompt += `\n\n${buildAccuracyDirective(resolvedProtocols)}`;
-    if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
+    if (addons?.pairProgrammingEnabled) {
+        // Band by POSITION, and the counterpart named from the roster — never
+        // hard-coded "Coder". On a coder-headed team the Band A half is an
+        // intern, and a note that names the wrong partner is worse than one
+        // that names none.
+        const seatBand = addons.pairBand ?? 'B';
+        const cp = (typeof addons.pairCounterpartRole === 'string' && addons.pairCounterpartRole)
+            ? addons.pairCounterpartRole.charAt(0).toUpperCase()
+                + addons.pairCounterpartRole.slice(1).replace(/[_-]+/g, ' ')
+            : '';
+        prompt += seatBand === 'A'
+            ? `\n\nPAIR PROGRAMMING NOTE: Focus only on Routine (Band A) implementation steps. `
+                + (cp ? `A separate ${cp} agent is handling Complex / Risky (Band B) work.`
+                      : 'Another seat on your team is handling Complex / Risky (Band B) work.')
+            : `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. `
+                + (cp ? `A separate ${cp} agent is handling Routine (Band A) tasks.`
+                      : 'Another seat on your team is handling Routine (Band A) tasks.');
+    }
     if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
     if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;
     if (addons?.reviewerRisksToMemoEnabled) prompt += '\n\n' + REVIEWER_RISKS_TO_MEMO_DIRECTIVE;

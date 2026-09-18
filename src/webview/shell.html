@@ -316,6 +316,22 @@
             pointer-events: none;
             text-shadow: 0 0 3px var(--bg), 0 0 2px var(--bg);
         }
+        /* A GROUP's mark. A group has no head role to colour a jet by, and a
+           group that looks like a team invites a click that tries to start it —
+           which would post a teamId that resolves to nothing. Muted bracket glyph
+           instead of the role jet, so team and group are distinguishable at 22px
+           without a mode switch on the strip. */
+        .strip-group-mark {
+            font-size: 13px;
+            line-height: 1;
+            font-weight: 700;
+            letter-spacing: -1px;
+            color: var(--text-secondary, #8a8a8a);
+            pointer-events: none;
+        }
+        .strip-team-btn.is-group .strip-team-initial {
+            color: var(--text-secondary, #8a8a8a);
+        }
         .strip-team-btn.is-dispatched::after {
             content: '';
             position: absolute;

@@ -209,6 +209,87 @@ export async function resolveTeamDefinitionForHeadTerminal(opts: {
     return resolveDefinitionForGroup(db, headGroup);
 }
 
+/**
+ * Resolve the PAIR BAND for a terminal from its POSITION on its team, not from
+ * its role string.
+ *
+ * The team's HEAD takes Band B (Complex / Risky); its SEATS take Band A
+ * (Routine). That is the whole rule, and it is why a `coder` seat on the Feature
+ * team and a `coder` head on the Coding team get different bands from the same
+ * role string. Inferring the band from the role told BOTH seats of a
+ * coder-headed team to do only Routine work, and nobody did the complex half.
+ *
+ * `counterpartRole` names the OTHER half so the prose can say who is doing it:
+ * for a head, the first seat role on the roster that can take routine work; for
+ * a seat, the team's head role. Absent when the team has no other half — the
+ * prose then names no counterpart rather than guessing.
+ *
+ * Returns `null` when the terminal belongs to no team — the non-team path, where
+ * the caller keeps the historical role mapping and tags it `'role-default'`.
+ */
+export async function resolveTeamPairBandForTerminal(opts: {
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
+    originName: string;
+}): Promise<{
+    band: 'A' | 'B';
+    source: 'team-head' | 'team-seat';
+    counterpartRole?: string;
+    teamId?: string;
+} | null> {
+    const { db, settings, originName } = opts;
+    if ((!db && !settings) || !originName) { return null; }
+
+    let groups: any[] = [];
+    try {
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+    } catch { return null; }
+    if (!Array.isArray(groups) || groups.length === 0) { return null; }
+
+    // Same id derivation as resolveTeamMembersForHead and wireSpawnedTeam: the
+    // group the origin HEADS. `head` is read, never inferred from order[0] —
+    // the two diverge when an operator reorders.
+    const headId = 'team_' + encodeURIComponent(originName).replace(/[^a-zA-Z0-9_]/g, '_');
+    let group = groups.find(g => g && g.id === headId);
+    let isHead = Boolean(group);
+    if (!group) {
+        group = groups.find(g => g && Array.isArray(g.members) && g.members.includes(originName));
+        if (!group) { return null; }
+        isHead = teamHeadName(group) === originName;
+    }
+
+    const def = await resolveDefinitionForGroup(db, group);
+    if (!def) { return null; }
+    const members: any[] = Array.isArray(def.members) ? def.members : [];
+    const headRole = typeof def.headRole === 'string' ? def.headRole : undefined;
+    const seatRole = members.find((m: any) => m && (m.role === 'coder' || m.role === 'intern'))?.role
+        || members.find((m: any) => m && typeof m.role === 'string' && m.role)?.role;
+
+    return isHead
+        ? { band: 'B', source: 'team-head', counterpartRole: seatRole, teamId: def.id }
+        : { band: 'A', source: 'team-seat', counterpartRole: headRole, teamId: def.id };
+}
+
 // ─── tmux session name derivation ─────────────────────────────────────────
 // tmux session names cannot contain `.` or `:` and should be shell-safe.
 // Team names are free-form user strings, so sanitize to `[a-z0-9_-]` and
@@ -552,44 +633,76 @@ export async function saveTerminalGroupsGuarded(opts: {
 const AGENT_GROUPS_CONFIG_KEY = 'terminals.agentGroups';
 
 /**
- * The three default team definitions.
- * Rail order is array order: Planning team, Coding team (Lead team), Review team.
- * Each team ships with the members its head actually hands out: a planner pool,
- * a coder pool, and a reviewer pool. A team is a head *and its seats*.
+ * Membership-read provenance for a team's `enabled` flag. Copied VERBATIM from
+ * the column union (`agentConfig.ts` `KanbanColumnDefinition.enabledSource`) —
+ * a team only ever writes `'config'` or `'default'`, but two nearly-identical
+ * source enums is the two-catalogues trap in miniature, so this takes the whole
+ * union rather than a narrower copy.
  */
-export const DEFAULT_TEAM_DEFINITIONS: any[] = [
-    {
-        id: 'planning-team',
-        name: 'Planning team',
-        headRole: 'planner',
-        // A team picks ONE machine — head and every delegate spawn on it. See
-        // the plan `agents-are-saved-per-machine-and-a-team-picks-one`.
-        machine: 'local',
-        members: [
-            { role: 'planner', count: 2, label: '' },
-        ],
-    },
-    {
-        id: 'feature-implementation',
-        name: 'Lead team',
-        headRole: 'lead',
-        machine: 'local',
-        members: [
-            { role: 'coder', count: 3, label: '' },
-        ],
-    },
-    {
-        id: 'review-team',
-        name: 'Review team',
-        headRole: 'reviewer',
-        machine: 'local',
-        members: [
-            { role: 'reviewer', count: 2, label: '' },
-        ],
-    },
-];
+export type TeamEnabledSource = 'config' | 'legacy-db-config' | 'default' | 'structural' | 'unknown';
 
-export const SEEDED_AGENT_GROUP: any = DEFAULT_TEAM_DEFINITIONS[1];
+/** Work kinds an implementation team can declare it accepts. */
+export type TeamWorkKind = 'feature' | 'plan';
+
+/**
+ * Read a team's in-use switch, tagged with WHO decided it. A team that exists
+ * is not automatically a team that plays, and "off because it ships off" must
+ * never read the same as "off because the operator switched it off" — that is
+ * the repo's fallback rule applied to a membership read.
+ *
+ * An absent flag reads as enabled with source `'unknown'`: the seed and the
+ * Teams tab both write the field explicitly, so absence means a row that
+ * predates the field, and the source says so rather than pretending a default
+ * was configured.
+ */
+export function readTeamEnabled(group: any): { value: boolean; source: TeamEnabledSource } {
+    if (!group || typeof group !== 'object') { return { value: false, source: 'unknown' }; }
+    const raw = group.enabled;
+    const source: TeamEnabledSource =
+        group.enabledSource === 'config' || group.enabledSource === 'default'
+            || group.enabledSource === 'legacy-db-config' || group.enabledSource === 'structural'
+            ? group.enabledSource
+            : 'unknown';
+    if (raw === true || raw === false) { return { value: raw, source }; }
+    return { value: true, source: 'unknown' };
+}
+
+/** Convenience predicate — `readTeamEnabled(g).value`. */
+export function isTeamEnabled(group: any): boolean {
+    return readTeamEnabled(group).value;
+}
+
+/**
+ * The refusal text for an explicit start of a switched-off team. Names the
+ * switch, so the operator is never left guessing why a rail click did nothing.
+ */
+export function teamDisabledMessage(group: any): string {
+    const name = (group && group.name) || (group && group.id) || 'This team';
+    const { source } = readTeamEnabled(group);
+    const because = source === 'default'
+        ? 'it ships switched off'
+        : source === 'config'
+            ? 'it was switched off in the Teams tab'
+            : 'its in-use switch is off';
+    return `'${name}' is switched off (${because}). Switch it on in the Teams tab to start it.`;
+}
+
+/**
+ * Read the work kinds a team accepts, tagged with the source. `'default'` means
+ * the team declares nothing — the routing was by absence, not by declaration,
+ * and the resolver says so rather than treating silence as a match.
+ */
+export function readTeamAcceptedKinds(group: any): { value: TeamWorkKind[] | null; source: 'config' | 'default' } {
+    const raw = group && group.acceptedKinds;
+    if (Array.isArray(raw)) {
+        const kinds = raw.filter((k: any): k is TeamWorkKind => k === 'feature' || k === 'plan');
+        if (kinds.length > 0) {
+            const source = group.acceptedKindsSource === 'config' ? 'config' as const : 'default' as const;
+            return { value: kinds, source };
+        }
+    }
+    return { value: null, source: 'default' };
+}
 
 /**
  * Durable commit instruction appended to every team-head standing order.
@@ -619,8 +732,10 @@ export const TEAM_HEAD_COMMIT_INSTRUCTION = ` ${TEAM_HEAD_COMMIT_FRAGMENT_BODY}`
  *  - "advance" language removed entirely to prevent misinterpretation, and
  *    card movement is never described as the lead's role.
  *
- * Byte-identical to the shipped `headPrompt` in `agent-control.js`'s Coding entry
- * (SHIPPED_TEAM_TYPES — the gallery moved there with the tabs).
+ * This IS the Feature team default's `headPrompt` — it is referenced by
+ * `DEFAULT_TEAM_DEFINITIONS` below, not hand-copied into a second catalogue. The
+ * webview gallery that carried the second copy (`SHIPPED_TEAM_TYPES` in
+ * `agent-control.js`) is deleted: there is one catalogue now.
  * The client mirror (`NEW_CODING_HEAD_PROMPT_CLIENT`) was retired when system
  * protocol composition moved to delivery-time fragment composition.
  */
@@ -685,21 +800,289 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     + 'dispatched: null, report that the queue is empty and stop.';
 
 /**
+ * The Multi-agent planning head prompt — fan-out, then synthesise. Roster-agnostic
+ * by construction: the head enumerates its own seats from `ptyListTerminals` by
+ * the `<head>-` name prefix `spawnDelegates` guarantees, so an operator who edits
+ * the roster does not invalidate the prompt. `{head}` is substituted with the
+ * live head name by `wireSpawnedTeam`.
+ *
+ * Every agent-facing call is the CLI verb, never raw HTTP — see the directives
+ * rule the rest of the shipped prompts follow.
+ */
+export const MULTI_AGENT_PLANNING_HEAD_PROMPT =
+    'You lead this team and you do not write the plan alone. When you are given something to '
+    + 'plan — a memo, a ticket, a bug report, a request — split it into one investigation angle '
+    + 'per member and hand each member its own angle BEFORE you write anything. '
+    + 'Find your members first: run node "<cliPath>" verb ptyListTerminals \'{}\' (or switchboard verb ptyListTerminals) '
+    + 'and take the active terminals whose friendlyName starts with "{head}-". Dispatch to each by name with '
+    + 'node "<cliPath>" verb ptySendPrompt \'{"name":"<member>","data":"<that member\'s angle>","clearBeforePrompt":false}\'. '
+    + 'Each member is a separate agent that cannot see this '
+    + 'conversation, so every dispatch must state the problem, that member\'s angle, and what '
+    + 'to report back, standing on its own. Give different members different angles — never '
+    + 'the same question twice. Then wait for their reports and synthesise them into ONE plan, '
+    + 'naming which findings came from which member. If a member never reports, say so in the '
+    + 'plan rather than dropping its angle quietly. If you have no members, say so and plan alone.';
+
+/**
+ * The Coding team head prompt — a coder head that takes the Complex / Risky half
+ * of ONE plan while its intern takes the Routine half, integrates both, commits,
+ * asserts completion and pops the queue. Deliberately light: no reviewer seat, no
+ * review hop, no lead dispensing work. A plan that needs reviewing goes to the
+ * Review team as its own dispatch.
+ */
+export const CODING_TEAM_HEAD_PROMPT =
+    'You head this team and you write code yourself. This team is two seats and one plan: you take the '
+    + 'Complex / Risky (Band B) half and your intern seat takes the Routine (Band A) half, in parallel. '
+    + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
+    + 'Hand your intern its half by name — node "<cliPath>" verb ptySendPrompt '
+    + '\'{"name":"<the intern seat>","data":"<the routine steps, each named, standing on its own>","clearBeforePrompt":false}\' '
+    + '(or switchboard verb ptySendPrompt) — before you start your own half; the intern cannot see this conversation, so the '
+    + 'dispatch must state the plan, the routine steps, and what to report back. Your team\'s seats are the ptyListTerminals '
+    + 'rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID. The intern has JUST started and will NOT be '
+    + 'finished yet — do not check its work at the start. Begin your Complex implementation immediately and only check and '
+    + 'integrate the intern\'s Routine work as a final step before declaring completion. '
+    + 'This team has no reviewer seat and no review hop; your integration check is the review. '
+    + 'Before sending the intern a revert or stand-down, confirm with git diff that the state you are undoing exists. '
+    + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
+    + 'Never move a card to a new column yourself — that is not your role. '
+    + 'When the work is complete, stage the files you changed by explicit path '
+    + '— never `git add -A` or `git add .`. Then create a single commit with a '
+    + 'descriptive message. '
+    + 'run node "<cliPath>" accept --plan "<the plan\'s planId>" '
+    + 'against the API base named in your SWITCHBOARD STATUS line. '
+    + 'The card stays where it is. Completion is asserted, never inferred from board position. '
+    + 'run node "<cliPath>" next (or switchboard next); '
+    + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+    + 'empty and stop.';
+
+/**
+ * The five default team definitions. Present on every board, none deletable, each
+ * carrying an in-use switch — four ship on, Multi-agent planning ships off.
+ *
+ * Ids are FIXED and stable. `feature-implementation` keeps its id and is named
+ * *Feature team*; the name *Coding* belongs to `coding-team`, the two-seat team a
+ * single plan goes to. Rail order is array order.
+ *
+ * `enabled` / `enabledSource` are stamped at seed time so a membership read can
+ * always answer "which source decided this team is in play?" — never absent, never
+ * a bare default that reads like a configured value.
+ *
+ * `pairProgramming` is written EXPLICITLY on every row whose identity depends on
+ * it, rather than left absent for `readTeamPairProgramming` to default to `'on'`:
+ * "on because it ships on" and "on because nobody set it" must not be the same read.
+ *
+ * NO default carries a `scope: 'shared'` member. `commandlessRoles`
+ * (`agentGroupInstantiation.ts`) skips shared members outright, so a shared seat's
+ * role is reported by nothing — an unconfigured researcher would spawn as a bare
+ * shell with no surface naming it. Shared scope also spawns unparented and escapes
+ * the delegate cap. Every role on every shipped default is a counted candidate.
+ */
+export const DEFAULT_TEAM_DEFINITIONS: any[] = [
+    {
+        id: 'planning-team',
+        name: 'Planning',
+        headRole: 'planner',
+        // A team picks ONE machine — head and every delegate spawn on it. See
+        // the plan `agents-are-saved-per-machine-and-a-team-picks-one`.
+        machine: 'local',
+        members: [
+            { role: 'planner', count: 2, label: '' },
+            // An ordinary per-team seat, deliberately NOT a shared one — see
+            // the note above this array.
+            { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
+        ],
+        purpose: 'Turns tickets and ideas into plans, with a researcher seat so the planner never hands research back to you.',
+        prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+            + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+            + '— naming what you changed and what to review. Do not wait to be asked.\n'
+            + 'Research the context for the plan — read the codebase, trace dependencies, and identify root causes. '
+            + 'Report your findings to {child} for synthesis into the plan.\n'
+            + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+            + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+            + 'commit first, then correct forward. '
+            + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+            + 'other agents may be working the same tree.',
+        enabled: true,
+        enabledSource: 'default',
+    },
+    {
+        id: 'feature-implementation',
+        name: 'Feature team',
+        headRole: 'lead',
+        machine: 'local',
+        members: [
+            { role: 'coder', count: 3, label: '' },
+        ],
+        purpose: 'Takes a whole feature and dispatches its subtasks across coder seats.',
+        acceptedKinds: ['feature'],
+        acceptedKindsSource: 'default',
+        pairProgramming: 'on',
+        prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+            + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+            + '— naming what you changed and what to review. Do not wait to be asked.\n'
+            + 'Work the subtask you were handed to completion and report it to {child}. Work only that subtask — '
+            + 'another seat on this team holds the next one.\n'
+            + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+            + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+            + 'commit first, then correct forward. '
+            + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+            + 'other agents may be working the same tree.',
+        headPrompt: NEW_CODING_HEAD_PROMPT,
+        enabled: true,
+        enabledSource: 'default',
+    },
+    {
+        id: 'coding-team',
+        name: 'Coding',
+        headRole: 'coder',
+        machine: 'local',
+        members: [
+            { role: 'intern', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
+        ],
+        purpose: 'Takes a single plan and splits it by complexity: the coder takes Band B, the intern takes Band A.',
+        acceptedKinds: ['plan'],
+        acceptedKindsSource: 'default',
+        // Written explicitly and NOT switchable off in the Teams tab: a coder and
+        // an intern with no split are two seats doing undifferentiated work, which
+        // is not this team. The control for "I do not want this" is the team switch.
+        pairProgramming: 'on',
+        prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+            + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+            + '— naming what you changed and what to review. Do not wait to be asked.\n'
+            + 'You are the Routine (Band A) half of a two-seat team. Work the routine, low-risk steps of the plan '
+            + '{child} hands you — it takes the Complex / Risky half itself and integrates your work before anything ships. '
+            + 'Do not take on the complex half, and do not wait on {child} to finish before reporting yours.\n'
+            + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+            + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+            + 'commit first, then correct forward. '
+            + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+            + 'other agents may be working the same tree.',
+        headPrompt: CODING_TEAM_HEAD_PROMPT,
+        enabled: true,
+        enabledSource: 'default',
+    },
+    {
+        id: 'review-team',
+        name: 'Review',
+        headRole: 'reviewer',
+        machine: 'local',
+        members: [
+            { role: 'reviewer', count: 2, label: '' },
+        ],
+        purpose: 'Reviews a feature across reviewer seats in read-only batches, triages findings, and fixes only what it reviewed.',
+        prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+            + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+            + '— naming what you changed and what to review. Do not wait to be asked.\n'
+            + 'In the review turn, perform a read-only review of your assigned plans, append your findings under ## Review Findings to the plan files, and report back to {child}. Do not modify code during the review turn.\n'
+            + 'When {child} apportions fixes back to you in the fix turn, implement the fixes for the plans you reviewed, run verification checks, and report back.\n'
+            + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+            + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+            + 'commit first, then correct forward. '
+            + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+            + 'other agents may be working the same tree.',
+        headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT,
+        enabled: true,
+        enabledSource: 'default',
+    },
+    {
+        id: 'multi-agent-planning',
+        name: 'Multi-agent planning',
+        headRole: 'planner',
+        machine: 'local',
+        // Peer planners, not a research pool. Three planner seats draft the SAME
+        // problem independently and the head reconciles the drafts. A planner
+        // member cannot recursively spawn a planner team — the auto-start guard is
+        // `!parentInstanceId && !_isTeamMember` and members are parented by
+        // construction.
+        members: [
+            { role: 'planner', count: 3, label: '', scope: 'per-team', relationship: 'reports-to-head' },
+            { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
+        ],
+        purpose: 'Three planners draft the same problem independently; the head reconciles the drafts into one plan.',
+        prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+            + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+            + '— naming what you changed and what to review. Do not wait to be asked.\n'
+            + 'You are one of several planners working the same problem from different angles. Draft your own '
+            + 'plan for the angle you were given — read the code, trace the dependencies, name the root cause '
+            + 'and the risks — and report it to {child}, which reconciles every draft into one plan. Do not '
+            + 'coordinate with the other planners and do not write the final plan yourself.\n'
+            + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+            + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+            + 'commit first, then correct forward. '
+            + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+            + 'other agents may be working the same tree.',
+        headPrompt: MULTI_AGENT_PLANNING_HEAD_PROMPT,
+        // Present and OFF. Not hidden, not deleted — greyed in the Teams tab with
+        // its switch, or there is no way back on.
+        enabled: false,
+        enabledSource: 'default',
+    },
+];
+
+/** Every shipped default's id. Derived, never typed — a default added above
+ *  joins this set by construction. Used by the delete refusal (a default is
+ *  undeletable) and by the setup surface's recommended-role derivation. */
+export const DEFAULT_TEAM_IDS: ReadonlySet<string> = new Set(
+    DEFAULT_TEAM_DEFINITIONS.map(d => d && d.id).filter((id: any): id is string => typeof id === 'string')
+);
+
+/** True when `id` names one of the five shipped defaults. */
+export function isDefaultTeamId(id: any): boolean {
+    return typeof id === 'string' && DEFAULT_TEAM_IDS.has(id);
+}
+
+/**
+ * The recommended agent set for first run: the union of `headRole` and member
+ * roles across the defaults that ship ENABLED. DERIVED, never typed — a
+ * hard-coded list drifts the moment a default's roster changes and the failure
+ * is silent, a team whose new role nobody was told to configure. `intern`
+ * entering the set is the proof: it arrives because a roster changed.
+ *
+ * Deriving from the ENABLED set is what keeps first run at six commands.
+ * Enabling a disabled team still has to surface any role it needs that is not
+ * configured — that is the `commandlessRoles` report, fired at enable time.
+ */
+export function recommendedAgentRoles(definitions: any[] = DEFAULT_TEAM_DEFINITIONS): string[] {
+    const roles = new Set<string>();
+    for (const def of definitions) {
+        if (!def || typeof def !== 'object') { continue; }
+        if (!readTeamEnabled(def).value) { continue; }
+        if (typeof def.headRole === 'string' && def.headRole) { roles.add(def.headRole); }
+        for (const m of Array.isArray(def.members) ? def.members : []) {
+            if (m && typeof m.role === 'string' && m.role) { roles.add(m.role); }
+        }
+    }
+    return [...roles].sort();
+}
+
+/**
+ * The shipped starter, resolved BY ID. It was `DEFAULT_TEAM_DEFINITIONS[1]` — a
+ * positional alias that breaks silently when the array grows, and the array grew
+ * to five.
+ */
+export const SEEDED_AGENT_GROUP: any =
+    DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === 'feature-implementation');
+
+
+/**
  * Convert existing agent groups to the team shape. Runs on every read
  * path that can trigger auto-start, so it is impossible for the
  * auto-start trigger to observe un-migrated data.
  *
- * Two steps, one pass:
- *  1. Add `scope: 'per-team'` and `relationship: 'reports-to-head'`
- *     defaults to every member that lacks them — the final member shape.
- *     Preserves `label` and any unknown keys on each member. Per-member
- *     `startupCommand` is retired (plan:
- *     `agents-are-saved-per-machine-and-a-team-picks-one`) and stripped on
- *     read.
- *  2. Resolve head-role collisions: the first group by stored order
- *     keeps its head role and becomes active; subsequent groups with
- *     the same head role are marked `unassigned: true` with a note
- *     naming the claimer. Non-destructive — nothing is deleted.
+ * One step, one pass: add `scope: 'per-team'` and
+ * `relationship: 'reports-to-head'` defaults to every member that lacks them —
+ * the final member shape. Preserves `label` and any unknown keys on each
+ * member. Per-member `startupCommand` is retired (plan:
+ * `agents-are-saved-per-machine-and-a-team-picks-one`) and stripped on read.
+ *
+ * There is NO head-role collision step. It marked the loser of a shared
+ * `headRole` `unassigned: true`, which only ever meant "not the auto-start
+ * default" — and auto-start is retired, so the flag gated nothing while reading,
+ * in the UI, exactly like a disabled state. Two flags that both look like "off"
+ * is the two-copies-disagreeing trap, and the shipped set has two
+ * `planner`-headed teams by design. Two teams sharing a head role is an ordinary
+ * configuration that nothing objects to; the in-use switch (`enabled`) is the
+ * only thing that takes a team out of play.
  *
  * Returns `null` when nothing changed (already fully converted), so
  * the caller does not write. Returns the converted array otherwise.
@@ -788,57 +1171,6 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
         next.push(g);
     }
 
-    // ── Step 2: resolve head-role collisions ────────────────────────
-    // The first group by stored order keeps its head role and becomes the
-    // auto-start default; subsequent groups with the same head role are
-    // marked unassigned. Non-destructive: nothing is deleted. An unassigned
-    // team is visible, editable, explicitly startable, and does not
-    // auto-start — the flag means "not the auto-start default", not "broken".
-    // Re-assigning its head role to a free one makes it the auto-start
-    // default for that role.
-    const seenHeadRoles = new Map<string, string>(); // headRole → claiming team name
-    for (const g of next) {
-        if (!g || !g.headRole) { continue; }
-        const headRole = g.headRole;
-        if (g.unassigned === true) {
-            // Already marked unassigned — check if the collision resolved
-            // (e.g. the claimer was deleted or re-assigned).
-            if (!seenHeadRoles.has(headRole)) {
-                // The claimer is gone — this team can become active again.
-                delete g.unassigned;
-                delete g.unassignedReason;
-                seenHeadRoles.set(headRole, g.name || headRole);
-                changed = true;
-            } else {
-                // Still colliding — update the reason in case the claimer
-                // was renamed.
-                const claimer = seenHeadRoles.get(headRole)!;
-                const reason = `Head role '${headRole}' is the auto-start default for '${claimer}'. This team is startable explicitly but does not auto-start.`;
-                if (g.unassignedReason !== reason) {
-                    g.unassignedReason = reason;
-                    changed = true;
-                }
-            }
-            continue;
-        }
-        if (seenHeadRoles.has(headRole)) {
-            // Collision — mark this group unassigned (not the auto-start
-            // default). The team remains visible, editable and explicitly
-            // startable; it only loses auto-start on a bare head-role
-            // terminal.
-            const claimer = seenHeadRoles.get(headRole)!;
-            g.unassigned = true;
-            g.unassignedReason = `Head role '${headRole}' is the auto-start default for '${claimer}'. This team is startable explicitly but does not auto-start.`;
-            changed = true;
-            console.log(
-                `[teamWiring] Migration: head-role collision on '${headRole}' — `
-                + `'${g.name}' is not the auto-start default (auto-start goes to '${claimer}').`
-            );
-        } else {
-            seenHeadRoles.set(headRole, g.name || headRole);
-        }
-    }
-
     return changed ? next : null;
 }
 
@@ -925,11 +1257,13 @@ export function importDelegatesIntoTeams(
 /**
  * Look up a team definition whose `headRole` matches the given role.
  *
- * Returns the first match or null. One team per head role is the constraint
- * enforced by the editor and the migration; this function runs the converter
- * in-memory on the raw DB read before matching, so it is impossible for the
- * auto-start trigger to observe un-migrated data — even on an install that
- * has never opened the TEAMS tab in the current session.
+ * Returns the first ENABLED match or null. Two teams may share a head role —
+ * the shipped set has two `planner`-headed teams — so this is a first-by-stored-
+ * order match, not a uniqueness constraint. A switched-off team is never the
+ * answer: the switch has to change what the board does, or it is decorative.
+ * The converter runs in-memory on the raw DB read before matching, so it is
+ * impossible for the caller to observe un-migrated data — even on an install
+ * that has never opened the TEAMS tab in the current session.
  *
  * Used by the auto-start trigger in both hosts' `handlePtyVerb`: when an
  * unparented terminal is created whose role heads a team, the team's members
@@ -942,18 +1276,15 @@ export async function findTeamForHeadRole(db: any, headRole: string): Promise<an
     try {
         const groups = await db.getConfigJson(AGENT_GROUPS_CONFIG_KEY, []) as any[];
         if (!Array.isArray(groups)) { return null; }
-        // Run the converter in-memory before matching so the auto-start
-        // trigger never observes un-migrated data — even on an install that
-        // has never opened the TEAMS tab in the current session. The
-        // converter adds member-shape defaults (scope/relationship) and
-        // resolves head-role collisions; it is idempotent and returns null
-        // when nothing changed, so the steady-state cost is one comparison
-        // per lookup and no write.
+        // Run the converter in-memory before matching so the caller never
+        // observes un-migrated data — even on an install that has never opened
+        // the TEAMS tab in the current session. The converter adds member-shape
+        // defaults (scope/relationship); it is idempotent and returns null when
+        // nothing changed, so the steady-state cost is one comparison per lookup
+        // and no write.
         const converted = migrateAgentGroups(groups) ?? groups;
-        // Skip unassigned teams — a head-role collision is resolved by the
-        // migration marking the loser `unassigned: true`. An unassigned team
-        // is visible and editable but does not auto-start.
-        return converted.find(g => g && g.headRole === headRole && !g.unassigned) || null;
+        // A switched-off team is not a candidate — it exists, it does not play.
+        return converted.find(g => g && g.headRole === headRole && isTeamEnabled(g)) || null;
     } catch (err) {
         console.warn(`[teamWiring] findTeamForHeadRole('${headRole}') failed:`, err);
         return null;
@@ -1003,39 +1334,55 @@ export async function findTeamForHeadRoleInRoots(
 }
 
 /**
- * Resolve a single team definition by id, host-side. Runs the migration
- * converter in-memory before matching (same guarantee as
+ * Resolve a team definition by id REGARDLESS of its in-use switch. Runs the
+ * migration converter in-memory before matching (same guarantee as
  * `findTeamForHeadRole`: the caller never observes un-migrated data).
  *
- * Unlike `findTeamForHeadRole`, this does NOT skip `unassigned` teams — an
- * unassigned team is explicitly startable, it only loses auto-start. This is
- * the lookup the explicit-start verb uses.
+ * This is the raw lookup. Use it only where a disabled team is still the right
+ * answer — resolving the definition behind a live group, or reading the switch
+ * itself in order to explain a refusal. Everything that puts a team INTO PLAY
+ * goes through {@link resolveTeamById}, which refuses a disabled one.
+ *
+ * There is no on-demand re-seed here any more. It existed because a default
+ * could be deleted; defaults are undeletable now (`_deleteAgentGroup` refuses a
+ * default id), so a default can no longer be missing and a second resurrection
+ * site is just a second writer on a read path.
  */
-export async function resolveTeamById(db: any, teamId: string): Promise<any | null> {
+export async function resolveTeamByIdIncludingDisabled(db: any, teamId: string): Promise<any | null> {
     if (!db || !teamId) { return null; }
     try {
         const groups = await db.getConfigJson(AGENT_GROUPS_CONFIG_KEY, []) as any[];
         if (!Array.isArray(groups)) { return null; }
         const converted = migrateAgentGroups(groups) ?? groups;
-        const found = converted.find(g => g && g.id === teamId);
-        if (found) { return found; }
-        const defaultDef = DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === teamId);
-        if (defaultDef) {
-            // Re-seed on demand: the operator deleted a default definition, so the
-            // rail slot would otherwise be a permanent dead button. Cloned, never the
-            // shared literal — see the seed comment in KanbanProvider.
-            const reseeded = { ...defaultDef, members: Array.isArray(defaultDef.members) ? [...defaultDef.members] : [] };
-            try {
-                const next = [...converted, reseeded];
-                await db.setConfig(AGENT_GROUPS_CONFIG_KEY, JSON.stringify(next));
-            } catch { /* ignore re-seed persist failure */ }
-            return reseeded;
-        }
-        return null;
+        return converted.find(g => g && g.id === teamId) || null;
     } catch (err) {
-        console.warn(`[teamWiring] resolveTeamById('${teamId}') failed:`, err);
+        console.warn(`[teamWiring] resolveTeamByIdIncludingDisabled('${teamId}') failed:`, err);
         return null;
     }
+}
+
+/**
+ * Resolve a single team definition by id for a path that will PUT IT IN PLAY —
+ * the explicit-start verb and the rail click behind it.
+ *
+ * A switched-off team is refused (returns `null`) and the refusal is logged
+ * naming the switch. Enable-and-start would make the switch unfalsifiable: the
+ * operator switches a team off, clicks its slot, and it starts anyway. Callers
+ * that want to tell the operator WHY re-read the definition with
+ * {@link resolveTeamByIdIncludingDisabled} and render {@link teamDisabledMessage}.
+ */
+export async function resolveTeamById(db: any, teamId: string): Promise<any | null> {
+    const found = await resolveTeamByIdIncludingDisabled(db, teamId);
+    if (!found) { return null; }
+    if (!isTeamEnabled(found)) {
+        const { source } = readTeamEnabled(found);
+        console.log(
+            `[teamWiring] resolveTeamById('${teamId}'): refused — team is switched off `
+            + `(enabledSource=${source}).`
+        );
+        return null;
+    }
+    return found;
 }
 
 /**
@@ -1085,9 +1432,11 @@ export function teamHeadName(g: any): string | undefined {
  * 2. Fallback for pre-existing groups with no `definitionId`: match the
  *    group's `headRole` against `headRole` across
  *    `terminals.agentGroups`, accepting ONLY a unique match. Uses the
- *    same migration converter as `findTeamForHeadRole` and the same
- *    `!g.unassigned` filter, but demands uniqueness — an ambiguous
- *    role match returns `null` rather than guessing.
+ *    same migration converter as `findTeamForHeadRole`, but demands
+ *    uniqueness — an ambiguous role match returns `null` rather than
+ *    guessing. Not filtered by the in-use switch: this resolves the
+ *    definition behind a group that is ALREADY LIVE, and a team switched
+ *    off while it runs still has a definition.
  * 3. Otherwise `null`. Every consumer must render a sane default when
  *    this returns `null`.
  *
@@ -1103,14 +1452,14 @@ export async function resolveDefinitionForGroup(db: any, g: any): Promise<any | 
     if (!db || !g || typeof g !== 'object') { return null; }
     // 1. Exact path: the definition id stamped at spawn.
     if (typeof g.definitionId === 'string' && g.definitionId.length > 0) {
-        const def = await resolveTeamById(db, g.definitionId);
+        const def = await resolveTeamByIdIncludingDisabled(db, g.definitionId);
         if (def) { return def; }
         // Fall through to role-match if the definition was deleted.
     }
     // 2. Role-match fallback for legacy groups (no definitionId, or a
-    //    deleted definition). Same migration + filter as
-    //    findTeamForHeadRole, but demands a UNIQUE match — the plan's
-    //    edge case: two definitions sharing a head role is ambiguous.
+    //    deleted definition). Same migration as findTeamForHeadRole, but
+    //    demands a UNIQUE match — two definitions sharing a head role is
+    //    ambiguous, and the shipped set has two `planner`-headed teams.
     const headRole = typeof g.headRole === 'string' && g.headRole.length > 0
         ? g.headRole : undefined;
     if (!headRole) { return null; }
@@ -1119,7 +1468,7 @@ export async function resolveDefinitionForGroup(db: any, g: any): Promise<any | 
         if (!Array.isArray(groups)) { return null; }
         const converted = migrateAgentGroups(groups) ?? groups;
         const matches = converted.filter((def: any) =>
-            def && def.headRole === headRole && !def.unassigned);
+            def && def.headRole === headRole);
         return matches.length === 1 ? matches[0] : null;
     } catch (err) {
         console.warn(`[teamWiring] resolveDefinitionForGroup role-match failed:`, err);
@@ -1297,7 +1646,15 @@ export async function startTeamById(opts: {
     if (!teamId) { return { success: false, error: 'Missing team id' }; }
 
     const team = await resolveTeamById(db, teamId);
-    if (!team) { return { success: false, error: `No team found with id '${teamId}'` }; }
+    if (!team) {
+        // Distinguish "no such team" from "switched off". resolveTeamById refuses
+        // a disabled team, and a refusal that reads as "not found" would send the
+        // operator hunting for a definition that is sitting right there in the
+        // Teams tab with its switch off.
+        const disabled = await resolveTeamByIdIncludingDisabled(db, teamId);
+        if (disabled) { return { success: false, error: teamDisabledMessage(disabled) }; }
+        return { success: false, error: `No team found with id '${teamId}'` };
+    }
 
     // Double-start: refuse if the head role is already live as an unparented
     // (head) terminal. A delegate is parented by construction, so it cannot

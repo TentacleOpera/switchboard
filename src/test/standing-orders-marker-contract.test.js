@@ -285,15 +285,20 @@ test('GIT_SAFETY_DIRECTIVE in agentPromptBuilder.ts is byte-identical to GIT_SAF
     );
 });
 
-test('agent-control.js shipped team prompts carry byte-identical safety + callback text', () => {
+test('the five shipped team defaults carry byte-identical safety + callback text', () => {
     // The THIRD and FOURTH copies of this prose. The test above pins
-    // terminals.js to agentPromptBuilder.ts; agent-control.js's SHIPPED_TEAM_TYPES
+    // terminals.js to agentPromptBuilder.ts; DEFAULT_TEAM_DEFINITIONS
     // hand-copies BOTH the git-safety directive and the callback instruction
     // into each shipped team's `prompt`, and nothing pinned them. Those
-    // prompts are what an operator actually adopts when they click USE, so a
+    // prompts are what every seat on a shipped team actually receives, so a
     // drift here silently ships a team whose coders carry stale or absent
     // safety text — the exact failure the owning plan names under "Safeguard
     // text must have one source of truth" (verification step 10).
+    //
+    // This used to read agent-control.js's SHIPPED_TEAM_TYPES. That catalogue is
+    // DELETED — the list you chose from was a different list from the one pushed
+    // onto you — so the extraction moved to the one surviving catalogue. The copy
+    // did not move; the extraction did.
     const hostMatch = AGENT_DIRECTIVES_SRC.match(
         /export\s+const\s+GIT_SAFETY_DIRECTIVE\s*=\s*`(.*)`;/
     );
@@ -311,11 +316,16 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
     const callback = readQuotedChain(LINK_PRESETS_SRC, cbAnchor.index + cbAnchor[0].length);
     assert.ok(callback, 'could not read reports-to-head template as a quoted chain');
 
-    const start = AGENT_CONTROL_JS_SRC.indexOf('const SHIPPED_TEAM_TYPES');
-    assert.ok(start >= 0, 'SHIPPED_TEAM_TYPES not found in agent-control.js');
-    const end = AGENT_CONTROL_JS_SRC.indexOf('const MEMBER_RELATIONSHIP_PRESETS', start);
-    assert.ok(end > start, 'could not bound the SHIPPED_TEAM_TYPES array');
-    const block = AGENT_CONTROL_JS_SRC.slice(start, end);
+    assert.ok(
+        !/SHIPPED_TEAM_TYPES\s*=/.test(AGENT_CONTROL_JS_SRC),
+        'agent-control.js must NOT declare a second team catalogue — there is one catalogue, '
+        + 'DEFAULT_TEAM_DEFINITIONS in teamWiring.ts'
+    );
+    const start = TEAM_WIRING_SRC.indexOf('export const DEFAULT_TEAM_DEFINITIONS');
+    assert.ok(start >= 0, 'DEFAULT_TEAM_DEFINITIONS not found in teamWiring.ts');
+    const end = TEAM_WIRING_SRC.indexOf('export const DEFAULT_TEAM_IDS', start);
+    assert.ok(end > start, 'could not bound the DEFAULT_TEAM_DEFINITIONS array');
+    const block = TEAM_WIRING_SRC.slice(start, end);
 
     const prompts = [];
     const re = /prompt:\s*/g;
@@ -326,45 +336,68 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
     }
     assert.strictEqual(
         prompts.length, 5,
-        `Expected 5 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
-        'five team types (Batch planners, Coding, Review, Multi-agent planning, Planning with analyst) and each must carry a prompt. ' +
-        'A sixth ("Review and Acceptance", a reviewer + Acceptance Tester pair) was added and then removed by decision: ' +
-        'intent checking inside a review team is the LEAD\'s job (category 4 of its triage), so the tester had nothing to do there. ' +
-        'The Acceptance Tester\'s only home is the Completion Tested column.'
+        `Expected 5 shipped team prompts, found ${prompts.length}. Exactly five teams ship — ` +
+        'Planning, Feature team, Coding, Review, Multi-agent planning — and each must carry a member prompt. ' +
+        'A team whose seats carry no prompt is a team whose seats are never told how to report back.'
     );
     for (const p of prompts) {
         assert.ok(
             p.startsWith(callback),
             'A shipped team prompt does not open with the reports-to-head callback text verbatim.\n' +
             `linkPresets.ts: "${callback}"\n` +
-            `agent-control.js:   "${p.slice(0, callback.length)}"\n` +
+            `teamWiring.ts:  "${p.slice(0, callback.length)}"\n` +
             'Without it, a team member is never told how to report back to its head.'
         );
         assert.ok(
             p.endsWith(gitSafety),
             'A shipped team prompt does not end with GIT_SAFETY_DIRECTIVE verbatim.\n' +
             `agentDirectives.ts: "${gitSafety}"\n` +
-            `agent-control.js:           "${p.slice(-gitSafety.length)}"\n` +
+            `teamWiring.ts:      "${p.slice(-gitSafety.length)}"\n` +
             'This is the only guardrail a team coder gets — a drift here is invisible without this test.'
         );
     }
 
     // ── headPrompt contract ──────────────────────────────────────────
     // The /prompt:\s*/g regex above is case-sensitive and does NOT match
-    // `headPrompt:` (capital P), so the 5-prompt count is unaffected. Pin
-    // the field: exactly TWO headPrompts exist (Coding and Review),
-    // and both must carry their respective dispatch/delegation literals.
-    const headPromptMatches = [];
-    const hpRe = /headPrompt:\s*/g;
+    // `headPrompt:` (capital P), so the 5-prompt count is unaffected.
+    //
+    // The defaults REFERENCE their head prompts by identifier
+    // (`headPrompt: NEW_CODING_HEAD_PROMPT`) rather than hand-copying the literal
+    // — one catalogue, one copy — so the assertion is that each row names the
+    // right constant, and the constants themselves are pinned below.
+    const headPromptRefs = [];
+    const hpRe = /headPrompt:\s*([A-Z_][A-Z0-9_]*)\s*,/g;
     let hpM;
-    while ((hpM = hpRe.exec(block)) !== null) {
-        const value = readQuotedChain(block, hpM.index + hpM[0].length);
-        if (value !== null) { headPromptMatches.push(value); }
-    }
-    assert.strictEqual(
-        headPromptMatches.length, 4,
-        `Expected exactly 4 shipped headPrompts (Coding, Review, Multi-agent planning, Planning with analyst), found ${headPromptMatches.length}.`
+    while ((hpM = hpRe.exec(block)) !== null) { headPromptRefs.push(hpM[1]); }
+    assert.deepStrictEqual(
+        headPromptRefs.sort(), [
+            'CODING_TEAM_HEAD_PROMPT',
+            'MULTI_AGENT_PLANNING_HEAD_PROMPT',
+            'NEW_CODING_HEAD_PROMPT',
+            'NEW_REVIEW_TEAM_HEAD_PROMPT',
+        ],
+        'Each default that leads must reference its head prompt BY IDENTIFIER, never a hand copy. '
+        + 'Planning carries none by design; the other four do. Found: ' + headPromptRefs.join(', ')
     );
+    assert.ok(
+        !/headPrompt:\s*'/.test(block),
+        'No default may inline a headPrompt string literal — a second copy drifts, and the '
+        + 'teamWiring.ts rewriter matches stale rows by indexOf.'
+    );
+    // Read the referenced constants for the content assertions below.
+    const readConst = (name) => {
+        const anchor = new RegExp('export const ' + name + '\\s*=\\s*').exec(TEAM_WIRING_SRC);
+        assert.ok(anchor, name + ' not found in teamWiring.ts');
+        const v = readQuotedChain(TEAM_WIRING_SRC, anchor.index + anchor[0].length);
+        assert.ok(v, 'could not read ' + name + ' as a quoted chain');
+        return v;
+    };
+    const headPromptMatches = [
+        readConst('NEW_CODING_HEAD_PROMPT'),
+        readConst('NEW_REVIEW_TEAM_HEAD_PROMPT'),
+        readConst('MULTI_AGENT_PLANNING_HEAD_PROMPT'),
+        readConst('CODING_TEAM_HEAD_PROMPT'),
+    ];
     // The Coding head prompt is selected by the accept verb — the ONE call
     // that ends its turn. `accept --plan` appears in exactly one shipped head
     // prompt, so it is the stable selector. It replaced `POST /kanban/task/
@@ -372,8 +405,11 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
     // subtask-and-the-system-advances): the head no longer hand-assembles the
     // POST, it runs the verb and the CLI resolves `from`. See
     // completion-is-asserted-never-inferred.md.
-    const codingHeadPrompt = headPromptMatches.find(hp => hp.includes('accept --plan'));
-    assert.ok(codingHeadPrompt, 'Coding headPrompt not found among shipped headPrompts');
+    // `accept --plan` now appears in TWO head prompts — the Feature team's and the
+    // Coding team's, because both assert their own completion. Select the Feature
+    // team's by its own opening sentence, which is unique to it.
+    const codingHeadPrompt = headPromptMatches.find(hp => hp.includes('Your coders work the subtasks of one feature'));
+    assert.ok(codingHeadPrompt, 'Feature team headPrompt not found among shipped headPrompts');
     const headPrompt = codingHeadPrompt;
     assert.ok(headPrompt.includes('accept --plan'),
         'Coding headPrompt must reference the accept --plan CLI verb — the asserted completion signal, the only way the system learns work finished');
@@ -397,35 +433,29 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
     assert.ok(!headPrompt.includes('Post a status report to .switchboard/mission-control/reports/'),
         'Coding headPrompt must NOT hardcode Mission Control report instruction — '
         + 'it is now gated by Mission ControlActive flag in ensureDispatchProtocolDirectives.');
-    // The shipped Coding reviewer member must declare
-    // relationship: 'reports-to-head' (member-receives → no pair-scoped
-    // bypass order on the lead). A future edit that reinstates
-    // relationship: 'reviewer' would silently re-install the lead-bypasses-
-    // the-board defect this plan exists to fix.
-    assert.ok(
-        block.includes("{ role: 'reviewer', count: 1, scope: 'shared', relationship: 'reports-to-head' }"),
-        'Coding reviewer member must declare relationship: \'reports-to-head\' — '
-        + 'relationship: \'reviewer\' installs a pair-scoped order on the lead that '
-        + 'bypasses the board, which is the defect this team definition exists to avoid.'
-    );
     assert.ok(
         !block.includes("relationship: 'reviewer'"),
         'No shipped team member may declare relationship: \'reviewer\' — it installs a '
-        + 'pair-scoped bypass order on the head. The Coding reviewer must use '
-        + 'relationship: \'reports-to-head\' instead.'
+        + 'pair-scoped bypass order on the head that bypasses the board. Members use '
+        + 'relationship: \'reports-to-head\'.'
+    );
+    // NO DEFAULT CARRIES A SHARED MEMBER. Asserted over the WHOLE seeded set, not
+    // just the planner teams: `commandlessRoles` skips `scope: 'shared'` members
+    // outright, so a shared seat's role is reported by NOTHING — an unconfigured
+    // researcher would spawn as a bare shell with no surface naming it. Shared
+    // scope also spawns unparented and escapes the delegate cap. This is exactly
+    // the kind of property a later roster edit reintroduces quietly.
+    assert.ok(
+        !block.includes("scope: 'shared'"),
+        'No shipped default may carry a scope: \'shared\' member — commandlessRoles skips '
+        + 'shared members, so an unconfigured role on a shared seat is reported by nothing, '
+        + 'and a shared seat spawns unparented and outside the delegate cap.'
     );
 
     // ── Review team headPrompt contract ──────────────────────────────
     const reviewHeadPrompt = headPromptMatches.find(hp => hp.includes('You lead this review team'));
     assert.ok(reviewHeadPrompt, 'Review team headPrompt not found among shipped headPrompts');
-    const reviewHeadAnchor = /NEW_REVIEW_TEAM_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
-    assert.ok(reviewHeadAnchor, 'NEW_REVIEW_TEAM_HEAD_PROMPT not found in teamWiring.ts');
-    const tsReviewHeadPrompt = readQuotedChain(TEAM_WIRING_SRC, reviewHeadAnchor.index + reviewHeadAnchor[0].length);
-    assert.ok(tsReviewHeadPrompt, 'could not read NEW_REVIEW_TEAM_HEAD_PROMPT as a quoted chain');
-    assert.strictEqual(
-        reviewHeadPrompt, tsReviewHeadPrompt,
-        'Review headPrompt drift detected between agent-control.js and teamWiring.ts.'
-    );
+    const tsReviewHeadPrompt = reviewHeadPrompt;
     assert.ok(reviewHeadPrompt.includes('assign its subtask plans to your reviewer seats in batches of up to two'), 'Review headPrompt must assign in batches of up to two');
     assert.ok(reviewHeadPrompt.includes('four categories'), 'Review headPrompt must describe the four-category triage');
     assert.ok(reviewHeadPrompt.includes('Apportion categories 2 and 3'), 'Review headPrompt must apportion categories 2 and 3');
@@ -441,18 +471,7 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
     // indexOf match, so the two literals MUST move together — a drift here
     // ships a lead that never asks for the next card (the whole point of
     // the lead-paced-pipeline feature).
-    const headPromptAnchor = /NEW_CODING_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
-    assert.ok(headPromptAnchor, 'NEW_CODING_HEAD_PROMPT not found in teamWiring.ts');
-    const tsHeadPrompt = readQuotedChain(TEAM_WIRING_SRC, headPromptAnchor.index + headPromptAnchor[0].length);
-    assert.ok(tsHeadPrompt, 'could not read NEW_CODING_HEAD_PROMPT as a quoted chain');
-    assert.strictEqual(
-        headPrompt, tsHeadPrompt,
-        'Coding headPrompt drift detected between agent-control.js and teamWiring.ts.\n'
-        + `teamWiring.ts: "${tsHeadPrompt}"\n`
-        + `agent-control.js:   "${headPrompt}"\n`
-        + 'The two literals must be byte-identical — the teamWiring.ts rewriter '
-        + 'matches stale rows by indexOf, so a drift ships a lead carrying stale text.'
-    );
+    const tsHeadPrompt = headPrompt;
     // The queue/next call is no longer conditioned on a reviewer's verdict.
     // A head ends its turn on ONE ending: post the completion fact, then ask
     // for the next card. The old preamble ("When the reviewer reports the
@@ -466,11 +485,6 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
         tsHeadPrompt.includes(queueNextSentence),
         'NEW_CODING_HEAD_PROMPT must carry the next standing order — '
         + 'without it a lead never asks for the next card after a review pass.'
-    );
-    assert.ok(
-        headPrompt.includes(queueNextSentence),
-        'agent-control.js Coding headPrompt must carry the next standing order '
-        + 'byte-identically to teamWiring.ts — a gallery-adopted team must pace its own pipeline.'
     );
 
     // ── unattended escalation clause ─────────────────────────────────
@@ -492,11 +506,6 @@ test('agent-control.js shipped team prompts carry byte-identical safety + callba
         tsHeadPrompt.includes(unattendedEscalationSentence),
         'NEW_CODING_HEAD_PROMPT must carry the unattended form of the escalation terminal rung — '
         + 'without it an unattended head stalls the queue on the first twice-failed subtask.'
-    );
-    assert.ok(
-        headPrompt.includes(unattendedEscalationSentence),
-        'agent-control.js Coding headPrompt must carry the unattended escalation clause byte-identically '
-        + 'to teamWiring.ts — a gallery-adopted team must not stall overnight.'
     );
 
     // ── role-boundary guardrails ─────────────────────────────────────

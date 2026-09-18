@@ -931,7 +931,14 @@ async function run() {
         const runStart = kanbanProvider.indexOf("case 'runQueue':");
         const runQueue = kanbanProvider.slice(runStart, kanbanProvider.indexOf("case '", runStart + 20));
         assert.ok(/getAliveCodingTerminalNames\(\)/.test(runQueue));
-        assert.ok(/No coding terminal is live/.test(runQueue));
+        // The refusal NAMES THE KIND and the team that would have taken it. "No
+        // coding terminal is live" told the operator to open a coder when the
+        // right move is to start the team that accepts plans — the routing
+        // resolver knows which team that is, so the message says so.
+        assert.ok(/No team is live to take a plan dispatch/.test(runQueue),
+            'the Run-queue refusal must name the work kind and the team that would have taken it');
+        assert.ok(/readTeamAcceptedKinds/.test(runQueue),
+            'the team named in the refusal must be DERIVED from the defaults that declare the kind, not typed into the message');
 
         const webview = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
         assert.ok(/lastCodingHeadLive \|\| lastAnyCodingTerminalLive/.test(webview));
@@ -1072,8 +1079,10 @@ async function run() {
         assert.ok(/dispatchNextFromQueue\(/.test(body), 'the schedule must dispatch through the pop');
         assert.ok(!/_autobanLaneInFlight/.test(body) && !/whenSchedule.*suppress/i.test(body),
             "the pop's 409 replaces every suppression guard — no lane map, no mutual disabling");
-        assert.ok(/resolveCodingHeadFromGroups/.test(body),
-            'the schedule must resolve its head the same way Run queue, staging and the watch do — the state.json registry cannot see a pty-fleet team');
+        assert.ok(/resolveImplementationHead|resolveCodingHeadFromGroups/.test(body),
+            'the schedule must resolve its head the same way Run queue, staging and the watch do — the state.json registry cannot see a pty-fleet team. '
+            + 'A queue pop is a PLAN dispatch, so the current resolver is resolveImplementationHead(root, \'plan\'): with both implementation teams live, '
+            + 'role order alone hands every pop to the Feature team\'s lead and the Coding team sits idle.');
         // The release-driven trigger is the other half of the retired clock: without
         // it an advance-when-ready job never re-fires and the queue stops silently.
         assert.ok(/onTeamReleased:[\s\S]{0,160}clearAdvanceWhenReadyJobs\(/.test(src),
@@ -1237,8 +1246,9 @@ async function run() {
         const body = src.slice(i, i + 900);
         assert.ok(/ingestionEngine\.armQueueWatch\s*\(/.test(body),
             'the staging arm must go through ingestionEngine.armQueueWatch — the same route the dispatch and release arms use, not a second one that can disagree');
-        assert.ok(/resolveCodingHeadFromGroups\s*\(/.test(body),
-            'the staging arm must resolve the head from terminals.groups, matching KanbanProvider.stageForQueue — not getAliveRoleTerminalNames (deprecated state.json)');
+        assert.ok(/resolveImplementationHead\s*\(|resolveCodingHeadFromGroups\s*\(/.test(body),
+            'the staging arm must resolve the head from terminals.groups, matching KanbanProvider.stageForQueue — not getAliveRoleTerminalNames (deprecated state.json). '
+            + 'Kind is \'plan\': a queue pop dispatches single plans.');
     });
 
     await check('the host-seam-parity guard script exists and is wired into CI', () => {
@@ -1488,8 +1498,8 @@ async function run() {
         const i = provider.indexOf('typeof apiServer.dispatchNextFromQueue');
         assert.ok(i > 0, 'the scheduled queue-pop branch must exist');
         const block = provider.slice(i, provider.indexOf('dispatchNextFromQueue({', i));
-        assert.ok(/resolveCodingHeadFromGroups/.test(block),
-            'the pop must prefer a registered team head');
+        assert.ok(/resolveImplementationHead|resolveCodingHeadFromGroups/.test(block),
+            'the pop must prefer a registered team head, routed by work kind (\'plan\')');
         assert.ok(/getAliveCodingTerminalNames\(\)/.test(block),
             'the pop must fall back to any live coding seat — a teamless PTY grid still pops the queue');
         assert.ok(!/getAliveRoleTerminalNames/.test(block),

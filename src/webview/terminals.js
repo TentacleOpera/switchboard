@@ -1746,11 +1746,11 @@
         });
 
         // Build a `teams` array beside `terminals` so the shell rail can render
-        // three FIXED slots — one per DEFAULT_TEAM_DEFINITIONS entry, in array
-        // order, present whether or not the team is running. Operator-created
-        // teams beyond the three defaults are not rail slots; they live in the
-        // Agent Control and Terminals panels. Order is definition order and is
-        // decided here: the shell cannot sort by an order it does not have.
+        // one slot per ENABLED team definition — default or operator-built,
+        // running or not — plus one per LIVE GROUP. Order is decided here: the
+        // shell cannot sort by an order it does not have. Every named arrangement
+        // is reachable from the rail; everything unnamed is reachable from the
+        // terminals panel icon.
         //
         // No completion state is relayed. The rail is a navigation surface, so
         // `light`/`doneStamp` were dropped from this payload; the durable
@@ -1877,43 +1877,41 @@
         });
     }
 
-    const DEFAULT_TEAM_DEFINITIONS = [
-        {
-            id: 'planning-team',
-            name: 'Planning team',
-            headRole: 'planner',
-            // A team picks ONE machine — head and every delegate spawn on it.
-            // See the plan `agents-are-saved-per-machine-and-a-team-picks-one`.
-            machine: 'local',
-            members: [
-                { role: 'planner', count: 2, label: '' },
-            ],
-        },
-        {
-            id: 'feature-implementation',
-            name: 'Lead team',
-            headRole: 'lead',
-            machine: 'local',
-            members: [
-                { role: 'coder', count: 3, label: '' },
-            ],
-        },
-        {
-            id: 'review-team',
-            name: 'Review team',
-            headRole: 'reviewer',
-            machine: 'local',
-            members: [
-                { role: 'reviewer', count: 2, label: '' },
-            ],
-        },
-    ];
-
-    /** Build the `teams` array for the shell rail. Always emits exactly three
-     *  fixed slots, one per default team definition, in fixed array order.
-     *  Running slots carry groupId and live member info; dormant slots carry
-     *  running: false. Operator-created fourth+ teams do not appear in the
-     *  rail — they live in the Agent Control and Terminals panels. */
+    /**
+     * Build the `teams` array for the shell rail.
+     *
+     * THE THREE-FIXED-SLOTS MODEL IS RETIRED. This used to iterate a module
+     * constant mirroring `DEFAULT_TEAM_DEFINITIONS` and emit exactly one slot per
+     * shipped default, using the stored definitions only to override name and
+     * icon — so an operator-built team was never a rail slot, and a fourth default
+     * would not have been either. (The count was never the constraint: it was a
+     * `for…of` over an array, so there was no hard limit of three — only what it
+     * iterated.) The mirror is gone with it; a second copy of the seed in the
+     * webview is the two-catalogues trap.
+     *
+     * The rail now shows every NAMED ARRANGEMENT:
+     *
+     *  - ONE SLOT PER ENABLED TEAM DEFINITION — default or operator-built,
+     *    running or not. A dormant slot's click starts it. A DISABLED team has no
+     *    slot: `ptyListAgentGroups` omits it, which is what the switch does. A
+     *    disabled team holding a slot would make the switch decorative — clicking
+     *    it would start a team the operator switched off.
+     *
+     *  - ONE SLOT PER LIVE GROUP — the `grp_` rows FILL GRID and SAVE AS GROUP
+     *    create. A group exists only while its seats do, so its slot comes and
+     *    goes with it. There is no dormant group and a group is never made
+     *    durable: if a user wants a lasting arrangement they start a team. That is
+     *    the whole distinction between the two kinds, and it is why one strip can
+     *    carry both without a mode switch — a team slot persists and can be
+     *    started; a group slot only ever reflects something already live. A group
+     *    slot carries `kind: 'group'` and NO `definitionId`, so the shell's click
+     *    handler can never post `ptyStartTeam` for it (there is nothing to start,
+     *    and the teamId would resolve to nothing).
+     *
+     *  - UNASSIGNED SEATS GET NO SLOT. An agent in no team and no group is reached
+     *    through the terminals panel icon, which opens the fleet view. The rail is
+     *    for named arrangements; the panel is the default for everything else.
+     */
     function buildTeamsForShell() {
         // Kick off a background refresh of the definition cache so the next
         // push carries current icons. Non-blocking — the current push uses
@@ -1923,14 +1921,19 @@
         refreshTeamQueueDepths();
 
         const fleetByFriendly = new Map(fleetList.map(t => [t.friendlyName, t]));
-        const defMap = new Map((_agentGroupsCache || []).map(g => [g.id, g]));
-
         const teamEntries = [];
-        for (const def of DEFAULT_TEAM_DEFINITIONS) {
-            const cachedDef = defMap.get(def.id) || null;
-            const name = (cachedDef && cachedDef.name) || def.name;
-            const headRole = (cachedDef && cachedDef.headRole) || def.headRole;
-            const iconValue = cachedDef && cachedDef.icon ? cachedDef.icon : null;
+        const boundGroupIds = new Set();
+
+        // ── One slot per enabled team definition ─────────────────────────
+        // `_agentGroupsCache` is what ptyListAgentGroups served, which already
+        // omits switched-off teams. The `enabled !== false` test here is a second
+        // guard for a cache filled by an older host, not a second policy.
+        for (const def of (_agentGroupsCache || [])) {
+            if (!def || !def.id) { continue; }
+            if (def.enabled === false) { continue; }
+            const name = def.name || def.id;
+            const headRole = def.headRole;
+            const iconValue = def.icon ? def.icon : null;
             const iconUri = iconValue ? resolveArtForShell(iconValue) : '';
 
             // Find matching live spawned group by definitionId, or fallback to head role matching.
@@ -1946,6 +1949,7 @@
             let headName = '';
 
             if (liveGroup) {
+                boundGroupIds.add(liveGroup.id);
                 const members = Array.isArray(liveGroup.members) ? liveGroup.members : [];
                 liveMembers = members.filter(name => fleetByFriendly.has(name));
                 for (const memberName of liveMembers) {
@@ -1970,8 +1974,8 @@
                 // whole team, and the only evidence it is running is a live,
                 // unparented terminal on the head role — the exact predicate
                 // startTeamById's double-start guard uses. Without this arm
-                // the three fixed slots render dormant forever and clicking a
-                // running one re-attempts a start the server refuses.
+                // the slot renders dormant forever and clicking a running one
+                // re-attempts a start the server refuses.
                 const headOnly = fleetList.find(t => t
                     && t.status === 'active'
                     && !t.parentInstanceId
@@ -1985,6 +1989,7 @@
             }
 
             teamEntries.push({
+                kind: 'team',
                 definitionId: def.id,
                 name,
                 head: headName,
@@ -1999,6 +2004,46 @@
                 activeCount,
                 exitedCount,
                 queueDepth: (running && liveGroup) ? (_teamQueueDepths.get(liveGroup.id) || 0) : 0,
+            });
+        }
+
+        // ── One slot per live group ──────────────────────────────────────
+        // Every `terminals.groups` row that is NOT a spawned team and is not
+        // already bound to a team slot above: the hand-made arrangements. A group
+        // with no live seat gets no slot at all — a group exists only while its
+        // seats do.
+        for (const g of terminalGroups) {
+            if (!g || !g.id) { continue; }
+            if (isSpawnedTeamGroup(g)) { continue; }
+            if (boundGroupIds.has(g.id)) { continue; }
+            const members = Array.isArray(g.members) ? g.members : [];
+            const liveMembers = members.filter(name => fleetByFriendly.has(name));
+            let activeCount = 0;
+            let exitedCount = 0;
+            for (const memberName of liveMembers) {
+                const t = fleetByFriendly.get(memberName);
+                if (!t) { continue; }
+                if (t.status === 'exited') { exitedCount++; } else { activeCount++; }
+            }
+            if (activeCount === 0) { continue; }
+            teamEntries.push({
+                // A group slot is NOT startable. No `definitionId` — the shell's
+                // click handler takes the running+groupId arm and switches the
+                // terminals panel into that scope; falling through to the start
+                // arm would post a teamId that resolves to nothing.
+                kind: 'group',
+                definitionId: null,
+                name: g.name || g.id,
+                head: '',
+                headRole: '',
+                iconUri: '',
+                running: true,
+                dispatched: false,
+                groupId: g.id,
+                memberNames: liveMembers,
+                activeCount,
+                exitedCount,
+                queueDepth: 0,
             });
         }
 

@@ -39,7 +39,8 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, inspectStandingOrders } from './teamWiring';
+import { resolveCommandlessRoles } from './agentGroupInstantiation';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { readBuildConfig, setBuildTarget, recordBuildResult, resolveBuildResult, lastResultPerTarget, probeBuildTargets, isBuildTargetId, type BuildResult } from './buildTarget';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
@@ -1755,6 +1756,17 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
+                // The complexity-routing toggle renders from a CLIENT default
+                // (`let dynamicComplexityRoutingEnabled = true`, kanban.html:3006) until a
+                // `dynamicComplexityRoutingState` message corrects it. That message had
+                // exactly one sender — `refreshWithData` — which only the extension host
+                // calls; standalone pushes through THIS builder. So on the shipping host
+                // the button showed a hard-coded ON no matter what the store said, while
+                // the router obeyed the stored value and sent every card to the lead.
+                // A toggle that cannot report its own state is the indistinguishable
+                // fallback CLAUDE.md bans, so the resync carries it like every other
+                // board toggle.
+                { type: 'dynamicComplexityRoutingState', enabled: this._dynamicComplexityRoutingEnabled, surface: SURFACES.kanban },
                 { type: 'updateBoard', cards, missions: boardMissions, orderByMode, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, codingRounds, sendablePlanIds, stalePlanIds, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
@@ -3176,7 +3188,11 @@ export class KanbanProvider implements vscode.Disposable {
             // again before notifying.
             onArmQueueWatch: async (wsRoot, _headTerminal) => {
                 try {
-                    const headTerminal = await this.resolveCodingHeadFromGroups(wsRoot);
+                    // A queue pop is a PLAN dispatch, so the watch's head must be
+                    // the head the pop would actually reach — the Coding team's
+                    // coder, not whichever lead happens to be live.
+                    const routed = await this.resolveImplementationHead(wsRoot, 'plan');
+                    const headTerminal = routed ? routed.head : null;
                     const engine = this._globalPlanWatcher?.getEngine?.();
                     if (engine) { await engine.armQueueWatch(wsRoot, headTerminal); }
                 } catch (e) {
@@ -5473,13 +5489,43 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return p;
     }
 
+    /**
+     * One-shot marker for the five-defaults reset (Change 5 of the plan
+     * `teams-are-four-defaults-and-you-can-switch-them-off`). Set once the
+     * reset has run, so the reset does not fight an operator's later edits on
+     * every subsequent load.
+     */
+    private static readonly AGENT_GROUPS_RESET_MARKER_KEY = 'terminals.agentGroups.fiveDefaultsReset';
+
     private async _loadAgentGroups(workspaceRoot: string): Promise<any[]> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) { return []; }
-        // Key absent → seed the built-in once, then persist it so a delete
-        // (which writes `[]`) is not overwritten on the next load.
-        // Key present → run the migration converter (add scope/relationship
-        // defaults, resolve head-role collisions).
+        // ── One-shot reset to the five defaults ──────────────────────────
+        // Teams have only ever existed in unreleased dev work, so this is a
+        // clean break (CLAUDE.md: unreleased features take clean breaks; no
+        // migrations, no compat shims). Operator decision, 2026-09-17:
+        // existing team definitions are disposable. Everything stored — the
+        // adopted `group-coding-*` rows, the legacy presets, the stale "Lead
+        // team" name, every `unassigned` flag — goes. Nothing is preserved,
+        // archived or imported, and there is no repair pass, no roster-vs-
+        // operator-edit arbitration and no duplicate-head-role reconciliation:
+        // those three branches existed only to protect stored state that does
+        // not need protecting.
+        //
+        // Behind a marker so it runs ONCE. Read before the write chain and
+        // written after it, so a second window's load sees the marker rather
+        // than resetting an operator's fresh edits.
+        let resetAlreadyRan = true;
+        try {
+            const marker = await db.getConfig(KanbanProvider.AGENT_GROUPS_RESET_MARKER_KEY);
+            resetAlreadyRan = typeof marker === 'string' && marker.length > 0;
+        } catch {
+            // A marker read failure must not trigger a destructive reset — an
+            // unreadable marker reads as "already ran", never as "never ran".
+            resetAlreadyRan = true;
+        }
+        // Key absent → seed the five defaults once, then persist them.
+        // Key present → run the migration converter (member-shape defaults).
         // Both happen inside the mutator so they are serialised against
         // concurrent saves and a second window's converter.
         //
@@ -5495,17 +5541,23 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // BEFORE the converter so the converter's member-shape defaults
         // (scope/relationship) are applied to the imported members too.
         // Never overwrites an existing team for a role.
-        return this._mutateAgentGroups(workspaceRoot, (groups) => {
+        const loaded = await this._mutateAgentGroups(workspaceRoot, (groups) => {
             let working = groups;
             let changed = false;
-            // Clone every seeded definition. DEFAULT_TEAM_DEFINITIONS is a
-            // module-level constant shared with SEEDED_AGENT_GROUP and read by
+            // Clone every seeded definition, members included. DEFAULT_TEAM_DEFINITIONS
+            // is a module-level constant shared with SEEDED_AGENT_GROUP and read by
             // every workspace in this process; pushing the literal itself into a
             // persisted array makes any later in-place edit of a group row a
-            // process-wide corruption of the seed.
-            const seedCopy = (def: any) => ({ ...def, members: Array.isArray(def.members) ? [...def.members] : [] });
-            if (working === null) {
-                // Key absent — seed the default team definitions.
+            // process-wide corruption of the seed. Members are cloned per entry, not
+            // just the array — a seeded member object is shared otherwise.
+            const seedCopy = (def: any) => ({
+                ...def,
+                members: Array.isArray(def.members) ? def.members.map((m: any) => ({ ...m })) : [],
+                ...(Array.isArray(def.acceptedKinds) ? { acceptedKinds: [...def.acceptedKinds] } : {}),
+            });
+            if (working === null || !resetAlreadyRan) {
+                // Key absent, or the one-shot reset has not run yet — the five
+                // defaults ARE the store. Nothing stored survives.
                 working = DEFAULT_TEAM_DEFINITIONS.map(seedCopy);
                 changed = true;
             } else {
@@ -5548,6 +5600,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (!changed) { return null; }
             return working;
         });
+        if (!resetAlreadyRan) {
+            try {
+                await db.setConfig(KanbanProvider.AGENT_GROUPS_RESET_MARKER_KEY, new Date().toISOString());
+                console.log('[KanbanProvider] Team definitions reset to the five shipped defaults (one-shot).');
+            } catch (err) {
+                // The reset itself landed; only the marker failed. Log it —
+                // the next load will reset again, which is idempotent, but
+                // "why did my teams come back" must be answerable.
+                console.warn('[KanbanProvider] five-defaults reset marker write failed:', err);
+            }
+        }
+        return loaded;
     }
 
     /**
@@ -5564,6 +5628,33 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             console.warn('[KanbanProvider] listAgentGroups failed:', err);
             return [];
         }
+    }
+
+    /**
+     * Which roles each team would start into BARE SHELLS, per team. Derived with
+     * the SAME function team start uses (`resolveCommandlessRoles`), so the
+     * setup surface and the start refusal cannot disagree.
+     *
+     * Reported for every team, enabled or not: enabling a switched-off team must
+     * surface any role it needs that is not yet configured, rather than starting
+     * it into bare shells. Today the enabled and full role sets agree — Multi-agent
+     * planning adds no new role — but that is a fact about this roster, not a rule.
+     */
+    public async resolveCommandlessRolesByTeam(
+        groups: any[]
+    ): Promise<Array<{ teamId: string; teamName: string; roles: string[] }>> {
+        const out: Array<{ teamId: string; teamName: string; roles: string[] }> = [];
+        for (const g of Array.isArray(groups) ? groups : []) {
+            if (!g || typeof g !== 'object' || !g.id) { continue; }
+            try {
+                const roles = await resolveCommandlessRoles(g);
+                out.push({ teamId: String(g.id), teamName: String(g.name || g.id), roles });
+            } catch {
+                // A per-team failure must not drop the whole report — the other
+                // teams' answers are still correct.
+            }
+        }
+        return out;
     }
 
     /**
@@ -5683,8 +5774,22 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     private async _deleteAgentGroup(workspaceRoot: string, groupId: string): Promise<void> {
-        // Persist the filtered array — even if empty — so a deleted built-in
-        // stays deleted (absent = re-seed; present-and-empty = user deleted all).
+        // The five shipped defaults are UNDELETABLE. The off switch (`enabled`)
+        // is the replacement for deleting one: a team the operator does not want
+        // stays present, greyed, with its switch — disabled is not deleted and
+        // not hidden, or there is no way back on.
+        //
+        // The old comment here claimed a deleted built-in stayed deleted
+        // ("absent = re-seed; present-and-empty = user deleted all"). That intent
+        // was unreachable — `_loadAgentGroups` only treated the key as absent
+        // when it was NULL, so a delete that left `[]` still re-seeded — and it
+        // is now wrong on purpose.
+        if (isDefaultTeamId(groupId)) {
+            throw new Error(
+                `'${groupId}' is a shipped default and cannot be deleted. `
+                + 'Switch it off in the Teams tab instead — a disabled team keeps its definition.'
+            );
+        }
         await this._mutateAgentGroups(workspaceRoot, (groups) =>
             (groups ?? []).filter(g => g.id !== groupId));
     }
@@ -6066,9 +6171,160 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
+     * The live implementation teams: every spawned team group whose head is
+     * alive and whose head role implements (`lead`, `coder`, `intern`), paired
+     * with the DEFINITION behind it. A team switched off is not a candidate —
+     * it exists, it does not play.
+     *
+     * The head's terminal name is the group's `name` (set by `wireSpawnedTeam`),
+     * the same derivation `resolveCodingRolesFromGroups` uses.
+     */
+    private async _liveImplementationTeams(workspaceRoot: string): Promise<Array<{
+        head: string;
+        headRole: string;
+        teamId: string | null;
+        def: any | null;
+    }>> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) return [];
+            let groups: any[] = [];
+            try {
+                const raw = await db.getConfigJson<any[]>(TERMINALS_GROUPS_KEY, []) as any[];
+                groups = Array.isArray(raw) ? [...raw] : [];
+            } catch { /* key absent */ }
+            try {
+                const bare = await db.getConfigJson<any[]>('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+            groups = await this._resolveHeadRoleForGroups(workspaceRoot, groups);
+            if (!Array.isArray(groups) || groups.length === 0) return [];
+
+            const liveness = this._taskViewerProvider?.getFleetLiveness() ?? [];
+            const aliveNames = new Set<string>();
+            for (const entry of liveness) {
+                if (entry && entry.status !== 'exited' && entry.friendlyName) {
+                    aliveNames.add(entry.friendlyName);
+                }
+            }
+
+            const out: Array<{ head: string; headRole: string; teamId: string | null; def: any | null }> = [];
+            for (const g of groups) {
+                if (!g || !g.headRole || !g.name) continue;
+                const head = String(g.name);
+                if (!aliveNames.has(head)) continue;
+                const headRole = String(g.headRole).toLowerCase().replace(/[_-]+/g, ' ').trim();
+                if (headRole !== 'lead' && headRole !== 'coder' && headRole !== 'intern') continue;
+                let def: any = null;
+                try { def = await resolveDefinitionForGroup(db, g); } catch { def = null; }
+                // A team switched off does not receive dispatches. `enabled` is
+                // absent on a definition-less live group, which reads as enabled
+                // with source `'unknown'` — a group nobody switched off.
+                if (def && !isTeamEnabled(def)) {
+                    console.log(
+                        `[KanbanProvider] implementation routing: skipping '${head}' — `
+                        + `team '${def.id || def.name}' is switched off `
+                        + `(enabledSource=${readTeamEnabled(def).source}).`
+                    );
+                    continue;
+                }
+                out.push({ head, headRole, teamId: def && def.id ? String(def.id) : null, def });
+            }
+            out.sort((a, b) => a.head.localeCompare(b.head));
+            return out;
+        } catch { return []; }
+    }
+
+    /**
+     * Resolve the implementation head for a dispatch of a given WORK KIND —
+     * features to the Feature team, plans to the Coding team.
+     *
+     * This replaces `resolveCodingHeadFromGroups`, whose whole body was
+     * `leads[0] ?? coders[0] ?? interns[0]`. With both implementation teams live
+     * that returned the Feature team's lead for EVERY dispatch, and the Coding
+     * team sat started, idle and never dispatched to, with nothing recording
+     * why — the "which store answered?" failure applied to routing.
+     *
+     * The answer carries its own `source`, so every implementation dispatch can
+     * answer "which team took this, and which rule sent it there?":
+     *  - `'accepted-kind'`  — exactly one live enabled team declares the kind.
+     *  - `'sole-live-team'` — one live implementation team, declaring no kinds
+     *                         (an operator-built team). It takes the work, and
+     *                         the source says the routing was by ABSENCE.
+     *  - `'role-order-fallback'` — nothing declares the kind and more than one
+     *                         is live. The old `leads[0]` behaviour, LOGGED as
+     *                         the fallback it is and never returned silently.
+     *                         Two live teams that both accept the same kind land
+     *                         here too — the tie-break is the sibling plan
+     *                         `two-teams-can-share-a-head-role-and-routing-decides-between-them`.
+     *  - `null`             — nothing live.
+     */
+    public async resolveImplementationHead(
+        workspaceRoot: string,
+        kind: TeamWorkKind
+    ): Promise<{ head: string; teamId: string | null; source: 'accepted-kind' | 'sole-live-team' | 'role-order-fallback' } | null> {
+        const live = await this._liveImplementationTeams(workspaceRoot);
+        if (live.length === 0) { return null; }
+
+        const declaring = live.filter(t => {
+            const { value } = readTeamAcceptedKinds(t.def);
+            return Array.isArray(value) && value.indexOf(kind) >= 0;
+        });
+        if (declaring.length === 1) {
+            const hit = declaring[0];
+            console.log(
+                `[KanbanProvider] implementation routing: kind='${kind}' → '${hit.head}' `
+                + `(team=${hit.teamId ?? 'none'}, source=accepted-kind).`
+            );
+            return { head: hit.head, teamId: hit.teamId, source: 'accepted-kind' };
+        }
+
+        if (declaring.length === 0 && live.length === 1) {
+            const only = live[0];
+            const { value } = readTeamAcceptedKinds(only.def);
+            if (value === null) {
+                console.log(
+                    `[KanbanProvider] implementation routing: kind='${kind}' → '${only.head}' `
+                    + `(team=${only.teamId ?? 'none'}, source=sole-live-team — it declares no kinds, `
+                    + 'so the routing was by absence, not by declaration).'
+                );
+                return { head: only.head, teamId: only.teamId, source: 'sole-live-team' };
+            }
+        }
+
+        // Nothing declared the kind (or two teams both did). Old behaviour —
+        // lead, then coder, then intern — returned with the source that says so.
+        const byRole = (role: string) => live.find(t => t.headRole === role) || null;
+        const pick = byRole('lead') || byRole('coder') || byRole('intern');
+        if (!pick) { return null; }
+        console.warn(
+            `[KanbanProvider] implementation routing FALLBACK: kind='${kind}' → '${pick.head}' `
+            + `(team=${pick.teamId ?? 'none'}, source=role-order-fallback). `
+            + `${declaring.length} live team(s) declare '${kind}'; ${live.length} implementation team(s) live. `
+            + 'No team declared this kind unambiguously, so the dispatch went by role order.'
+        );
+        return { head: pick.head, teamId: pick.teamId, source: 'role-order-fallback' };
+    }
+
+    /**
      * Convenience: resolve the single coding head (lead first, then coder, then intern) from
      * `terminals.groups`. Same order as subtask 2's plan specifies. Returns
      * null when no head is live.
+     *
+     * DEPRECATED for kind-aware paths — it cannot tell a feature dispatch from a
+     * plan dispatch, so with both implementation teams live it hands every
+     * dispatch to the Feature team's lead. Kept for the legacy extension host
+     * (`extension.ts`), which is being removed and is not wired for work-kind
+     * routing; every standalone call site resolves through
+     * {@link resolveImplementationHead}.
      */
     public async resolveCodingHeadFromGroups(workspaceRoot: string): Promise<string | null> {
         const { leads, coders, interns } = await this.resolveCodingRolesFromGroups(workspaceRoot);
@@ -6797,6 +7053,26 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
                 mergedAddons.driveMode = await resolveDrive();
             }
+            // §Pair band by POSITION — a custom agent seated on a team takes its
+            // band from where it sits, not from its role string. Absent leaves the
+            // add-on prose on its historical Band B wording, tagged 'role-default'.
+            if (overrides?.dispatchTargetTerminal) {
+                try {
+                    const bandDb = this._getKanbanDb(workspaceRoot);
+                    const band = bandDb
+                        ? await resolveTeamPairBandForTerminal({ db: bandDb, originName: overrides.dispatchTargetTerminal })
+                        : null;
+                    if (band) {
+                        mergedAddons.pairBand = band.band;
+                        mergedAddons.pairBandSource = band.source;
+                        mergedAddons.pairCounterpartRole = band.counterpartRole;
+                        console.log(
+                            `[KanbanProvider] pair-band resolved (${role}): band=${band.band} `
+                            + `source=${band.source} counterpart=${band.counterpartRole ?? 'none'}`
+                        );
+                    }
+                } catch { /* no team → the historical role mapping stands */ }
+            }
 
             // §Git — neutral defaulting for custom agents. The UI radio `default` only
             // governs rendering, not persistence; a custom agent whose Prompts-tab UI was
@@ -7031,6 +7307,35 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
         }
 
+        // §Pair band by POSITION. The band is a dispatch input, resolved from the
+        // team definition — head → B, seat → A — never inferred from the role
+        // string. An explicit override from the caller wins (the fan-out below
+        // hands the Band A half to the seat it is dispatching to); otherwise it is
+        // resolved from the target terminal's position on its team. When neither
+        // answers, the builder falls back to the historical role mapping and tags
+        // it `'role-default'`, so "B because this seat heads its team" and "B
+        // because the role string says lead" are never the same read.
+        if (overrides?.pairBand === undefined && overrides?.dispatchTargetTerminal) {
+            try {
+                const db = this._getKanbanDb(workspaceRoot);
+                const band = db
+                    ? await resolveTeamPairBandForTerminal({ db, originName: overrides.dispatchTargetTerminal })
+                    : null;
+                if (band) {
+                    resolvedOptions.pairBand = band.band;
+                    resolvedOptions.pairBandSource = band.source;
+                    resolvedOptions.pairCounterpartRole = band.counterpartRole;
+                }
+            } catch (bandErr) {
+                console.warn('[KanbanProvider] pair-band resolution failed:', bandErr);
+            }
+        }
+        if (overrides?.pairBand !== undefined) {
+            resolvedOptions.pairBand = overrides.pairBand;
+            resolvedOptions.pairBandSource = overrides.pairBandSource ?? 'role-default';
+            resolvedOptions.pairCounterpartRole = overrides.pairCounterpartRole;
+        }
+
         if (role === 'planner') {
             // §Pair-programming scope: a team-scoped value (teamPairProgramming
             // override, set by the dispatch path when the dispatch context is a
@@ -7084,7 +7389,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const boardActive = resolvedOptions.pairProgrammingEnabled;
                 resolvedOptions.pairProgrammingSource = boardActive ? 'board' : 'default';
             }
-            console.log(`[KanbanProvider] pair-programming resolved (${role}): enabled=${resolvedOptions.pairProgrammingEnabled} aggressive=${resolvedOptions.aggressivePairProgramming} source=${resolvedOptions.pairProgrammingSource}`);
+            console.log(
+                `[KanbanProvider] pair-programming resolved (${role}): enabled=${resolvedOptions.pairProgrammingEnabled} `
+                + `aggressive=${resolvedOptions.aggressivePairProgramming} source=${resolvedOptions.pairProgrammingSource} `
+                + `band=${resolvedOptions.pairBand ?? 'role-default'} bandSource=${resolvedOptions.pairBandSource ?? 'role-default'} `
+                + `counterpart=${resolvedOptions.pairCounterpartRole ?? 'none'}`
+            );
             resolvedOptions.accurateCodingEnabled = promptsConfig.accurateCodingEnabledByRole?.[role] ?? false;
             if (role === 'lead') {
                 resolvedOptions.includeInlineChallenge = promptsConfig.leadChallengeEnabled ?? false;
@@ -7939,20 +8249,25 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // derived from the board enum for the non-team path; a team's coder
         // seat is a terminal, so a team split dispatches to the coder
         // terminal, never the IDE clipboard.
-        // Resolve the lead's own terminal when the caller had no explicit
-        // override — the ordinary drag path passes none, and it is exactly the
-        // path a team's lead is dispatched on. Without this the team's intensity
-        // was unreachable here while the LEAD prompt (built with
-        // dispatchTargetTerminal) already honoured it: the lead would be told to
-        // take only the Band B half while no coder was ever dispatched the Band A
-        // half. Same role→name fallback isCodingTeamHead uses.
+        // Resolve the team's own head when the caller had no explicit override —
+        // the ordinary drag path passes none, and it is exactly the path a team's
+        // head is dispatched on. Without this the team's intensity was
+        // unreachable here while the HEAD prompt (built with
+        // dispatchTargetTerminal) already honoured it: the head would be told to
+        // take only the Band B half while no seat was ever dispatched the Band A
+        // half.
+        //
+        // This used to fall back to `agentNames['lead']`, which finds the wrong
+        // team — or no team — for a `coder`-headed team. It resolves through the
+        // work-kind resolver instead, so a plan dispatch reaches the Coding
+        // team's coder head and a feature dispatch the Feature team's lead.
         let resolvedTarget = String(targetTerminal || '').trim();
         if (!resolvedTarget) {
             try {
-                const agentNames = await this._getAgentNames(workspaceRoot);
-                const leadName = String(agentNames['lead'] || '').trim();
-                if (leadName && leadName !== 'No agent assigned') { resolvedTarget = leadName; }
-            } catch { /* unresolvable name → non-team scope, board enum governs */ }
+                const kind: TeamWorkKind = cards.some(c => (c as any)?.isFeature) ? 'feature' : 'plan';
+                const routed = await this.resolveImplementationHead(workspaceRoot, kind);
+                if (routed) { resolvedTarget = routed.head; }
+            } catch { /* unresolvable head → non-team scope, board enum governs */ }
         }
         const teamPP = resolvedTarget
             ? await this.resolveTeamPairProgrammingForTerminal(workspaceRoot, resolvedTarget)
@@ -7965,12 +8280,32 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const coderUsesIde = !teamPP && (mode === 'cli-ide' || mode === 'ide-ide');
         const accurateCodingEnabled = !coderUsesIde && (promptsConfig.accurateCodingEnabledByRole?.coder ?? false);
         const plans = await this._cardsToPromptPlans(cards, workspaceRoot);
+        // The seat takes Band A because it is a SEAT, not because its role string
+        // is `coder`. The counterpart named in its prose is the team's actual
+        // head role — on the Coding team that is a coder, not a lead.
+        let counterpartHeadRole: string | undefined;
+        if (resolvedTarget) {
+            try {
+                const db = this._getKanbanDb(workspaceRoot);
+                const headDef = db
+                    ? await resolveTeamDefinitionForHeadTerminal({ db, originName: resolvedTarget })
+                    : null;
+                if (headDef && typeof headDef.headRole === 'string') { counterpartHeadRole = headDef.headRole; }
+            } catch { /* no definition → the prose names no counterpart */ }
+        }
         const coderPrompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, {
             pairProgrammingEnabled: true,
             accurateCodingEnabled,
             // Team-scoped aggressive flag (board add-on for the non-team path).
-            teamPairProgramming: teamPP ? teamPP.intensity : undefined
+            teamPairProgramming: teamPP ? teamPP.intensity : undefined,
+            pairBand: 'A',
+            pairBandSource: teamPP ? 'team-seat' : 'role-default',
+            pairCounterpartRole: counterpartHeadRole
         });
+        console.log(
+            `[KanbanProvider] pair fan-out: band=A source=${teamPP ? 'team-seat' : 'role-default'} `
+            + `head='${resolvedTarget || 'none'}' counterpart=${counterpartHeadRole ?? 'none'}`
+        );
         if (coderUsesIde) {
             const choice = await vscode.window.showInformationMessage(
                 'Pair Programming: Routine tasks identified. Click to copy Coder prompt.',
@@ -9502,7 +9837,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // Resolve from terminals.groups in the DB config (the plan's path
             // — same as resolveTeamMembersForHead), NOT
             // getAliveRoleTerminalNames — that reads the deprecated state.json.
-            const headTerminal = await this.resolveCodingHeadFromGroups(workspaceRoot);
+            // Kind is 'plan': a queue pop dispatches single plans.
+            const routed = await this.resolveImplementationHead(workspaceRoot, 'plan');
+            const headTerminal = routed ? routed.head : null;
             const engine = this._globalPlanWatcher?.getEngine?.();
             if (engine) { await engine.armQueueWatch(workspaceRoot, headTerminal); }
         } catch (armErr) {
@@ -13852,7 +14189,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 // getAliveRoleTerminalNames — that resolves through
                 // _readTerminalRegistryState which reads the deprecated
                 // state.json.
-                let headTerminal = await this.resolveCodingHeadFromGroups(workspaceRoot) || '';
+                // `Run queue` pops PLAN cards, so with the Coding team live it is
+                // the queue's target rather than the Feature team's lead. That is
+                // the intent — a plan is what that team is for — and it does not
+                // change the queue's own teamless contract when no implementation
+                // team is live (the fallback below).
+                const routed = await this.resolveImplementationHead(workspaceRoot, 'plan');
+                let headTerminal = routed ? routed.head : '';
                 if (!headTerminal) {
                     // Fallback: find any live coding terminal from the in-memory cache
                     // (NOT getAliveRoleTerminalNames — that reads the deprecated state.json).
@@ -13863,8 +14206,16 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     }
                 }
                 if (!headTerminal) {
-                    this.postMessage({ type: 'showStatusMessage', message: 'No coding terminal is live. Open a coder terminal (AGENT SETUP tab or your saved agent grid) before pressing Run.', isError: true });
-                    return { success: false, error: 'No coding terminal is live — open a coder terminal first' };
+                    // Name the KIND and the team that would have taken it, so a
+                    // refusal says which team to start rather than "open a coder".
+                    const wouldTake = DEFAULT_TEAM_DEFINITIONS.find(d => {
+                        const { value } = readTeamAcceptedKinds(d);
+                        return Array.isArray(value) && value.indexOf('plan') >= 0;
+                    });
+                    const msgText = `No team is live to take a plan dispatch. Start the ${wouldTake ? `'${wouldTake.name}' team` : 'Coding team'} `
+                        + '(click its slot on the rail), or open a coder terminal, before pressing Run.';
+                    this.postMessage({ type: 'showStatusMessage', message: msgText, isError: true });
+                    return { success: false, error: msgText };
                 }
                 // Subtask 3: resolve the team's pacing mode so the status
                 // message names which mode ran. `from` is still required and
@@ -14875,17 +15226,37 @@ ${FOCUS_DIRECTIVE}`;
                 }
             }
             case 'getAgentGroups': {
+                // The Teams tab owns the in-use switch, so it receives EVERY team
+                // with its flag — a disabled team is greyed with its switch, never
+                // hidden, or there is no way back on. Filtering here would hide the
+                // switch from the tab that owns it; `ptyListAgentGroups` (the
+                // Command roster and the rail) is where disabled teams drop out.
+                //
+                // `defaultTeamIds` and `recommendedRoles` are DERIVED from
+                // DEFAULT_TEAM_DEFINITIONS and sent rather than mirrored in the
+                // webview: a second hand-typed copy drifts the moment a default's
+                // roster changes, and the failure is silent.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const derived = {
+                    defaultTeamIds: [...DEFAULT_TEAM_IDS],
+                    recommendedRoles: recommendedAgentRoles(),
+                };
                 if (!workspaceRoot) {
-                    this.postMessage({ type: 'agentGroups', groups: [], workspaceRoot });
+                    this.postMessage({ type: 'agentGroups', groups: [], workspaceRoot, ...derived, commandlessByTeam: [] });
                     return { success: false, groups: [], error: 'No workspace root resolved' };
                 }
                 try {
                     const groups = await this._loadAgentGroups(workspaceRoot);
-                    this.postMessage({ type: 'agentGroups', groups, workspaceRoot });
-                    return { success: true, groups };
+                    // Per-team commandless report, BEFORE a start. Team start already
+                    // reports this, but the report arrives at start; a first-run user
+                    // needs it in the setup surface — "Coding needs `coder` and
+                    // `intern`" — so they never click into bare shells. The same
+                    // function team start uses, so the two cannot disagree.
+                    const commandlessByTeam = await this.resolveCommandlessRolesByTeam(groups);
+                    this.postMessage({ type: 'agentGroups', groups, workspaceRoot, ...derived, commandlessByTeam });
+                    return { success: true, groups, ...derived, commandlessByTeam };
                 } catch (e: any) {
-                    this.postMessage({ type: 'agentGroups', groups: [], workspaceRoot });
+                    this.postMessage({ type: 'agentGroups', groups: [], workspaceRoot, ...derived });
                     return { success: false, groups: [], error: e?.message || 'Failed to load agent groups' };
                 }
             }

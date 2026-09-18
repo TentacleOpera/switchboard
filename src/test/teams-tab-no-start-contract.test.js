@@ -18,13 +18,21 @@
  * the terminals panel's START TEAM button is the single entry point.
  *
  * What must NOT be removed, and is pinned here:
- *  - adoption (`teamsTabAdopt` + the `saveAgentGroup` post) — the flow panel is
- *    the only adoption entry point for a shipped type besides `+ Build your own`;
- *  - the `#teams-flow-error` span and the failed-adopt rollback that writes into it;
+ *  - persistence of a newly created team (the `saveAgentGroup` post) and the
+ *    rollback that undoes the optimistic push when the host refuses it;
+ *  - the `#teams-flow-error` span and the failed-save rollback that writes into it;
  *  - the host's `startAgentGroup` verb arm, which stays registered as an HTTP
  *    surface for external Mission Control. This change removes a UI CONTROL, not a
  *    capability — and deleting the arm would force a regeneration of two
  *    committed generated artefacts (verbAllowlist.ts, protocol-catalog.json).
+ *
+ * ADOPTION ITSELF IS GONE, and that is not a regression of this contract. The
+ * shipped-type catalogue it forked from (`SHIPPED_TEAM_TYPES`) is deleted: the
+ * list you chose from was a different list from the one pushed onto you, which is
+ * why a board grew a lead-headed team the operator never created. The five
+ * shipped defaults now arrive from the host like any other team, so there is
+ * nothing to adopt — "ADD TEAM" creates an empty custom definition. The flow
+ * panel therefore offers NO action button at all, only the terminals-panel hint.
  */
 
 const fs = require('fs');
@@ -74,42 +82,45 @@ test('the start button, its busy state and its result arm are gone', () => {
     }
 });
 
-test('adoption survives the start deletion', () => {
-    // Deleting teamsTabAdoptAndStart wholesale would delete adoption too: the
-    // card-body USE button was already removed when adoption moved onto the flow
-    // panel, so this is the only adoption entry point for a shipped type besides
-    // `+ Build your own`.
+test('there is no shipped-type catalogue to adopt from, and no adopt handler', () => {
+    // One catalogue. `SHIPPED_TEAM_TYPES` and `teamsTabAdopt` are deleted
+    // together: a gallery that forks a hand-written type into the workspace is
+    // exactly how the chosen-from list and the pushed-onto list came apart.
     assert.ok(
-        agentControlJs.includes('function teamsTabAdopt('),
-        'agent-control.js must keep teamsTabAdopt — the fork-and-persist half of the old handler'
+        !/SHIPPED_TEAM_TYPES\s*=/.test(agentControlJs),
+        'agent-control.js must not declare a second team catalogue'
     );
     assert.ok(
-        /teamsTabAdopt\(entry\.group\)/.test(agentControlJs),
-        'the flow panel USE button must call teamsTabAdopt with the picked type'
-    );
-    assert.ok(
-        /postKanbanMessage\(\{ type: 'saveAgentGroup', group: forked \}\)/.test(agentControlJs),
-        'teamsTabAdopt must still post saveAgentGroup — adoption is persistence, not local state'
+        !/function teamsTabAdopt\(/.test(agentControlJs),
+        'teamsTabAdopt must be gone — there are no shipped types to fork'
     );
 });
 
-test('the flow panel offers USE and a static terminals-panel hint, and no START', () => {
+test('creating a team still persists through saveAgentGroup, with a rollback key', () => {
+    assert.ok(
+        /postKanbanMessage\(\{ type: 'saveAgentGroup', group \}\)/.test(agentControlJs),
+        'the editor save must post saveAgentGroup — a team is persistence, not local state'
+    );
+    assert.ok(
+        /teamsTabPendingAdoptId = id;/.test(agentControlJs),
+        'a NEW team must set the rollback key, so a host refusal does not leave a card '
+        + 'drawn for a team the host never saw'
+    );
+});
+
+test('the flow panel offers a static terminals-panel hint and no button at all', () => {
     const start = agentControlJs.indexOf("actionDiv.className = 'teams-flow-action'");
     assert.ok(start !== -1, 'teams-flow-action block not found');
     const end = agentControlJs.indexOf('panel.appendChild(actionDiv);', start);
     assert.ok(end !== -1, 'end of the action block not found');
     const action = agentControlJs.substring(start, end);
     assert.ok(
-        /btn\.textContent = 'USE';/.test(action),
-        "the flow panel's only button must read USE"
-    );
-    assert.ok(
         !/START/.test(action),
         'no START / USE & START / STARTING… label may survive in the action block'
     );
     assert.ok(
-        /if \(!entry\.adopted\)/.test(action),
-        'the USE button must be gated on the type being un-adopted — an adopted team gets no action button'
+        !/textContent = 'USE'/.test(action),
+        'no USE button may survive — every card in this gallery is already the workspace\'s own team'
     );
     assert.ok(
         /Start it from the terminals panel\./.test(action),
@@ -117,7 +128,7 @@ test('the flow panel offers USE and a static terminals-panel hint, and no START'
     );
 });
 
-test('the adopt rollback and its error span survive', () => {
+test('the save rollback and its error span survive', () => {
     const start = agentControlJs.indexOf("case 'saveAgentGroupResult':");
     assert.ok(start !== -1, 'saveAgentGroupResult arm not found');
     const end = agentControlJs.indexOf("case 'deleteAgentGroupResult':", start);
@@ -129,7 +140,7 @@ test('the adopt rollback and its error span survive', () => {
     );
     assert.ok(
         /agentsTabAgentGroups\.splice\(idx, 1\)/.test(arm),
-        'a failed save must roll the optimistic push back — an adopted card for a team the host never saw is worse than none'
+        'a failed save must roll the optimistic push back — a card for a team the host never saw is worse than none'
     );
     assert.ok(
         /getElementById\('teams-flow-error'\)/.test(arm),
