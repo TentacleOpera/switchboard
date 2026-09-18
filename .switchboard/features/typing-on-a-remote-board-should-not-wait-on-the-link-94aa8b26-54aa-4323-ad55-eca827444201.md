@@ -16,9 +16,9 @@ They are complementary, not alternatives: prediction hides the network, de-quant
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A keystroke echo waits on two frame boundaries it does not need](../plans/the-echo-path-pays-two-frames-of-quantization.md) — **LEAD CODED** — ID: a8f75f5d-f377-482a-8ca0-99e4686b99cf
-- [ ] [A Remote Terminal Round-Trips Every Keystroke — Add Predictive Local Echo](../plans/a-remote-terminal-round-trips-every-keystroke-add-predictive-local-echo.md) — **LEAD CODED** — ID: 1ee5b5fa-9776-4c61-9bf9-808bafa379a1
-- [ ] [The Go PTY host has no coalescing window — add a link-aware one](../plans/the-go-pty-host-has-no-coalescing-window-add-a-link-aware-one.md) — **LEAD CODED** — ID: e05303a4-687f-42e0-af7e-d0e256d18bf4
+- [ ] [A keystroke echo waits on two frame boundaries it does not need](../plans/the-echo-path-pays-two-frames-of-quantization.md) — **CODE REVIEWED** — ID: a8f75f5d-f377-482a-8ca0-99e4686b99cf
+- [ ] [A Remote Terminal Round-Trips Every Keystroke — Add Predictive Local Echo](../plans/a-remote-terminal-round-trips-every-keystroke-add-predictive-local-echo.md) — **CODE REVIEWED** — ID: 1ee5b5fa-9776-4c61-9bf9-808bafa379a1
+- [ ] [The Go PTY host has no coalescing window — add a link-aware one](../plans/the-go-pty-host-has-no-coalescing-window-add-a-link-aware-one.md) — **CODE REVIEWED** — ID: e05303a4-687f-42e0-af7e-d0e256d18bf4
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -75,3 +75,13 @@ handlers (:2054 binary, :2086 legacy `t:'out'`), `writeLiveChars`'s future home 
   - Reconciliation hooks `writeLiveChars` only and drops overlay glyphs in the write callback, not at hand-off — no visible flicker or one-frame hole.
   - No RTT probe or latency gate anywhere in the prediction path.
 - **Must not touch:** `terminals.js` (no duplicate prediction layer), `writeReplay`, `cmd/` — prediction is client-side only. Land after the `a8f75f5d` seam exists.
+
+## Review Findings
+
+Reviewed 2026-09-19 as one delivery unit across `d6df5cdf` (fast path), `f0ba3aef` (prediction) and `388a9aea` (Go coalescing). Files changed in this review pass: `src/webview/terminalViewport.js` (one CRITICAL and three MAJOR fixes, all in the prediction layer), `src/test/terminal-flow-control-contract.test.js` and `src/test/terminal-content-free-collapse-contract.test.js` (two CI-wired gates that the fast-path commit had turned red or made vacuous), and `src/test/terminals-panel-payload-contract.test.js` (byte budget raised 1100→1145 KB with an itemised note). The CRITICAL was that the predictive-echo overlay was a 0×0 `overflow:hidden` box that clipped every predicted glyph out of existence — the feature's whole visible effect rendered nothing. Validation: `go build`/`vet`/`gofmt`/`go test` clean, `node --check` and `compile-tests` (tsc) and eslint clean, 22/35 terminal contract suites pass with all 13 remaining failures individually confirmed pre-existing by re-running each against the pre-feature source. Remaining risk: nothing in CI discriminates on whether prediction actually predicts, reconciles or converges, and `go test -race` cannot run on this Pi, so the feature's core mechanisms rest on manual verification that was not performed.
+
+## Deferred Findings
+
+- MAJOR — the panel first-load byte budget was **already breached by 2.5 KB before this feature** (1102.5 KB against the 1100 KB line). This feature's +27.7 KB is itemised in the note at `src/test/terminals-panel-payload-contract.test.js`, but that pre-existing 2.5 KB of unattributed re-accretion is not this feature's and is still owed an explanation.
+- MAJOR — the feature's core mechanisms have no automated discriminating check. Every latency and correctness claim (echo appears before the PTY confirms, display converges, no flicker, coalescing actually coalesces, lone frames are never held) is manual-only, and no manual verification ran in this pass. Passing the contract suites is not evidence any of it works.
+- See each subtask plan's own `## Deferred Findings` for the per-plan items.

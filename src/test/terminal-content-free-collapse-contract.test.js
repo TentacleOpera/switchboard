@@ -64,6 +64,20 @@ function block(code, startMarker, endMarker) {
     return code.substring(start, end);
 }
 
+/**
+ * The binary arm's live-frame stamping block: everything between the live-frame
+ * comment and the queue push, which is the region that runs BEFORE both the
+ * lone-frame fast path and the batched path. Stamping that fell below the fast
+ * path would silently stop running for lone echoes.
+ */
+function liveFrameStampBlock() {
+    const b = block(terminalViewportJs, '// Live frame (not a replay', 'entry.batchQueue.push(text);');
+    assert.ok(b.includes('writeLiveChars(entry, text)'),
+        'the stamping block must sit ABOVE the lone-frame fast-path write, or a fast-path '
+        + 'frame never stamps lastFrameAt/lastPrintableAt and the silence clock goes stale');
+    return b;
+}
+
 // The exact 30-byte devin heartbeat recorded in the plan. After CSI/OSC/DCS
 // removal only a lone CR (0x0d) remains, which is a C0 control, not a
 // printable glyph — so the frame is content-free.
@@ -401,7 +415,13 @@ test('the silence clock falls back to firstFrameAt, never to lastFrameAt', () =>
 test('the printable scan and the DOM clear are throttled off the live-frame hot path', () => {
     assert.ok(/const PRINTABLE_SCAN_THROTTLE_MS = \d+;/.test(terminalViewportJs),
         'a scan throttle constant must exist');
-    const stamp = block(terminalViewportJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
+    // Scoped from the live-frame comment to the queue push: the stamping block
+    // was HOISTED above the push so it runs on the lone-frame fast path as well
+    // as the batched path (a fast-path frame that skipped stamping would stop
+    // the silence clock from ever being reset by a lone echo). Reading the old
+    // push->scheduleBatchFlush slice now reads an empty region and passes
+    // vacuously, so the scope is the region that precedes BOTH writes.
+    const stamp = liveFrameStampBlock();
     assert.ok(/now - entry\.lastPrintableAt >= PRINTABLE_SCAN_THROTTLE_MS/.test(stamp),
         'the printable scan must be gated by the throttle');
     assert.ok(/workingSilenceShown\.has\(entry\.name\)/.test(stamp),
@@ -422,7 +442,7 @@ test('the webview stamps timers only on LIVE frames, not replay frames', () => {
 test('the webview resets lastPrintableAt only on a printable glyph via frameHasPrintable', () => {
     assert.ok(/function frameHasPrintable\(text\)/.test(terminalViewportJs),
         'frameHasPrintable must be defined');
-    const stamp = block(terminalViewportJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
+    const stamp = liveFrameStampBlock();
     assert.ok(stamp.includes('frameHasPrintable(text)'),
         'the binary live path must test the frame for printables');
     assert.ok(/if \(frameHasPrintable\(text\)\) {[\s\S]*?entry\.lastPrintableAt = now;/.test(stamp),
@@ -443,7 +463,7 @@ test('the signal is gated on the seat holding a dispatched card', () => {
 });
 
 test('the signal clears the instant a printable frame arrives', () => {
-    const stamp = block(terminalViewportJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
+    const stamp = liveFrameStampBlock();
     assert.ok(stamp.includes('clearWorkingSilence(entry.name)'),
         'a printable live frame must call clearWorkingSilence immediately');
 });

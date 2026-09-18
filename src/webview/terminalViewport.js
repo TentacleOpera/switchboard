@@ -1089,7 +1089,11 @@
     // termios ECHO flag lives server-side and is invisible through ssh/tmux
     // transports; the residual leak for a nonstandard prompt is recorded in
     // the plan's Outstanding Questions.
-    const HIDDEN_PROMPT_RE = /pass(?:word|phrase)?|pin|secret|token/i;
+    // `pin` is word-anchored; the others are deliberately substring matches.
+    // Unanchored, `pin` matched 'shipping', 'typing' and any path containing
+    // it, which killed prediction on ordinary prompt lines. 'PIN:' and
+    // 'Enter PIN' still match — only non-prompt substrings stop matching.
+    const HIDDEN_PROMPT_RE = /pass(?:word|phrase)?|\bpin\b|secret|token/i;
     // How long output may stay silent after the first unechoed keystroke
     // before further predictions are suppressed — sized to cover RTT+jitter
     // so ordinary echo is never mistaken for a no-echo prompt.
@@ -1097,10 +1101,24 @@
 
     function ensurePredictOverlay(entry) {
         let overlay = entry.predictOverlay;
-        if (overlay && overlay.isConnected) { return overlay; }
+        if (overlay) {
+            // Re-attach the overlay we already have rather than building a
+            // second one: a container detached from the document (a narrowed-
+            // out pane) leaves isConnected false indefinitely, and recreating
+            // on that condition mints one orphan div per keystroke. appendChild
+            // of an existing child is a no-op move, so this is safe to repeat.
+            if (!overlay.isConnected && entry.container) { entry.container.appendChild(overlay); }
+            return overlay;
+        }
         overlay = document.createElement('div');
         overlay.className = 'sb-echo-overlay';
-        overlay.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:3;overflow:hidden;';
+        // right/bottom, not just left/top: an absolutely positioned div whose
+        // only children are themselves absolutely positioned shrink-to-fits to
+        // a 0x0 box, and `overflow:hidden` on that box — which IS those
+        // children's containing block — clips every predicted glyph out of
+        // existence. Inset to all four edges so the overlay is the container's
+        // padding box and the clip means "the pane", which is what it is for.
+        overlay.style.cssText = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:3;overflow:hidden;';
         if (entry.container) {
             if (getComputedStyle(entry.container).position === 'static') {
                 entry.container.style.position = 'relative';
@@ -1130,6 +1148,13 @@
         if (!(cw > 0) || !(ch > 0)) { return; }
         overlay.style.fontFamily = term.options.fontFamily || '';
         overlay.style.fontSize = (term.options.fontSize || 0) + 'px';
+        // The overlay sits over the terminal's background, so it takes the
+        // TERMINAL's foreground — inheriting the panel's colour paints the
+        // guess in whatever the surrounding chrome uses, which on a themed
+        // board is not guaranteed to be legible against --term-surface.
+        // Presentation only: a wrong colour is a visible glyph in the wrong
+        // ink, never a behaviour change.
+        overlay.style.color = (term.options.theme && term.options.theme.foreground) || 'inherit';
         const dx = srect.left - orect.left;
         const dy = srect.top - orect.top;
         for (const p of preds) {
@@ -1143,7 +1168,10 @@
     }
 
     function dropAllPredictions(entry) {
-        if (entry.predictions) { entry.predictions.length = 0; }
+        // Called from onScroll, which a firehose fires per scrolled line —
+        // return before touching the DOM when there is nothing pending.
+        if (!entry.predictions || entry.predictions.length === 0) { return; }
+        entry.predictions.length = 0;
         if (entry.predictOverlay) { entry.predictOverlay.textContent = ''; }
     }
 
@@ -1221,7 +1249,31 @@
     // see yet.
     function scanParserInFlight(entry, text) {
         let state = entry.parserInFlightState || 'ground';
-        for (let i = 0; i < text.length; i++) {
+        // Bounded entry, because this runs on EVERY live chunk and a coalesced
+        // firehose frame is up to 128 KB — a per-byte interpreter loop over all
+        // of it is real CPU on the Pi this product is an appliance for.
+        //
+        // Two shortcuts, both exact rather than approximate:
+        //  1. ESC unconditionally lands this machine in 'esc' from ANY state
+        //     (the top-of-loop abort, or the 'esc' case's own ESC arm), so
+        //     whatever precedes the LAST ESC cannot affect the final state.
+        //     Start there, in 'esc'.
+        //  2. With no ESC in the chunk at all, only the incoming state can
+        //     change, and nothing can re-open a sequence — so 'ground' in means
+        //     'ground' out with no scan, and any other state can stop scanning
+        //     the moment it reaches 'ground'.
+        const lastEsc = text.lastIndexOf('\x1b');
+        let i = 0;
+        if (lastEsc >= 0) {
+            state = 'esc';
+            i = lastEsc + 1;
+        } else if (state === 'ground') {
+            entry.parserInFlightState = 'ground';
+            entry.parserInFlight = false;
+            return;
+        }
+        for (; i < text.length; i++) {
+            if (lastEsc < 0 && state === 'ground') { break; }
             const c = text.charCodeAt(i);
             if (state !== 'ground' && state !== 'esc' && c === 0x1b) {
                 // ESC aborts whatever sequence was open and starts a new one.
@@ -2454,8 +2506,16 @@
                     // Answer to the {t:'ping'} probe — measure the link and
                     // report it back so the host can size its coalescing
                     // window to the slowest attached client.
-                    entry.lastRttMs = Date.now() - frame.ts;
-                    try { ws.send(JSON.stringify({ t: 'rtt', ms: entry.lastRttMs })); } catch { /* socket closing */ }
+                    // Validate the echoed stamp before deriving a link from it:
+                    // a host that omits `ts` decodes it as 0 on the Go side and
+                    // echoes 0 back, which would read as a ~1.7e12 ms link and
+                    // pin the window at the ceiling. No stamp means no
+                    // measurement — lastRttMs stays null, which is what the
+                    // diagnostic dump is supposed to say.
+                    if (typeof frame.ts === 'number' && frame.ts > 0 && frame.ts <= Date.now()) {
+                        entry.lastRttMs = Date.now() - frame.ts;
+                        try { ws.send(JSON.stringify({ t: 'rtt', ms: entry.lastRttMs })); } catch { /* socket closing */ }
+                    }
                 } else if (frame.t === 'flushWindow') {
                     // The host's resolved coalescing window — stored for the
                     // diagnostic dump, not acted on. Older clients ignore

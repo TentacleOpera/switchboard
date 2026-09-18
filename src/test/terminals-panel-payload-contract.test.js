@@ -75,7 +75,21 @@ async function test(name, fn) {
 // DEVELOPMENT build, which is served unminified). 1045 KB is the post-plan figure with
 // the xterm bundle and the canvas addon both off the critical path; the budget sits
 // just above it, tight enough that re-adding either eagerly breaches it.
-const PANEL_BUDGET_BYTES = 1100 * 1024;
+//
+// Raised 2026-09-19, 1100 -> 1145 KB, in the review of the feature "Typing on a
+// Remote Board Should Not Wait on the Link" — the deliberate, reviewed addition
+// this file's header asks be recorded rather than absorbed silently:
+//   +24.2 KB  src/webview/terminalViewport.js — predictive local echo (the
+//             overlay, reconciler and escape-sequence scanner), the lone-frame
+//             fast path, and the RTT probe / flushWindow read-back.
+//    +3.4 KB  src/webview/terminals.js — four __sbTerminalStats fields.
+//   =27.7 KB  measured, taking the first load from 1102.5 KB to 1130.2 KB.
+// AND, separately: the budget was ALREADY breached by 2.5 KB before that feature
+// landed (1102.5 KB against the 1100 KB line). That overage is NOT this feature's
+// and is not laundered by this note — it is unattributed re-accretion that
+// predates it and is still owed an explanation. The new line keeps ~15 KB of
+// headroom, which is deliberately too little to absorb another feature quietly.
+const PANEL_BUDGET_BYTES = 1145 * 1024;
 
 // Placeholders substituted server-side by getTerminalsHtml (headlessPanelHtml.ts).
 // Mapped here so the budget reads SRC, not a possibly-stale dist/.
@@ -193,7 +207,15 @@ async function main() {
         const measured = 1517 * 1024;
         // The xterm bundle (383 KB) and the canvas addon (95 KB) both left the critical
         // path, so the gap is ~470 KB, not the ~95 KB the lazy-canvas step alone bought.
-        assert.ok(bytes < measured - 400 * 1024,
+        //
+        // Gap relaxed 2026-09-19, 400 -> 370 KB, for the same reviewed +27.7 KB
+        // recorded at PANEL_BUDGET_BYTES. What this assertion actually guards is
+        // that the two vendor bundles have not come back onto the first-load
+        // path; 27.7 KB of hand-written source is not that, and re-adding
+        // either bundle (383 KB / 95 KB) still blows through the relaxed gap by
+        // a wide margin. The eager-<script> assertions below remain the direct
+        // check and are unchanged.
+        assert.ok(bytes < measured - 370 * 1024,
             `first load (${(bytes / 1024).toFixed(0)} KB) is not materially below the 1517 KB `
             + 'baseline — the xterm bundle and the canvas addon should both be off the '
             + 'first-load path.');

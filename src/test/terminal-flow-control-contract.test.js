@@ -45,10 +45,32 @@ function block(code, startMarker, endMarker) {
 // ---------------------------------------------------------------- flow control
 
 test('the ack is emitted from the xterm write callback, not from onmessage', () => {
+    // Asserted against writeLiveChars, the single seam every live write goes
+    // through (flushBatch's join and the lone-frame fast path alike), rather
+    // than against flushBatch's inline write, which no longer exists. The
+    // property is the same one and is now pinned harder: there is exactly ONE
+    // live write call site, and it carries the callback.
+    const liveWrite = block(terminalViewportJs, 'function writeLiveChars(entry, text)', 'function ensurePredictOverlay(');
     assert.ok(
-        terminalViewportJs.includes('entry.term.write(combined, () => onWriteParsed(entry, combined.length))'),
-        'flushBatch must pass a write callback — acking on receipt measures the transport, which is the bug being fixed'
+        /entry\.term\.write\(text,\s*\(\)\s*=>\s*\{/.test(liveWrite)
+        && /onWriteParsed\(entry, text\.length\)/.test(liveWrite),
+        'writeLiveChars must pass a write callback — acking on receipt measures the transport, which is the bug being fixed'
     );
+    // writeLiveChars is the SINGLE seam for pty output: flushBatch's join and
+    // the lone-frame fast path both route through it, and neither writes to
+    // the term itself. (The other term.write call sites are viewport-generated
+    // chrome — DEC-mode restore, the paste notice, the clear, the exit banner —
+    // which are deliberately not billed to the ack ledger.)
+    const flushBody = block(terminalViewportJs, 'function flushBatch(entry)', 'function writeLiveChars(');
+    assert.ok(flushBody.includes('writeLiveChars(entry, combined)') && !flushBody.includes('entry.term.write('),
+        'flushBatch must hand off to writeLiveChars, not write to the term itself');
+    const onMessageBody = block(terminalViewportJs, 'ws.onmessage = (event) => {', 'ws.onclose = () =>');
+    const fastPathWrites = (onMessageBody.match(/writeLiveChars\(entry, /g) || []).length;
+    assert.strictEqual(fastPathWrites, 2,
+        'both the binary and legacy t:\'out\' fast paths must write through writeLiveChars, '
+        + 'so the ack ledger cannot diverge between them');
+    assert.ok(!/entry\.term\.write\((?:text|rawData|combined)\b/.test(onMessageBody),
+        'no frame handler may write pty output to the term directly — that bypasses onWriteParsed');
     const onMessage = block(terminalViewportJs, 'ws.onmessage = (event) => {', 'ws.onclose = () =>');
     assert.ok(!onMessage.includes("t: 'ack'"), 'ws.onmessage must not send an ack directly');
     assert.ok(block(terminalViewportJs, 'function onWriteParsed(', 'function destroyTerminalView(').includes("t: 'ack'"),
