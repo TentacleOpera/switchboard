@@ -85,6 +85,10 @@ func newTransport(r Routes) *Transport {
 		ServerRoot: r.ServerRoot.Value,
 		Token:      r.Token.Value,
 		HTTP:       &http.Client{Timeout: time.Duration(defaultTimeoutMs) * time.Millisecond},
+		// Diagnostics go to stderr — stdout stays the command payload.
+		// Declared since the transport landed; first assigned for the
+		// remote-source line (named-remotes plan).
+		Diag: func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) },
 	}
 }
 

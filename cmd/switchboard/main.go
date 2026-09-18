@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -70,6 +71,13 @@ func main() {
 		verb = "version"
 	}
 
+	// `remote` manages ~/.switchboard/remotes.json — config owned by this
+	// client, handled before the owned-verb dispatch: list/remove/default
+	// touch only the local file, and add resolves its own URL argument.
+	if verb == "remote" {
+		os.Exit(client.RunRemote(stripVerb(remaining, verb), connOpts))
+	}
+
 	if !ownedVerbs[verb] {
 		// Non-client verb: hand off to the Node host with original arguments.
 		delegateOrNoHost(args)
@@ -97,6 +105,17 @@ func runOwnedVerb(verb string, args []string, connOpts client.Options) {
 	disc := client.NewDiscoverer(cwd)
 	endpoint, err := client.ResolveEndpoint(connOpts, disc)
 	if err != nil {
+		// A NAMED tier failed — a --remote/SWITCHBOARD_REMOTE that is not
+		// configured, a corrupt remotes.json, an unparseable URL. That is not
+		// "no local board": printing the offline guidance here would answer a
+		// typo'd remote name with "run `switchboard local`", advice for the
+		// wrong machine, and would drop the only message that says what is
+		// actually wrong. Only ErrNoLocalBoard reaches the offline shapes
+		// below — the same split the Node client makes on NoLocalBoardError.
+		if !errors.Is(err, client.ErrNoLocalBoard) {
+			fmt.Fprintln(os.Stderr, "[switchboard] "+err.Error())
+			os.Exit(1)
+		}
 		// `status` and `about` emit their offline shape instead of erroring.
 		if verb == "status" {
 			jsonFlag := hasFlag(args, "--json")
@@ -167,6 +186,25 @@ func runOwnedVerb(verb string, args []string, connOpts client.Options) {
 	nodeEntry, nodeSource := resolveNodeEntry()
 	c := client.NewClient(routes, nodeEntry, nodeSource)
 	c.JSONFlag = hasFlag(args, "--json")
+
+	// A remote target is announced, not silent: the source line names the
+	// board and the tier that produced it (the tagging half of the fallback
+	// rule — a sticky configured defaultRemote retargets every bare command,
+	// so which board answered must be visible). Under --json the same facts
+	// ride every emitJSON envelope as `target` instead. A local invocation
+	// gains no output. Mirrors cli.ts recordActiveTarget.
+	if !localBoard {
+		via := client.DescribeTargetVia(connOpts, endpoint)
+		client.SetActiveTarget(&client.TargetInfo{
+			BaseURL:       endpoint.Value.BaseURL,
+			WorkspaceRoot: serverRoot.Value,
+			Source:        via,
+		})
+		if !c.JSONFlag {
+			c.Transport.Diag("%s", client.TargetSourceLine(connOpts, endpoint, serverRoot.Value))
+		}
+	}
+
 	dispatchOwned(c, verb, args)
 }
 

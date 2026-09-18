@@ -131,6 +131,24 @@ jobs:
       - name: Workspace-root write-path guard (root identity, fail-closed, honest count)
         run: npm run test:contract:workspace-root-write-path
 
+      # The board-resolution chain both CLI clients share. Every failure it
+      # guards is a valid 200 from the WRONG board: a named remote quietly
+      # demoting to loopback, a remote root guessed from selectedWorkspaceRoot,
+      # a write carrying the laptop's cwd to the Pi, or `--remote` before the
+      # verb falling through to a LOCAL board launch. Compile and lint see none
+      # of it — both outcomes typecheck and both answer. Runs against out/, so
+      # it must stay AFTER "Compile test outputs".
+      - name: CLI ApiTarget resolution + call-site conversion (tagged target, no loopback literal)
+        run: npm run test:contract:api-target
+
+      # `remotes.json` is one file written and read by TWO clients. A schema
+      # that drifts between them keeps both green against different stored
+      # state, and a configured defaultRemote silently retargets every bare
+      # command — which is why the printed source line is pinned here with it.
+      # Runs against out/, so it must stay AFTER "Compile test outputs".
+      - name: Named remotes + source line, both clients (shared schema, visible stickiness)
+        run: npm run test:contract:remote-config
+
       # The `.agents/` seed loop's creation path treats "destination absent" as
       # "never seeded" unless the bundle ledger says otherwise. Every way that
       # guard can break is silent: inverting the condition freezes the control

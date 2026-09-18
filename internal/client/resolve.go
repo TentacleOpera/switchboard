@@ -154,7 +154,7 @@ func loadRemotesConfig(path string) (*RemotesConfig, error) {
 	}
 	var cfg RemotesConfig
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		return nil, fmt.Errorf("remotes.json at %s is corrupt: %w", path, err)
+		return nil, fmt.Errorf("remotes.json at %s is corrupt: %w — fix or delete that file, then re-add the remote with `switchboard remote add <name> <url>`", path, err)
 	}
 	return &cfg, nil
 }
@@ -448,7 +448,17 @@ func rootContains(roots []string, target string) bool {
 	return false
 }
 
+// ErrNoLocalBoard is the ONE endpoint-resolution failure that means "local
+// discovery found nothing" — the only case that maps to the shared offline
+// guidance. Every other ResolveEndpoint error named a tier (a --remote that is
+// not configured, a corrupt remotes.json, an unparseable URL) and must be
+// printed with that cause instead: telling an operator who typed
+// `--remote labcom` to run `switchboard local` is advice for the wrong machine.
+// Exported so main.go can distinguish by identity, never by message matching —
+// the Node client distinguishes the same case by NoLocalBoardError's class.
+var ErrNoLocalBoard = errors.New("no running Switchboard instance found for this workspace")
+
 var (
-	errNoEndpoint   = errors.New("no running Switchboard instance found for this workspace")
+	errNoEndpoint   = ErrNoLocalBoard
 	errNoServerRoot = errors.New("no server workspace root supplied and none advertised")
 )

@@ -1073,6 +1073,8 @@
     "test:contract:teams-tab-no-start": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/teams-tab-no-start-contract.test.js",
     "test:contract:teams-tab-member-editor": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/teams-tab-member-editor-contract.test.js",
     "test:contract:agent-machines": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/agent-machines-contract.test.js",
+    "test:contract:api-target": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/cli-api-target-contract.test.js",
+    "test:contract:remote-config": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/cli-remote-config-contract.test.js",
     "test:contract:standalone-agent-isolation": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-agent-team-isolation-contract.test.js",
     "test:contract:autoban-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-state-regression.test.js",
     "test:contract:completion-asserted-never-inferred": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/completion-asserted-never-inferred.test.js",

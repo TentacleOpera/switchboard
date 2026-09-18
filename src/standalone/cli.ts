@@ -18,7 +18,7 @@ import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackH
 import { detectTailnetAddress, resolveMagicDnsNames, readCertDomains, detectServeConfigMapping } from '../utils/tailnetDetect';
 import { resolveTailnetOrigin } from '../utils/tailnetOrigin';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
-import { resolveApiTarget, fetchHealthJson, loadRemotesConfig, NoLocalBoardError, type ApiTarget, type HealthJson } from './apiTarget';
+import { resolveApiTarget, fetchHealthJson, loadRemotesConfig, saveRemotesConfig, parseServerUrl, unreachableMessage, NoLocalBoardError, type ApiTarget, type HealthJson, type RemotesConfig, type StoredRemote, type ResolvedEndpoint } from './apiTarget';
 import { stateFile } from '../utils/stateHome';
 import { BANNER_ART_TRUECOLOR, BANNER_ART_256, BANNER_ART_ASCII } from '../generated/bannerArt';
 import { getInotifyWatchCount, getOpenFdCount } from './planIngestionHost';
@@ -56,6 +56,10 @@ function usage(): string {
        npx switchboard token clear
        npx switchboard export [--out <path>] [--workspace <path>]
        npx switchboard import <bundle.json> [--workspace <path>]
+       npx switchboard remote add <name> <url> [--workspace-root <path>] [--force]
+       npx switchboard remote list
+       npx switchboard remote remove <name>
+       npx switchboard remote default <name> | --clear
        npx switchboard help [command]
        npx switchboard about | version
 
@@ -121,6 +125,12 @@ Connection flags (board commands — may appear before OR after the verb):
                              path). Env: SWITCHBOARD_WORKSPACE_ROOT.
   --token-file <path>        Read the API token from a file. Env for a token
                              value: SWITCHBOARD_API_TOKEN.
+  remote                     Manage named remotes (~/.switchboard/remotes.json):
+                             'remote add' probes /health and one real read
+                             before storing; 'remote default' makes a remote
+                             sticky for bare commands. Every remote command
+                             prints which board answered and where that came
+                             from — a configured default is visible, not silent.
   A named remote that cannot be reached is an error, never a fallback to the
   local board. Local-only verbs (stop, token, secrets, service, probe, …)
   refuse under a remote target — run them on the machine that hosts the board.
@@ -356,9 +366,52 @@ function routeLogsToStderr(): void {
     console.debug = toStderr;
 }
 
+/**
+ * The target this invocation resolved to — set by tryResolveBoardTarget the
+ * first time a command resolves successfully. Drives two outputs of the
+ * named-remotes plan: the stderr source line (non-json) and the `target`
+ * field injected into every emitJson envelope (json). Stays null for local
+ * invocations' unresolved state — a command that never resolves never tags.
+ */
+let activeBoardTarget: ApiTarget | null = null;
+let lastSourceLine: string | null = null;
+
+/**
+ * Record the resolved target and print the source line for a remote one:
+ *
+ *   [switchboard] labcom · https://labcom.ts.net · /home/patrick/labcom · via config:remotes.labcom
+ *
+ * This is the tagging half of the fallback rule — a sticky configured
+ * `defaultRemote` retargets every bare command, so which board answered must
+ * be VISIBLE on every remote command, not just returned. The line goes to
+ * stderr (stdout stays the command payload), fires only for remote targets
+ * (a local invocation gains no new output), is suppressed under --json
+ * (where the same facts ride the envelope as `target`), and prints once per
+ * distinct line so the board console's re-resolution loop does not spam.
+ * Byte-identical to the Go client's line.
+ */
+function recordActiveTarget(target: ApiTarget): void {
+    activeBoardTarget = target;
+    if (!target.isRemote || process.argv.includes('--json')) { return; }
+    const name = target.remoteName ? `${target.remoteName} · ` : '';
+    const line = `[switchboard] ${name}${target.baseUrl} · ${target.workspaceRoot} · via ${target.source}`;
+    if (line !== lastSourceLine) {
+        console.error(line);
+        lastSourceLine = line;
+    }
+}
+
 /** Write a JSON payload to stdout directly, bypassing the redirected console.log. */
 function emitJson(payload: unknown): void {
-    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    let out = payload;
+    const t = activeBoardTarget;
+    if (t?.isRemote && out !== null && typeof out === 'object' && !Array.isArray(out)) {
+        // The source line's facts, in the envelope — a --json consumer gets
+        // which board answered without parsing stderr. Appended LAST, mirroring
+        // the Go client's splice, so the key order matches between clients.
+        out = { ...(out as Record<string, unknown>), target: { baseUrl: t.baseUrl, workspaceRoot: t.workspaceRoot, source: t.source } };
+    }
+    process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
 }
 
 /**
@@ -800,7 +853,7 @@ function refuseRemoteTargetVerb(verb: string): never {
  */
 async function tryResolveBoardTarget(workspaceRoot: string): Promise<ApiTarget | null> {
     try {
-        return await resolveApiTarget({
+        const target = await resolveApiTarget({
             remote: connFlags.remote,
             server: connFlags.server,
             workspaceRoot: connFlags.workspaceRoot,
@@ -808,6 +861,8 @@ async function tryResolveBoardTarget(workspaceRoot: string): Promise<ApiTarget |
             clientCwd: workspaceRoot,
             env: process.env,
         });
+        recordActiveTarget(target);
+        return target;
     } catch (err) {
         if (err instanceof NoLocalBoardError) { return null; }
         console.error(`[switchboard] ${err instanceof Error ? err.message : String(err)}`);
@@ -2360,6 +2415,221 @@ async function cmdApi(workspaceRoot: string, argv: string[]): Promise<void> {
 
     console.error(`[switchboard] api ${upperMethod} ${rawPath} returned ${res.status}: ${res.body}`);
     exitFlushed(1);
+}
+
+// ─── remote: named boards in ~/.switchboard/remotes.json ───────────────────
+//
+// `switchboard remote add|list|remove|default` — the operator-ergonomics
+// layer over the resolver's config tier (plan:
+// named-remotes-and-the-source-line-in-both-clients). These subcommands touch
+// ONLY the local config file — they never resolve a board target, so they are
+// not in LOCAL_ONLY_REMOTE_VERBS (a remote flag is irrelevant to them, not a
+// conflict) and not in the resolveBoardTarget seam. Only `add` dials, and it
+// resolves its own URL argument. Output strings are byte-identical to the Go
+// client's RunRemote — keep them in sync.
+
+/** The credential for `remote add`'s probe read: env, then --token-file (loud), then trusted-none. The workspace token file is deliberately NOT read — it is the LOCAL board's credential and would leak to the remote being added. */
+function remoteAddAuth(): ApiTarget['auth'] {
+    const envToken = (process.env.SWITCHBOARD_API_TOKEN ?? '').trim();
+    if (envToken) { return { token: envToken, source: 'env:SWITCHBOARD_API_TOKEN' }; }
+    const tf = (connFlags.tokenFile ?? '').trim();
+    if (tf) {
+        let v = '';
+        try {
+            v = fs.readFileSync(tf, 'utf8').trim();
+        } catch (err) {
+            console.error(`[switchboard] --token-file '${tf}': cannot read token — ${err instanceof Error ? err.message : String(err)}`);
+            exitFlushed(1);
+        }
+        if (!v) {
+            console.error(`[switchboard] --token-file '${tf}': file is empty — no token to send`);
+            exitFlushed(1);
+        }
+        return { token: v, source: 'flag:--token-file' };
+    }
+    return { token: null, source: 'tailnet-listener-trusted' };
+}
+
+function remoteUsageFail(): never {
+    console.error(`[switchboard] 'remote' needs a subcommand: add | list | remove | default`);
+    console.error(`  switchboard remote add <name> <url> [--workspace-root <path>] [--force]`);
+    console.error(`  switchboard remote list`);
+    console.error(`  switchboard remote remove <name>`);
+    console.error(`  switchboard remote default <name> | --clear`);
+    return exitFlushed(1);
+}
+
+function remoteNameFail(name: string | undefined): asserts name is string {
+    if (name === undefined || name === '' || name.includes('://') || name.startsWith('-') || /\s/.test(name)) {
+        console.error(`[switchboard] '${name ?? ''}' is not a usable remote name — use a short name (letters, digits, '-', '_', '.'), not a URL.`);
+        exitFlushed(1);
+    }
+}
+
+async function cmdRemoteAdd(remotesPath: string, argv: string[]): Promise<void> {
+    const name = argv[0];
+    const rawUrl = argv[1];
+    if (!name || !rawUrl) { remoteUsageFail(); }
+    remoteNameFail(name);
+    let ep: ResolvedEndpoint;
+    try {
+        ep = { ...parseServerUrl(rawUrl), source: 'remote add', remoteName: name };
+    } catch (err) {
+        console.error(`[switchboard] remote '${name}' not added — '${rawUrl}' is not a usable board URL: ${err instanceof Error ? err.message : String(err)}`);
+        exitFlushed(1);
+    }
+    const force = argv.includes('--force');
+    const cfg: RemotesConfig = loadRemotesConfig(remotesPath) ?? {};
+    const existing = cfg.remotes?.[name];
+    if (existing && !force) {
+        console.error(`[switchboard] remote '${name}' is already configured (${existing.url}) — pass --force to overwrite, or pick another name.`);
+        exitFlushed(1);
+    }
+
+    // Probe /health — proves the URL names a switchboard board, nothing more.
+    let health: HealthJson;
+    try {
+        health = await fetchHealthJson(ep.baseUrl, 4000);
+    } catch (err) {
+        console.error(`[switchboard] remote '${name}' not added — ${unreachableMessage(ep, err)}. Check the URL and that the remote board is running, then retry.`);
+        exitFlushed(1);
+    }
+
+    // Pick the root BEFORE the read — the read itself is routed by it. An
+    // explicit --workspace-root wins; a single advertised root is unambiguous;
+    // more than one is a refusal that lists them, not a silent pick.
+    const roots = Array.isArray(health.roots) ? health.roots : [];
+    let root = (connFlags.workspaceRoot ?? '').trim();
+    if (!root) {
+        if (roots.length === 1) {
+            root = roots[0];
+        } else if (roots.length > 1) {
+            console.error(`[switchboard] remote '${name}' not added — ${ep.baseUrl} advertises ${roots.length} workspace roots and none was chosen:`);
+            for (const r of roots) { console.error(`  ${r}`); }
+            console.error(`[switchboard] Re-run with --workspace-root <path> to name one.`);
+            exitFlushed(1);
+        } else {
+            console.error(`[switchboard] remote '${name}' not added — ${ep.baseUrl} advertises no workspace roots. Re-run with --workspace-root <path> to name the board's root.`);
+            exitFlushed(1);
+        }
+    }
+
+    // One real read: /health proves reachability, NOT usability — a board with
+    // a durable token answers /health and then 401s the first real read.
+    // Storing that target hands the operator a remote that fails on every
+    // subsequent command with no explanation, so the read must pass first.
+    const probe: ApiTarget = {
+        baseUrl: ep.baseUrl,
+        workspaceRoot: root,
+        rootSource: connFlags.workspaceRoot ? 'flag:--workspace-root' : 'health-roots',
+        auth: remoteAddAuth(),
+        source: 'remote add',
+        isRemote: true,
+        remoteName: name,
+    };
+    let res: ApiResponse;
+    try {
+        res = await apiGet(probe, '/kanban/plans');
+    } catch (err) {
+        console.error(`[switchboard] remote '${name}' not added — ${unreachableMessage(ep, err)}. Check the URL and that the remote board is running, then retry.`);
+        exitFlushed(1);
+    }
+    if (res.status === 401) {
+        console.error(`[switchboard] remote '${name}' not added — ${ep.baseUrl} answered /health but rejected a real read with 401: the remote board has an API token configured.`);
+        console.error(`[switchboard] Re-run with SWITCHBOARD_API_TOKEN=<token> or --token-file <path>, or run 'switchboard token clear' on the remote host to remove the token.`);
+        exitFlushed(1);
+    }
+    if (res.status < 200 || res.status >= 300) {
+        console.error(`[switchboard] remote '${name}' not added — ${ep.baseUrl} answered /health but a real read returned ${res.status} — the endpoint is not a usable board. Check the URL, then retry.`);
+        exitFlushed(1);
+    }
+
+    cfg.remotes = cfg.remotes ?? {};
+    cfg.remotes[name] = {
+        url: ep.baseUrl,
+        workspaceRoot: root,
+        roots,
+        lastContact: new Date().toISOString(),
+    };
+    saveRemotesConfig(remotesPath, cfg);
+    console.log(`[switchboard] remote '${name}' added: ${ep.baseUrl} · ${root}`);
+    console.log(`[switchboard]   advertised roots: ${roots.length ? roots.join(', ') : '(none)'}`);
+    console.log(`[switchboard] Stored in ${remotesPath} — target it with 'switchboard --remote ${name} <command>', or make it the default with 'switchboard remote default ${name}'.`);
+    exitFlushed(0);
+}
+
+function cmdRemoteList(remotesPath: string): void {
+    const cfg = loadRemotesConfig(remotesPath);
+    const remotes = cfg?.remotes ?? {};
+    const entries = Object.keys(remotes).sort();
+    if (entries.length === 0) {
+        console.log(`[switchboard] No remotes configured — add one with 'switchboard remote add <name> <url>'.`);
+        exitFlushed(0);
+    }
+    for (const name of entries) {
+        const r: StoredRemote = remotes[name];
+        const root = r.workspaceRoot ? r.workspaceRoot : '(no root stored)';
+        const contact = r.lastContact ? r.lastContact : 'never';
+        const def = cfg?.defaultRemote === name ? ' (default)' : '';
+        console.log(`[switchboard] ${name} · ${r.url} · ${root} · last contact ${contact}${def}`);
+    }
+    exitFlushed(0);
+}
+
+function cmdRemoteRemove(remotesPath: string, argv: string[]): void {
+    const name = argv[0];
+    if (!name) { remoteUsageFail(); }
+    const cfg = loadRemotesConfig(remotesPath) ?? {};
+    if (!cfg.remotes?.[name]) {
+        const names = Object.keys(cfg.remotes ?? {}).sort();
+        console.error(`[switchboard] remote '${name}' is not configured — configured remotes: ${names.length ? names.join(', ') : 'none'}.`);
+        exitFlushed(1);
+    }
+    delete cfg.remotes![name];
+    const wasDefault = cfg.defaultRemote === name;
+    if (wasDefault) { delete cfg.defaultRemote; }
+    saveRemotesConfig(remotesPath, cfg);
+    if (wasDefault) {
+        console.log(`[switchboard] remote '${name}' removed — it was the configured default remote; the default is cleared.`);
+    } else {
+        console.log(`[switchboard] remote '${name}' removed.`);
+    }
+    exitFlushed(0);
+}
+
+function cmdRemoteDefault(remotesPath: string, argv: string[]): void {
+    const cfg = loadRemotesConfig(remotesPath) ?? {};
+    const arg = argv[0];
+    if (arg === '--clear') {
+        if (!cfg.defaultRemote) {
+            console.log(`[switchboard] no default remote is configured.`);
+            exitFlushed(0);
+        }
+        delete cfg.defaultRemote;
+        saveRemotesConfig(remotesPath, cfg);
+        console.log(`[switchboard] default remote cleared — bare commands resolve this machine's board again.`);
+        exitFlushed(0);
+    }
+    if (!arg) { remoteUsageFail(); }
+    const entry = cfg.remotes?.[arg];
+    if (!entry) {
+        console.error(`[switchboard] remote '${arg}' is not configured — add it with 'switchboard remote add ${arg} <url>'.`);
+        exitFlushed(1);
+    }
+    cfg.defaultRemote = arg;
+    saveRemotesConfig(remotesPath, cfg);
+    console.log(`[switchboard] default remote set to '${arg}' — bare commands now target ${entry.url} (via config:remotes.${arg}).`);
+    exitFlushed(0);
+}
+
+async function cmdRemote(argv: string[]): Promise<void> {
+    const remotesPath = stateFile('remotes.json');
+    const sub = argv[0];
+    if (sub === 'add') { await cmdRemoteAdd(remotesPath, argv.slice(1)); return; }
+    if (sub === 'list') { cmdRemoteList(remotesPath); return; }
+    if (sub === 'remove' || sub === 'rm') { cmdRemoteRemove(remotesPath, argv.slice(1)); return; }
+    if (sub === 'default') { cmdRemoteDefault(remotesPath, argv.slice(1)); return; }
+    remoteUsageFail();
 }
 
 /**
@@ -3918,7 +4188,7 @@ async function main() {
         'stop', 'status', 'logs', 'init', 'scaffold', 'control-plane', 'secrets',
         'token', 'export', 'import', 'plans', 'ready', 'dispatch', 'done', 'accept',
         'next', 'reports', 'clear', 'fleet', 'probe', 'heap-snapshot', 'verb', 'api',
-        'help', 'about', 'version', 'launcher-state', 'controller',
+        'help', 'about', 'version', 'launcher-state', 'controller', 'remote',
     ]);
     const heapFirstArg = process.argv[2];
     const mayStartBoard = !heapFirstArg
@@ -3969,7 +4239,7 @@ async function main() {
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
         'plans', 'ready', 'dispatch', 'done', 'accept', 'next', 'reports', 'clear', 'fleet', 'probe', 'heap-snapshot', 'verb', 'api',
-        'help', 'about', 'version', 'setup', 'launcher-state', 'service', 'controller',
+        'help', 'about', 'version', 'setup', 'launcher-state', 'service', 'controller', 'remote',
         // Internal routing token — re-spawned by cmdMainMenu's CLI Mode to
         // enable Back without refactoring cmdBoardConsole's exit semantics.
         // NOT documented in usage(); not a user-facing subcommand.
@@ -4103,6 +4373,7 @@ async function main() {
         && subcommand !== 'controller'
         && subcommand !== 'help' && subcommand !== 'about' && subcommand !== 'version'
         && subcommand !== 'setup'
+        && subcommand !== 'remote'
         && subcommand !== 'launcher-state';
     const switchboardDir = path.join(workspaceRoot, '.switchboard');
     if (subcommandTargetsCwd && !fs.existsSync(switchboardDir)) {
@@ -5003,6 +5274,11 @@ async function main() {
     // ── controller ────────────────────────────────────────────────
     if (process.argv[2] === 'controller') {
         await cmdController(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── remote ────────────────────────────────────────────────────
+    if (process.argv[2] === 'remote') {
+        await cmdRemote(process.argv.slice(3));
     }
 
     // ── Internal routing token: board console (re-spawned by cmdMainMenu) ──

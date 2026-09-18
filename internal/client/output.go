@@ -23,7 +23,45 @@ func emitJSON(payload any) {
 		os.Exit(1)
 	}
 	// json.Encoder.Encode already adds a trailing newline.
-	os.Stdout.Write(buf.Bytes())
+	os.Stdout.Write(withTargetJSON(buf.Bytes()))
+}
+
+// withTargetJSON appends "target" as the LAST key of a top-level JSON object
+// when the invocation resolved a remote target — mirroring cli.ts emitJson's
+// `{...payload, target}` injection. Splicing (rather than a field on each
+// envelope struct) keeps the payload's own key order byte-identical and
+// covers every emitJSON call site uniformly; a non-object payload passes
+// through untouched.
+func withTargetJSON(out []byte) []byte {
+	t := activeJSONTarget
+	if t == nil {
+		return out
+	}
+	trimmed := bytes.TrimRight(out, "\n")
+	if len(trimmed) == 0 || trimmed[len(trimmed)-1] != '}' {
+		return out
+	}
+	var tb bytes.Buffer
+	e := json.NewEncoder(&tb)
+	e.SetEscapeHTML(false)
+	e.SetIndent("  ", "  ")
+	if err := e.Encode(t); err != nil {
+		return out
+	}
+	tj := bytes.TrimRight(tb.Bytes(), "\n")
+	inner := trimmed[:len(trimmed)-1]
+	var merged []byte
+	if bytes.Equal(bytes.TrimSpace(inner), []byte("{")) {
+		// Empty object: no leading comma.
+		merged = append(merged, inner...)
+		merged = append(merged, []byte(`  "target": `)...)
+	} else {
+		merged = append(merged, inner...)
+		merged = append(merged, []byte(",\n  \"target\": ")...)
+	}
+	merged = append(merged, tj...)
+	merged = append(merged, []byte("\n}\n")...)
+	return merged
 }
 
 // emitHuman prints a line to stdout (the human path).

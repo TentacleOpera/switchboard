@@ -154,7 +154,7 @@ export class NoLocalBoardError extends Error {
 
 // ─── URL parsing (mirrors internal/client/resolve.go parseServerURL) ────────
 
-interface ParsedEndpoint {
+export interface ParsedEndpoint {
     baseUrl: string;
     host: string;
     port: number;
@@ -167,7 +167,7 @@ interface ParsedEndpoint {
  * port means 443 (the `tailscale serve` spelling `https://host` is the
  * natural way to name that endpoint). Mirrors the Go parseServerURL.
  */
-function parseServerUrl(raw: string): ParsedEndpoint {
+export function parseServerUrl(raw: string): ParsedEndpoint {
     let u: URL;
     try {
         u = new URL(raw);
@@ -222,15 +222,28 @@ export function loadRemotesConfig(remotesPath: string): RemotesConfig | null {
     try {
         parsed = JSON.parse(raw);
     } catch (err) {
-        throw new Error(`remotes.json at ${remotesPath} is corrupt: ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(`remotes.json at ${remotesPath} is corrupt: ${err instanceof Error ? err.message : String(err)} — fix or delete that file, then re-add the remote with 'switchboard remote add <name> <url>'.`);
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error(`remotes.json at ${remotesPath} is corrupt: top level is not an object`);
+        throw new Error(`remotes.json at ${remotesPath} is corrupt: top level is not an object — fix or delete that file, then re-add the remote with 'switchboard remote add <name> <url>'.`);
     }
     return parsed as RemotesConfig;
 }
 
-interface ResolvedEndpoint extends ParsedEndpoint {
+/**
+ * Write remotes.json at 0600 — the file may carry a URL the operator considers
+ * private to their tailnet, and writeFileSync's mode is umask-masked, so the
+ * permission is set explicitly after the write (the ptyBackend.ts pattern).
+ * The whole config is rewritten: remotes are few and the file is tiny, so a
+ * read-modify-write of the parsed object is the honest merge.
+ */
+export function saveRemotesConfig(remotesPath: string, cfg: RemotesConfig): void {
+    fs.mkdirSync(path.dirname(remotesPath), { recursive: true });
+    fs.writeFileSync(remotesPath, JSON.stringify(cfg, null, 2) + '\n');
+    fs.chmodSync(remotesPath, 0o600);
+}
+
+export interface ResolvedEndpoint extends ParsedEndpoint {
     source: string;
     remoteName?: string;
     storedRoot?: string;
@@ -280,22 +293,51 @@ function resolveRemoteSpec(spec: string, remotesPath: string): Omit<ResolvedEndp
 export function fetchHealthJson(baseUrl: string, timeoutMs = 2000): Promise<HealthJson> {
     return new Promise((resolve, reject) => {
         const mod = baseUrl.startsWith('https:') ? https : http;
-        const req = mod.get(`${baseUrl}/health`, { headers: { 'X-Switchboard-Client': 'switchboard-cli' } }, (res) => {
-            let body = '';
-            res.on('data', (c: Buffer) => body += c.toString());
-            res.on('end', () => {
-                try {
-                    const json = JSON.parse(body);
-                    if (json.service === 'switchboard' && json.status === 'ok') {
-                        resolve(json);
-                    } else {
-                        reject(new Error('Health endpoint did not identify as switchboard'));
-                    }
-                } catch (err) { reject(err); }
+        let settled = false;
+        let req: http.ClientRequest | undefined;
+        // A WALL-CLOCK guard, not only `req.setTimeout` — the latter arms on
+        // socket INACTIVITY, so a DNS lookup for a MagicDNS name that neither
+        // resolves nor NXDOMAINs leaves this promise pending forever. This is
+        // the FIRST dial to a named remote and the one that decides
+        // reachability: resolveApiTarget awaits it, so a hang here is not a
+        // slow command, it is a command that never returns and never errors.
+        // Same pattern isHttpsOriginReachable uses (tailnetOrigin.ts) and the
+        // same phase split apiRequest arms for a remote target.
+        const settle = (fn: () => void): void => {
+            if (settled) { return; }
+            settled = true;
+            clearTimeout(wallClock);
+            try { req?.destroy(); } catch { /* already gone */ }
+            fn();
+        };
+        const wallClock = setTimeout(
+            () => settle(() => reject(new Error(`Health check timed out after ${timeoutMs}ms reaching ${baseUrl} — the host did not answer`))),
+            timeoutMs,
+        );
+        try {
+            req = mod.get(`${baseUrl}/health`, { headers: { 'X-Switchboard-Client': 'switchboard-cli' } }, (res) => {
+                let body = '';
+                res.on('data', (c: Buffer) => body += c.toString());
+                res.on('end', () => {
+                    settle(() => {
+                        try {
+                            const json = JSON.parse(body);
+                            if (json.service === 'switchboard' && json.status === 'ok') {
+                                resolve(json);
+                            } else {
+                                reject(new Error('Health endpoint did not identify as switchboard'));
+                            }
+                        } catch (err) { reject(err as Error); }
+                    });
+                });
             });
-        });
-        req.on('error', reject);
-        req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Health check timed out')); });
+            req.on('error', (err) => settle(() => reject(err)));
+            req.setTimeout(timeoutMs, () => settle(() => reject(new Error('Health check timed out'))));
+        } catch (err) {
+            // http.get throws SYNCHRONOUSLY on a malformed host — clear the
+            // wall clock rather than leaving the process pinned for its span.
+            settle(() => reject(err as Error));
+        }
     });
 }
 
@@ -305,7 +347,7 @@ export function fetchHealthJson(baseUrl: string, timeoutMs = 2000): Promise<Heal
  * host with a stopped board. Distinguishing them is the difference between
  * "check the name" and "start the board".
  */
-function unreachableMessage(ep: ResolvedEndpoint, err: unknown): string {
+export function unreachableMessage(ep: ResolvedEndpoint, err: unknown): string {
     // Name the resolved URL AND the tier that produced it — "the URL and the
     // env var" is what the operator edits.
     const target = ep.remoteName

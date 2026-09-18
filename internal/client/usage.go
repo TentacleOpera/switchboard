@@ -35,6 +35,10 @@ const usageText = `Usage: switchboard                        (interactive front-
        switchboard status [--json]
        switchboard logs [-f|--follow]
        switchboard probe [--csv <file>] [--samples N] [--interval N] [--json]
+       switchboard remote add <name> <url> [--workspace-root <path>] [--force]
+       switchboard remote list
+       switchboard remote remove <name>
+       switchboard remote default <name> | --clear
        switchboard help [command]
        switchboard about | version
 
@@ -73,6 +77,13 @@ Connection options (resolve a remote board without Node):
   SWITCHBOARD_WORKSPACE_ROOT       Server workspace root from environment.
   SWITCHBOARD_API_TOKEN            Credential from environment.
   SWITCHBOARD_NODE_ENTRYPOINT      Override the Node host entry point for non-client verbs.
+
+remote                  Manage named remotes (~/.switchboard/remotes.json):
+                        'remote add' probes /health and one real read before
+                        storing; 'remote default' makes a remote sticky for
+                        bare commands. Every remote command prints which
+                        board answered and where that came from — a
+                        configured default is visible, not silent.
 
 Non-client verbs (local, tailnet, setup, secrets, token, import/export, stop,
 interactive menu) are delegated to the Node host entry point when one is
