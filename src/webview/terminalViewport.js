@@ -1055,11 +1055,262 @@
      * suppression window, and is not billed to the ack ledger the same way.
      */
     function writeLiveChars(entry, text) {
+        // Prediction bookkeeping runs at hand-off, not in the write callback:
+        // the reconciler must see this chunk before the NEXT chunk arrives,
+        // and WriteBuffer serialises callbacks, not hand-offs. Overlay glyph
+        // removal is the part deferred to the callback — the real bytes paint
+        // in the same frame, so neither glyph is absent for a frame.
+        scanParserInFlight(entry, text);
+        const repaintPredictions = reconcilePredictions(entry, text);
         try {
-            entry.term.write(text, () => onWriteParsed(entry, text.length));
+            entry.term.write(text, () => {
+                if (repaintPredictions) { paintPredictions(entry); }
+                onWriteParsed(entry, text.length);
+            });
         } catch (err) {
+            if (repaintPredictions) { paintPredictions(entry); }
             entry.writeThrowCount = (entry.writeThrowCount || 0) + 1;
             console.error(`[Terminals] term.write failed for terminal ${entry.name}:`, err);
+        }
+    }
+
+    // ─── Predictive local echo (mosh-style) ──────────────────────────────
+    //
+    // A typed printable character renders immediately as an underlined DOM
+    // overlay glyph — NEVER via term.write, so a wrong guess is deleted from
+    // the DOM rather than erased from the terminal buffer. The PTY stays the
+    // source of truth: reconciliation at writeLiveChars confirms matched
+    // predictions and discards the rest, and the screen converges on what the
+    // pty actually said. No RTT gate and no configuration — reconciliation
+    // that is correct at 50 ms is correct at 1 ms, and a gate would only hide
+    // a reconciliation bug on the link where it is hardest to see.
+
+    // Hidden-input heuristic — a heuristic, NOT a guarantee. The pty's
+    // termios ECHO flag lives server-side and is invisible through ssh/tmux
+    // transports; the residual leak for a nonstandard prompt is recorded in
+    // the plan's Outstanding Questions.
+    const HIDDEN_PROMPT_RE = /pass(?:word|phrase)?|pin|secret|token/i;
+    // How long output may stay silent after the first unechoed keystroke
+    // before further predictions are suppressed — sized to cover RTT+jitter
+    // so ordinary echo is never mistaken for a no-echo prompt.
+    const ECHO_LULL_MS = 1000;
+
+    function ensurePredictOverlay(entry) {
+        let overlay = entry.predictOverlay;
+        if (overlay && overlay.isConnected) { return overlay; }
+        overlay = document.createElement('div');
+        overlay.className = 'sb-echo-overlay';
+        overlay.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:3;overflow:hidden;';
+        if (entry.container) {
+            if (getComputedStyle(entry.container).position === 'static') {
+                entry.container.style.position = 'relative';
+            }
+            entry.container.appendChild(overlay);
+        }
+        entry.predictOverlay = overlay;
+        return overlay;
+    }
+
+    function paintPredictions(entry) {
+        const overlay = entry.predictOverlay;
+        if (!overlay) { return; }
+        overlay.textContent = '';
+        const preds = entry.predictions;
+        const term = entry.term;
+        if (!preds || preds.length === 0 || !term || !entry.container) { return; }
+        // .xterm-screen is the exact grid box under both renderers (DOM rows
+        // or the WebGL canvas); measuring it avoids depending on row divs
+        // that do not exist under WebGL.
+        const screen = entry.container.querySelector('.xterm-screen') || entry.container.querySelector('.xterm-rows');
+        if (!screen) { return; }
+        const orect = overlay.getBoundingClientRect();
+        const srect = screen.getBoundingClientRect();
+        const cw = srect.width / term.cols;
+        const ch = srect.height / term.rows;
+        if (!(cw > 0) || !(ch > 0)) { return; }
+        overlay.style.fontFamily = term.options.fontFamily || '';
+        overlay.style.fontSize = (term.options.fontSize || 0) + 'px';
+        const dx = srect.left - orect.left;
+        const dy = srect.top - orect.top;
+        for (const p of preds) {
+            if (p.row < 0 || p.row >= term.rows || p.col < 0 || p.col >= term.cols) { continue; }
+            const span = document.createElement('span');
+            span.textContent = p.char;
+            // Underlined = unconfirmed, mosh's convention.
+            span.style.cssText = `position:absolute;left:${dx + p.col * cw}px;top:${dy + p.row * ch}px;width:${cw}px;height:${ch}px;line-height:${ch}px;text-align:center;text-decoration:underline;`;
+            overlay.appendChild(span);
+        }
+    }
+
+    function dropAllPredictions(entry) {
+        if (entry.predictions) { entry.predictions.length = 0; }
+        if (entry.predictOverlay) { entry.predictOverlay.textContent = ''; }
+    }
+
+    function recordPrediction(entry, char) {
+        const term = entry.term;
+        if (!entry.predictions) { entry.predictions = []; }
+        let col, row;
+        const last = entry.predictions[entry.predictions.length - 1];
+        if (last) {
+            col = last.col + 1;
+            row = last.row;
+            if (col >= term.cols) { col = 0; row += 1; }
+        } else {
+            const buf = term.buffer.active;
+            col = buf.cursorX;
+            row = buf.cursorY;
+        }
+        // Past the last row the echo would scroll and the predicted position
+        // is unknowable — do not guess at all.
+        if (row >= term.rows) { return; }
+        entry.predictions.push({ char, row, col });
+        // Retire-on-silence: if ECHO_LULL_MS passes with no echo-like output,
+        // the keystrokes went somewhere that swallows input — the pending
+        // glyphs are the leak the hidden-input gate exists to prevent. The
+        // timer is armed once per silent stretch; a healthy link reconciles
+        // and clears awaitingEcho long before it fires, making it a no-op.
+        if (!entry.predictionLullTimer) {
+            entry.predictionLullTimer = setTimeout(() => {
+                entry.predictionLullTimer = null;
+                // Re-check the stamp, not just the flag: a keystroke that
+                // landed inside this timer's window re-armed the lull and
+                // owns a later deadline — only drop when the CURRENT
+                // unechoed stretch has actually run out.
+                if (entry.awaitingEcho && Date.now() - entry.unechoedInputAt >= ECHO_LULL_MS) {
+                    dropAllPredictions(entry);
+                }
+            }, ECHO_LULL_MS);
+        }
+        ensurePredictOverlay(entry);
+        paintPredictions(entry);
+    }
+
+    // Feeds one live output chunk through the prediction ledger BEFORE the
+    // chunk reaches xterm. A predicted char confirmed by the leading bytes is
+    // retired; a shorter matching prefix confirms partially; any mismatch
+    // discards every pending prediction — the authoritative bytes win.
+    // Returns true when the overlay needs repainting, which the caller defers
+    // to the write callback so the real glyph paints in the same frame the
+    // overlay glyph leaves.
+    function reconcilePredictions(entry, text) {
+        const preds = entry.predictions;
+        if (!preds || preds.length === 0) { return false; }
+        const n = Math.min(preds.length, text.length);
+        let i = 0;
+        while (i < n && preds[i].char === text[i]) { i++; }
+        if (i > 0) {
+            // A confirmed prediction IS echo arriving — reset the lull gate
+            // here too, because the printable-scan throttle can keep
+            // awaitingEcho armed through a fast-typing burst and would
+            // otherwise suppress prediction exactly when it helps most.
+            entry.awaitingEcho = false;
+        }
+        if (i === n) {
+            preds.splice(0, i);
+        } else {
+            preds.length = 0;
+        }
+        return true;
+    }
+
+    // Maintains the per-entry "parser in flight" flag: scans each live chunk
+    // for whether its tail leaves a CSI/OSC/DCS sequence unterminated, and
+    // shouldPredictEcho suppresses while set — predicting on top of a
+    // half-parsed sequence is a guess about cursor state the viewport cannot
+    // see yet.
+    function scanParserInFlight(entry, text) {
+        let state = entry.parserInFlightState || 'ground';
+        for (let i = 0; i < text.length; i++) {
+            const c = text.charCodeAt(i);
+            if (state !== 'ground' && state !== 'esc' && c === 0x1b) {
+                // ESC aborts whatever sequence was open and starts a new one.
+                state = 'esc';
+                continue;
+            }
+            switch (state) {
+                case 'ground':
+                    if (c === 0x1b) { state = 'esc'; }
+                    break;
+                case 'esc':
+                    if (c === 0x5b) { state = 'csi'; }       // [
+                    else if (c === 0x5d) { state = 'osc'; }  // ]
+                    else if (c === 0x50) { state = 'dcs'; }  // P
+                    else if (c === 0x58 || c === 0x5e || c === 0x5f) { state = 'str'; } // X ^ _ : SOS/PM/APC
+                    else if (c === 0x1b) { state = 'esc'; }  // ESC ESC restarts
+                    else if (c >= 0x20 && c <= 0x2f) { state = 'esc'; } // intermediate byte: nF seq stays open (ESC ( B …)
+                    else { state = 'ground'; }               // \ (ST) or any 2-byte seq
+                    break;
+                case 'csi':
+                    if (c >= 0x40 && c <= 0x7e) { state = 'ground'; }
+                    break;
+                case 'osc':
+                    if (c === 0x07) { state = 'ground'; }    // BEL
+                    break;
+                case 'dcs':
+                case 'str':
+                    // Terminates only on ST — handled by the ESC check above.
+                    break;
+            }
+        }
+        entry.parserInFlightState = state;
+        entry.parserInFlight = (state !== 'ground');
+    }
+
+    // The gate set: prediction is correct for a plain printable character
+    // echoed at a shell prompt and visibly wrong everywhere else — a terminal
+    // that guesses wrong in a TUI is worse than one that waits.
+    function shouldPredictEcho(entry, data, now) {
+        const term = entry.term;
+        if (!term || entry.disposed || entry.suspended) { return false; }
+        if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) { return false; }
+        // TUIs redraw rather than echo — a prediction there is garbage.
+        if (term.buffer.active.type === 'alternate') { return false; }
+        // v1 predicts a single printable character only: backspace, arrows,
+        // control characters, function keys and multi-byte input all take the
+        // not-at-all branch. That length gate is also the bracketed-paste
+        // gate — a paste arrives as one large onData call, so it can never
+        // produce per-character predictions.
+        if (data.length !== 1) { return false; }
+        const code = data.charCodeAt(0);
+        if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) { return false; }
+        // Parser mid-sequence — see scanParserInFlight.
+        if (entry.parserInFlight) { return false; }
+        // A replay write is mid-parse; predictions would stack on scrollback.
+        if (entry.suppressAnswerback) { return false; }
+        // Hidden-input gate (heuristic): the prompt row text, plus an
+        // echo-lull window — after the first unechoed keystroke, silence for
+        // longer than ECHO_LULL_MS reads as a prompt that swallows input.
+        // getLine takes an ABSOLUTE buffer index (scrollback included);
+        // cursorY is viewport-relative — baseY + cursorY is the cursor's
+        // real line. Reading cursorY alone reads scrollback line N whenever
+        // the buffer has a history, and the prompt heuristic never fires.
+        const line = term.buffer.active.getLine(term.buffer.active.baseY + term.buffer.active.cursorY);
+        if (line && HIDDEN_PROMPT_RE.test(line.translateToString())) { return false; }
+        if (entry.awaitingEcho && now - entry.unechoedInputAt > ECHO_LULL_MS) { return false; }
+        return true;
+    }
+
+    function maybePredictEcho(entry, data) {
+        const now = Date.now();
+        // The lull that suppresses NEW predictions also retires the pending
+        // ones — at a no-echo prompt nothing ever arrives to reconcile them,
+        // and underlined glyphs parked over a hidden-input line are the exact
+        // leak the gate exists to prevent.
+        if (entry.awaitingEcho && now - entry.unechoedInputAt > ECHO_LULL_MS
+            && entry.predictions && entry.predictions.length > 0) {
+            dropAllPredictions(entry);
+        }
+        if (shouldPredictEcho(entry, data, now)) {
+            recordPrediction(entry, data);
+        }
+        // Armed on every send, cleared by the next printable live frame — the
+        // echo-lull gate reads it to spot a prompt that swallows input
+        // silently. Keeps the FIRST unechoed keystroke's timestamp, so rapid
+        // typing on a healthy link never trips the gate.
+        if (!entry.awaitingEcho) {
+            entry.awaitingEcho = true;
+            entry.unechoedInputAt = now;
         }
     }
 
@@ -1079,6 +1330,13 @@
     function writeReplay(entry, text) {
         if (!entry || entry.disposed || !entry.term) { return; }
         entry.suppressAnswerback = true;
+        // The replay is part of the same byte stream the live frames continue,
+        // so the mid-escape-sequence flag must track it — a replay ending
+        // inside a CSI would otherwise leave the first live frame scanned as
+        // 'ground' and let a prediction land mid-sequence. This is stream
+        // bookkeeping only; reconciliation still lives solely in
+        // writeLiveChars.
+        scanParserInFlight(entry, text);
         try {
             entry.term.write(text, () => {
                 entry.suppressAnswerback = false;
@@ -1139,6 +1397,9 @@
         entry.disposed = true;
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.rttProbeInterval) { clearInterval(entry.rttProbeInterval); entry.rttProbeInterval = null; }
+        if (entry.predictionLullTimer) { clearTimeout(entry.predictionLullTimer); entry.predictionLullTimer = null; }
+        dropAllPredictions(entry);
+        entry.predictOverlay = null;
         cancelRendererRelease(entry);
         pendingBatchEntries.delete(entry);
         entry.exited = true;
@@ -1238,6 +1499,19 @@
             suppressAnswerback: false,
             awaitingReplayFrame: false,
             pendingModes: null,
+            // Predictive local echo — see the section near writeLiveChars.
+            // predictions: pending {char,row,col} glyphs awaiting the real
+            // echo; predictOverlay: the DOM layer they paint on (never the
+            // xterm buffer); parserInFlight*: the live stream's tail ended
+            // mid-escape-sequence; awaitingEcho/unechoedInputAt: the
+            // echo-lull half of the hidden-input gate.
+            predictions: null,
+            predictOverlay: null,
+            predictionLullTimer: null,
+            parserInFlight: false,
+            parserInFlightState: 'ground',
+            awaitingEcho: false,
+            unechoedInputAt: 0,
             inputThrottled: false,
             queuedBytes: 0,
             replayGap: false,
@@ -1551,6 +1825,9 @@
 
         let resizeTimer = null;
         const resizeObserver = new ResizeObserver(() => {
+            // Cell geometry is about to move — stored prediction positions
+            // are stale before the debounced fit even runs.
+            dropAllPredictions(entry);
             // Per-entry churn probe (Proposed Change #4): counts ONLY this
             // terminal's observer, never the global ResizeObserver the plan's
             // original 33-callback figure was taken with. The 100 ms debounce
@@ -1734,6 +2011,10 @@
                 if (data.length > entry.largestInputDataLen) entry.largestInputDataLen = data.length;
                 entry.totalInputChars = (entry.totalInputChars || 0) + data.length;
                 entry.ws.send(encodeInputFrame(data));
+                // Predictive local echo — render a printable char now as an
+                // unconfirmed overlay glyph; the real echo reconciles it at
+                // writeLiveChars. The gate set lives inside shouldPredictEcho.
+                maybePredictEcho(entry, data);
             } else {
                 // The socket is CONNECTING, in reconnect backoff, or CLOSED. This
                 // branch used to be an implicit no-op: the keystroke evaporated
@@ -1799,6 +2080,9 @@
         let lastBehind = -1;
         const update = () => {
             if (entry.disposed || !entry.term) { return; }
+            // A scroll moves viewport rows under the stored prediction
+            // positions — drop rather than paint over the wrong lines.
+            dropAllPredictions(entry);
             let behind = 0;
             try {
                 const buf = term.buffer.active;
@@ -1875,6 +2159,7 @@
         }
         // onclose was detached above, so the probe cannot clear itself.
         if (entry.rttProbeInterval) { clearInterval(entry.rttProbeInterval); entry.rttProbeInterval = null; }
+        dropAllPredictions(entry);
         // Release the renderer — a status pane paints no terminal pixels, and a
         // WebGL context held by an invisible surface is one the visible panes
         // cannot get. entry.term is NOT disposed; its buffer survives.
@@ -1996,6 +2281,8 @@
         // The RTT probe belongs to the socket that just went away — and
         // onclose was detached above, so it cannot clear its own interval.
         if (entry.rttProbeInterval) { clearInterval(entry.rttProbeInterval); entry.rttProbeInterval = null; }
+        // Same for predictions: the socket they were sent on is gone.
+        dropAllPredictions(entry);
 
         let wsUrl = `${deps.ptyHostOrigin}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
         // Connection-scoped, not per-frame: this document is a single-terminal pop-out
@@ -2094,6 +2381,9 @@
                     if (now - entry.lastPrintableAt >= PRINTABLE_SCAN_THROTTLE_MS) {
                         if (frameHasPrintable(text)) {
                             entry.lastPrintableAt = now;
+                            // Echo-like output arrived — the lull gate's
+                            // silent-prompt signal resets.
+                            entry.awaitingEcho = false;
                             if (deps.workingSilenceShown.has(entry.name)) { deps.clearWorkingSilence(entry.name); }
                         }
                     }
@@ -2140,6 +2430,9 @@
                     if (now - entry.lastPrintableAt >= PRINTABLE_SCAN_THROTTLE_MS) {
                         if (frameHasPrintable(rawData)) {
                             entry.lastPrintableAt = now;
+                            // Echo-like output arrived — the lull gate's
+                            // silent-prompt signal resets.
+                            entry.awaitingEcho = false;
                             if (deps.workingSilenceShown.has(entry.name)) { deps.clearWorkingSilence(entry.name); }
                         }
                     }
@@ -2254,6 +2547,7 @@
                     // onmessage catch swallows it into a console.warn.
                     deps.dismissStartupCurtain(entry.name);
                     deps.clearWorkingSilence(entry.name);
+                    dropAllPredictions(entry);
                     entry.exited = true;
                     if (entry.term) { entry.term.options.disableStdin = true; }
                     deps.refreshInputState(entry.name);
@@ -2271,6 +2565,7 @@
                         deps.dismissStartupCurtain(entry.name);
                         deps.clearWorkingSilence(entry.name);
                         const exitCode = typeof frame.code === 'number' ? frame.code : 0;
+                        dropAllPredictions(entry);
                         entry.exited = true;
                         // A stale startup-command death (code 0, no output, inside
                         // the first-readiness window) is named for what it is —
@@ -2304,6 +2599,9 @@
             // The probe belongs to this socket — cleared before the exited
             // early-return so a dead terminal's interval cannot outlive it.
             if (entry.rttProbeInterval) { clearInterval(entry.rttProbeInterval); entry.rttProbeInterval = null; }
+            // Predictions pending across a reconnect die with the socket —
+            // the replay that follows cannot confirm them.
+            dropAllPredictions(entry);
             entry.pendingAttribution = null;
             if (entry.exited) { return; }
             // Same strand as ws.onopen: a socket that died mid-paste will never get
