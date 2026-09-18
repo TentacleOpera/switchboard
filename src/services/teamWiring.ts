@@ -65,7 +65,7 @@ export const EXTERNAL_AGENT_PULL_INSTRUCTION =
     + 'Save the returned token — you need it for every subsequent call.\n'
     + '2. HEARTBEAT: POST http://127.0.0.1:<port>/agents/heartbeat with {"seat":"<your name>","token":"<token>"} every 50 seconds (≤60s).\n'
     + '3. POLL: GET http://127.0.0.1:<port>/agents/inbox?seat=<your name>&token=<token> — returns pending dispatch items. Poll every 5-10 seconds.\n'
-    + '4. DONE: When you finish a dispatched item, report completion via the mechanism the dispatch item specifies (POST /kanban/queue/done, POST /kanban/task/complete, etc.).\n'
+    + '4. DONE: When you finish a dispatched item, report completion with the CLI — `node "<cliPath>" done` for your own work, or `node "<cliPath>" accept --plan "<planId>"` if you are a lead accepting a subtask. Do NOT POST the completion endpoints directly: they are state-changing, so the CSRF guard refuses any request without an `X-Switchboard-Client` marker, and the CLI is what sets it.\n'
     + 'The port comes from your SWITCHBOARD STATUS line. Use http://127.0.0.1:<port> for all calls.';
 
 /**

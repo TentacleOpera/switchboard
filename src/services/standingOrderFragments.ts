@@ -121,7 +121,7 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + 'Report YOUR task, and only yours. Do not infer that a feature is finished from board\n'
         + 'position: a column advances when work STARTS, not when it finishes, so "every subtask is\n'
         + 'in a coding column" is not evidence of anything. Handing a feature to review is your\n'
-        + 'lead\'s call, not yours — the lead asserts completion with POST /kanban/task/complete.\n\n'
+        + 'lead\'s call, not yours — the lead asserts completion with `switchboard accept --plan`.\n\n'
         + 'Before reporting, re-read your full orders at .switchboard/teams/' + ctx.teamId + '/member-orders.md';
 }
 

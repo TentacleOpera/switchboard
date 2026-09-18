@@ -60,6 +60,7 @@ import { WsHub } from './wsHub';
 import { PLANNING_VERBS, SETUP_VERBS, TASKVIEWER_VERBS, TICKETS_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
 import { isAllowedHostFor, isAllowedOriginFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, normalizeIpv6Literal, type BindPolicy } from '../utils/loopbackHostname';
+import { substituteCliPath } from '../utils/cliPathToken';
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION, TURN_END_VERIFY_INSTRUCTION_STANDALONE } from './PlanIngestionEngine';
@@ -1141,12 +1142,38 @@ function composeAcceptanceInstruction(
     planId: string | undefined,
     workspaceRoot: string
 ): string {
-    const idPart = planId ? JSON.stringify(planId) : '"<this subtask\'s planId>"';
-    return ' When you are done with this subtask, commit, then POST /kanban/task/complete with '
-        + `{"from":${JSON.stringify(leadName)},"planId":${idPart},"workspaceRoot":${JSON.stringify(workspaceRoot)}} `
-        + 'against the API base named in your SWITCHBOARD STATUS line. Post every time — you reject by sending '
-        + `a fix round first, not by withholding the post. Until you post, the seat is not cleared and you `
-        + 'cannot be handed the next subtask.';
+    // The CLI is the ONLY supported way to assert completion, and naming it here
+    // is load-bearing rather than stylistic. The endpoint behind it
+    // (`POST /kanban/task/complete`) is state-changing, so it is covered by the
+    // CSRF guard in `_isAllowedCrossSiteRequest`: a POST carrying no `Origin`,
+    // no `Sec-Fetch-Site` and no `X-Switchboard-Client` marker is refused with
+    // 403 `cross-site request rejected`. That is deliberate — the 2026-09-10
+    // correction records that curl is not a supported client — but this text used
+    // to instruct the lead to make exactly that unsupported call, naming the raw
+    // endpoint and the API base and nothing else. A lead that obeyed it literally
+    // got a 403; a lead that ignored it and reached for the CLI succeeded,
+    // because `cli.ts` sets the marker on every request. So the documented path
+    // failed and the undocumented one worked, and every agent "fixed" it by
+    // abandoning the directive — which is why the directive itself survived
+    // unfixed. Do not reintroduce a raw-HTTP form here, in the feature-complete
+    // sibling, or in the team prompts: if a caller must be told how to reach the
+    // board, tell it the CLI.
+    const idPart = planId ? JSON.stringify(planId).replace(/"/g, '') : '<this subtask\'s planId>';
+    void workspaceRoot; // the CLI resolves its own workspace root and API port
+    // Substituted HERE rather than at the call sites: this module does not run
+    // its output through the prompt builder, so an unresolved `<cliPath>` would
+    // reach the lead verbatim and be exactly as unrunnable as the POST it
+    // replaces. Both composition roots wire the seam this reads
+    // (`bootstrap.ts` and `TaskViewerProvider.ts` both call
+    // `setBundledCliPath`), so it resolves on either host.
+    return substituteCliPath(
+        ' When you are done with this subtask, commit, then run '
+        + `\`node "<cliPath>" accept --plan "${idPart}"\`. `
+        + `You are ${leadName}; accept with the SUBTASK's planId, never the feature's. `
+        + 'Accept every time — you reject by sending '
+        + 'a fix round first, not by withholding the accept. Until you accept, the seat is not cleared and you '
+        + 'cannot be handed the next subtask.'
+    );
 }
 
 /**
@@ -4921,9 +4948,12 @@ export class LocalApiServer {
                     // instruction it was handed. The subtasks are already loaded
                     // above, so the count costs nothing.
                     const outstanding = subs.filter(sub => sub && !sub.completedAt).length;
+                    // Names the CLI, not the endpoint: an agent that reads this
+                    // error is being told how to retry, and a raw-HTTP retry is
+                    // refused by the CSRF guard (see composeAcceptanceInstruction).
                     const error = outstanding > 0
-                        ? `This planId is a feature with ${outstanding} of ${subs.length} subtasks still incomplete. Do NOT complete the feature. POST /kanban/task/complete with the planId of the SUBTASK you were dispatched, not the feature. POST /kanban/feature/complete only once every subtask has reported done.`
-                        : 'This planId is a feature. Use POST /kanban/feature/complete with { from, planId, workspaceRoot } to complete all subtasks and clear the team.';
+                        ? substituteCliPath(`This planId is a feature with ${outstanding} of ${subs.length} subtasks still incomplete. Do NOT complete the feature. Run \`node "<cliPath>" accept --plan "<the SUBTASK's planId>"\` for the subtask you were dispatched, not the feature. Complete the feature only once every subtask has reported done.`)
+                        : substituteCliPath('This planId is a feature, not a subtask. Run `node "<cliPath>" accept --plan "<planId>"` once per subtask; the system completes the feature when the last one is accepted.');
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: false, error, outstandingSubtasks: outstanding }));
                     return;

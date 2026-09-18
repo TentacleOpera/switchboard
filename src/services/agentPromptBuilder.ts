@@ -1370,7 +1370,7 @@ export function ensureCompletionDirective(text: string): string {
 // that carry it do not break, but the body no longer instructs agents to
 // write report files — the completion POST (POST /kanban/queue/done) is the
 // only signal that clears a card, and `switchboard reports` is the read path.
-export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: The host records every turn-end (finished, blocked, stalled) as a plan_events row — queryable via \`switchboard reports [--kind blocked]\`. You do NOT need to write a report file. This is IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done via \`switchboard done\`) — the completion POST is the signal that clears your card. Do NOT skip the completion POST. If you are blocked and cannot continue, report the block in your status and stop; the host records the turn-end and the card stays parked for review.`;
+export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: The host records every turn-end (finished, blocked, stalled) as a plan_events row — queryable via \`switchboard reports [--kind blocked]\`. You do NOT need to write a report file. This is IN ADDITION TO, never INSTEAD OF, the completion report (\`node "<cliPath>" done\`) — that is the signal that clears your card. Do NOT skip it, and do NOT substitute a raw HTTP POST: the endpoint behind it is state-changing, so the CSRF guard refuses any request without an \`X-Switchboard-Client\` marker, and the CLI is what sets it. If you are blocked and cannot continue, report the block in your status and stop; the host records the turn-end and the card stays parked for review.`;
 
 /**
  * Idempotent report-directive guard. Appends MISSION_CONTROL_REPORT_DIRECTIVE to

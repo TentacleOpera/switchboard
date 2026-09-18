@@ -6373,7 +6373,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same plan: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that plan's planId>","workspaceRoot":"<your cwd>"} against the API base named in your SWITCHBOARD STATUS line. Post per plan, with that plan's planId. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next plan.`,
+            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then run \`node "<cliPath>" accept --plan "<that plan's planId>"\`. You are ${originVal}. Accept per plan, with that plan's planId. Do NOT POST the endpoint behind it directly — the CSRF guard refuses a request with no \`X-Switchboard-Client\` marker, and the CLI is what sets it. Nothing downstream happens until you accept: the coder is not cleared and you cannot be handed the next plan.`,
             '',
             'BATCH RULES:',
             '- The plans in this batch are independent and possibly unrelated.',
@@ -6476,7 +6476,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * works the feature and reach every coding role; the drive block is the
      * lead's operating contract and must not.
      *
-     * It carries "CLOSE OUT EVERY SUBTASK … POST /kanban/task/complete", which is
+     * It carries "CLOSE OUT EVERY SUBTASK … accept --plan", which is
      * the HEAD's assertion — see the plan `add-a-task-complete-endpoint-for-the-lead`
      * — and its own wording gives it away: "the coder is not cleared and you
      * cannot be handed the next subtask" is nonsense addressed to a coder. The
