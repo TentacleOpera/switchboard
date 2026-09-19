@@ -1430,11 +1430,17 @@ export function importDelegatesIntoTeams(
  * impossible for the caller to observe un-migrated data — even on an install
  * that has never opened the TEAMS tab in the current session.
  *
- * Used by the auto-start trigger in both hosts' `handlePtyVerb`: when an
- * unparented terminal is created whose role heads a team, the team's members
- * are spawned alongside it. The lookup is a read-only DB query; the definition
- * is not modified at spawn time. The in-memory conversion is not persisted
- * here — `_loadAgentGroups` does the persist when the TEAMS tab is opened.
+ * NOT an auto-start trigger any more. This once fired when an unparented
+ * terminal was created whose role headed a team, spawning the team around it.
+ * That trigger is gone — a team is started explicitly, from its rail icon or by
+ * the controller — and the docblock that still described it sent readers looking
+ * for a spawn path that does not exist.
+ *
+ * The only remaining caller is the autoban DISPATCH TARGET lookup in
+ * `_selectAutobanTerminal`, which asks "does a team head this role?" in order to
+ * pick an existing terminal, never to create one. The lookup is a read-only DB
+ * query. The in-memory conversion is not persisted here — `_loadAgentGroups`
+ * does the persist when the TEAMS tab is opened.
  */
 export async function findTeamForHeadRole(db: any, headRole: string): Promise<any | null> {
     if (!db || !headRole) { return null; }

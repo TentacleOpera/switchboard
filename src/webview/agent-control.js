@@ -1806,8 +1806,16 @@
                 hintDiv.style.flexBasis = '100%';
                 hintDiv.style.fontSize = '10px';
                 hintDiv.style.color = 'var(--text-secondary)';
-                hintDiv.textContent = 'This team does nothing until you add a member. Add one and every '
-                    + group.headRole + ' you start will bring it along, already told what it is there for.';
+                // Auto-start is RETIRED. This used to read "every <headRole> you
+                // start will bring it along", describing a trigger that spawned a
+                // team around any bare head-role terminal. That trigger no longer
+                // exists — `findTeamForHeadRole` is reached only by the dispatch
+                // target lookup now — and starting a team by starting one of its
+                // roles was the wrong model anyway: you start a team by starting
+                // the team.
+                hintDiv.textContent = 'This team has no seats, so starting it opens its '
+                    + group.headRole + ' and nothing else. Add seats for it to hand work to, '
+                    + 'then start the team from its icon on the rail.';
                 row.appendChild(hintDiv);
             }
             const actions = document.createElement('div');
