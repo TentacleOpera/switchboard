@@ -1221,7 +1221,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(setupDisposable);
 
     const initiatePlanDisposable = registerSwitchboardCommand('switchboard.initiatePlan', async () => {
-        await taskViewerProvider?.createDraftPlanTicket();
+        // Return the result — KanbanProvider's createPlan arm reads it: false means
+        // the write failed, undefined (unbridged) means nothing ran.
+        return await taskViewerProvider?.createDraftPlanTicket();
     });
     context.subscriptions.push(initiatePlanDisposable);
 

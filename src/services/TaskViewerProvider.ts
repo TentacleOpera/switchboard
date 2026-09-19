@@ -24179,7 +24179,7 @@ Each plan file must include:
         await this._seams().commands.executeCommand('vscode.open', vscode.Uri.file(planFileAbsolute));
     }
 
-    public async createDraftPlanTicket(initiatorProject?: string | null): Promise<void> {
+    public async createDraftPlanTicket(initiatorProject?: string | null): Promise<boolean> {
         // No VS Code dialogue — create directly with default title.
         // The project panel opens in edit mode (autoEdit: true) so the user
         // can rename the plan immediately in the editor.
@@ -24196,8 +24196,15 @@ Each plan file must include:
             let activatedInProjectPanel = false;
             if (workspaceRoot && this._kanbanProvider) {
                 const planFileRelative = path.relative(workspaceRoot, planFileAbsolute).replace(/\\/g, '/');
-                await this._kanbanProvider.activatePlanInProjectPanel(planFileRelative, workspaceRoot, true);
-                activatedInProjectPanel = this._kanbanProvider.hasPlanningPanelProvider();
+                try {
+                    await this._kanbanProvider.activatePlanInProjectPanel(planFileRelative, workspaceRoot, true);
+                    activatedInProjectPanel = this._kanbanProvider.hasPlanningPanelProvider();
+                } catch {
+                    // Headless hosts have no editor panel: openProject's createWebviewPanel
+                    // throws. The plan file is already written — degrade to the raw-file
+                    // fallback instead of reporting a failure for a create that succeeded.
+                    activatedInProjectPanel = false;
+                }
             }
             // Fallback: if the project panel couldn't be activated (no planning panel provider,
             // no workspace root), open the raw file so the user at least sees something.
@@ -24207,9 +24214,11 @@ Each plan file must include:
             }
             this.postMessage({ type: 'planCreated' });
             this._kanbanProvider?.postMessage?.({ type: 'planCreated' });
+            return true;
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._seams().ui.showErrorMessage(`Plan creation failed: ${msg}`);
+            return false;
         }
     }
 

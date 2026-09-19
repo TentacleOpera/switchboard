@@ -184,3 +184,7 @@ the ground truth for this plan and should fall silent when it is done.
   flag per control. `terminalCreateAvailable` sets the precedent for one; naming four or five more
   invites a single `capabilities: {}` object instead. Proceeding with one object rather than one flag
   per button.
+
+## Completion Summary
+
+Bridged all ten previously unbridged command ids in `src/standalone/bootstrap.ts` by delegating to the same `TaskViewerProvider` methods `extension.ts` registers, plus `analystMapFromKanbanBatch`, and classified `copyPlanFromKanban`/`addCoderTerminalFromKanban` as unavailable-by-design and `openSetupPanel` as client-owned in the registration block's audit comment. `uncompleteCard` now rolls back only on an explicit `false`, so a missing bridge no longer re-completes a card it just un-completed. `recoverSelected`/`recoverAll`/`batchDispatchLow`/`createPlan`/`codeMapSelected` report real command results instead of counting `undefined` as success, `codeMapSelected` dispatches a single `analystMapFromKanbanBatch` call, and both confirm gates (`recoverAll`, `codeMapConfirm`) were removed per repo rules. `createDraftPlanTicket` returns `Promise<boolean>` with a headless-safe panel-activation guard, and `extension.ts`'s `initiatePlan` handler returns that result. Compilation, tests, and live-host verification were skipped per run directives — the running host still serves pre-change `dist/` bytes.

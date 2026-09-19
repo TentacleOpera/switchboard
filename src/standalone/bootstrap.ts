@@ -2042,6 +2042,72 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         return await service.importBundle(bundlePath);
     });
 
+    // ─── Kanban command bridge ───────────────────────────────────────────────
+    // The ten ids KanbanProvider arms dispatch that were unbridged on this host
+    // (plan: `kanban-buttons-that-silently-do-nothing-in-standalone`). Unbridged,
+    // the registry-first seam fell through to vscodeShim's warn-and-undefined, and
+    // the arms reported success — `uncompleteCard` even read the `undefined` as a
+    // failed restore and rolled back DB writes it had already committed. Every
+    // handler delegates to the SAME TaskViewerProvider method extension.ts
+    // registers (extension.ts:1930-2007), so the two hosts cannot drift in
+    // behaviour — only in this wiring.
+    //
+    // Classification for the command-seam audit's allowlist — every id here is
+    // BRIDGED (no disabled-with-flag kanban arms were needed):
+    //   restorePlanFromKanban            → handleKanbanRestorePlan      (uncompleteCard, recoverSelected, recoverAll)
+    //   kanbanBackwardMove               → handleKanbanBackwardMove     (uncompleteCard)
+    //   kanbanForwardMove                → handleKanbanForwardMove      (moveSelected/moveAll else-arm)
+    //   completePlanFromKanban           → handleKanbanCompletePlan     (completePlan, completeSelected, completeAll)
+    //   batchDispatchLow                 → handleBatchDispatchLow       (batchDispatchLow)
+    //   analystMapFromKanban             → handleAnalystContextMap      (single-session code-map callers)
+    //   analystMapFromKanbanBatch        → handleAnalystContextMapBatch (codeMapSelected, codeMapConfirm)
+    //   setPairProgrammingModeFromKanban → setPairProgrammingMode       (setPairProgrammingMode)
+    //   initiatePlan                     → createDraftPlanTicket        (PlanningPanelProvider createPlan; the kanban
+    //                                                                    `createPlan` verb is intercepted above and
+    //                                                                    never dispatches this id on this host)
+    //   fullSync                         → ingestionEngine scan + pushFullState. The board's `ready`/`refresh` verbs are
+    //                                                                    intercepted by kanbanVerb (pushFullState), but
+    //                                                                    Agent Control's `refresh` delegates into
+    //                                                                    kanbanService.refresh → this command. On the
+    //                                                                    extension it is taskViewerProvider.fullSync's
+    //                                                                    file→DB scan; the shared engine's triggerScan
+    //                                                                    is that scan's standalone path.
+    //
+    // Deliberately NOT bridged (classification: unavailable-by-design, arm already
+    // reports failure honestly):
+    //   copyPlanFromKanban — the copy lands on the OS clipboard; headless has no
+    //     server-side clipboard (the seam is a console.log no-op), so a bridge would
+    //     report success for a copy that reached nothing. Unbridged, the copyPlanLink
+    //     arm reads the `undefined` as failure and reports it — the honest outcome.
+    //   addCoderTerminalFromKanban — extension-only by design; the board payload
+    //     carries terminalCreateAvailable:false and the button renders disabled.
+    //   openSetupPanel — client-owned on this host: transport.js's
+    //     PANEL_SWITCH_VERBS intercepts the verb in the page and switches the
+    //     shell to the setup panel, so the arm's command dispatch is never
+    //     reached. Unbridged here is correct — a registration would be dead code.
+    switchboardCommandRegistry.register('switchboard.restorePlanFromKanban', async (planId: string, wsRoot?: string) =>
+        taskViewerProvider.handleKanbanRestorePlan(planId, wsRoot || workspaceRoot));
+    switchboardCommandRegistry.register('switchboard.kanbanBackwardMove', async (sessionIds: string[], targetColumn: string, wsRoot?: string) =>
+        taskViewerProvider.handleKanbanBackwardMove(sessionIds, targetColumn, wsRoot || workspaceRoot));
+    switchboardCommandRegistry.register('switchboard.kanbanForwardMove', async (sessionIds: string[], targetColumn: string, wsRoot?: string, sourceColumn?: string) =>
+        taskViewerProvider.handleKanbanForwardMove(sessionIds, targetColumn, wsRoot || workspaceRoot, sourceColumn));
+    switchboardCommandRegistry.register('switchboard.completePlanFromKanban', async (sessionId: string, wsRoot?: string) =>
+        taskViewerProvider.handleKanbanCompletePlan(sessionId, wsRoot || workspaceRoot));
+    switchboardCommandRegistry.register('switchboard.batchDispatchLow', async (wsRoot?: string) =>
+        taskViewerProvider.handleBatchDispatchLow(wsRoot || workspaceRoot));
+    switchboardCommandRegistry.register('switchboard.analystMapFromKanban', async (sessionId: string, wsRoot?: string) =>
+        taskViewerProvider.handleAnalystContextMap(sessionId, wsRoot || workspaceRoot));
+    switchboardCommandRegistry.register('switchboard.analystMapFromKanbanBatch', async (sessionIds: string[], wsRoot?: string) =>
+        taskViewerProvider.handleAnalystContextMapBatch(sessionIds, wsRoot || workspaceRoot));
+    switchboardCommandRegistry.register('switchboard.setPairProgrammingModeFromKanban', async (mode: string) =>
+        taskViewerProvider.setPairProgrammingMode(mode));
+    switchboardCommandRegistry.register('switchboard.initiatePlan', async () =>
+        taskViewerProvider.createDraftPlanTicket());
+    switchboardCommandRegistry.register('switchboard.fullSync', async () => {
+        await ingestionEngine.triggerScan(workspaceRoot);
+        await pushFullState();
+    });
+
     const moveSessionsToColumn = async (sessionIds: string[], targetColumn: string) => {
         for (const sid of sessionIds) {
             const plan = await db.getPlanBySessionId(sid);

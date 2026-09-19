@@ -12731,8 +12731,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 let recovered = 0;
                 for (const sid of sessionIds) {
                     try {
-                        await this._seams().commands.executeCommand('switchboard.restorePlanFromKanban', sid);
-                        recovered++;
+                        // Count only an explicit true — an unbridged command resolves
+                        // `undefined` (nothing happened) and a declined restore resolves
+                        // false; neither is a recovery.
+                        const ok = await this._seams().commands.executeCommand<boolean>('switchboard.restorePlanFromKanban', sid);
+                        if (ok === true) { recovered++; }
                     } catch (e) {
                         console.error(`[KanbanProvider] Failed to recover plan ${sid}:`, e);
                     }
@@ -12740,8 +12743,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (recovered > 0) {
                     void this._seams().ui.showInformationMessage(`↩ Recovered ${recovered} plan(s).`);
                     await this._refreshBoard(msg.workspaceRoot);
+                    return { success: true, recovered };
                 }
-                return { success: true, recovered };
+                if (sessionIds.length > 0) {
+                    const error = `No plans could be recovered (0 of ${sessionIds.length}).`;
+                    this.postMessage({ type: 'showStatusMessage', message: error, isError: true });
+                    return { success: false, recovered: 0, error };
+                }
+                return { success: true, recovered: 0 };
             }
             case 'archiveSelected': {
                 const sessionIds: string[] = msg.sessionIds || [];
@@ -12757,18 +12766,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 return { success: false, error: 'The archive export has been removed. Completed cards leave the board via the hot window; their rows stay in the board store.' };
             }
             case 'recoverAll': {
-                const count = msg.count || 0;
-                const confirm = await this._seams().ui.showWarningMessage(
-                    `Recover ${count} completed plan(s) back to the active board?`,
-                    'Recover', 'Cancel'
-                );
-                if (confirm !== 'Recover') return { success: false, error: 'Cancelled' };
+                // No confirm gate: banned by repo rules, and dead on the headless host —
+                // the shim's showWarningMessage resolves undefined, so the gate cancelled
+                // every run before a single restore was attempted.
                 const sessionIds: string[] = msg.sessionIds || [];
                 let recovered = 0;
                 for (const sid of sessionIds) {
                     try {
-                        await this._seams().commands.executeCommand('switchboard.restorePlanFromKanban', sid);
-                        recovered++;
+                        // Count only an explicit true — `undefined` (unbridged) and false
+                        // (declined) both mean this plan was not recovered.
+                        const ok = await this._seams().commands.executeCommand<boolean>('switchboard.restorePlanFromKanban', sid);
+                        if (ok === true) { recovered++; }
                     } catch (e) {
                         console.error(`[KanbanProvider] Failed to recover plan ${sid}:`, e);
                     }
@@ -12776,8 +12784,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (recovered > 0) {
                     void this._seams().ui.showInformationMessage(`↩ Recovered ${recovered} plan(s).`);
                     await this._refreshBoard(msg.workspaceRoot);
+                    return { success: true, recovered };
                 }
-                return { success: true, recovered };
+                if (sessionIds.length > 0) {
+                    const error = `No plans could be recovered (0 of ${sessionIds.length}).`;
+                    this.postMessage({ type: 'showStatusMessage', message: error, isError: true });
+                    return { success: false, recovered: 0, error };
+                }
+                return { success: true, recovered: 0 };
             }
             // showInfo / showWarning: the toast is the editor's channel; the
             // `showStatusMessage` push is the HEADLESS degrade for it, because the shim's
@@ -12941,8 +12955,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!workspaceRoot) {
                     return { success: false, error: 'No workspace root resolved' };
                 }
-                await this._seams().commands.executeCommand('switchboard.batchDispatchLow', workspaceRoot);
-                return { success: true };
+                // Report the command's real result: the handler returns false when no
+                // eligible plans or no terminal runtime exists, and `undefined` when the
+                // command is unbridged — neither may read as a dispatch that happened.
+                const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.batchDispatchLow', workspaceRoot);
+                return dispatched === true
+                    ? { success: true }
+                    : { success: false, error: 'Batch dispatch did not run — no eligible plans, no terminal runtime, or the command is not bridged on this host.' };
             }
             case 'batchLowComplexity': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -13950,10 +13969,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     _schedulePlanStateWrite(db, workspaceRoot, sessionId, targetColumn,
                         targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                     const ok = await this._seams().commands.executeCommand<boolean>('switchboard.restorePlanFromKanban', planId, workspaceRoot);
-                    if (ok) {
-                        await this._seams().commands.executeCommand('switchboard.kanbanBackwardMove', [sessionId], targetColumn, workspaceRoot);
-                        successCount++;
-                    } else {
+                    // Rollback ONLY on an explicit false. `undefined` means "nobody answered"
+                    // (unbridged host) or the handler threw — never "the restore failed", and
+                    // the DB writes above already landed: reverting them on `undefined` made
+                    // this button un-complete then instantly re-complete on the standalone host.
+                    if (ok === false) {
                         // Rollback DB changes if restore failed (re-cascade feature subtasks to COMPLETED).
                         await db.updateStatus(sessionId, 'completed');
                         if (featurePlanId) {
@@ -13968,6 +13988,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                         _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
                             'completed').catch(() => { /* fire-and-forget */ });
+                    } else {
+                        await this._seams().commands.executeCommand('switchboard.kanbanBackwardMove', [sessionId], targetColumn, workspaceRoot);
+                        successCount++;
                     }
                 }
                 await this._refreshBoard(workspaceRoot);
@@ -14122,8 +14145,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     console.error('[KanbanProvider] DB creation before plan creation failed:', e);
                 }
 
-                await this._seams().commands.executeCommand('switchboard.initiatePlan');
-                return { success: true };
+                // Report the command's real result: createDraftPlanTicket returns false
+                // when the write failed, and `undefined` means the command is unbridged —
+                // neither may read as a plan that was created.
+                const initiated = await this._seams().commands.executeCommand<boolean>('switchboard.initiatePlan');
+                return initiated === true
+                    ? { success: true }
+                    : { success: false, error: 'Plan creation did not run — the initiatePlan command is not bridged on this host.' };
             case 'toggleBacklogView':
                 this._showingBacklog = !this._showingBacklog;
                 this.postMessage({ type: 'backlogViewState', showing: this._showingBacklog });
@@ -14439,19 +14467,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
             case 'importFromClipboard':
                 await this._seams().commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
                 return { success: true };
-            case 'codeMapConfirm': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
-                    return { success: false, error: 'workspaceRoot and sessionIds are required' };
-                }
-                const confirm = await this._seams().ui.showWarningMessage(
-                    `Run code map on all ${msg.sessionIds.length} plans in this column?`,
-                    'Run All', 'Cancel'
-                );
-                if (confirm !== 'Run All') { return { success: false, error: 'Cancelled' }; }
-                msg.type = 'codeMapSelected';
-            }
-            // falls through
+            case 'codeMapConfirm':
+            // No confirm gate: banned by repo rules, and dead on the headless host —
+            // the shim's showWarningMessage resolves undefined, so the gate cancelled
+            // every run. The button's intent IS the run — falls through.
             case 'codeMapSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
@@ -14462,20 +14481,20 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     void this._seams().ui.showWarningMessage('Analyst agent is not available.');
                     return { success: false, error: 'Analyst agent is not available.' };
                 }
-                let succeeded = 0;
-                let failed = 0;
-                for (const sessionId of msg.sessionIds) {
-                    try {
-                        await this._seams().commands.executeCommand('switchboard.analystMapFromKanban', sessionId, workspaceRoot);
-                        succeeded++;
-                    } catch (err) {
-                        failed++;
-                        console.error(`[KanbanProvider] Code map failed for session ${sessionId}:`, err);
-                    }
+                // One batch dispatch maps every selected plan in a single analyst
+                // prompt (handleAnalystContextMapBatch — same delegate the extension
+                // registers). Report the command's real result: `undefined` means
+                // unbridged, false means the dispatch declined (no analyst seat, no
+                // resolvable plans) — neither may read as a map that ran.
+                const mapped = await this._seams().commands.executeCommand<boolean>(
+                    'switchboard.analystMapFromKanbanBatch', msg.sessionIds, workspaceRoot);
+                if (mapped === true) {
+                    this.postMessage({ type: 'showStatusMessage', message: `Code map dispatched for ${msg.sessionIds.length} plan(s).`, isError: false });
+                    return { success: true, dispatched: msg.sessionIds.length };
                 }
-                const failMsg = failed > 0 ? ` ${failed} failed.` : '';
-                this.postMessage({ type: 'showStatusMessage', message: `Code map dispatched for ${succeeded}/${msg.sessionIds.length} plan(s).${failMsg}`, isError: false });
-                return { success: true, dispatched: succeeded, failed };
+                const error = 'Code map did not run — no resolvable plans, no analyst dispatch, or the command is not bridged on this host.';
+                this.postMessage({ type: 'showStatusMessage', message: error, isError: true });
+                return { success: false, dispatched: 0, error };
             }
             case 'getDbPath': {
                 const dbPath = this._seams().pathConfig.getConfigString('kanban.dbPath') || '.switchboard/kanban.db';
