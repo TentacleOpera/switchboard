@@ -182,3 +182,18 @@ via `/health`) over hardcoding, so the eventual measurement lands in one place.
 - Confirm the host is running the `GoPtyFleetProjection` binary-frame fix **before** any manual test.
 - A seat with a frozen heartbeat renders as `unknown`/`stale`, never `idle`.
 - A genuinely quiet-but-live seat renders `idle`; a seat producing output renders `working`.
+
+## Dependency, confirmed 2026-09-19 — this cannot land first
+
+This plan derives operator-facing liveness from heartbeats. **The heartbeat has never
+stamped a row**, which is the subject of `f877e48a` (under the
+`8033c64d` feature — "the ten-minute liveness blackout").
+
+Coding this first does not improve the surfaces; it replaces *"every live shell reads
+active"* with *"every seat reads idle"*, because the signal it switches to is not being
+produced. That is a worse answer than the one being replaced, and it would look like a
+regression to the operator.
+
+`8033c64d` lands first. See the blocker recorded on `f877e48a`: the column the
+heartbeat would write to is not present on the live board at all, so the prerequisite
+may be larger than "restore the stamp".

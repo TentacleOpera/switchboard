@@ -245,3 +245,31 @@ Key risks: (1) the `create()` reorder must preserve the load-bearing env spread 
 ## Outstanding Questions
 
 - **[user]** Should the VS Code terminal creation path (`vscode.window.createTerminal`, used by `startMissionControlFromKanban`) also refuse no-command roles? It does not go through `PtyFleetService.create()` and is not addressed by this plan. Proceeding on the assumption that the pty fleet is the primary path and the VS Code terminal path is legacy — but if a no-command role can be seated via `vscode.window.createTerminal`, the defect persists there.
+
+## Conflict with shipped behaviour (2026-09-19) — decide, do not just implement
+
+This plan says seating a role with no agent CLI **must fail**. What shipped instead is
+an **advisory**, and the two cannot both be true.
+
+`resolveCommandlessRoles` (`agentGroupInstantiation.ts`) computes exactly the roles this
+plan is about, and its docblock states the position outright: *"Advisory, NOT a gate.
+`injectStartupCommand` returns silently when a role resolves to nothing, so the seat
+spawns as a bare shell."* Team start reports the list and proceeds. On 2026-09-19 that
+report was also surfaced **before** a start, on each team's card in the TEAMS tab
+("Coding needs a startup command for: coder, intern"), so the operator is now told
+ahead of time rather than after the seats are open.
+
+Implementing this plan flips advisory → refusal. That is a legitimate design — a bare
+shell is a useless seat — but it is a **change of position**, not a bug fix, and it
+will break the "team start reports commandlessRoles and proceeds" contract and the
+tests pinning it (`standalone-agent-team-isolation-contract`).
+
+Decide which is wanted, and say so here before coding:
+
+- **Refuse** — then the pre-start report becomes a warning about something that will
+  be rejected, `instantiateAgentGroupCore` returns a failure, and every caller that
+  currently starts-with-a-toast has to handle it.
+- **Keep advisory** — then this plan is superseded by the report and should be retired,
+  not coded.
+
+The `shell` / `NO_ROLE` exception in the goal above is unaffected either way.

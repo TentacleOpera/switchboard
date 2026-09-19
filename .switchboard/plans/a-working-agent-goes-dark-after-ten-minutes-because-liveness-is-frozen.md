@@ -321,3 +321,36 @@ detached from reality.
 - Kill a seat mid-dispatch; its card clears on the next sweep.
 - Confirm a commit made by that seat carries its `Switchboard-Plan` trailer — the downstream symptom
   that motivated this card.
+
+## Blocker found in the live board (2026-09-19) — check this before coding
+
+Measured on the operator's board (`~/.switchboard/boards/<id>.db`), migration version
+**83**, which is current — the board is not behind:
+
+```
+plan_runtime_state columns:   plan_id, device_id, workspace_id,
+                              dispatched_agent, dispatched_ide,
+                              updated_at, dispatched_team_group        (7)
+KanbanDatabase's backfill
+INSERT names:                 ... dispatched_terminal, dispatched_at,
+                              last_liveness_at, blocked_at             (4 NOT PRESENT)
+tables carrying last_liveness_at anywhere: none
+plan_runtime_state rows:      532
+```
+
+So **the column the liveness heartbeat would stamp does not exist on this board**,
+while the table it belongs to has 532 rows written through a narrower column set. The
+`INSERT OR REPLACE INTO plan_runtime_state (...)` at `KanbanDatabase.ts:12436` names
+four columns the live schema lacks; its catch re-throws rather than swallowing, so
+either that path never runs here or it fails loudly somewhere nobody is reading.
+
+This is not the "heartbeat never fires" story exactly — it is a rung below it. Before
+implementing, establish which is true:
+
+- the V58 migration adding `plans.last_liveness_at` did not apply to this board despite
+  the version counter reading current, or
+- the column moved to `plan_runtime_state` and that migration is the one missing, or
+- the schema is intended and the backfill is dead code from a retired shape.
+
+The answer changes this plan's scope from "restore a heartbeat that stopped" to "add
+the storage it was always supposed to have". Do not assume the first.

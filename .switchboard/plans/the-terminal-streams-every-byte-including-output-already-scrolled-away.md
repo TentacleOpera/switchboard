@@ -145,3 +145,23 @@ Key risks: a screen model that mishandles one escape sequence corrupts the displ
 - Assert the session log (`log.go` output) contains the complete byte stream regardless of coalescing.
 - Assert a progress bar animates rather than jumping to its end state.
 - Assert the coalescing/backpressure layer and the screen model both live in `cmd/switchboard-pty-host` (no TS-side sender).
+
+## Two interactions to settle first (2026-09-19)
+
+**1. It can starve predictive echo's reconciliation.** Predictive local echo retires a
+predicted run by matching **the real echo in the output stream**; a run it cannot match
+stays painted, which is the duplicate-input defect that took the feature offline
+(`PREDICTIVE_ECHO_ENABLED = false`, see *Predictive Local Echo Duplicates Input*).
+Dropping output that was "superseded before it could be displayed" can remove exactly
+the frames reconciliation needs to see.
+
+Harmless today because the feature is off. A trap the moment it is switched back on,
+and the two plans must agree on a rule: either echo frames are never eligible for
+suppression, or reconciliation stops depending on seeing them. Whichever lands second
+inherits the problem, so name the rule here rather than discovering it on a link.
+
+**2. Part of it may already be done.** `388a9aea` landed a **link-aware coalescing
+window** in the Go pty host. Re-read the problem analysis against that before
+implementing — the remaining gap may be smaller than the plan describes, and a second
+coalescing layer on top of the first is the kind of thing that only shows up under
+latency.

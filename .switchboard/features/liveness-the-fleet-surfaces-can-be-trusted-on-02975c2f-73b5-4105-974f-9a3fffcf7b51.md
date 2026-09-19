@@ -57,3 +57,18 @@ Three operator-facing surfaces — the `switchboard fleet` CLI, the phone comman
 - [ ] [The Fleet Tab Blanks on a Half-Dead Host, Hides Its Own Staleness, and Loses Hop History on Restart](../plans/memo-the-fleet-tab-blanks-on-a-half-dead-host-and-hop-history-dies-with-the-process.md) — **PLAN REVIEWED** — ID: 1fdcc41d-1f20-4c05-bcb7-6ff7a3a05fe8
 <!-- END SUBTASKS -->
 
+
+## Dependency, confirmed 2026-09-19 — this cannot land first
+
+This plan derives operator-facing liveness from heartbeats. **The heartbeat has never
+stamped a row**, which is the subject of `f877e48a` (under the
+`8033c64d` feature — "the ten-minute liveness blackout").
+
+Coding this first does not improve the surfaces; it replaces *"every live shell reads
+active"* with *"every seat reads idle"*, because the signal it switches to is not being
+produced. That is a worse answer than the one being replaced, and it would look like a
+regression to the operator.
+
+`8033c64d` lands first. See the blocker recorded on `f877e48a`: the column the
+heartbeat would write to is not present on the live board at all, so the prerequisite
+may be larger than "restore the stamp".
