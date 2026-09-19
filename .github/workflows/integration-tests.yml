@@ -485,6 +485,14 @@ jobs:
       - name: Team automated-dispatch policy (pooled vs hands-on-only teams)
         run: npm run test:contract:team-automated-dispatch
 
+      # A feature is ordered into rounds by the team HEAD, so it must never be
+      # complexity-routed to a seat. A complexity-6 feature reached a coder, which
+      # cannot register rounds, and the feature stalled owned and undispatched.
+      # Pins both guards (DB record, and plan-file path when the DB read throws)
+      # and that neither is conditional on a team being live.
+      - name: A feature is never complexity-routed (always the lead)
+        run: npm run test:contract:feature-not-complexity-routed
+
       # The standalone Review team is where review LIVES now that the coding team has
       # no reviewer seat. Pins the read-only review turn, the batch-of-two reviewer
       # prompt, fix apportionment, and — the reason this gate is wired rather than run

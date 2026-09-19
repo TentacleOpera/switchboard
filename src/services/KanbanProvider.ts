@@ -10177,6 +10177,27 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const db = this._getKanbanDb(workspaceRoot);
             if (await db.ensureReady()) {
                 const record = await db.getPlanBySessionId(sessionId);
+                // A FEATURE ALWAYS GOES TO THE LEAD, whatever its complexity score.
+                //
+                // Complexity routing answers "how hard is this work?", which is the
+                // right question for a plan and the wrong one for a feature. A
+                // feature is not work a seat does — it is a set of subtasks someone
+                // has to ORDER INTO ROUNDS and register, and only the team head has
+                // that role. Routed by score, a complexity-6 feature landed on a
+                // coder seat that cannot fan it out, so the feature sat owned and
+                // undispatched with its subtasks untouched.
+                //
+                // Checked on the record this function already reads, and `isFeature`
+                // is confirmed present on it (the live /kanban/plan mapper emits it
+                // alongside featureId) — not inferred from the plan file's path.
+                if (record && Number(record.isFeature) === 1) {
+                    console.log(
+                        `[KanbanProvider] complexity routing: '${sessionId}' is a FEATURE `
+                        + `(complexity=${record.complexity ?? 'unknown'}) → lead. A feature is `
+                        + 'ordered into rounds by the head, never worked by a seat.'
+                    );
+                    return 'lead';
+                }
                 if (record?.planFile) {
                     planFile = record.planFile;
                 }
@@ -10194,6 +10215,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
         if (!planFile) {
             console.warn(`[KanbanProvider] No planFile found for session ${sessionId} — defaulting to 'lead'`);
+            return 'lead';
+        }
+        // Second proof that this is a feature, for the path where the DB read above
+        // threw and the run sheet answered instead. A feature's plan file lives in
+        // `.switchboard/features/`, so the path settles it without another query.
+        // Belt and braces deliberately: routing a feature to a seat is not a
+        // degraded answer, it is a wrong one — the seat cannot register rounds, so
+        // the feature stalls owned and undispatched with its subtasks untouched.
+        if (planFile.replace(/\\/g, '/').includes('/.switchboard/features/')) {
+            console.log(
+                `[KanbanProvider] complexity routing: '${sessionId}' is a FEATURE by plan-file path `
+                + '→ lead (DB read did not answer).'
+            );
             return 'lead';
         }
         const complexity = await this.getComplexityFromPlan(workspaceRoot, planFile);
