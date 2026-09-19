@@ -238,6 +238,10 @@ export function normalizeFeatureWorktreeMode(value: unknown): 'none' | 'per-feat
  * Provides a Kanban board WebviewPanel in the editor area.
  * Cards represent active plans and columns represent workflow stages.
  */
+/** The coded columns a FEATURE must never be routed into. A feature goes to
+ *  the lead, which is the only seat that orders its subtasks into rounds. */
+const CODED_SEAT_COLUMNS = new Set(['CODER CODED', 'INTERN CODED']);
+
 export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
     /** Ceilings for bulk moves (plan: a-bulk-move-cannot-outgrow-the-board). */
@@ -9631,6 +9635,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         sessionId: string,
         targetColumn: string
     ): Promise<ColumnUpdateOutcome> {
+        /* eslint-disable-next-line no-param-reassign */
         if (!sessionId) return { ok: false, reason: 'not_found', detail: 'No plan key supplied.' };
         try {
             const db = this._getKanbanDb(workspaceRoot);
@@ -9644,6 +9649,21 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
 
             const plan = await db.getPlanBySessionId(sessionId);
+            // A FEATURE IS NEVER COMPLEXITY-ROUTED TO A SEAT COLUMN.
+            //
+            // Enforced HERE, at the single write, because the column is chosen in
+            // several places — the auto-dispatch resolver, the CODED_AUTO partition,
+            // and the webview's own optimistic prediction, which sends an explicit
+            // column and consults no host rule at all. Guarding the resolvers one at
+            // a time kept missing whichever path the operator actually used. This is
+            // the one line every path passes through.
+            //
+            // Only the team head orders a feature's subtasks into rounds; a coder or
+            // intern seat cannot fan it out, so the feature stalls owned and
+            // undispatched. LEAD CODED is the only coded column a feature may enter.
+            if (plan && plan.isFeature && CODED_SEAT_COLUMNS.has(targetColumn)) {
+                targetColumn = 'LEAD CODED';
+            }
             let outcome: ColumnUpdateOutcome;
             let subtaskSessionIds: string[] = [];
             let subtaskKeys: string[] = [];  // sessionId or planId — for runsheet fan-out

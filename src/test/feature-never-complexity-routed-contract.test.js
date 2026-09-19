@@ -75,5 +75,22 @@ t('the API call site passes isFeature instead of dropping it', () => {
     'the caller holds the record and must pass the feature flag — dropping it here is the defect');
 });
 
+// THE GUARD THAT MATTERS: the single column WRITE. The resolvers above each
+// choose a column, and the webview predicts one of its own and sends it
+// explicitly — guarding them one at a time kept missing whichever path was
+// actually used. Every path funnels through moveCardToColumnWithReason.
+t('the column write refuses to put a feature in a seat column', () => {
+  const i = KP.indexOf('public async moveCardToColumnWithReason(');
+  const fn = KP.slice(i, KP.indexOf('\n    public async moveCardToColumn(', i));
+  assert.ok(/CODED_SEAT_COLUMNS\.has\(targetColumn\)/.test(fn),
+    'the write must reject a seat column for a feature, whoever chose it');
+  assert.ok(/targetColumn = 'LEAD CODED'/.test(fn), 'and redirect it to LEAD CODED');
+  const guard = fn.indexOf('CODED_SEAT_COLUMNS');
+  const write = fn.indexOf('cascadeFeatureByPlanId');
+  assert.ok(guard > 0 && write > 0 && guard < write, 'it must run BEFORE the row is written');
+  assert.ok(/new Set\(\['CODER CODED', 'INTERN CODED'\]\)/.test(KP),
+    'the set is the two seat columns — LEAD CODED is the one coded column a feature may enter');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
