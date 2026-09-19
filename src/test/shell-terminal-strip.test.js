@@ -235,12 +235,36 @@ test('pop-out windows stay owned by the shell, so theme fan-out keeps working', 
     );
 });
 
-test('the peek is a presentation override — it never writes layout or seating state', () => {
-    for (const fn of ['function applyPeekClasses() {', 'function dismissPeek() {']) {
-        const body = block(terminalsJs, fn, '\n    }');
-        for (const forbidden of ['effectiveLayout =', 'currentLayout =', 'paneAssignments =', 'pinnedPanes[']) {
-            assert.ok(!body.includes(forbidden), `${fn.trim()} must not assign ${forbidden}`);
-        }
+test('the peek is a glance — its seat persists and focuses nothing, its dismiss replays the snapshot', () => {
+    // Deliberately inverted by the non-destructive-peek subtask: this test used
+    // to require dismissPeek to write NO layout or seating state ("the peek is
+    // a presentation override"), which described the destructive peek it
+    // replaced. A dismiss that restores seating MUST write seating — the
+    // writes are the feature. What the contract still pins: the writes are
+    // gated behind peekSnapshotIsApplicable and replay the snapshot verbatim,
+    // and nothing the SEAT does persists or takes the caret.
+    const dismiss = block(terminalsJs, 'function dismissPeek() {', 'function peekTerminal');
+    assert.ok(
+        /peekSnapshotIsApplicable\(snap\)/.test(dismiss),
+        'the restore must be gated on applicability — a stale snapshot would seat dead terminals'
+    );
+    assert.ok(
+        /paneAssignments = snap\.assignments\.slice\(\)/.test(dismiss),
+        'the only seating write dismissPeek may do is replaying the snapshot'
+    );
+    // The seat runs under peekSeatInProgress; the two funnels every settings
+    // write and every caret path pass through refuse during it — a reload
+    // mid-peek comes back to the user's grid, and the Esc dismiss stays
+    // reachable because the caret never lands inside the peeked pane.
+    const save = block(terminalsJs, 'function saveLayoutSettings() {', 'function saveTeamScopedLayoutSettings');
+    assert.ok(save.includes('peekSeatInProgress'), 'saveLayoutSettings must refuse while a peek is seating');
+    const focus = block(terminalsJs, 'function focusPaneTerminal(index) {', 'function clearCaretRing');
+    assert.ok(focus.includes('peekSeatInProgress'), 'focusPaneTerminal must refuse while a peek is seating');
+    // applyPeekClasses keeps the half of the old contract still true: the
+    // visual pass is presentation-only and touches no seating state.
+    const body = block(terminalsJs, 'function applyPeekClasses() {', 'function afterPeekTransition');
+    for (const forbidden of ['effectiveLayout =', 'currentLayout =', 'paneAssignments =', 'pinnedPanes[']) {
+        assert.ok(!body.includes(forbidden), `applyPeekClasses must not assign ${forbidden}`);
     }
     // Re-derived on every render, never set once: a resize mid-peek re-runs
     // applyLayoutFloor -> renderPaneGrid, and a peek asserted once evaporates.

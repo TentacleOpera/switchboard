@@ -251,6 +251,16 @@
     // terminal in the active group BEFORE seating, and a membership left behind
     // is re-applied by the next seatActiveGroupPage, silently undoing the restore.
     let peekRestoreState = null;
+    // True while peekTerminal's seat call is on the stack. Two funnels read it:
+    // saveLayoutSettings refuses the write (every locked-path seater —
+    // clearGroupLock, switchToGroup, setGroupOrder, addTerminalToActiveGroup —
+    // funnels through it, and a reload mid-peek must come back to the user's
+    // grid, not the peek's displacement) and focusPaneTerminal refuses the
+    // caret (locateTerminal, the clearGroupLock arm, and the renderPaneGrid
+    // reclaim all reach for it — the caret inside the peeked pane is the state
+    // the Esc dismiss stands down for). try/finally in peekTerminal is the
+    // only setter.
+    let peekSeatInProgress = false;
     let hasFetchedList = false;
     // The dock was previously a /terminals?…&dock=1 iframe; it is now its own
     // document at /dock and no longer embeds /terminals iframes. The
@@ -2584,6 +2594,10 @@
 
     function saveLayoutSettings() {
         if (soloTerminalName || isKanbanDock) { return; }
+        // A peek seat is transient end to end: nothing it mutates — seat,
+        // enrolment, lock drop, group switch, member reorder — may reach
+        // settings, or a reload mid-peek comes back to the peek's grid.
+        if (peekSeatInProgress) { return; }
         saveSetting('terminals.layoutMode', currentLayout);
         saveSetting('terminals.paneAssignments', paneAssignments);
         saveSetting('terminals.pinnedPanes', pinnedPanes);
@@ -4796,6 +4810,8 @@
         if (!group && activeGroupId) {
             // In team-scoped mode clearGroupLock() early-returns and dropping
             // the lock is forbidden — seat the terminal in place instead.
+            // peekSeatInProgress: locateTerminal still seats, but its
+            // focusPaneTerminal half refuses the caret — the seat is a glance.
             if (teamScopeId) {
                 locateTerminal(name);
                 return;
@@ -4804,7 +4820,7 @@
             activeTerminalName = name;
             const seatIdx = paneAssignments.indexOf(name);
             if (seatIdx !== -1 && seatIdx < getSlotCount(effectiveLayout)) {
-                focusPaneTerminal(seatIdx);
+                focusPaneTerminal(seatIdx);   // refuses while a peek is seating
             }
             renderSidebarList();
             return;
@@ -4842,7 +4858,11 @@
                 // lock and seats the terminal normally.
                 if (!isTeamGroup(activeGroupId)) {
                     addTerminalToActiveGroup(name);
-                    assignToFocusedPane(name, { keepLock: true });
+                    // peekSeatInProgress: the seat itself still runs, but
+                    // transient (and the saveLayoutSettings gate) keep the
+                    // displacement out of settings — a reload mid-peek comes
+                    // back to the user's grid, not the peek's.
+                    assignToFocusedPane(name, { keepLock: true, transient: peekSeatInProgress });
                     return;
                 }
             }
@@ -6719,6 +6739,13 @@
      * spent on the rebuild.
      */
     function focusPaneTerminal(index) {
+        // A peek seat is a glance: it must not take the caret, or post-restore
+        // keystrokes land in the wrong agent and the Esc dismiss stands down
+        // while the caret is inside the peeked pane. Gating here, the single
+        // funnel, covers every seat-side caller — locateTerminal, the
+        // clearGroupLock arm of handleLockedTerminalClick, and renderPaneGrid's
+        // hadFocus reclaim when the seat displaced the focused pane's xterm.
+        if (peekSeatInProgress) { return; }
         const name = paneAssignments[index];
         if (!name) { return; }
         const entry = terminalsMap.get(name);
@@ -7324,15 +7351,26 @@
             // and through handleLockedTerminalClick, which can also enrol the
             // name, drop the lock, or switch groups outright.
             peekRestoreState = captureGridState();
-            if (activeGroupId) {
-                handleLockedTerminalClick(name);
-            } else {
-                // NOT locateTerminal: that calls focusPaneTerminal after seating,
-                // which takes the caret — the half of the seat a peek must not do
-                // (see the note at the foot of this function). transient skips
-                // the persistence write so a reload mid-peek comes back to the
-                // real grid, not the peek's displaced one.
-                assignToFocusedPane(name, { transient: true });
+            // The whole seat runs under peekSeatInProgress: saveLayoutSettings
+            // refuses every write the locked path makes (enrol, lock-drop,
+            // group switch, reorder, seat) and focusPaneTerminal refuses the
+            // caret on every path that reaches for it (locateTerminal, the
+            // clearGroupLock arm, the renderPaneGrid hadFocus reclaim).
+            peekSeatInProgress = true;
+            try {
+                if (activeGroupId) {
+                    handleLockedTerminalClick(name);
+                } else {
+                    // NOT locateTerminal: that calls focusPaneTerminal after
+                    // seating, which takes the caret — the half of the seat a
+                    // peek must not do (see the note at the foot of this
+                    // function). transient skips the persistence write so a
+                    // reload mid-peek comes back to the real grid, not the
+                    // peek's displaced one.
+                    assignToFocusedPane(name, { transient: true });
+                }
+            } finally {
+                peekSeatInProgress = false;
             }
             // Record what the seat left the layout at — only a mismatch against
             // THIS, not against the capture-time layout, means an outside writer
@@ -7340,13 +7378,12 @@
             if (peekRestoreState) { peekRestoreState.seatLayout = effectiveLayout; }
         }
         const index = paneAssignments.indexOf(name);
-        if (index === -1) {
-            // Seat refused (every pane pinned). Drop the snapshot rather than
-            // leave it for the next dismissPeek to apply to a grid it no longer
-            // describes.
-            peekRestoreState = null;
-            return;
-        }
+        // Seat refused (every pane pinned): drop the snapshot rather than leave
+        // it for a later dismissPeek to apply to a grid it no longer describes.
+        // Two statements on purpose — shell-terminal-strip requires the literal
+        // early-return below, with the badge clear above it.
+        if (index === -1) { peekRestoreState = null; }
+        if (index === -1) { return; }
         peekTerminalName = name;
         applyPeekClasses();
         afterPeekTransition();
