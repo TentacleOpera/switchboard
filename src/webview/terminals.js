@@ -238,6 +238,19 @@
 
     let soloTerminalName = null;
     let peekTerminalName = null;
+    // Pre-peek grid state, captured ONLY when a peek had to seat an unseated
+    // terminal (which can displace a seated one). dismissPeek restores it; every
+    // involuntary peek-clear DISCARDS it (the peeked terminal is gone, so its
+    // neighbours' pre-peek seats may no longer be valid). Records the layout it
+    // was taken under AND the layout the seat left behind: an outside layout
+    // change mid-peek invalidates the snapshot (replaying arrays sized for a
+    // different slot count would resurrect seats in panes that no longer
+    // render), while a layout the seat itself moved — clearGroupLock /
+    // switchToGroup on the locked path — is restored with everything else.
+    // Carries group membership too: handleLockedTerminalClick enrols the peeked
+    // terminal in the active group BEFORE seating, and a membership left behind
+    // is re-applied by the next seatActiveGroupPage, silently undoing the restore.
+    let peekRestoreState = null;
     let hasFetchedList = false;
     // The dock was previously a /terminals?…&dock=1 iframe; it is now its own
     // document at /dock and no longer embeds /terminals iframes. The
@@ -3685,11 +3698,21 @@
             }
         }
 
+        // Same discipline as undoSnapshot above: a peek snapshot that would seat
+        // a name with no session opens a WebSocket to a terminal that no longer
+        // exists. Gated on peekTerminalName because sanitize also runs INSIDE
+        // the peek seat (clearGroupLock sanitizes mid-enrolment) while the
+        // snapshot is legitimately in flight — only an ACTIVE peek can go stale.
+        if (peekRestoreState && peekTerminalName && !peekSnapshotIsApplicable(peekRestoreState)) {
+            peekRestoreState = null;
+        }
+
         if (activeTerminalName && !liveNames.has(activeTerminalName)) {
             activeTerminalName = null;
         }
         if (peekTerminalName && !liveNames.has(peekTerminalName)) {
             peekTerminalName = null;
+            peekRestoreState = null;
         }
 
         // Seed pane 0 on FIRST load only. Re-seeding on every list refresh would undo a
@@ -6662,7 +6685,10 @@
         // outlive the mutation it describes.
         hidePaneToast();
 
-        saveLayoutSettings();
+        // opts.transient: the peek seat passes it so the displacement it just
+        // made is never persisted — a reload mid-peek must come back to the
+        // user's real grid, not the peek's. Everything else still renders.
+        if (!opts.transient) { saveLayoutSettings(); }
         renderSidebarList();
         renderPaneGrid();
         batchFitVisiblePanes();
@@ -7131,6 +7157,9 @@
             }
             if (!seated) {
                 peekTerminalName = null;
+                // Discard, never apply: the peeked terminal is gone, so its
+                // neighbours' pre-peek seats may no longer be valid.
+                peekRestoreState = null;
                 isPeeking = false;
             }
         }
@@ -7155,9 +7184,112 @@
         batchFitVisiblePanes();
     }
 
+    /** Everything a peek's displacing seat can mutate, in one object. */
+    function captureGridState() {
+        const group = activeGroupId ? getAllGroups().find(g => g.id === activeGroupId) : null;
+        return {
+            layout: effectiveLayout,
+            currentLayout,
+            // What the seat left effectiveLayout at — peekTerminal overwrites
+            // this after seating. If the layout has moved since then, an OUTSIDE
+            // writer (layout pick, floor demote) changed the slot count mid-peek
+            // and the snapshot must be discarded, not applied. A seat-side move
+            // (clearGroupLock / switchToGroup on the locked path) is recorded
+            // here instead and restored with everything else.
+            seatLayout: effectiveLayout,
+            assignments: paneAssignments.slice(),
+            pins: pinnedPanes.slice(),
+            modes: paneModes.slice(),
+            focused: focusedPaneIndex,
+            activeName: activeTerminalName,
+            groupId: activeGroupId,
+            groupPage: activeGroupPage,
+            // addTerminalToActiveGroup writes to ONE of these depending on the
+            // group's source, and promoteGroupMember rewrites order. Snapshot
+            // whichever applies so the peeked terminal is un-enrolled on restore;
+            // without this the next seatActiveGroupPage reseats it from
+            // membership and reverses the whole restore.
+            groupMembers: group && group.source === 'manual' && Array.isArray(group.members)
+                ? group.members.slice() : null,
+            groupOrder: group && group.source === 'manual' && Array.isArray(group.order)
+                ? group.order.slice() : null,
+            groupExtras: group && group.source !== 'manual' && groupPrefs.extras
+                && Array.isArray(groupPrefs.extras[activeGroupId])
+                ? groupPrefs.extras[activeGroupId].slice() : null
+        };
+    }
+
+    /** True when the snapshot still describes the grid it would be applied to. */
+    function peekSnapshotIsApplicable(snap) {
+        if (!snap) { return false; }
+        // The layout must not have moved since the seat finished — see the
+        // seatLayout note in captureGridState.
+        if (effectiveLayout !== snap.seatLayout) { return false; }
+        const liveNames = new Set(fleetList.map(t => t.friendlyName));
+        return snap.assignments.filter(Boolean).every(n => liveNames.has(n));
+    }
+
     function dismissPeek() {
+        // The !peekTerminalName arm must NOT touch peekRestoreState: the seat's
+        // own dismissPeek (first statement of assignToFocusedPane and
+        // handleLockedTerminalClick) runs between the snapshot's capture and the
+        // peek being set, and nulling there would destroy it mid-flight. Every
+        // genuinely dangling snapshot is discarded by the explicit paths —
+        // applyPeekClasses, the sanitize guards, peekTerminal's refused-seat arm.
         if (!peekTerminalName) { return; }
         peekTerminalName = null;
+        const snap = peekRestoreState;
+        peekRestoreState = null;
+        if (peekSnapshotIsApplicable(snap)) {
+            activeGroupId = snap.groupId;
+            activeGroupPage = snap.groupPage;
+            const group = snap.groupId ? getAllGroups().find(g => g.id === snap.groupId) : null;
+            if (group && group.source === 'manual') {
+                // Un-enrol whatever the peek seat added — locally AND host-side
+                // for grp_ groups, whose roster is host-owned: ptyListGroups
+                // would push the member straight back on the next fetch.
+                const added = Array.isArray(group.members)
+                    ? group.members.filter(n => !(snap.groupMembers || []).includes(n))
+                    : [];
+                group.members = snap.groupMembers ? snap.groupMembers.slice() : [];
+                if (snap.groupOrder) { group.order = snap.groupOrder.slice(); }
+                if (group.id.startsWith('grp_')) {
+                    for (const n of added) {
+                        fetch('/terminals/verb/ptyRemoveGroupMember', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ groupId: group.id, memberName: n })
+                        }).catch(() => {});
+                    }
+                }
+            }
+            if (groupPrefs.extras) {
+                // Derived groups enrol via the extras overlay. Restore the
+                // captured array, or delete the key when there was none — either
+                // way the peeked name is gone and seatActiveGroupPage cannot
+                // reseat it from a membership the restore was meant to undo.
+                if (snap.groupExtras) {
+                    groupPrefs.extras[snap.groupId] = snap.groupExtras.slice();
+                } else {
+                    delete groupPrefs.extras[snap.groupId];
+                }
+            }
+            pinnedPanes = snap.pins.slice();
+            if (snap.seatLayout !== snap.layout) {
+                // The seat itself moved the layout. Put the user's pick back and
+                // let the floor re-derive effectiveLayout for the window — under
+                // the restored lock it also reseats from the restored membership,
+                // which is the same grid the assignments below then re-assert.
+                currentLayout = snap.currentLayout;
+                syncLayoutPickerUI();
+                applyLayoutFloor();
+            }
+            paneAssignments = snap.assignments.slice();
+            paneModes = snap.modes.slice();
+            focusedPaneIndex = snap.focused;
+            activeTerminalName = snap.activeName;
+            saveLayoutSettings();
+        }
         applyPeekClasses();
         afterPeekTransition();
     }
@@ -7175,20 +7307,46 @@
         }
         if (paneAssignments.indexOf(name) === -1) {
             // ORDERING IS LOAD-BEARING with Rule 1 in place: handleLockedTerminalClick
-            // and locateTerminal both call dismissPeek() now. peekTerminalName is still
-            // null (or names the PREVIOUS peek) at this point, so the seat's dismissPeek
-            // clears the old peek — not the one we are about to set. The assignment
-            // `peekTerminalName = name` MUST stay below this block. Moving it above
-            // would let the seat's own dismissPeek() cancel the new peek mid-flight,
-            // leaving the terminal seated but not peeked.
+            // and assignToFocusedPane both call dismissPeek() internally, and
+            // peekTerminalName is still null (or names the PREVIOUS peek) at this
+            // point, so an inner dismiss clears the old peek — not the one we are
+            // about to set. The assignment `peekTerminalName = name` MUST stay
+            // below this block for the same reason.
+            //
+            // Restore any PREVIOUS peek first, explicitly, so the snapshot below
+            // is taken against the user's real grid rather than a peek-displaced
+            // one — sequential `peek A → peek B → restore` must end at the
+            // original grid, not at "A seated".
+            dismissPeek();
+            // Snapshot AFTER the restore and BEFORE the seat. Seating goes through
+            // assignToFocusedPane's displacement ladder, which overwrites
+            // paneAssignments[target] with no record of the outgoing terminal —
+            // and through handleLockedTerminalClick, which can also enrol the
+            // name, drop the lock, or switch groups outright.
+            peekRestoreState = captureGridState();
             if (activeGroupId) {
                 handleLockedTerminalClick(name);
             } else {
-                locateTerminal(name);
+                // NOT locateTerminal: that calls focusPaneTerminal after seating,
+                // which takes the caret — the half of the seat a peek must not do
+                // (see the note at the foot of this function). transient skips
+                // the persistence write so a reload mid-peek comes back to the
+                // real grid, not the peek's displaced one.
+                assignToFocusedPane(name, { transient: true });
             }
+            // Record what the seat left the layout at — only a mismatch against
+            // THIS, not against the capture-time layout, means an outside writer
+            // moved the slot count mid-peek.
+            if (peekRestoreState) { peekRestoreState.seatLayout = effectiveLayout; }
         }
         const index = paneAssignments.indexOf(name);
-        if (index === -1) { return; }
+        if (index === -1) {
+            // Seat refused (every pane pinned). Drop the snapshot rather than
+            // leave it for the next dismissPeek to apply to a grid it no longer
+            // describes.
+            peekRestoreState = null;
+            return;
+        }
         peekTerminalName = name;
         applyPeekClasses();
         afterPeekTransition();
@@ -11073,6 +11231,20 @@
                 }
                 if (activeTerminalName === name) { activeTerminalName = next; }
                 if (peekTerminalName === name) { peekTerminalName = next; }
+                // The peek snapshot holds names in the same places the undo one
+                // does — same discipline: left alone it would seat a name with
+                // no session, which sanitize can no longer see (the live slots
+                // now carry the new one). Kept a separate statement: the
+                // shell-terminal-strip contract matches the peekTerminalName
+                // line above verbatim.
+                if (peekRestoreState) {
+                    peekRestoreState.assignments = peekRestoreState.assignments.map(n => (n === name ? next : n));
+                    if (peekRestoreState.activeName === name) { peekRestoreState.activeName = next; }
+                    for (const key of ['groupMembers', 'groupOrder', 'groupExtras']) {
+                        const arr = peekRestoreState[key];
+                        if (Array.isArray(arr)) { peekRestoreState[key] = arr.map(n => (n === name ? next : n)); }
+                    }
+                }
                 // The undo snapshot must follow the rename too. Left alone it holds the
                 // OLD name, which sanitizePaneAssignments cannot see (the live slots now
                 // carry the new one), so Undo would restore a name with no session.
