@@ -136,3 +136,21 @@ still catches what it claims to.
 - **Is `queue-pipeline` a live defect?** Unclassified on purpose — see Change 3. It
   is the one row here that could be mis-ordering real work, and guessing it stale is
   how it would stay that way.
+
+## Related card, and why the count is "seven" rather than "all of them"
+
+`9d6a4525` — *Triage remaining red contract gates: staging-column and
+feature-file-subtask-link* — covers two suites that are **not** in the table above,
+so the two cards are complementary rather than duplicates. Re-measured 2026-09-19:
+**both of its gates now pass** (`staging-column` green, `feature-file-subtask-link`
+14/14), so that card appears complete and should be verified and retired rather than
+coded.
+
+Its framing is the strongest argument for Change 4 here. It opens with *"Two contract
+gates remain red after the queue-watch gates were fixed in a reviewer pass"* — i.e.
+red gates have already been triaged at least twice, and each pass left a residue that
+nobody noticed accumulating. Seven more did. Fixing this batch without making a red
+gate fail the build just schedules the next card like this one.
+
+The seven above are the suites measured on 2026-09-19 while verifying unrelated work.
+They are not necessarily the complete set — nothing currently reports one.

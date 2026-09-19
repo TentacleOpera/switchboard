@@ -134,3 +134,21 @@ process.exit(0);
 3. Run the full contract suite — assert no regressions from either fix.
 4. For Gate 2: manually test `node .agents/skills/kanban_operations/create-feature.js "Test" '["no-such-id"]' /tmp/test-ws` — assert non-zero exit and `ok: false` in output.
 5. For Gate 2: manually test with a valid planId — assert exit 0 and feature file created.
+
+## Status check (2026-09-19) — both gates now pass
+
+Re-measured while cataloguing red contract suites:
+
+- `npm run test:contract:staging-column` → **green** ("staging column contract
+  passed"), including the run-sheet assertion this card was opened for.
+- `npm run test:contract:feature-file-subtask-link` → **green**, 14 passed / 0 failed,
+  including "an unresolvable planId aborts instead of writing guessed links".
+
+So this card's goal reads as already met. Before retiring it, confirm gate 2 passes
+because `create-feature.js`'s offline fallback now actually aborts on an unresolvable
+planId — and not because the assertion was relaxed. That gate was opened against a
+LIVE defect (guessed `../plans/<pid>.md` links written on an exit-0 path), and a
+green light earned by a weakened test would bury it.
+
+The broader problem this card is a symptom of is tracked separately:
+*Seven Contract Gates Are Red, and Have Been Long Enough That Nobody Reads Them*.
