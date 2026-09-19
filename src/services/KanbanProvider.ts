@@ -6482,8 +6482,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const headName: string = String(g.name);
                 const headStatus = livenessByName.get(headName);
                 if (headStatus === 'exited') continue;
-                // Accept if liveness says non-exited, or if liveness is empty
-                // (fleet unavailable — don't block the roster on a missing snapshot).
+                // ABSENT FROM THE SNAPSHOT IS NOT ALIVE — when there IS a snapshot.
+                //
+                // This accepted any head `livenessByName` had no entry for, because
+                // `undefined !== 'exited'`. A retired group whose head was long dead
+                // was therefore chosen as the target, and the prompt handed the lead a
+                // roster of seats that do not exist (`Coding`, `Coding-coder-*`). It
+                // then registered rounds against that dead team and round 1 dispatched
+                // to a seat name nothing answers to.
+                //
+                // The original intent — "don't block the roster on a missing snapshot"
+                // — is kept exactly, and narrowed to the case it names: only an EMPTY
+                // snapshot means "cannot tell". A populated snapshot that does not
+                // list this head is positive evidence the head is gone.
+                if (livenessByName.size > 0 && headStatus === undefined) { continue; }
                 targetGroup = g;
                 break;
             }
