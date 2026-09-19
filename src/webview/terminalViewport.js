@@ -1343,7 +1343,24 @@
         return true;
     }
 
+    /**
+     * PREDICTIVE LOCAL ECHO IS OFF.
+     *
+     * Shipped 2026-09-19 and switched off the same day: on a real tailnet link it
+     * duplicated input rather than merely mispositioning it — whole phrases
+     * appeared twice, because a predicted run was not always retired when the
+     * real echo arrived, so the operator's own typing read back garbled.
+     *
+     * Off is the correct resting state for a feature whose failure mode corrupts
+     * what the user sees themselves type. The machinery below is left intact and
+     * unreferenced rather than deleted: the reconciliation ledger is the hard part
+     * and is worth fixing, not rewriting. Flip this constant to re-enable once the
+     * duplicate-on-reconcile defect has a regression test behind it.
+     */
+    const PREDICTIVE_ECHO_ENABLED = false;
+
     function maybePredictEcho(entry, data) {
+        if (!PREDICTIVE_ECHO_ENABLED) { return; }
         const now = Date.now();
         // The lull that suppresses NEW predictions also retires the pending
         // ones — at a no-echo prompt nothing ever arrives to reconcile them,
