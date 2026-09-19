@@ -10167,6 +10167,21 @@
         let chosenTarget = targetSpec;
         const roots = buildWorkspaceList();
         if (!targetSpec && roots.length > 1) {
+            // The choice is operator state, so it lives on pickerState — the
+            // object the renderer rebuilds this picker from — never in a closure
+            // or the select itself, both of which renderSidebarList() destroys on
+            // every poll, push and toggle. A spawn root that silently reverts to
+            // roots[0] is indistinguishable from the operator having chosen it,
+            // which is exactly the quiet-wrong-answer failure a routing read must
+            // not have. The saved root is also validated against the CURRENT list:
+            // a mapping deleted mid-open falls back to roots[0] in the state AND
+            // in the DOM, or the two disagree again.
+            const saved = pickerState ? pickerState.spawnTarget : null;
+            const initial = saved && roots.some(r => r.root === saved.parentRoot)
+                ? saved
+                : { parentRoot: roots[0].root };
+            chosenTarget = initial;
+            if (pickerState) { pickerState.spawnTarget = initial; }
             const loc = document.createElement('select');
             loc.className = 'role-picker-location';
             for (const r of roots) {
@@ -10175,8 +10190,11 @@
                 opt.textContent = r.label;
                 loc.appendChild(opt);
             }
-            loc.addEventListener('change', () => { chosenTarget = { parentRoot: loc.value }; });
-            chosenTarget = { parentRoot: roots[0].root };
+            loc.value = initial.parentRoot;
+            loc.addEventListener('change', () => {
+                chosenTarget = { parentRoot: loc.value };
+                if (pickerState) { pickerState.spawnTarget = chosenTarget; }
+            });
             picker.appendChild(loc);
         }
 
