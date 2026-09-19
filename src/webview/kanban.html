@@ -4389,10 +4389,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // at render time it always reports zero).
                     const suppressPipeline = (isCreated && showingBacklog);
                     const pipelineButtons = suppressPipeline ? '' : `
-                        <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (dispatches agents if board-move triggers are on)">
+                        <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage and dispatch their agents">
                             <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
                         </button>
-                        <button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage (dispatches agents if board-move triggers are on)">
+                        <button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage and dispatch their agents">
                             <img src="${ICON_MOVE_ALL}" alt="Move All">
                         </button>
                         <button class="column-icon-btn" data-action="promptSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Copy prompt for selected plans and advance to next stage">
@@ -4558,7 +4558,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 }
                                 moveCardsOptimistically(ids, column, nextCol);
                             }
-                            postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids });
+                            // EXPLICIT operator action, not a board move. The
+                            // board-move CLI trigger gates DRAG-AND-DROP (which posts
+                            // moveCardForward/moveCardBackwards); pressing a button is a
+                            // dispatch request, and the toggle's own tooltip already says
+                            // explicit dispatch fires either way. Without this the button
+                            // moved the cards and silently dispatched nothing.
+                            postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids, bypassTriggerGate: true });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
@@ -4579,9 +4585,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             }
                             // CODED_AUTO: backend moveAll filters by single column, so send explicit IDs instead
                             if (column === 'CODED_AUTO') {
-                                postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids });
+                                // Explicit operator action — see the note on the other
+                                // moveSelected post above.
+                                postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids, bypassTriggerGate: true });
                             } else {
-                                postKanbanMessage({ type: 'moveAll', column: backendColumn });
+                                // Explicit operator action — see the note on the
+                                // moveSelected post above.
+                                postKanbanMessage({ type: 'moveAll', column: backendColumn, bypassTriggerGate: true });
                             }
                             ids.forEach(id => selectedCards.delete(id));
                             break;
