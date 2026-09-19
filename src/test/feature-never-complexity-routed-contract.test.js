@@ -47,5 +47,33 @@ t('the ONLY non-lead outcomes remain the complexity map', () => {
   assert.ok(returns.filter(r=>r!=='lead').length === 0,
     'every literal return in this function must be lead; coder/intern come only from resolveRoutedRole');
 });
+// The path the board's auto-dispatch actually takes: resolveAutoDispatchColumn.
+// The guard above is in _resolveComplexityRoutedRole, which only runs for a
+// CODED_AUTO target — a feature routed through the API's auto-column resolver
+// never reached it, which is how a complexity-6 feature landed on CODER CODED.
+const KP = SRC;
+const API = fs.readFileSync(path.resolve(__dirname,'..','services','LocalApiServer.ts'),'utf8');
+
+t('resolveAutoDispatchColumn refuses to complexity-route a feature', () => {
+  const i = KP.indexOf('public async resolveAutoDispatchColumn(');
+  assert.ok(i > 0, 'resolveAutoDispatchColumn must exist');
+  const fn = KP.slice(i, KP.indexOf('\n    private ', i));
+  assert.ok(/isFeature\?: boolean/.test(KP.slice(i, i + 400)),
+    'it must take isFeature — a complexity STRING alone cannot tell a feature from a plan');
+  const guard = fn.indexOf('if (isFeature)');
+  const band  = fn.indexOf('resolveRoutedRole');
+  assert.ok(guard > 0 && band > 0 && guard < band,
+    'the feature guard must run BEFORE the complexity band is consulted');
+  assert.ok(/LEAD CODED/.test(fn.slice(guard, guard + 300)), 'a feature goes to LEAD CODED');
+});
+
+t('the API call site passes isFeature instead of dropping it', () => {
+  const i = API.indexOf('resolveAutoDispatchColumn(');
+  const call = API.slice(i, i + 260);
+  assert.ok(/record\.complexity/.test(call), 'sanity: this is the call site');
+  assert.ok(/isFeature/.test(call),
+    'the caller holds the record and must pass the feature flag — dropping it here is the defect');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

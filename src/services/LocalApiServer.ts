@@ -657,7 +657,18 @@ interface LocalApiServerOptions {
      * 5–6 coder / 7+ lead, pair-mode bypass included); routing off or unknown
      * complexity → lead. Optional.
      */
-    resolveAutoDispatchColumn?: (workspaceRoot: string, complexity: string | null) => Promise<{
+    resolveAutoDispatchColumn?: (
+        workspaceRoot: string,
+        complexity: string | null,
+        /**
+         * Whether the plan being routed is a FEATURE. Passed because the caller
+         * has the record and the resolver does not: a feature must never be
+         * complexity-routed to a seat column — only the team head orders its
+         * subtasks into rounds. Dropping this at the call was how a complexity-6
+         * feature reached CODER CODED and a coder seat that cannot fan it out.
+         */
+        isFeature?: boolean,
+    ) => Promise<{
         targetColumn: string;
         reason: string;
     }>;
@@ -3481,7 +3492,8 @@ export class LocalApiServer {
             if (!this._options.resolveAutoDispatchColumn) {
                 return fail(400, 'targetColumn is required (auto-routing callback unavailable)');
             }
-            const auto = await this._options.resolveAutoDispatchColumn(workspaceRoot, record.complexity ?? null);
+            const auto = await this._options.resolveAutoDispatchColumn(
+                workspaceRoot, record.complexity ?? null, Number((record as any).isFeature) === 1);
             targetColumn = auto.targetColumn;
             routing = `auto: ${auto.reason}`;
         } else {

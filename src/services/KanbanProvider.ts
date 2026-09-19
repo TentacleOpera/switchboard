@@ -10190,14 +10190,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // Checked on the record this function already reads, and `isFeature`
                 // is confirmed present on it (the live /kanban/plan mapper emits it
                 // alongside featureId) — not inferred from the plan file's path.
-                if (record && Number(record.isFeature) === 1) {
-                    console.log(
-                        `[KanbanProvider] complexity routing: '${sessionId}' is a FEATURE `
-                        + `(complexity=${record.complexity ?? 'unknown'}) → lead. A feature is `
-                        + 'ordered into rounds by the head, never worked by a seat.'
-                    );
-                    return 'lead';
-                }
+                if (record && Number(record.isFeature) === 1) { return 'lead'; }
                 if (record?.planFile) {
                     planFile = record.planFile;
                 }
@@ -10223,13 +10216,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // Belt and braces deliberately: routing a feature to a seat is not a
         // degraded answer, it is a wrong one — the seat cannot register rounds, so
         // the feature stalls owned and undispatched with its subtasks untouched.
-        if (planFile.replace(/\\/g, '/').includes('/.switchboard/features/')) {
-            console.log(
-                `[KanbanProvider] complexity routing: '${sessionId}' is a FEATURE by plan-file path `
-                + '→ lead (DB read did not answer).'
-            );
-            return 'lead';
-        }
+        if (planFile.replace(/\\/g, '/').includes('/.switchboard/features/')) { return 'lead'; }
         const complexity = await this.getComplexityFromPlan(workspaceRoot, planFile);
         const score = parseComplexityScore(complexity);
         const role = this.resolveRoutedRole(score);
@@ -10881,9 +10868,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * the nearest visible coding column. If no coding column is visible, throw a
      * KanbanDispatchError so the API can return a 4xx instead of a hidden fallback.
      */
-    public async resolveAutoDispatchColumn(workspaceRoot: string | undefined | null, complexity: string | undefined | null): Promise<{ targetColumn: string; reason: string }> {
+    public async resolveAutoDispatchColumn(workspaceRoot: string | undefined | null, complexity: string | undefined | null, isFeature?: boolean): Promise<{ targetColumn: string; reason: string }> {
         const resolvedWorkspaceRoot = workspaceRoot ? this._resolveWorkspaceRoot(workspaceRoot) : (this._currentWorkspaceRoot || '');
         const visibleAgents = resolvedWorkspaceRoot ? await this._getVisibleAgents(resolvedWorkspaceRoot) : {};
+        // A feature is never complexity-routed: only the head orders its subtasks
+        // into rounds, so a seat that receives one cannot fan it out. This resolver
+        // saw a complexity STRING only, so a complexity-6 feature routed to CODER
+        // CODED like any plan — the caller held the record and dropped the flag.
+        if (isFeature) {
+            return {
+                targetColumn: this._validateOrDegradeCodingColumn('LEAD CODED', visibleAgents),
+                reason: 'feature — routed to the lead, not by complexity',
+            };
+        }
         if (!this._dynamicComplexityRoutingEnabled) {
             const targetColumn = this._validateOrDegradeCodingColumn('LEAD CODED', visibleAgents);
             return { targetColumn, reason: 'dynamic complexity routing off' };
