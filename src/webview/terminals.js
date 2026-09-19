@@ -3736,29 +3736,16 @@
 
     function brandIconForCliLabel(cliLabel) {
         if (!cliLabel || cliLabel === 'No agent assigned') { return null; }
-        // cliLabel is the display name, e.g. 'Antigravity CLI', 'CLAUDE CLI',
-        // 'DEVIN CLI', 'JULES CLI', 'GEMINI CLI', etc. Match case-insensitively
-        // against the known brand prefixes; fall back to the default icon.
+        // ONE table, not a table plus a hand-written startsWith chain that duplicates
+        // it. The chain was the only live resolver and CLI_BRAND_ICON_KEYS was dead —
+        // two copies of the same twenty mappings, so a new brand added to the wrong
+        // one silently rendered as `default`. Longest key first so 'antigravity' cannot
+        // be shadowed by a shorter prefix if one is ever added.
         const key = cliLabel.toLowerCase();
-        if (key.startsWith('antigravity')) { return 'antigravity'; }
-        if (key.startsWith('claude')) { return 'claude'; }
-        if (key.startsWith('devin')) { return 'devin'; }
-        if (key.startsWith('jules')) { return 'jules'; }
-        if (key.startsWith('gemini')) { return 'gemini'; }
-        if (key.startsWith('codex')) { return 'openai'; }
-        if (key.startsWith('openai')) { return 'openai'; }
-        if (key.startsWith('cursor')) { return 'cursor'; }
-        if (key.startsWith('copilot')) { return 'copilot'; }
-        if (key.startsWith('windsurf')) { return 'windsurf'; }
-        if (key.startsWith('qwen')) { return 'qwen'; }
-        if (key.startsWith('amp')) { return 'amp'; }
-        if (key.startsWith('cline')) { return 'cline'; }
-        if (key.startsWith('kiro')) { return 'kiro'; }
-        if (key.startsWith('kilo')) { return 'kilo'; }
-        if (key.startsWith('trae')) { return 'trae'; }
-        if (key.startsWith('opencode')) { return 'opencode'; }
-        if (key.startsWith('zed')) { return 'zed'; }
-        if (key.startsWith('ollama')) { return 'ollama'; }
+        const prefixes = Object.keys(CLI_BRAND_ICON_KEYS).sort((a, b) => b.length - a.length);
+        for (const p of prefixes) {
+            if (key.startsWith(p)) { return CLI_BRAND_ICON_KEYS[p]; }
+        }
         return 'default';
     }
 
@@ -3786,6 +3773,24 @@
             default: ds.brandIconDefault,
         };
         return map[key] || '';
+    }
+
+    /** An <img> for a role's brand icon, or null when the role has no CLI. */
+    function brandIconImgForRole(role, className) {
+        const label = agentLabelForRole(role);
+        const iconKey = brandIconForCliLabel(label);
+        if (!iconKey) { return null; }              // no CLI -> no icon (never `default`)
+        const uri = brandIconUri(iconKey);
+        if (!uri) { return null; }                  // host emitted no data-brand-icon-* attrs
+        const icon = document.createElement('img');
+        icon.className = className;
+        icon.src = uri;
+        icon.alt = '';
+        icon.setAttribute('aria-hidden', 'true');   // the button's own text names the agent
+        icon.dataset.brand = iconKey;
+        // Deliberately NO data-terminal stamp: dismissStartupCurtain strips .is-starting
+        // by that handle and a second matching node would be cleared inconsistently.
+        return icon;
     }
 
     /** Codicon-shaped pencil, built as inline SVG DOM so it inherits currentColor
@@ -10160,9 +10165,17 @@
             btn.className = 'role-option';
             const meta = BUILT_IN_AGENT_LABELS.find(r => r.key === role);
             const label = meta ? meta.label : role;
-            btn.textContent = label;
+            const cliLabel = agentLabelForRole(role);
+            const icon = brandIconImgForRole(role, 'role-option-icon');
+            if (icon) { btn.appendChild(icon); }
+            const text = document.createElement('span');
+            // The role name is what the board calls it; the CLI name is what will
+            // actually run. Show both when they differ — "Researcher" alone never
+            // mentioned Antigravity anywhere in this picker.
+            text.textContent = cliLabel ? `${label} · ${cliLabel}` : label;
+            btn.appendChild(text);
             btn.title = hasCommand[role]
-                ? `Open ${label} terminal`
+                ? `Open ${label} terminal${cliLabel ? ` (${cliLabel})` : ''}`
                 : `${label} — no agent CLI configured (plain shell)`;
             // Annotate roles that head an auto-start team, so picking a role
             // never silently produces a fleet. The pane-originated open

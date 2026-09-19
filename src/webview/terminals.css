@@ -275,10 +275,23 @@
             font-family: inherit;
             cursor: pointer;
             text-transform: capitalize;
+            display: inline-flex;
+            align-items: center;
         }
         .role-option:hover {
             border-color: var(--accent-teal);
             color: var(--accent-teal);
+        }
+        /* Brand mark inside a role-option chip — modelled on .item-role-icon. */
+        .role-option-icon {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+            align-self: center;
+            margin-right: 4px;
+            opacity: 0.9;
+            object-fit: contain;
+            pointer-events: none;
         }
         /* Not a role — the absence of one. Takes its own row below the role chips
            and wears a dashed, muted border so it does not read as a peer of them.
