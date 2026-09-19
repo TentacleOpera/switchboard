@@ -8286,7 +8286,30 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (headDef && typeof headDef.headRole === 'string') { counterpartHeadRole = headDef.headRole; }
             } catch { /* no definition → the prose names no counterpart */ }
         }
-        const coderPrompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, {
+        // WHICH SEAT takes the routine half, and its live terminal. Same derivation
+        // `resolveTeamPairBandForTerminal` uses to name the counterpart, so the two
+        // can never disagree about who the other half is: the first roster seat that
+        // can take routine work — `coder` on the Feature team, `intern` on the
+        // Coding team, whose whole point is that the cheap seat does the routine
+        // half.
+        let seatRole: string | undefined;
+        let seatTerminal: string | null = null;
+        if (teamPP && resolvedTarget) {
+            try {
+                const db = this._getKanbanDb(workspaceRoot);
+                const headDef = db
+                    ? await resolveTeamDefinitionForHeadTerminal({ db, originName: resolvedTarget })
+                    : null;
+                const members: any[] = Array.isArray(headDef?.members) ? headDef!.members : [];
+                seatRole = members.find((m: any) => m && (m.role === 'coder' || m.role === 'intern'))?.role;
+                if (seatRole) {
+                    seatTerminal = await this._taskViewerProvider?.resolveTeamRoleTerminal(
+                        workspaceRoot, resolvedTarget, seatRole) ?? null;
+                }
+            } catch { /* fall through to the board-wide path below */ }
+        }
+        const bandARole = seatRole || 'coder';
+        const coderPrompt = await this.generateUnifiedPrompt(bandARole, plans, workspaceRoot, {
             pairProgrammingEnabled: true,
             accurateCodingEnabled,
             // Team-scoped aggressive flag (board add-on for the non-team path).
@@ -8296,9 +8319,28 @@ This step is what moves the plan forward in the Switchboard pipeline.
             pairCounterpartRole: counterpartHeadRole
         });
         console.log(
-            `[KanbanProvider] pair fan-out: band=A source=${teamPP ? 'team-seat' : 'role-default'} `
-            + `head='${resolvedTarget || 'none'}' counterpart=${counterpartHeadRole ?? 'none'}`
+            `[KanbanProvider] pair fan-out: band=A role=${bandARole} source=${teamPP ? 'team-seat' : 'role-default'} `
+            + `head='${resolvedTarget || 'none'}' seat='${seatTerminal || 'unresolved'}' `
+            + `counterpart=${counterpartHeadRole ?? 'none'}`
         );
+        if (teamPP && !seatTerminal) {
+            // A team answered but its routine seat is not live. Say so instead of
+            // falling back to a board-wide `coder` lookup, which on a coder-headed
+            // team resolves to the HEAD and would hand the seat that was just told
+            // to do the complex half a second prompt telling it to do only the
+            // routine half.
+            this.postMessage({
+                type: 'showStatusMessage',
+                isError: true,
+                message: `Pair programming: no live '${bandARole}' seat on this team to take the Routine (Band A) half. `
+                    + 'Start the team so its seats are up, or the complex half ships alone.'
+            });
+            console.warn(
+                `[KanbanProvider] pair fan-out SKIPPED: team head '${resolvedTarget}' has no live `
+                + `'${bandARole}' seat; the Band A half was not dispatched.`
+            );
+            return;
+        }
         if (coderUsesIde) {
             const choice = await vscode.window.showInformationMessage(
                 'Pair Programming: Routine tasks identified. Click to copy Coder prompt.',
@@ -8308,7 +8350,22 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.env.clipboard.writeText(coderPrompt);
                 vscode.window.showInformationMessage('Coder prompt copied to clipboard.');
             }
+        } else if (seatTerminal) {
+            // THE BOARD dispatches the routine half — the team head does not
+            // hand-write it. Routed through `triggerBatchAgentFromKanban`, which is
+            // registered in BOTH composition roots and takes a target terminal;
+            // `switchboard.dispatchToCoderTerminal` (the old route) is registered
+            // only in extension.ts, so on the standalone host this whole leg was a
+            // warn-once dead end and the Band A half was never delivered at all.
+            // It also resolved a board-wide `coder`, never the team's own seat.
+            const ids = cards.map(c => this._cardId(c));
+            await this._seams().commands.executeCommand(
+                'switchboard.triggerBatchAgentFromKanban',
+                bandARole, ids, undefined, workspaceRoot, seatTerminal
+            );
         } else {
+            // Non-team path: no team answered, so the board enum governs and the
+            // historical board-wide coder lookup is still the right target.
             const commonWorktree = plans[0]?.worktreePath;
             const allSameWorktree = plans.every(p => p.worktreePath === commonWorktree);
             const worktreePath = allSameWorktree ? commonWorktree : undefined;
