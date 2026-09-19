@@ -1022,7 +1022,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             // the note above this array.
             { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'Turns tickets and ideas into plans, with a researcher seat so the planner never hands research back to you.',
+        purpose: 'Bulk planning. Send it a batch of cards and each planner seat takes one and writes its plan; the researcher seat digs through the codebase for them so a plan never comes back asking you to look something up. This is the team automated planning dispatch goes to.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
@@ -1054,7 +1054,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'coder', count: 2, label: '' },
             { role: 'intern', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'Takes a whole feature and dispatches its subtasks across coder and intern seats.',
+        purpose: 'Whole features. The lead reads the feature, groups its subtasks into rounds, and the system deals one subtask at a time to each free seat — two coders and an intern — until the feature is done. Send it a feature, not a single plan.',
         acceptedKinds: ['feature'],
         acceptedKindsSource: 'default',
         pairProgramming: 'on',
@@ -1083,7 +1083,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         members: [
             { role: 'intern', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'Takes a single plan and splits it by complexity: the coder takes Band B, the intern takes Band A.',
+        purpose: 'One plan, two seats. The board splits the plan by difficulty and sends both halves at once: the coder gets the complex and risky work, the intern gets the routine work, and the coder integrates both before committing. No lead, no reviewer — it is the cheap team for a single plan.',
         acceptedKinds: ['plan'],
         acceptedKindsSource: 'default',
         // Written explicitly and NOT switchable off in the Teams tab: a coder and
@@ -1116,7 +1116,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         members: [
             { role: 'reviewer', count: 2, label: '' },
         ],
-        purpose: 'Reviews a feature across reviewer seats in read-only batches, triages findings, and fixes only what it reviewed.',
+        purpose: 'Review. The head hands each reviewer up to two plans to read without touching code, then triages what comes back and sends only the real fixes to the reviewer that found them. Send it work that has already been built.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
@@ -1155,7 +1155,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'planner', count: 3, label: '', scope: 'per-team', relationship: 'reports-to-head' },
             { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'Three planners draft the same problem independently; the head reconciles the drafts into one plan.',
+        purpose: 'Hard planning you oversee. Three planners attack the SAME problem from different angles and the head reconciles their drafts into one plan. It never receives automated dispatch — you drive it yourself with the copy-prompt buttons. Ships switched off.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'

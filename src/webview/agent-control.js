@@ -1392,23 +1392,30 @@
             // 404 fallback so a deleted PNG degrades to the role portrait.
             card.appendChild(teamsTabPortraitEl(group, TEAMS_TAB_CELL));
 
+            // The card is a ROW now: portrait | text column | controls column.
+            // Everything textual goes in the body so a long purpose wraps inside
+            // the card instead of shoving the controls off the end.
+            const body = document.createElement('div');
+            body.className = 'teams-card-body';
+            card.appendChild(body);
+
             // Name
             const nameDiv = document.createElement('div');
             nameDiv.className = 'teams-card-name';
             nameDiv.textContent = group.name || group.id;
-            card.appendChild(nameDiv);
+            body.appendChild(nameDiv);
 
             // Purpose — types carry one; adopted teams fall back to member summary
             const purposeDiv = document.createElement('div');
             purposeDiv.className = 'teams-card-purpose';
             purposeDiv.textContent = group.purpose || teamsTabRosterStrip(group);
-            card.appendChild(purposeDiv);
+            body.appendChild(purposeDiv);
 
             // Roster strip: LEAD · 3 CODER · 1 REVIEWER
             const rosterDiv = document.createElement('div');
             rosterDiv.className = 'teams-card-roster';
             rosterDiv.textContent = teamsTabRosterStrip(group);
-            card.appendChild(rosterDiv);
+            body.appendChild(rosterDiv);
 
             // ── The in-use switch ────────────────────────────────────────
             // A team that exists is not automatically a team that plays. A
@@ -1445,14 +1452,43 @@
             switchLabel.appendChild(switchInput);
             switchLabel.appendChild(switchText);
             switchDiv.appendChild(switchLabel);
-            card.appendChild(switchDiv);
+            const aside = document.createElement('div');
+            aside.className = 'teams-card-aside';
+            aside.appendChild(switchDiv);
+            // EDIT and delete live ON the card now. They used to sit in a second
+            // "Your Teams" list that rendered the same five teams again — two
+            // surfaces for one thing, which is how the roster and the switch
+            // ended up describing each other rather than the team.
+            const cardActions = document.createElement('div');
+            cardActions.className = 'teams-card-actions';
+            cardActions.addEventListener('click', (e) => e.stopPropagation());
+            const editBtn2 = document.createElement('button');
+            editBtn2.className = 'agents-tab-custom-agent-item-btn';
+            editBtn2.textContent = 'EDIT';
+            editBtn2.addEventListener('click', () => teamsTabShowGroupForm(group));
+            cardActions.appendChild(editBtn2);
+            if (!teamsTabIsDefault(group)) {
+                const del2 = document.createElement('button');
+                del2.className = 'agents-tab-custom-agent-item-btn delete';
+                del2.textContent = '\u00d7';
+                del2.addEventListener('click', () => {
+                    // Delete immediately — no confirmation dialog (hard project rule).
+                    agentsTabAgentGroups = agentsTabAgentGroups.filter(g => g.id !== group.id);
+                    if (teamsTabPickedKey === group.id) { teamsTabPickedKey = null; }
+                    teamsTabRenderGallery();
+                    postKanbanMessage({ type: 'deleteAgentGroup', groupId: group.id });
+                });
+                cardActions.appendChild(del2);
+            }
+            aside.appendChild(cardActions);
+            card.appendChild(aside);
             if (!teamsTabIsEnabled(group)) {
                 const offNote = document.createElement('div');
                 offNote.className = 'teams-card-note';
                 offNote.textContent = group.enabledSource === 'default'
                     ? 'Ships switched off. Switch it on to start it.'
                     : 'Switched off. It keeps its definition and its seats; it just does not play.';
-                card.appendChild(offNote);
+                body.appendChild(offNote);
             }
             // Roles this team would start into BARE SHELLS. Reported BEFORE a
             // start, which is when a first-run user needs it — team start reports
@@ -1463,7 +1499,7 @@
                 const needDiv = document.createElement('div');
                 needDiv.className = 'teams-card-note';
                 needDiv.textContent = `${group.name} needs a startup command for: ${commandless.roles.join(', ')}`;
-                card.appendChild(needDiv);
+                body.appendChild(needDiv);
             }
 
             // Worktree field — adopted teams only. Previously gated behind a
@@ -1498,7 +1534,7 @@
                     postKanbanMessage({ type: 'saveAgentGroup', group: { ...g } });
                 });
                 autoDiv.appendChild(wtInput);
-                card.appendChild(autoDiv);
+                body.appendChild(autoDiv);
             }
 
             // WORKTREE badge
@@ -1509,7 +1545,7 @@
                 wtLabel.className = 'teams-card-autostart-label';
                 wtLabel.textContent = 'WORKTREE';
                 wtBadge.appendChild(wtLabel);
-                card.appendChild(wtBadge);
+                body.appendChild(wtBadge);
             }
 
             card.addEventListener('click', () => {
