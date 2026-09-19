@@ -12429,11 +12429,16 @@ Each plan file must include:
         if (normalized === 'lead' || normalized === 'coder' || normalized === 'intern') {
             const liveRolesMap = this.getAliveCodingRolesWithTerminals();
             const visibleAgents = await this.getVisibleAgents(workspaceRoot);
-            const isPairMode = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+            // An intern used to be dropped from this pool whenever board-level pair
+            // programming was on. That predates teams: the band a seat works is now
+            // decided by its POSITION on its team (head → Band B, seats → Band A),
+            // not by its role string, so excluding interns here hid a live seat from
+            // every dispatch while it kept spawning and holding RAM. It also
+            // contradicted the Coding team outright, whose whole design is a coder
+            // head handing the routine half to an intern.
             const available = new Set<'intern' | 'coder' | 'lead'>();
             for (const r of liveRolesMap.keys()) {
                 if (visibleAgents && visibleAgents[r] === false) continue;
-                if (r === 'intern' && isPairMode) continue;
                 available.add(r);
             }
             if (available.size === 0) {
