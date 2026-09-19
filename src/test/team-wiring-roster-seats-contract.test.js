@@ -228,14 +228,23 @@ test('resolveTeamSeats: head by explicit team.head name (arm 1)', () => {
     assert.deepStrictEqual(out.get('t1').members, []);
 });
 
-test('resolveTeamSeats: head by role when no team.head (arm 2)', () => {
+test('resolveTeamSeats: no team.head means no head — the role match is gone', () => {
+    // Was "head by role when no team.head (arm 2)". That arm is removed: a team
+    // cannot claim an agent it did not start. `lead-1` here is unassigned, and an
+    // unassigned agent is not a team member.
     const teams = [{ id: 't1', headRole: 'lead' }];
     const fleet = [{ friendlyName: 'lead-1', role: 'lead', agentInstanceId: 'a1', status: 'active' }];
     const out = resolveTeamSeats(teams, fleet);
-    assert.strictEqual(out.get('t1').head.friendlyName, 'lead-1');
+    assert.strictEqual(out.get('t1').head, null, 'an unassigned lead is not this team\'s head');
+    assert.deepStrictEqual(out.get('t1').members, []);
 });
 
-test('resolveTeamSeats: two teams sharing headRole — claim order, no double-claim', () => {
+test('resolveTeamSeats: a team with no registered head claims NOBODY', () => {
+    // Operator rule, 2026-09-19: teams cannot claim unassigned agents — that is not
+    // how a team works. A team's head is the seat its group row names, or it has
+    // none. This test previously asserted the opposite (two headless teams claiming
+    // two live leads in claim order), which is the defect: a dormant coder-headed
+    // team adopted another team's coder and reported "1 live".
     const teams = [
         { id: 't1', headRole: 'lead' },
         { id: 't2', headRole: 'lead' },
@@ -245,8 +254,10 @@ test('resolveTeamSeats: two teams sharing headRole — claim order, no double-cl
         { friendlyName: 'lead-2', role: 'lead', agentInstanceId: 'a2', status: 'active' },
     ];
     const out = resolveTeamSeats(teams, fleet);
-    assert.strictEqual(out.get('t1').head.friendlyName, 'lead-1', 'first team claims first lead');
-    assert.strictEqual(out.get('t2').head.friendlyName, 'lead-2', 'second team gets the remaining lead');
+    assert.strictEqual(out.get('t1').head, null, 'no group row, no head — never an unassigned agent');
+    assert.strictEqual(out.get('t2').head, null);
+    assert.strictEqual(out.get('t1').members.length, 0);
+    assert.strictEqual(out.get('t2').members.length, 0);
 });
 
 test('resolveTeamSeats: explicit head disambiguates two teams sharing headRole', () => {
@@ -277,13 +288,16 @@ test('resolveTeamSeats: members by parentInstanceId', () => {
 });
 
 test('resolveTeamSeats: exited seats are not claimed', () => {
-    const teams = [{ id: 't1', headRole: 'lead' }];
+    // Keyed on the team's registered head now that the role match is gone, so this
+    // still tests what it always meant: an EXITED seat is filtered from the pool.
+    const teams = [{ id: 't1', headRole: 'lead', head: 'lead-1' }];
     const fleet = [
         { friendlyName: 'lead-1', role: 'lead', agentInstanceId: 'a1', status: 'exited' },
         { friendlyName: 'lead-2', role: 'lead', agentInstanceId: 'a2', status: 'active' },
     ];
     const out = resolveTeamSeats(teams, fleet);
-    assert.strictEqual(out.get('t1').head.friendlyName, 'lead-2', 'exited seats are filtered from the pool');
+    assert.strictEqual(out.get('t1').head, null,
+        'the team\'s own head is exited, so it has no live head — and it does not fall through to lead-2');
 });
 
 test('resolveTeamSeats: no matching head returns null head', () => {
@@ -486,7 +500,7 @@ test('instantiateAgentGroupCore never passes the definition name as the head sea
     assert.strictEqual(feature.head && feature.head.friendlyName, 'Feature');
     assert.strictEqual(feature.members.length, 3, 'the Feature team keeps all three of its seats');
     assert.strictEqual(coding.head, null,
-        'a dormant coder-headed team must NOT claim another team\'s coder delegate as its head');
+        'a dormant coder-headed team must NOT claim another team\'s coder as its head');
     assert.strictEqual(coding.members.length, 0, 'and therefore reports no live seats');
     console.log('  \u2705 a dormant team does not claim another team\'s delegate as its head');
 }

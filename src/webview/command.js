@@ -37,23 +37,17 @@
                     pool.splice(idx, 1);
                 }
             }
-            if (!head && role) {
-                // A HEAD IS UNPARENTED. Matching on role alone let a team that is
-                // not running claim someone else's SEAT: the Coding team is
-                // `coder`-headed, so with only the Feature team up it claimed
-                // `Feature-coder-1` — a delegate — and reported "1 live" for a team
-                // with nothing running.
-                //
-                // `parentInstanceId` is the membership fact: a delegate is parented
-                // by construction, a head never is. Same predicate startTeamById's
-                // double-start guard uses ("a live, unparented terminal on the head
-                // role"), so the view and the start path agree on what a head is.
-                const idx = pool.findIndex(t => t.role === role && !t.parentInstanceId);
-                if (idx !== -1) {
-                    head = pool[idx];
-                    pool.splice(idx, 1);
-                }
-            }
+            // NO ROLE FALLBACK. A team's head is the seat its registered group row
+            // names, or the team has no head. Matching on role adopted a stranger:
+            // a dormant `coder`-headed team claimed a live coder that belonged to
+            // another team, and reported "1 live" for a team running nothing. A team
+            // is a head and ITS seats — membership is the group row, never a role
+            // coincidence, and an unassigned agent is not a team member.
+            //
+            // Narrowing the match to unparented terminals is not enough either: a
+            // lone unassigned agent of the right role is unparented too, and would
+            // still be adopted by a team that never started it.
+
             let members = [];
             if (head && head.agentInstanceId) {
                 members = pool.filter(t => t.parentInstanceId === head.agentInstanceId);
