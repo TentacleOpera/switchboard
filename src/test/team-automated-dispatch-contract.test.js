@@ -177,6 +177,42 @@ const defOf = (id) => tw.DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === id);
             'a roster read failure must degrade to today\'s behaviour, not stop the board dispatching');
     });
 
+    console.log('\n--- The seat cap is automatic ---');
+
+    const KP_SRC = fs.readFileSync(path.join(REPO_ROOT, 'src/services/KanbanProvider.ts'), 'utf8');
+    const fanOut = (() => {
+        const i = KP_SRC.indexOf('private async _distributePlannerDispatch(');
+        return KP_SRC.slice(i, KP_SRC.indexOf('\n    private async ', i + 10));
+    })();
+
+    await test('the batch is capped at one plan per seat, unconditionally', () => {
+        assert.ok(/const plans = ordered\.slice\(0, terminals\.length\);/.test(fanOut),
+            'the fan-out must take the oldest terminals.length plans with no condition — a fan-out that '
+            + 'can be switched off silently stacks several plans on one seat, which is a queue, not a fan-out');
+        assert.ok(!/\bskipLimit\b/.test(fanOut),
+            'no escape hatch: every caller gets one plan per seat');
+    });
+
+    await test('no toggle survives anywhere — not the reader, the state field, or the UI', () => {
+        const TVP = fs.readFileSync(path.join(REPO_ROOT, 'src/services/TaskViewerProvider.ts'), 'utf8');
+        const AC_HTML = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/agent-control.html'), 'utf8');
+        const AC_JS = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/agent-control.js'), 'utf8');
+        assert.ok(!/getLimitDispatchToTerminals/.test(TVP + KP_SRC),
+            'the reader must be gone, not merely unread');
+        assert.ok(!/plannerLimitDispatchToTerminals/.test(TVP),
+            'the state field must be gone from the reader side');
+        assert.ok(!/agents-tab-planner-limit-dispatch|agents-tab-planner-terminal-count/.test(AC_HTML + AC_JS),
+            'the AGENTS tab must carry neither the limit checkbox nor the duplicate terminal-count selector — '
+            + 'opening a grid is the TERMINALS tab\'s gesture and the roster sizes the fan-out');
+    });
+
+    await test('the held-plans message names no setting, because there is none', () => {
+        assert.ok(!/limit ON/.test(fanOut),
+            'the status suffix must not name a toggle the operator cannot find');
+        assert.ok(/one plan per planner seat/.test(fanOut),
+            'it must explain the rule instead');
+    });
+
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failed > 0) { process.exit(1); }
 })().catch(e => { console.error(e); process.exit(1); });

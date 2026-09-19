@@ -3368,7 +3368,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         ['switchboard.agents.promptOverrides', 'defaultPromptOverrides'],
         ['switchboard.agents.julesAutoSyncEnabled', 'julesAutoSyncEnabled'],
         ['switchboard.agents.plannerTerminalCount', 'plannerTerminalCount'],
-        ['switchboard.agents.plannerLimitDispatchToTerminals', 'plannerLimitDispatchToTerminals'],
     ];
 
     /** Discover all role config keys from a state object (global or workspace). */
@@ -9116,11 +9115,6 @@ Each plan file must include:
     public async getPlannerTerminalCount(ws?: string): Promise<number> {
         const n = await this._readStateField('plannerTerminalCount', ws, 1);
         return Math.max(1, Math.min(5, Number.isFinite(n) ? Math.floor(n) : 1));
-    }
-
-    public async getLimitDispatchToTerminals(role: string, ws?: string): Promise<boolean> {
-        if (role !== 'planner') return false;
-        return await this._readStateField('plannerLimitDispatchToTerminals', ws, false);
     }
 
     public async getAliveRoleTerminalNames(role: string, workspaceRoot: string): Promise<string[]> {

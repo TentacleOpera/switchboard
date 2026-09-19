@@ -5935,7 +5935,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const visibleAgents = await this._taskViewerProvider.getVisibleAgents(workspaceRoot);
             const julesAutoSyncEnabled = this._context.globalState.get<boolean>('switchboard.agents.julesAutoSyncEnabled', false);
             const plannerTerminalCount = await this._taskViewerProvider.getPlannerTerminalCount(workspaceRoot);
-            const plannerLimitDispatchToTerminals = await this._taskViewerProvider.getLimitDispatchToTerminals('planner', workspaceRoot);
             // Machine threading (plan: agents-are-saved-per-machine-and-a-team-picks-one):
             // surface the machines list + the selected machine (local on first load)
             // so the Agents tab can render the machine selector.
@@ -5951,7 +5950,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 agentNames: await this._getAgentNames(workspaceRoot),
                 julesAutoSyncEnabled,
                 plannerTerminalCount,
-                plannerLimitDispatchToTerminals,
                 machines,
                 machineId: 'local'
             };
@@ -5965,10 +5963,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 visibleAgents: state.visibleAgents || {},
                 julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false,
                 plannerTerminalCount: state.plannerTerminalCount ?? 1,
-                plannerLimitDispatchToTerminals: state.plannerLimitDispatchToTerminals ?? false
             };
         } catch {
-            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, plannerTerminalCount: 1, plannerLimitDispatchToTerminals: false };
+            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, plannerTerminalCount: 1 };
         }
     }
 
@@ -6007,9 +6004,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 if (typeof msg.plannerTerminalCount === 'number') {
                     state.plannerTerminalCount = msg.plannerTerminalCount;
                 }
-                if (typeof msg.plannerLimitDispatchToTerminals === 'boolean') {
-                    state.plannerLimitDispatchToTerminals = msg.plannerLimitDispatchToTerminals;
-                }
             });
             return;
         }
@@ -6024,7 +6018,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (msg.visibleAgents) state.visibleAgents = { ...(state.visibleAgents || {}), ...msg.visibleAgents };
             if (typeof msg.julesAutoSyncEnabled === 'boolean') state.julesAutoSyncEnabled = msg.julesAutoSyncEnabled;
             if (typeof msg.plannerTerminalCount === 'number') state.plannerTerminalCount = msg.plannerTerminalCount;
-            if (typeof msg.plannerLimitDispatchToTerminals === 'boolean') state.plannerLimitDispatchToTerminals = msg.plannerLimitDispatchToTerminals;
             await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
             // No notifyStateChanged() here: this legacy state.json branch only runs when
             // there is no TaskViewerProvider to notify (the provider path returned above).
@@ -8328,8 +8321,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
     private async _distributePlannerDispatch(
         workspaceRoot: string,
         sourceCards: KanbanCard[],
-        nextCol: string,
-        options?: { skipLimit?: boolean }
+        nextCol: string
     ): Promise<void> {
         const tvp = this._taskViewerProvider;
         if (!tvp) return;
@@ -8369,9 +8361,21 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const orderByMode = this._resolveOrderByModeSync(workspaceRoot);
         const ordered = [...sourceCards].sort((a, b) => compareByPrecedence(a, b, sortColumn, orderByMode));
 
-        // Limit: only oldest N plans (N = live terminal count), one per terminal
-        const limit = !options?.skipLimit && await tvp.getLimitDispatchToTerminals('planner', workspaceRoot);
-        const plans = limit ? ordered.slice(0, terminals.length) : ordered;
+        // ONE PLAN PER SEAT. The batch is the oldest N plans where N is the number
+        // of ELIGIBLE planner terminals, so a fan-out hands each planning seat
+        // exactly one prompt and leaves the rest of the column for the next round.
+        // This is automatic and has no control: the fan-out width is a property of
+        // the team's roster, not a preference.
+        //
+        // It used to be gated on `plannerLimitDispatchToTerminals`, a checkbox that
+        // defaulted OFF and was written for the VS Code product before teams
+        // existed. Off, the round-robin silently stacked several plans on one seat
+        // — which is not a fan-out, it is a queue with extra steps.
+        //
+        // `terminals` is already filtered by the automated-dispatch policy
+        // (getRoleTerminalSet), so a hands-on-only team's seats neither receive a
+        // plan nor inflate this count.
+        const plans = ordered.slice(0, terminals.length);
 
         if (plans.length === 0) {
             this.postMessage({ type: 'showStatusMessage', message: 'No plans to dispatch.', isError: false });
@@ -8435,8 +8439,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // Advance the rotation so the next move continues after the last plan's terminal.
         await tvp.advancePlannerRotationCursor(locationKey, plans.length);
 
-        const limitSuffix = limit && ordered.length > terminals.length
-            ? ` (${ordered.length - terminals.length} plan(s) held — limit ON)`
+        // Say what was held and WHY, without naming a setting: there is no setting.
+        // The old suffix reported the state of a checkbox that no longer exists, and
+        // a message naming a control the operator cannot find is worse than one that
+        // explains the rule.
+        const limitSuffix = ordered.length > terminals.length
+            ? ` (${ordered.length - terminals.length} plan(s) held for the next round — one plan per planner seat)`
             : '';
         if (failedBuckets.length > 0) {
             this.postMessage({
@@ -12919,7 +12927,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 const selectedCards = this._lastCards.filter(card =>
                                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                                 );
-                                await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true });
+                                await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol);
                             } else {
                                 // 'Advance to next stage': the operation re-derives
                                 // the target from sourceColumn through the same
