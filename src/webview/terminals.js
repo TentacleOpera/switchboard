@@ -374,6 +374,7 @@
     const groupTabStripEl = document.getElementById('group-tab-strip');
     const toastContainerEl = document.getElementById('toast-container');
     const fallbackBannerEl = document.getElementById('layout-fallback-banner');
+    const sidebarTitleEl = document.querySelector('.sidebar-title');
     const groupPagerEl = document.getElementById('group-pager');
     const groupPagerLabelEl = document.getElementById('group-pager-label');
     const groupPagerPrevEl = document.getElementById('group-pager-prev');
@@ -3857,7 +3858,9 @@
         // Under a tier the chip is the tier's own name repeated on every row, so it is
         // suppressed there. A seat claimed only by a derived role/worktree group has no
         // tier, and the chip is still the only thing that names its claimant.
-        const claimingGroup = opts?.inTeamTier ? null : findGroupForTerminalName(item.friendlyName);
+        // Under a group lock every visible row is a member, so the chip
+        // carries no information — and the sidebar is 220px wide.
+        const claimingGroup = (opts?.inTeamTier || activeGroupId) ? null : findGroupForTerminalName(item.friendlyName);
         if (claimingGroup) {
             const groupChip = document.createElement('span');
             groupChip.className = 'item-group-chip';
@@ -4659,7 +4662,8 @@
         }
         // No unassigned fallback — the pseudo-group is retired. Returns null
         // for ungrouped terminals, which makes handleLockedTerminalClick's
-        // !group branch live (drop the lock and seat the terminal).
+        // !group guard live (drop the lock via clearGroupLock and seat the
+        // terminal on the unassigned grid).
         return null;
     }
 
@@ -4723,11 +4727,33 @@
         // PREVIOUS peek at this point, so this clears the old one, not the new.
         dismissPeek();
         const group = findGroupForTerminalName(name);
+
+        // An ungrouped terminal is never adopted by the lock. Show the
+        // unassigned grid instead. This must sit ABOVE the free-slot branch:
+        // that branch calls addTerminalToActiveGroup(), which is a persisted
+        // membership write, so letting it claim an ungrouped terminal
+        // permanently conscripts it into whatever happened to be locked.
+        if (!group && activeGroupId) {
+            // In team-scoped mode clearGroupLock() early-returns and dropping
+            // the lock is forbidden — seat the terminal in place instead.
+            if (teamScopeId) {
+                locateTerminal(name);
+                return;
+            }
+            clearGroupLock();          // the single unassigned seater
+            activeTerminalName = name;
+            const seatIdx = paneAssignments.indexOf(name);
+            if (seatIdx !== -1 && seatIdx < getSlotCount(effectiveLayout)) {
+                focusPaneTerminal(seatIdx);
+            }
+            renderSidebarList();
+            return;
+        }
         const rendered = Math.max(1, getSlotCount(effectiveLayout));
 
         // Free-slot fill: if there is a genuinely empty rendered pane, a click
-        // on a non-member (whether claimed by another group or by no group at
-        // all) means "seat it HERE and make it a member" — not "switch to its
+        // on a non-member claimed by another group means "seat it HERE and
+        // make it a member" — not "switch to its
         // group". This is the fix for the reported defect: empty panes under a
         // lock were unfillable because every click was intercepted as a mode
         // change. The terminal is added to the active group's membership BEFORE
@@ -4764,23 +4790,6 @@
 
         // No free slot, or the terminal is already a member of the active
         // group — fall through to the existing behaviour.
-        if (!group) {
-            // No group claims it at all, and no free slot to add it — drop the
-            // lock and seat it, so the click is never dead. This branch is now
-            // live for every ungrouped terminal clicked under a lock (the
-            // Unassigned pseudo-group was retired by the deletion plan, so
-            // findGroupForTerminalName returns null instead of a fallback).
-            // In team-scoped mode, do not drop the lock — just seat the terminal.
-            if (teamScopeId) {
-                locateTerminal(name);
-                return;
-            }
-            activeGroupId = null;
-            activeGroupPage = 0;
-            saveLayoutSettings();
-            locateTerminal(name);
-            return;
-        }
         if (group.id !== activeGroupId) {
             // Belongs to another group, and no free slot in the active group —
             // switch to its group. The tab strip is the deliberate switch
@@ -5885,6 +5894,35 @@
             }
         }
 
+        // Group filter. The top-bar strip is the panel's group selector; when a
+        // group is locked the sidebar must agree with it. Resolved ONCE per
+        // render: findGroupForTerminalName walks every group and calls
+        // getGroupMembers per group, so a per-row resolution would be
+        // O(rows x groups x fleet) on the 5s fleet poll.
+        //
+        // AFTER the strip render, never before: the strip's per-tab counts come
+        // from getGroupMembers() against the full fleet and must stay global —
+        // the strip is how the operator sees what the filter is hiding.
+        //
+        // An activeGroupId that no longer resolves (group deleted between the
+        // save and this render) falls through to UNFILTERED, not to an empty
+        // sidebar: a stale id must never blank the operator's only spawn tree.
+        const lockedGroup = activeGroupId
+            ? getAllGroups().find(g => g.id === activeGroupId)
+            : null;
+        const lockedMemberNames = lockedGroup
+            ? new Set(getGroupMembers(lockedGroup))
+            : null;
+
+        // Sidebar title carries the lock, so a filtered tree is never mistaken
+        // for an empty fleet — the one thing a silent filter always causes.
+        if (sidebarTitleEl) {
+            sidebarTitleEl.textContent = lockedGroup ? `Agents — ${lockedGroup.name}` : 'Agents';
+            sidebarTitleEl.title = lockedGroup
+                ? `Showing only ${lockedGroup.name}. Click All in the group bar to show every terminal.`
+                : '';
+        }
+
         let parents = Array.isArray(parentsList) ? [...parentsList] : [];
         if (parents.length === 0) {
             parents.push({
@@ -5917,7 +5955,14 @@
         // The full fleetList is still in memory for sanitize, standing orders,
         // and dispatch-in-flight cleanup — this is the render boundary.
         const renderFleet = scopedFleet();
-        for (const item of renderFleet) {
+        // fleetList stays the unfiltered fleet and is still read by the pane-grid
+        // empty-state toggle above AND by the workspace picker's Unmapped probe
+        // (workspace-dropdown sibling). Only the bucketing pass consumes the
+        // filtered array — keep the two names distinct.
+        const sidebarItems = lockedMemberNames
+            ? renderFleet.filter(t => lockedMemberNames.has(t.friendlyName))
+            : renderFleet;
+        for (const item of sidebarItems) {
             let targetGroup = parentGroups.find(p => p.fullPath && p.fullPath === item.parentRoot);
             if (!targetGroup) {
                 // Fold an unattributed terminal into the sole group ONLY when that group is
@@ -6049,7 +6094,11 @@
             if (totalItems === 0) {
                 const emptyNotice = document.createElement('div');
                 emptyNotice.className = 'empty-parent-notice';
-                emptyNotice.textContent = '(no terminals — + to open)';
+                // Under a lock the workspace may hold ten terminals, none of them
+                // members. "(no terminals)" would be a lie about the workspace.
+                emptyNotice.textContent = lockedGroup
+                    ? `(no ${lockedGroup.name} terminals here — + to open)`
+                    : '(no terminals — + to open)';
                 itemsContainer.appendChild(emptyNotice);
             } else {
                 const directSplit = bucketRowsByTeam(parentGroup.direct, claimMap);

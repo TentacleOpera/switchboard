@@ -511,8 +511,13 @@ async function item6() {
             + 'seatActiveGroupPage reconcile evicts it (a visible flicker that reads as a bug)'
         );
         assert.ok(
-            /activeGroupId = null;/.test(fn.slice(seatIdx)),
-            'the fall-through must reach the lock-drop path so the click is never dead'
+            fn.indexOf('clearGroupLock()') !== -1 && fn.indexOf('clearGroupLock()') < guardIdx,
+            'the ungrouped lock-drop must sit ABOVE the free-slot branch — below it, '
+            + 'addTerminalToActiveGroup conscripts an ungrouped terminal into the locked group'
+        );
+        assert.ok(
+            /switchToGroup\(group\.id\)/.test(fn.slice(seatIdx)),
+            'the fall-through must reach the group-switch path so the click is never dead'
         );
     });
 

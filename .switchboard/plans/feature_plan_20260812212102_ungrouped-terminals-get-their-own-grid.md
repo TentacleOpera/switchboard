@@ -201,3 +201,7 @@ an id for the unassigned scope re-opens the
 ## No migration
 
 No setting is renamed, dropped or repurposed. No new key is written.
+
+## Completion summary (2026-09-19, Feature-intern)
+
+Implemented the trimmed scope only: `handleLockedTerminalClick` in `src/webview/terminals.js` now hoists the `!group && activeGroupId` case above the free-slot branch and routes it through `clearGroupLock()`, so an ungrouped click can no longer reach `addTerminalToActiveGroup`. The dead `!group` fallback below was retired, and its `teamScopeId` carve-out was preserved inside the hoisted guard (`locateTerminal` — `clearGroupLock` early-returns under team scope, so dropping it would have made the click dead). Two stale comments (free-slot "no group at all" wording, `findGroupForTerminalName`'s `!group` branch reference) were corrected. One contract test asserted the deleted literal `activeGroupId = null` tail; it now asserts `clearGroupLock()` precedes the membership write and `switchToGroup` still resolves the fall-through. `node --check` clean; compile/tests skipped per dispatch orders.

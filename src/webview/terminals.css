@@ -107,6 +107,10 @@
             letter-spacing: 0.05em;
             text-transform: uppercase;
             color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
         }
         .sidebar-session-count {
             font-size: 10px;
