@@ -79,7 +79,7 @@ the Coding team is delivered plans.**
 | id | name | headRole | members | pairProgramming | ships |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `planning-team` | Planning | `planner` | 2 × `planner`, 1 × `researcher` (`scope: 'per-team'`) | — | **enabled** |
-| `feature-implementation` | Feature team | `lead` | 3 × `coder` | `'on'` | **enabled** |
+| `feature-implementation` | Feature team | `lead` | 2 × `coder`, 1 × `intern` | `'on'` | **enabled** |
 | `coding-team` | Coding | `coder` | 1 × `intern` | `'on'`, not switchable off | **enabled** |
 | `review-team` | Review | `reviewer` | 2 × `reviewer` | — | **enabled** |
 | `multi-agent-planning` | Multi-agent planning | `planner` | 3 × `planner` (peer drafts), 1 × `researcher` (`scope: 'per-team'`) | — | **disabled** |
@@ -784,3 +784,18 @@ too — and the Manual section was not executed in this pass.
 - NIT — `dynamicComplexityRoutingState` was added to the connect-time resync, which is outside
   this plan's scope; verified benign (idempotent webview handler, no second sender on this path).
   `src/services/KanbanProvider.ts:1769`
+
+
+## Correction (2026-09-19, post-review)
+
+The table above originally gave the Feature team **3 × `coder`**, inherited from
+*The Three Preset Teams Ship Member-Less* under this plan's own note that it "does
+not re-derive" the Planning/Feature/Review rosters. That inheritance was wrong:
+`feature-implementation` held `members: []` at the time, so the three-coder roster
+came from a stale constant rather than from anything in use. The implementation
+team the operator was actually running (`group-coding-mswk2w8r`, discarded by
+Change 5's reset) was **lead + 2 × `coder` + 1 × `intern`**.
+
+Corrected in the seed and backfilled onto the live board. The review that passed
+this plan checked the implementation against the table and never asked whether the
+table matched the board — the same class of miss as the rest of this session.

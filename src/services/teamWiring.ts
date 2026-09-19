@@ -1045,10 +1045,17 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         name: 'Feature team',
         headRole: 'lead',
         machine: 'local',
+        // Two coders and an INTERN, not three coders. The three-coder roster came
+        // from the older member-less preset constant and was carried forward
+        // unexamined; the implementation team the operator actually ran was
+        // lead + 2 × coder + 1 × intern. A feature's subtasks are not uniformly
+        // complex, and the cheap seat is the one that makes the roster worth its
+        // RAM on a box where board-plus-agents wants 2 GB.
         members: [
-            { role: 'coder', count: 3, label: '' },
+            { role: 'coder', count: 2, label: '' },
+            { role: 'intern', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'Takes a whole feature and dispatches its subtasks across coder seats.',
+        purpose: 'Takes a whole feature and dispatches its subtasks across coder and intern seats.',
         acceptedKinds: ['feature'],
         acceptedKindsSource: 'default',
         pairProgramming: 'on',

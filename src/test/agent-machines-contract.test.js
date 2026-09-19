@@ -164,12 +164,22 @@ async function run() {
 
     // ── 5. The phantom-seed predicate tolerates both persisted shapes ───
 
+    // The persisted shape DERIVED from the seed, never retyped. These fixtures
+    // used to hard-code `[{ role: 'coder', count: 3 }]`, which silently stopped
+    // describing the seed the moment its roster changed — and the roster did
+    // change (the Feature team is 2 coders and an intern, not 3 coders). A
+    // hand-copied fixture turns a roster edit into a red gate that looks like a
+    // predicate bug, which is the two-copies-disagreeing trap in a test file.
+    const seedMembersAsPersisted = (extra) => SEEDED_AGENT_GROUP.members.map(m => ({
+        ...m, scope: 'per-team', relationship: 'reports-to-head', ...(extra || {}),
+    }));
+
     check('a seed persisted BEFORE the machine field still reads as untouched', () => {
         const legacyShaped = {
             id: SEEDED_AGENT_GROUP.id,
             name: SEEDED_AGENT_GROUP.name,
             headRole: SEEDED_AGENT_GROUP.headRole,
-            members: [{ role: 'coder', count: 3, label: '', startupCommand: '', scope: 'per-team', relationship: 'reports-to-head' }],
+            members: seedMembersAsPersisted({ startupCommand: '' }),
         };
         assert.strictEqual(isUntouchedSeed(legacyShaped), true,
             'a persisted seed with the retired startupCommand and no machine key must NOT read as authored');
@@ -181,7 +191,7 @@ async function run() {
             name: SEEDED_AGENT_GROUP.name,
             headRole: SEEDED_AGENT_GROUP.headRole,
             machine: 'local',
-            members: [{ role: 'coder', count: 3, label: '', scope: 'per-team', relationship: 'reports-to-head' }],
+            members: seedMembersAsPersisted(),
         };
         assert.strictEqual(isUntouchedSeed(current), true);
     });
@@ -190,13 +200,18 @@ async function run() {
         assert.strictEqual(isUntouchedSeed({
             id: SEEDED_AGENT_GROUP.id, name: SEEDED_AGENT_GROUP.name, headRole: SEEDED_AGENT_GROUP.headRole,
             machine: 'local',
-            members: [{ role: 'coder', count: 3, label: '', startupCommand: 'claude', scope: 'per-team', relationship: 'reports-to-head' }],
+            members: seedMembersAsPersisted({ startupCommand: 'claude' }),
         }), false, 'a real per-member command is an operator edit');
         assert.strictEqual(isUntouchedSeed({
             id: SEEDED_AGENT_GROUP.id, name: SEEDED_AGENT_GROUP.name, headRole: SEEDED_AGENT_GROUP.headRole,
             machine: 'tower',
-            members: [{ role: 'coder', count: 3, label: '', scope: 'per-team', relationship: 'reports-to-head' }],
+            members: seedMembersAsPersisted(),
         }), false, 'a re-pinned machine is an operator edit');
+        assert.strictEqual(isUntouchedSeed({
+            id: SEEDED_AGENT_GROUP.id, name: SEEDED_AGENT_GROUP.name, headRole: SEEDED_AGENT_GROUP.headRole,
+            machine: 'local',
+            members: [...seedMembersAsPersisted(), { role: 'reviewer', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' }],
+        }), false, 'an added seat is an operator edit');
     });
 
     // ── 6. The machine id reaches the HEAD, not just the delegates ──────
