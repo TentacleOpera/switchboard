@@ -1556,10 +1556,33 @@
         }
 
         /** Compact roster strip: "LEAD · 3 CODER · 1 REVIEWER" */
+        /** A role's display label — `lead` is "Lead Coder", not "LEAD". Falls back
+         *  to the raw key for an operator's custom role, which has no entry. */
+        function teamsTabRoleLabel(role) {
+            const key = String(role || '').trim();
+            if (!key) { return 'agent'; }
+            const hit = (typeof BUILT_IN_AGENT_LABELS !== 'undefined' ? BUILT_IN_AGENT_LABELS : [])
+                .find(r => r && r.key === key);
+            return hit ? hit.label : key;
+        }
+
+        /**
+         * The roster, with the HEAD named as the head.
+         *
+         * This used to emit the head role bare at the front of a flat list —
+         * `PLANNER · 2 PLANNER · 1 RESEARCHER` — so a head plus two seats read as
+         * "three planners" and the team looked like a pool with nobody leading it.
+         * The head is not one of the seats: it is the agent the work is sent to,
+         * and on every shipped team it does a different job from its seats.
+         */
         function teamsTabRosterStrip(group) {
             const members = group.members || [];
-            const parts = members.map(m => `${(m.count || 1)} ${String(m.role || 'member').toUpperCase()}${m.scope === 'shared' ? ' (SHARED)' : ''}`);
-            return [String(group.headRole || 'head').toUpperCase(), ...parts].join(' · ') || 'head only';
+            const head = 'Head: ' + teamsTabRoleLabel(group.headRole);
+            if (members.length === 0) { return head + ' · no seats'; }
+            const seats = members
+                .map(m => `${(m.count || 1)} × ${teamsTabRoleLabel(m.role)}${m.scope === 'shared' ? ' (shared)' : ''}`)
+                .join(', ');
+            return head + ' · Seats: ' + seats;
         }
 
         /**
@@ -1819,7 +1842,7 @@
             const ppLabel = ppVal === 'aggressive' ? 'pair: aggressive'
                 : ppVal === 'off' ? 'pair: off'
                 : 'pair: on';
-            detailDiv.textContent = `head: ${group.headRole} · ${memberSummary} · ${ppLabel}`;
+            detailDiv.textContent = `${teamsTabRosterStrip(group)} · ${ppLabel}`;
             // Switched off: informational, not a fault — muted text, not red.
             // The definition and its seats are untouched; the team just does not
             // play. There is no `unassigned` flag any more: it meant "not the

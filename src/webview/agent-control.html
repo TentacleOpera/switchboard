@@ -1520,11 +1520,14 @@
             color: var(--text-secondary);
             line-height: 1.4;
         }
+        /* No uppercase transform: the roster carries real role LABELS now
+           ("Head: Lead Coder · Seats: 2 × Coder, 1 × Intern"), and shouting them
+           both destroys the casing and makes the line harder to scan than the
+           purpose above it. */
         .teams-card-roster {
-            font-size: 9px;
+            font-size: 10px;
             color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
+            opacity: 0.85;
             margin-top: 2px;
         }
         .teams-card-note {
