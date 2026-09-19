@@ -310,8 +310,9 @@ test('both levels collapse independently under one prefixed key set', () => {
     assert.ok(!/collapsedWorktrees/.test(terminalsJs), 'the old collapse set must be gone, not shadowed');
 });
 
-test('an empty parent gets a notice so its + is discoverable', () => {
-    assert.ok(/empty-parent-notice/.test(terminalsJs), 'a parent with zero terminals must still show why it is there');
+test('an empty parent renders nothing at all — no header, no notice', () => {
+    assert.ok(!/empty-parent-notice/.test(terminalsJs), 'a mapping with no terminals must not manufacture a heading');
+    assert.ok(/parentGroups\.filter\(populated\)/.test(terminalsJs), 'only populated parent groups may render');
 });
 
 test('the solo-mode empty-fleet guard survived the rewrite', () => {

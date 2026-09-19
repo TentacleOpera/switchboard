@@ -6025,6 +6025,12 @@
                 : '';
         }
 
+        // The synthetic bucket below is an internal fold target ONLY — it never
+        // renders a heading. `suppressSoleHeader` (further down) drops the header
+        // for any single populated parent group with no worktree children, which
+        // covers this bucket, the backend's own `workspace-root` synthetic
+        // (resolveParentsForTerminals, used when mappings are disabled), and the
+        // ordinary one-real-mapping case alike.
         let parents = Array.isArray(parentsList) ? [...parentsList] : [];
         if (parents.length === 0) {
             parents.push({
@@ -6105,8 +6111,14 @@
         });
         renderSidebarWorkspacePicker(hasUnmapped);
 
+        // A mapping with nothing in it is a heading that separates nothing from
+        // nothing. Both collections are tested: a parent whose only terminals
+        // live in worktrees has an empty `direct` and must NOT be filtered out.
+        const populated = (g) => g.direct.length > 0 || g.worktreesMap.size > 0;
         const allRenderable = [
-            ...parentGroups,
+            ...parentGroups.filter(populated),
+            // Spelled out longhand, not via populated(): multi-parent-terminals-contract
+            // matches this exact condition to prove Unmapped is never an always-on header.
             ...(unmappedGroup.direct.length > 0 || unmappedGroup.worktreesMap.size > 0 ? [unmappedGroup] : [])
         ];
         // Single-workspace mode: one bucket, and its header tier is dropped —
@@ -6117,6 +6129,17 @@
                 ? g.id === 'unmapped'
                 : g.fullPath === sidebarWorkspace)
             : allRenderable;
+
+        // A heading that every row is under by definition is not a grouping — it
+        // is a collapse target that can hide the whole fleet and a row of chrome
+        // claiming a structure the user never made. Suppressed for the SOLE
+        // populated parent group with no worktree children. Kept for `Unmapped`
+        // (that label is content), and kept whenever two or more groups render
+        // or a worktree needs scoping.
+        const suppressSoleHeader =
+            activeGroupsToRender.length === 1 &&
+            activeGroupsToRender[0] !== unmappedGroup &&
+            activeGroupsToRender[0].worktreesMap.size === 0;
 
         // Sort each bucket by role before rendering. Workspace/worktree hierarchy stays.
         // In team-scoped mode, sort by the group's `order` array — the operator
@@ -6142,27 +6165,31 @@
 
         for (const parentGroup of activeGroupsToRender) {
             const parentKey = 'parent:' + parentGroup.id;
-            const isParentCollapsed = collapsedGroups.has(parentKey);
+            const headerless = flattenHeaders || (suppressSoleHeader && parentGroup !== unmappedGroup);
+            // A headerless group has no collapse target, so it can never be
+            // collapsed — an inert persisted `parent:<id>` key must not hide the
+            // whole fleet.
+            const isParentCollapsed = !headerless && collapsedGroups.has(parentKey);
             const parentDiv = document.createElement('div');
-            // No `collapsed` class when flattened: collapsedGroups keeps its
+            // No `collapsed` class when headerless: collapsedGroups keeps its
             // parent:* keys (an operator toggling back to All expects them), but
-            // applying one here would render the selected workspace as an empty
-            // list with no chevron on screen to reopen it.
-            parentDiv.className = 'parent-group'
-                + (!flattenHeaders && isParentCollapsed ? ' collapsed' : '');
+            // applying one here would render the group as an empty list with no
+            // chevron on screen to reopen it.
+            parentDiv.className = 'parent-group' + (isParentCollapsed ? ' collapsed' : '');
 
-            // totalItems survives: it gates the "no terminals" notice below,
-            // which is the else-arm of the row render — losing it renders the
-            // notice on every workspace AND suppresses every row. The
-            // active/exited split does not survive: the rows already announce
-            // their own state ((exited) suffix + .is-exited styling), and the
-            // encoded badge that reported it was unreadable.
+            // totalItems survives: the contract test extracts the span up to
+            // `const headerEl` and requires the worktree totals aggregated in
+            // it, and it still gates the row render below. The "no terminals"
+            // notice it used to feed is gone — only populated groups render now.
+            // The active/exited split does not survive: the rows already
+            // announce their own state ((exited) suffix + .is-exited styling),
+            // and the encoded badge that reported it was unreadable.
             let totalItems = parentGroup.direct.length;
             for (const wtGroup of parentGroup.worktreesMap.values()) {
                 totalItems += wtGroup.items.length;
             }
 
-            if (!flattenHeaders) {
+            if (!headerless) {
                 const headerEl = document.createElement('div');
                 headerEl.className = 'parent-group-header';
                 if (parentGroup.fullPath) headerEl.title = parentGroup.fullPath;
@@ -6221,16 +6248,12 @@
             const itemsContainer = document.createElement('div');
             itemsContainer.className = 'parent-group-items';
 
-            if (totalItems === 0) {
-                const emptyNotice = document.createElement('div');
-                emptyNotice.className = 'empty-parent-notice';
-                // Under a lock the workspace may hold ten terminals, none of them
-                // members. "(no terminals)" would be a lie about the workspace.
-                emptyNotice.textContent = lockedGroup
-                    ? `(no ${lockedGroup.name} terminals here — + to open)`
-                    : '(no terminals — + to open)';
-                itemsContainer.appendChild(emptyNotice);
-            } else {
+            // The "(no terminals — + to open)" notice is gone: every group in
+            // activeGroupsToRender is populated by definition, so a mapping with
+            // nothing in it manufactures no heading and no notice. totalItems > 0
+            // is therefore always true; the aggregation stays because the contract
+            // test extracts the span above and requires the worktree totals in it.
+            if (totalItems > 0) {
                 const directSplit = bucketRowsByTeam(parentGroup.direct, claimMap);
                 for (const bucket of directSplit.buckets) {
                     itemsContainer.appendChild(renderTeamTier(bucket, parentGroup));
@@ -10135,6 +10158,28 @@
         title.textContent = 'New terminal — pick a role';
         picker.appendChild(title);
 
+        // Header `+` buttons pass a pinned { parentRoot }. The strip `+` passes
+        // undefined, and with sole/empty headers suppressed it is now the ONLY
+        // route to a non-default folder — so it must let the operator choose one.
+        // Reuses buildWorkspaceList(), the same parentsList projection the kanban
+        // pane's workspace picker uses, and the same { parentRoot } targetSpec
+        // shape createTerminal already accepts. No new transport.
+        let chosenTarget = targetSpec;
+        const roots = buildWorkspaceList();
+        if (!targetSpec && roots.length > 1) {
+            const loc = document.createElement('select');
+            loc.className = 'role-picker-location';
+            for (const r of roots) {
+                const opt = document.createElement('option');
+                opt.value = r.root;
+                opt.textContent = r.label;
+                loc.appendChild(opt);
+            }
+            loc.addEventListener('change', () => { chosenTarget = { parentRoot: loc.value }; });
+            chosenTarget = { parentRoot: roots[0].root };
+            picker.appendChild(loc);
+        }
+
         // ── Role picker ───────────────────────────────────────────────────
         const optionsEl = document.createElement('div');
         optionsEl.className = 'role-picker-options';
@@ -10199,7 +10244,7 @@
                 // holds it until the 5s fleet poll.
                 pickerState = null;
                 renderSidebarList();
-                createTerminal(role, targetSpec, hasCommand[role] === true, { slotIndex, groupId: scopeGroupId });
+                createTerminal(role, chosenTarget, hasCommand[role] === true, { slotIndex, groupId: scopeGroupId });
             });
             optionsEl.appendChild(btn);
         }
@@ -10216,7 +10261,7 @@
             // Close synchronously — same reasoning as the role buttons above.
             pickerState = null;
             renderSidebarList();
-            createTerminal(NO_ROLE, targetSpec, false, { slotIndex, groupId: scopeGroupId });
+            createTerminal(NO_ROLE, chosenTarget, false, { slotIndex, groupId: scopeGroupId });
         });
         optionsEl.appendChild(noRoleBtn);
         picker.appendChild(optionsEl);

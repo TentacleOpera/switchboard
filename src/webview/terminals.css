@@ -259,6 +259,20 @@
             color: var(--text-secondary);
             margin-bottom: 6px;
         }
+        /* Spawn-location select — shown only on pickers opened without a pinned
+           target (the tab-strip +). Modelled on .link-select so it reads as part
+           of the picker, not a stray form control. */
+        .role-picker-location {
+            width: 100%;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 11px;
+            padding: 4px 6px;
+            border-radius: 3px;
+            margin-bottom: 6px;
+        }
         .role-picker-options {
             display: flex;
             flex-wrap: wrap;
@@ -777,12 +791,6 @@
         }
         .parent-group.collapsed .parent-group-items {
             display: none;
-        }
-        .empty-parent-notice {
-            font-size: 10px;
-            color: var(--text-muted, #777);
-            font-style: italic;
-            padding: 4px 8px;
         }
         .worktree-group.indent-worktree {
             margin-left: 6px;
