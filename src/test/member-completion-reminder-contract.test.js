@@ -118,6 +118,68 @@ async function sweep(engine, opts) {
 const T0 = 1788750000000;
 const quiet = (name, ageMs) => ({ friendlyName: name, lastDataAt: T0 - ageMs, status: 'active' });
 
+// ── 0. Teams whose seats assert their own completion ────────────────────
+
+// Reported live, 2026-09-20: "why are planners getting idle nudges? this is
+// pure waste."
+//
+// Planning has no supervising head — every planner seat takes its OWN card and
+// finishes it. Nothing on that team ever calls POST /kanban/task/complete, and
+// that endpoint is the only writer of `completed_at`. So gate 3's
+// "held and not completed" predicate is PERMANENTLY true for a planner, and the
+// sweep spends the full per-dispatch budget re-delivering an instruction to
+// report to a head that does not exist.
+//
+// Asserted in BOTH directions: suppressing for the headless team is only
+// correct if the supervised team beside it still gets its reminder. A gate that
+// silently suppressed everything would pass the negative alone.
+
+testAsync('a seat on a team that asserts its own completion is never reminded', async () => {
+    const sent = await sweep(makeEngine(), {
+        folder: '/ws',
+        board: [heldCard({ ownerSeat: 'Planning-planner-1' })],
+        groups: [teamGroup({
+            id: 'team_Planning',
+            definitionId: 'planning-team',
+            name: 'Planning',
+            head: 'Planning',
+            headRole: 'planner',
+            members: ['Planning', 'Planning-planner-1'],
+            order: ['Planning', 'Planning-planner-1'],
+        })],
+        liveness: [quiet('Planning-planner-1', SILENCE_MS * 4)],
+        nowMs: T0,
+    });
+    assert.strictEqual(sent.length, 0,
+        'a planner seat must draw no reminder — there is no head to report to and '
+        + 'no completed_at will ever be written for it');
+});
+
+testAsync('a head-supervised team beside it STILL gets its reminder', async () => {
+    const sent = await sweep(makeEngine(), {
+        folder: '/ws',
+        board: [heldCard()],
+        groups: [teamGroup({ definitionId: 'coding-team' })],
+        liveness: [quiet(MEMBER, SILENCE_MS * 4)],
+        nowMs: T0,
+    });
+    assert.strictEqual(sent.length, 1,
+        'suppression must be scoped to headless teams, not global');
+});
+
+testAsync('an unrecognised team keeps the reminder, and is not read as headless', async () => {
+    const sent = await sweep(makeEngine(), {
+        folder: '/ws',
+        board: [heldCard()],
+        groups: [teamGroup({ definitionId: 'some-team-this-build-never-heard-of' })],
+        liveness: [quiet(MEMBER, SILENCE_MS * 4)],
+        nowMs: T0,
+    });
+    assert.strictEqual(sent.length, 1,
+        'an unknown definitionId must fail toward KEEPING the backstop — a redundant '
+        + 'prompt is bounded, a dropped reminder is not');
+});
+
 // ── 1. The core delivery ────────────────────────────────────────────────
 
 // The reminder must describe POST-DISPATCH silence. Measured failure

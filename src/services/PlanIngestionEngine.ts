@@ -26,7 +26,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type KanbanPlanRecord } from './KanbanDatabase';
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
-import { TERMINALS_GROUPS_KEY } from './teamWiring';
+import { TERMINALS_GROUPS_KEY, readTeamCompletionAuthority } from './teamWiring';
 import { ControllerBoardStore } from './ControllerBoardStore';
 import { decideNudgeSweeps, describeNudgeSweeps, type NudgeSweepState } from './nudgeSuppression';
 import type { ClickUpSyncService } from './ClickUpSyncService';
@@ -2233,6 +2233,21 @@ export class PlanIngestionEngine {
                 const headName = typeof g.head === 'string' ? g.head : (typeof g.name === 'string' ? g.name : '');
                 if (!headName) { continue; }
                 const externalHead = g.externalHead === true;
+                // (4b) A team whose seats assert their OWN completion has no
+                // head to report to, and its cards never get a `completed_at`
+                // — nothing writes one but the lead's POST /kanban/task/complete
+                // (see gate 3). So the held-card predicate below is permanently
+                // true for these seats and the reminder would nag every planner
+                // for the full per-dispatch budget, re-delivering an
+                // instruction to report to a head that does not exist.
+                const authority = readTeamCompletionAuthority(g);
+                if (authority.value === 'seat') {
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] member completion reminder skips team '${g.id}' `
+                        + `— seats assert their own completion (source: ${authority.source})`
+                    );
+                    continue;
+                }
                 const roster: string[] = Array.isArray(g.order) && g.order.length
                     ? g.order
                     : (Array.isArray(g.members) ? g.members : []);

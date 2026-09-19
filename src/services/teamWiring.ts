@@ -1011,6 +1011,9 @@ export const CODING_TEAM_HEAD_PROMPT =
 export const DEFAULT_TEAM_DEFINITIONS: any[] = [
     {
         id: 'planning-team',
+        // no supervising head: every planner seat takes its OWN card and asserts its own completion.
+        completionAuthority: 'seat',
+        completionAuthoritySource: 'shipped-default',
         name: 'Planning',
         headRole: 'planner',
         // A team picks ONE machine — head and every delegate spawn on it. See
@@ -1024,15 +1027,19 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         ],
         purpose: 'For getting a lot of plans written at once. Each planner seat takes one card, so a batch is planned in parallel instead of one at a time. The researcher seat does WEB research — when a plan turns on something nobody is sure of, an unfamiliar library, an API\'s real behaviour, which approach is standard, it goes and finds out instead of the plan shipping a guess. Automated planning dispatch goes here.',
         trigger: 'Move cards to Planned. A batch move fans out one card per planner seat, so it plans as many at once as it has seats.',
-        prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
-            + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
-            + '— naming what you changed and what to review. Do not wait to be asked.\n'
+        prompt: 'DO NOT REPORT TO A HEAD. This team has no coordinating head: every planner seat takes its own card '
+            + 'and finishes it, so there is nobody waiting on a status report and ptySendPrompt to one wastes your turn.\n'
             + 'If you are a PLANNER seat: take the card you were handed and write its plan — read the code, trace the '
-            + 'dependencies, name the root cause, and report the finished plan to {child}.\n'
+            + 'dependencies, name the root cause. When the plan is written, ASSERT COMPLETION TO THE SYSTEM: '
+            + 'run node "<cliPath>" accept --plan "<the card\'s planId>" (or switchboard accept --plan). Then run '
+            + 'node "<cliPath>" next (or switchboard next); if it returns a dispatched card, plan it; if it returns '
+            + 'dispatched: null, report that the queue is empty and stop.\n'
             + 'If you are the RESEARCHER seat: you do WEB research, not codebase reading. Answer the open questions the '
             + 'planners cannot settle from the repo — how an unfamiliar library actually behaves, what an API really '
-            + 'returns, which approach is current practice — and report sourced findings to {child}. Say plainly when '
-            + 'the evidence is thin rather than resolving an uncertainty with a guess.\n'
+            + 'returns, which approach is current practice. Report your sourced findings to the seat that ASKED you, '
+            + 'by name, with node "<cliPath>" verb ptySendPrompt \'{"name":"<that seat>","data":"<your findings>",'
+            + '"clearBeforePrompt":false}\'. Say plainly when the evidence is thin rather than resolving an '
+            + 'uncertainty with a guess.\n'
             + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
             + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
             + 'commit first, then correct forward. '
@@ -1046,6 +1053,9 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
     },
     {
         id: 'feature-implementation',
+        // the lead coder reviews each member's work and asserts completion.
+        completionAuthority: 'head',
+        completionAuthoritySource: 'shipped-default',
         name: 'Feature team',
         headRole: 'lead',
         machine: 'local',
@@ -1083,6 +1093,9 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
     },
     {
         id: 'coding-team',
+        // the lead coder reviews the intern's half and asserts completion.
+        completionAuthority: 'head',
+        completionAuthoritySource: 'shipped-default',
         name: 'Coding',
         headRole: 'coder',
         machine: 'local',
@@ -1117,6 +1130,9 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
     },
     {
         id: 'review-team',
+        // the head hands out plans and asserts completion.
+        completionAuthority: 'head',
+        completionAuthoritySource: 'shipped-default',
         name: 'Review',
         headRole: 'reviewer',
         machine: 'local',
@@ -1144,6 +1160,9 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
     },
     {
         id: 'multi-agent-planning',
+        // the head reconciles the three drafts and asserts completion.
+        completionAuthority: 'head',
+        completionAuthoritySource: 'shipped-default',
         name: 'Multi-agent planning',
         headRole: 'planner',
         machine: 'local',
@@ -1203,6 +1222,44 @@ export const DEFAULT_TEAM_IDS: ReadonlySet<string> = new Set(
 /** True when `id` names one of the five shipped defaults. */
 export function isDefaultTeamId(id: any): boolean {
     return typeof id === 'string' && DEFAULT_TEAM_IDS.has(id);
+}
+
+/**
+ * Who asserts a card complete for this team — and which source said so.
+ *
+ * `'head'`: a lead reviews the member's work and posts /kanban/task/complete.
+ * `'seat'`: there IS no supervising head; the seat finishes its own card and
+ * asserts completion itself. Planning is the shipped example — every planner
+ * seat takes its own card, so nobody is waiting on a status report.
+ *
+ * Returned WITH its source because the wrong answer here is silent and
+ * expensive in both directions: read `'head'` for a headless team and its seats
+ * are told to report to nothing and then nagged about it forever (the
+ * member-completion reminder keys on a `completed_at` that team can never
+ * write); read `'seat'` for a supervised team and a real reminder is dropped.
+ *
+ * Resolved from the team DEFINITION by `definitionId`, not from the live group
+ * row, so a board that seeded before this field existed gets the right answer
+ * without a migration.
+ */
+export function readTeamCompletionAuthority(
+    group: any
+): { value: 'head' | 'seat'; source: string } {
+    const defId = group && typeof group.definitionId === 'string' ? group.definitionId : '';
+    if (defId) {
+        const def = DEFAULT_TEAM_DEFINITIONS.find((d: any) => d && d.id === defId);
+        if (def && (def.completionAuthority === 'head' || def.completionAuthority === 'seat')) {
+            return { value: def.completionAuthority, source: `definition:${defId}` };
+        }
+    }
+    if (group && (group.completionAuthority === 'head' || group.completionAuthority === 'seat')) {
+        return { value: group.completionAuthority, source: 'group-row' };
+    }
+    // A team this build does not recognise. `'head'` preserves the reminder,
+    // which is the SAFE failure here — a redundant prompt is bounded by the
+    // per-dispatch budget, whereas suppressing wrongly loses the backstop.
+    // Tagged so "unrecognised team" is never mistaken for a configured value.
+    return { value: 'head', source: 'fallback:unrecognised-team' };
 }
 
 /**
@@ -1886,13 +1943,33 @@ export async function startTeamById(opts: {
     // refusing is the safe answer.
     try {
         const live = await liveTerminals();
-        const headRole = team.headRole;
-        const existing = (Array.isArray(live) ? live : []).find(t =>
-            t && t.status === 'active' && t.role === headRole && !t.parentInstanceId);
-        if (existing) {
+        const liveNames = new Set(
+            (Array.isArray(live) ? live : [])
+                .filter(t => t && t.status === 'active' && t.friendlyName)
+                .map(t => String(t.friendlyName))
+        );
+        // IS *THIS* TEAM ALREADY RUNNING? — asked of its own live group row, not of
+        // its head ROLE. Matching on role refused any team whose head role happened
+        // to be live on ANOTHER team: the `coder`-headed Coding team could not start
+        // while a coder sat unparented elsewhere, and Multi-agent planning could not
+        // start while Planning was up. Both are `planner`-headed by design, and the
+        // shipped set REQUIRES two teams to share a head role —
+        // "no team is refused for declaring the same headRole as another".
+        //
+        // A team is running when the group it spawned is present and its head is
+        // live. That is the question this guard was always asking.
+        let groups: any[] = [];
+        try {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } catch { /* no groups key — nothing is running */ }
+        const own = groups.find((g: any) =>
+            g && isSpawnedTeamGroup(g) && g.definitionId === teamId);
+        const ownHead = own ? (teamHeadName(own) || (typeof own.name === 'string' ? own.name : '')) : '';
+        if (ownHead && liveNames.has(ownHead)) {
             return {
                 success: false,
-                error: `Team "${team.name}" head role "${headRole}" is already live as "${existing.friendlyName}". Reuse that terminal or stop it first — a second head is not started.`,
+                error: `Team "${team.name}" is already running as "${ownHead}". Stop it first — a second head is not started.`,
             };
         }
     } catch (err: any) {
