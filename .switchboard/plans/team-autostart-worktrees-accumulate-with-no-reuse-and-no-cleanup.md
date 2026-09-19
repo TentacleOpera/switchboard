@@ -70,3 +70,31 @@ provisioning and left the team in the workspace root). With no way to set it, th
 suppression can no longer be reached: an auto-mode team now provisions unconditionally on
 every start. Any reuse/cleanup design has to carry that, or restore a control that actually
 selects a worktree rather than one that only disables the feature.
+
+## Decision (2026-09-19) — narrowed to one problem; the accumulation belongs elsewhere
+
+This card was carrying two unrelated things. Split:
+
+**KEEP, and it is now the whole card:** a team whose `worktreeMode` is `'auto'`
+provisions a **fresh branch and worktree on every explicit start**, and nothing
+reuses the one it made last time. `provisionTeamWorktree` is called unconditionally
+from `startAgentGroupById` and from `TaskViewerProvider` once the mode is set, so
+starting the same team three times leaves three checkouts. Re-title around
+"every start", not "autostart" — autostart does not exist.
+
+Re-verified 2026-09-19: **no team on this board sets `worktreeMode: 'auto'`**, so the
+defect is currently dormant. It arms itself the first time an operator ticks the box
+in the team editor, which is also the first time they would notice — the trap is that
+nothing warns them, and the field that used to double as a suppression
+(`startWorktree`) was removed the same day because it never worked as a spawn cwd.
+
+**DROP — it is not this card's problem:** the worktree rows piling up on this board
+were NOT produced by team provisioning. Measured: 17 rows in the `worktrees` table,
+**every one pointing at a path that does not exist**, all `status: 'abandoned'`, and
+all of them macOS paths (`/Users/patrickvuleta/Documents/GitHub/worktrees/...`) that
+arrived in a board transfer. Git knows about one real worktree here. That is a
+board-versus-git reconciliation problem and it is already covered by
+`bf12d71f` / `d7a048e6` — see the note added to `bf12d71f`.
+
+Coding this card should therefore touch reuse-on-start only, and leave the existing
+rows alone.

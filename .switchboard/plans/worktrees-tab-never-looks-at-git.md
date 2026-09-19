@@ -288,3 +288,32 @@ New contract test, in the idiom of `src/test/feature-worktree-guardrail-contract
 ---
 
 **Recommendation: Send to Coder.** (Complexity 6 — multi-file, but every risky decision is pinned by a pure function with a fixture matrix.)
+
+## Field evidence (2026-09-19) — and a case the reconciliation rule has to answer
+
+Measured on the operator's live board while chasing an unrelated worktree question:
+
+- `worktrees` table: **17 rows**.
+- Rows whose `path` exists on disk: **0**.
+- `git worktree list` on this machine: one real checkout (the repo itself) plus one
+  prunable scratchpad.
+- Every row is `status: 'abandoned'`, and every path is a **macOS** path —
+  `/Users/patrickvuleta/Documents/GitHub/worktrees/...` — on a board now running on a
+  Raspberry Pi. They arrived with a board transfer.
+
+So the tab is not merely missing worktrees git knows about; it is **entirely** rows
+git has never heard of, and cannot hear of, because they belong to a different
+machine's filesystem.
+
+**That is a third case this plan's rule must name**, alongside "in git, not in the
+database" and "in the database, on disk":
+
+- **In the database, path unresolvable on THIS machine.** Reconciling naively by
+  pruning anything absent from `git worktree list` deletes transferred history for a
+  board that legitimately moved hosts. Keeping them all leaves the tab showing 17
+  phantom rows forever, which is the state today.
+
+Distinguishing "this worktree was removed" from "this worktree belongs to a host we
+are not on" probably needs the row to record which machine created it — the same
+question the fallback rule asks everywhere else: *which store answered?* Decide it
+here rather than letting the prune path decide it by accident.
