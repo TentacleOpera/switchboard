@@ -200,13 +200,16 @@ test('the page index is transient — reset on lock change, clamped by the floor
     );
 });
 
-test('the floor re-pages a locked group and the banner reports the shortfall', () => {
+test('the floor re-pages a locked group and the toolbar pager reports the shortfall', () => {
     const fn = block(terminalsJs, 'function applyLayoutFloor(opts) {', 'Attempt schedule for the settle ladder');
     assert.ok(
         fn.includes('if (activeGroupId) { seatActiveGroupPage(); }'),
         'a changed rendered slot count must re-page the locked group'
     );
-    assert.ok(fn.includes('banner-page-btn'), 'the paging control must sit alongside the shortfall message');
+    assert.ok(
+        fn.includes('groupPagerEl'),
+        'the paging control must live in the toolbar pager — the banner is window-too-small only'
+    );
 });
 
 test('switchToGroup exits solo mode before locking', () => {
@@ -820,15 +823,19 @@ test('renameTerminal only fixups manual group members/order', () => {
     );
 });
 
-test('applyLayoutFloor shows a group-aware shortfall banner', () => {
+test('applyLayoutFloor splits the floor warning from the toolbar pager', () => {
     const fn = block(terminalsJs, 'function applyLayoutFloor(', '/** Attempt schedule');
     assert.ok(
         fn.includes('activeGroupId ? getAllGroups().find'),
-        'applyLayoutFloor must look up the active group for banner text'
+        'applyLayoutFloor must look up the active group for the pager label'
     );
     assert.ok(
-        fn.includes('Showing'),
-        'applyLayoutFloor must produce a showing-N-of-M message'
+        fn.includes('Window too small'),
+        'the banner must carry the window-too-small floor warning'
+    );
+    assert.ok(
+        fn.includes('groupPagerLabelEl.textContent') && fn.includes('of ${members}'),
+        'the shortfall N-of-M range must be written to the toolbar pager label, not the banner'
     );
 });
 
