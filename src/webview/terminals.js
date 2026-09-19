@@ -122,6 +122,9 @@
     }
     let lastReadGroupIds = []; // ids of terminal groups as last read from backend
     let activeGroupId = null; // which group is currently locked, or null for "composing"
+    // '' = All workspaces. Otherwise a parent's resolved `parentFolder`, or the
+    // reserved '__unmapped__' sentinel.
+    let sidebarWorkspace = '';
 
     /**
      * The tmux session a newly created seat should join: the locked group's name, or
@@ -375,6 +378,9 @@
     const toastContainerEl = document.getElementById('toast-container');
     const fallbackBannerEl = document.getElementById('layout-fallback-banner');
     const sidebarTitleEl = document.querySelector('.sidebar-title');
+    const sidebarWsRowEl = document.getElementById('sidebar-workspace-row');
+    const sidebarWsSelectEl = document.getElementById('sidebar-workspace-select');
+    const sidebarWsNewEl = document.getElementById('sidebar-workspace-new');
     const groupPagerEl = document.getElementById('group-pager');
     const groupPagerLabelEl = document.getElementById('group-pager-label');
     const groupPagerPrevEl = document.getElementById('group-pager-prev');
@@ -961,6 +967,26 @@
         };
         if (groupPagerPrevEl) { groupPagerPrevEl.addEventListener('click', () => stepGroupPage(-1)); }
         if (groupPagerNextEl) { groupPagerNextEl.addEventListener('click', () => stepGroupPage(1)); }
+
+        if (sidebarWsSelectEl) {
+            sidebarWsSelectEl.addEventListener('change', () => {
+                sidebarWorkspace = sidebarWsSelectEl.value || '';
+                // An open role picker is scoped to a header that may no longer render
+                // under the new selection. Dismiss rather than orphan it.
+                pickerState = null;
+                saveSetting('terminals.sidebarWorkspace', sidebarWorkspace);
+                renderSidebarList();
+            });
+        }
+        if (sidebarWsNewEl) {
+            sidebarWsNewEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // The picker mounts on `parent:<id>` keys, so resolve the selected
+                // root's parent id — passing the raw root would open nothing.
+                const parent = parentsList.find(p => p && p.parentFolder === sidebarWorkspace);
+                onNewTerminalClicked({ parentRoot: sidebarWorkspace }, 'parent:' + (parent ? parent.id : sidebarWorkspace));
+            });
+        }
 
         const btnClearAll = document.getElementById('btn-clear-all');
         if (btnClearAll) {
@@ -2473,6 +2499,9 @@
             savedCollapsed.forEach(c => collapsedGroups.add(c));
         }
 
+        const savedSidebarWs = await loadSetting('terminals.sidebarWorkspace', '');
+        sidebarWorkspace = typeof savedSidebarWs === 'string' ? savedSidebarWs : '';
+
         if (soloTerminalName) {
             currentLayout = '1';
             effectiveLayout = '1';
@@ -2551,6 +2580,7 @@
         saveSetting('terminals.groups', terminalGroups.filter(g => !g.id.startsWith('grp_')));
         saveSetting('terminals.activeGroupId', activeGroupId);
         saveSetting('terminals.groupPrefs', groupPrefs);
+        saveSetting('terminals.sidebarWorkspace', sidebarWorkspace);
     }
 
     /** Save ONLY the team-namespaced layout keys (TEAM_NAMESPACED_KEYS).
@@ -5764,6 +5794,71 @@
         return div;
     }
 
+    /** Build/refresh the sidebar workspace picker. Options are rebuilt ONLY when
+     *  the workspace set changes — this runs on every 5s fleet poll, and
+     *  recreating the <select> each tick slams an open dropdown shut and drops
+     *  keyboard focus (the same defect the kanban pane header solves with a
+     *  dataset.sig guard at :5048).
+     *
+     *  hasUnmapped MUST be probed from the unfiltered fleet by the caller. A
+     *  group lock narrows the buckets, and deriving it from them would make the
+     *  Unmapped option vanish under a lock, trip the stale-selection fallback
+     *  below, and PERSIST the reset — losing the operator's selection on a
+     *  gesture that has nothing to do with workspaces. */
+    function renderSidebarWorkspacePicker(hasUnmapped) {
+        if (!sidebarWsRowEl || !sidebarWsSelectEl) { return; }
+        const workspaces = buildWorkspaceList();
+
+        // Fewer than two real roots: nothing to choose between. Hide the row and
+        // force All so the tree renders exactly as it did before this existed.
+        // Not persisted — the roots may come back on the next fleet response,
+        // and writing '' here would erase a still-valid saved selection.
+        if (workspaces.length < 2 && !hasUnmapped) {
+            sidebarWsRowEl.hidden = true;
+            sidebarWorkspace = '';
+            return;
+        }
+        sidebarWsRowEl.hidden = false;
+
+        // A saved root that no longer resolves must not blank the sidebar.
+        if (sidebarWorkspace && sidebarWorkspace !== '__unmapped__'
+            && !workspaces.some(w => w.root === sidebarWorkspace)) {
+            sidebarWorkspace = '';
+            saveSetting('terminals.sidebarWorkspace', sidebarWorkspace);
+        }
+        if (sidebarWorkspace === '__unmapped__' && !hasUnmapped) {
+            sidebarWorkspace = '';
+            saveSetting('terminals.sidebarWorkspace', sidebarWorkspace);
+        }
+
+        const sig = workspaces.map(w => `${w.root}|${w.label}`).join('~') + (hasUnmapped ? '~U' : '');
+        if (sidebarWsSelectEl.dataset.sig !== sig) {
+            sidebarWsSelectEl.dataset.sig = sig;
+            sidebarWsSelectEl.textContent = '';
+            const allOpt = document.createElement('option');
+            allOpt.value = '';
+            allOpt.textContent = 'All workspaces';
+            sidebarWsSelectEl.appendChild(allOpt);
+            for (const ws of workspaces) {
+                const opt = document.createElement('option');
+                opt.value = ws.root;
+                opt.textContent = ws.label;
+                sidebarWsSelectEl.appendChild(opt);
+            }
+            if (hasUnmapped) {
+                const opt = document.createElement('option');
+                opt.value = '__unmapped__';
+                opt.textContent = 'Unmapped';
+                sidebarWsSelectEl.appendChild(opt);
+            }
+        }
+        sidebarWsSelectEl.value = sidebarWorkspace;
+
+        // The + spawns into the SELECTED root. Unmapped has no root to spawn into.
+        const spawnable = !!sidebarWorkspace && sidebarWorkspace !== '__unmapped__';
+        sidebarWsNewEl.hidden = !spawnable;
+    }
+
     function renderSidebarList() {
         syncLinkUpEnabled();
         const btnTeamOrders = document.getElementById('btn-team-orders');
@@ -5992,10 +6087,29 @@
             }
         }
 
-        const activeGroupsToRender = [
+        // Probed from the UNFILTERED fleet, never from the buckets: a group lock
+        // narrows the buckets, and an option list that flickers with the lock
+        // would trip the stale-selection fallback and persist a reset.
+        const hasUnmapped = fleetList.some(t => {
+            const mapped = parentGroups.some(p => p.fullPath && p.fullPath === t.parentRoot);
+            const soleSynthetic = parentGroups.length === 1
+                && (parentGroups[0].id === 'workspace-root' || !parentGroups[0].fullPath);
+            return !mapped && !soleSynthetic;
+        });
+        renderSidebarWorkspacePicker(hasUnmapped);
+
+        const allRenderable = [
             ...parentGroups,
             ...(unmappedGroup.direct.length > 0 || unmappedGroup.worktreesMap.size > 0 ? [unmappedGroup] : [])
         ];
+        // Single-workspace mode: one bucket, and its header tier is dropped —
+        // the dropdown IS the header now. All-workspaces mode is unchanged.
+        const flattenHeaders = !!sidebarWorkspace;
+        const activeGroupsToRender = sidebarWorkspace
+            ? allRenderable.filter(g => sidebarWorkspace === '__unmapped__'
+                ? g.id === 'unmapped'
+                : g.fullPath === sidebarWorkspace)
+            : allRenderable;
 
         // Sort each bucket by role before rendering. Workspace/worktree hierarchy stays.
         // In team-scoped mode, sort by the group's `order` array — the operator
@@ -6023,7 +6137,12 @@
             const parentKey = 'parent:' + parentGroup.id;
             const isParentCollapsed = collapsedGroups.has(parentKey);
             const parentDiv = document.createElement('div');
-            parentDiv.className = 'parent-group' + (isParentCollapsed ? ' collapsed' : '');
+            // No `collapsed` class when flattened: collapsedGroups keeps its
+            // parent:* keys (an operator toggling back to All expects them), but
+            // applying one here would render the selected workspace as an empty
+            // list with no chevron on screen to reopen it.
+            parentDiv.className = 'parent-group'
+                + (!flattenHeaders && isParentCollapsed ? ' collapsed' : '');
 
             // totalItems survives: it gates the "no terminals" notice below,
             // which is the else-arm of the row render — losing it renders the
@@ -6036,53 +6155,57 @@
                 totalItems += wtGroup.items.length;
             }
 
-            const headerEl = document.createElement('div');
-            headerEl.className = 'parent-group-header';
-            if (parentGroup.fullPath) headerEl.title = parentGroup.fullPath;
+            if (!flattenHeaders) {
+                const headerEl = document.createElement('div');
+                headerEl.className = 'parent-group-header';
+                if (parentGroup.fullPath) headerEl.title = parentGroup.fullPath;
 
-            const titleArea = document.createElement('div');
-            titleArea.className = 'worktree-title-area';
+                const titleArea = document.createElement('div');
+                titleArea.className = 'worktree-title-area';
 
-            const icon = document.createElement('span');
-            icon.className = 'worktree-collapse-icon';
-            icon.textContent = '▼';
+                const icon = document.createElement('span');
+                icon.className = 'worktree-collapse-icon';
+                icon.textContent = '▼';
 
-            const nameEl = document.createElement('span');
-            nameEl.className = 'worktree-name';
-            nameEl.textContent = parentGroup.name;
+                const nameEl = document.createElement('span');
+                nameEl.className = 'worktree-name';
+                nameEl.textContent = parentGroup.name;
 
-            titleArea.appendChild(icon);
-            titleArea.appendChild(nameEl);
+                titleArea.appendChild(icon);
+                titleArea.appendChild(nameEl);
 
-            const groupNewBtn = document.createElement('button');
-            groupNewBtn.className = 'btn-group-new';
-            groupNewBtn.textContent = '+';
-            groupNewBtn.title = `Spawn terminal in ${parentGroup.name}`;
-            groupNewBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                onNewTerminalClicked(parentGroup.fullPath ? { parentRoot: parentGroup.fullPath } : undefined, parentKey);
-            });
+                const groupNewBtn = document.createElement('button');
+                groupNewBtn.className = 'btn-group-new';
+                groupNewBtn.textContent = '+';
+                groupNewBtn.title = `Spawn terminal in ${parentGroup.name}`;
+                groupNewBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    onNewTerminalClicked(parentGroup.fullPath ? { parentRoot: parentGroup.fullPath } : undefined, parentKey);
+                });
 
-            headerEl.appendChild(titleArea);
-            headerEl.appendChild(groupNewBtn);
+                headerEl.appendChild(titleArea);
+                headerEl.appendChild(groupNewBtn);
 
-            headerEl.addEventListener('click', () => {
-                if (collapsedGroups.has(parentKey)) {
-                    collapsedGroups.delete(parentKey);
-                } else {
-                    collapsedGroups.add(parentKey);
-                }
-                saveLayoutSettings();
-                renderSidebarList();
-            });
+                headerEl.addEventListener('click', () => {
+                    if (collapsedGroups.has(parentKey)) {
+                        collapsedGroups.delete(parentKey);
+                    } else {
+                        collapsedGroups.add(parentKey);
+                    }
+                    saveLayoutSettings();
+                    renderSidebarList();
+                });
 
-            parentDiv.appendChild(headerEl);
+                parentDiv.appendChild(headerEl);
+            }
 
-            // Between header and items, NOT inside .parent-group-items — that
-            // container is display:none when the group is collapsed, and a picker
-            // the user opened must not vanish because the group happens to be shut.
-            // itemsContainer is appended later, so appending here yields
-            // header → picker → items.
+            // The picker mounts between the header and the items so a collapsed
+            // group cannot hide it. With the header gone it mounts at the top of
+            // the group — which in flattened mode is the top of the list, directly
+            // under the dropdown row, so it still reads as attached to the + that
+            // opened it. Still outside .parent-group-items, and still counted by
+            // pickerRendered so the tail garbage-collect does not null pickerState
+            // on the next poll.
             if (pickerState && pickerState.key === parentKey) {
                 parentDiv.appendChild(mountRolePicker(pickerState.targetSpec));
                 pickerRendered = true;

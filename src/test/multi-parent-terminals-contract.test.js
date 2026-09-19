@@ -262,12 +262,13 @@ test('OPEN AGENT TERMINALS still posts no target, so the proxy fills it in', () 
     assert.ok(/createTerminalsForRole\(/.test(openAll), 'open-all must drive that shared loop rather than forking its own POST');
 });
 
-// `renderFleet`, not `fleetList`: team-scoped mode narrowed the render boundary
-// to scopedFleet() while the full fleetList stayed in memory for sanitize,
-// standing orders, and dispatch-in-flight cleanup. The grouping logic below is
+// `sidebarItems`, not `fleetList`: team-scoped mode narrowed the render boundary
+// to scopedFleet() (renderFleet) while the full fleetList stayed in memory for
+// sanitize, standing orders, and dispatch-in-flight cleanup — and a group lock
+// narrows renderFleet once more to sidebarItems. The grouping logic below is
 // unchanged — only the iterand was renamed.
 test('an unattributed terminal only folds into a sole SYNTHETIC parent', () => {
-    const grouping = block(terminalsJs, 'for (const item of renderFleet) {', 'const activeGroupsToRender');
+    const grouping = block(terminalsJs, 'for (const item of sidebarItems) {', 'const allRenderable');
     assert.ok(/unmappedGroup/.test(grouping), 'a null parentRoot must be able to reach the Unmapped group');
     assert.ok(
         /workspace-root/.test(grouping) || /!parentGroups\[0\]\.fullPath/.test(grouping),
@@ -280,7 +281,7 @@ test('an unattributed terminal only folds into a sole SYNTHETIC parent', () => {
 });
 
 test('a worktreePath that is really a parent folder renders as direct, not a sub-accordion', () => {
-    const grouping = block(terminalsJs, 'for (const item of renderFleet) {', 'const activeGroupsToRender');
+    const grouping = block(terminalsJs, 'for (const item of sidebarItems) {', 'const allRenderable');
     assert.ok(
         /wtPath === targetGroup\.fullPath \|\| allParentFolders\.has\(wtPath\)/.test(grouping),
         'terminals created before the back-stamp fix are still live in the fleet — guard at render time too'

@@ -175,6 +175,18 @@
             flex-shrink: 0;
         }
         .sidebar-seatless-close:hover { background: color-mix(in srgb, var(--state-readonly) 14%, transparent); }
+        .sidebar-workspace-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 10px 0;
+        }
+        /* Both the row and the + are toggled by the `hidden` attribute. The row
+           needs the explicit rule because `display: flex` above would otherwise
+           beat the UA `[hidden] { display: none }`. .btn-group-new declares no
+           `display`, so the UA rule is sufficient for it. */
+        .sidebar-workspace-row[hidden] { display: none; }
+        .sidebar-workspace-row .link-select { min-width: 0; flex: 1; }
         /* Terminal-ops block. Ports .secondary-btn / .w-full from the extension
            sidebar's Terminals sub-tab (implementation.html) so the browser page
            presents the same full-width stacked controls rather than a row of

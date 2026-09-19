@@ -77,6 +77,14 @@
             <span class="sidebar-title">Agents</span>
             <span id="sidebar-session-count" class="sidebar-session-count" hidden></span>
         </div>
+        <!-- Workspace picker. Every other panel selects a workspace from a
+             dropdown (kanban.html:2765); this sidebar was the last surface
+             stacking them as collapsible headers. Hidden entirely when there
+             is fewer than two workspaces to choose between. -->
+        <div id="sidebar-workspace-row" class="sidebar-workspace-row" hidden>
+            <select id="sidebar-workspace-select" class="link-select" title="Filter the agent list by workspace"></select>
+            <button type="button" id="sidebar-workspace-new" class="btn-group-new" title="Spawn terminal in the selected workspace">+</button>
+        </div>
         <!-- The role picker is NOT declared here any more. It is built per group by
              buildRolePicker() and rendered directly under the workspace or worktree
              header whose `+` was clicked, so the menu is visually attached to the
