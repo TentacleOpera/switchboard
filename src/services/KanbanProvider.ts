@@ -5599,6 +5599,42 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (!changed) { return null; }
             return working;
         });
+        // ORPHANED LIVE GROUPS GO WITH THEIR DEFINITIONS.
+        //
+        // The reset above replaces `terminals.agentGroups` — the DEFINITIONS. The
+        // live rows in `terminals.groups` are a separate key, and a row whose
+        // `definitionId` named a discarded definition survived it, pointing at a
+        // team that no longer exists. That is not what the reset meant: its stated
+        // scope was "the adopted `group-coding-*` rows go", and the row IS the
+        // adopted team.
+        //
+        // The consequence was not cosmetic. A stale row kept a dead head name in
+        // play, so a live lead registered coding rounds against a team with no
+        // seats and every round dispatch failed to find one.
+        //
+        // Runs on every load, not only behind the one-shot marker: an orphan can
+        // also appear when an operator deletes a team they built. A row with no
+        // `definitionId` is a hand-made group and is never touched.
+        try {
+            const liveDefIds = new Set(
+                (loaded || []).map((g: any) => g && g.id).filter((id: any): id is string => typeof id === 'string')
+            );
+            await mutateTerminalGroups({ db }, (current: any[]) => {
+                const kept = current.filter((g: any) =>
+                    !g || typeof g.definitionId !== 'string' || !g.definitionId || liveDefIds.has(g.definitionId));
+                for (const g of current) {
+                    if (kept.indexOf(g) === -1) {
+                        console.log(
+                            `[KanbanProvider] pruning orphaned team group '${g?.id}' — its definition `
+                            + `'${g?.definitionId}' no longer exists.`
+                        );
+                    }
+                }
+                return kept;
+            });
+        } catch (pruneErr) {
+            console.warn('[KanbanProvider] orphaned-group prune failed:', pruneErr);
+        }
         if (!resetAlreadyRan) {
             try {
                 await db.setConfig(KanbanProvider.AGENT_GROUPS_RESET_MARKER_KEY, new Date().toISOString());

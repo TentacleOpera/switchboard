@@ -6013,7 +6013,23 @@ export class LocalApiServer {
             // roster). The destination clearBeforePrompt uses the config
             // default (the seat IS cleared before the prompt — it is
             // receiving new work).
-            const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, undefined, {
+            // NO COMPLEXITY ROUTING IN A TEAM ROUND. The seat is already chosen —
+            // the roster picked it, round-robin, one subtask per cleared seat. Passing
+            // `undefined` here let the endpoint auto-route by the subtask's complexity
+            // and pick a column that contradicts the seat it was being handed to: a
+            // cx-2 subtask resolved INTERN CODED while the card sat at LEAD CODED
+            // (where the feature cascade had put it), the move was refused, and the
+            // whole round reported a delivery error.
+            //
+            // It only ever appeared to work by coincidence: when the feature cascaded
+            // its subtasks into CODER CODED, a cx-6 subtask was already in the column
+            // complexity picked, so no move was needed.
+            //
+            // Keep the card where it is. A team decides who works what; complexity
+            // routing is the NON-team path.
+            const subtaskRec = await db.getPlanByPlanId(planId);
+            const keepColumn = subtaskRec?.kanbanColumn || undefined;
+            const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, keepColumn, {
                 targetTerminalOverride: seat,
                 originTerminal: from,
                 skipClear: true,
@@ -6148,7 +6164,10 @@ export class LocalApiServer {
             // (skip the roster barrier), clearBeforePrompt: false (do not
             // clear the destination seat — it is being repaired, not handed
             // new work).
-            const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, undefined, {
+            // No complexity routing here either: this is a TEAM re-delivery to the
+            // seat the card already names. Auto-routing would move it to whatever
+            // column its complexity picks, contradicting the seat being repaired.
+            const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, card?.kanbanColumn || undefined, {
                 targetTerminalOverride: seat,
                 originTerminal: from,
                 skipClear: true,
