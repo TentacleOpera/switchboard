@@ -1022,12 +1022,16 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             // the note above this array.
             { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'For getting a lot of plans written at once. Each planner seat takes one card, so a batch is planned in parallel instead of one at a time, and the researcher seat does the codebase digging for all of them so a plan never comes back asking you to look something up. Automated planning dispatch goes here.',
+        purpose: 'For getting a lot of plans written at once. Each planner seat takes one card, so a batch is planned in parallel instead of one at a time. The researcher seat does WEB research — when a plan turns on something nobody is sure of, an unfamiliar library, an API\'s real behaviour, which approach is standard, it goes and finds out instead of the plan shipping a guess. Automated planning dispatch goes here.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
-            + 'Research the context for the plan — read the codebase, trace dependencies, and identify root causes. '
-            + 'Report your findings to {child} for synthesis into the plan.\n'
+            + 'If you are a PLANNER seat: take the card you were handed and write its plan — read the code, trace the '
+            + 'dependencies, name the root cause, and report the finished plan to {child}.\n'
+            + 'If you are the RESEARCHER seat: you do WEB research, not codebase reading. Answer the open questions the '
+            + 'planners cannot settle from the repo — how an unfamiliar library actually behaves, what an API really '
+            + 'returns, which approach is current practice — and report sourced findings to {child}. Say plainly when '
+            + 'the evidence is thin rather than resolving an uncertainty with a guess.\n'
             + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
             + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
             + 'commit first, then correct forward. '
