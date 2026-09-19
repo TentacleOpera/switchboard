@@ -409,3 +409,25 @@ Run `npm run compile-tests` before any `test:contract:*` script.
   called *"just one of the problems"*. The others are not captured anywhere in the plan corpus. They
   should be collected into their own card rather than inferred here — this plan deliberately does not
   guess at them.
+
+
+## Scope correction (2026-09-19) — the field has landed; this plan is now the generalisation
+
+`acceptedKinds` and `acceptedKindsSource` **shipped** with
+`teams-are-four-defaults-and-you-can-switch-them-off`, which landed the minimal field
+itself because the Feature/Coding split was unusable without it. They are seeded
+`['feature']` on `feature-implementation` and `['plan']` on `coding-team`, read by
+`readTeamAcceptedKinds` (`teamWiring.ts`), and consumed by
+`KanbanProvider.resolveImplementationHead(root, kind)`, which returns
+`{ head, teamId, source }` with `source: 'accepted-kind' | 'sole-live-team' | 'role-order-fallback'`.
+
+**Do not add the field again.** What remains of this plan:
+
+- `complexityBand` on the definition — untouched, still the original idea.
+- Operator-built teams declaring their own kinds. Today only the two shipped defaults
+  carry the field; the Teams tab has no editor for it, so a custom team is always
+  `{ value: null, source: 'default' }` and routes by the `'sole-live-team'` arm.
+- The Teams-tab editor for both fields. `teamsTabSaveAgentGroup` already CARRIES
+  `acceptedKinds`/`acceptedKindsSource` from the previous definition so an unrelated
+  rename does not drop a default's routing — the editor has to write them, not just
+  preserve them.

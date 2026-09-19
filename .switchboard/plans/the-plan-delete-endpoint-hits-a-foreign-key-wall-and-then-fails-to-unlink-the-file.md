@@ -168,3 +168,37 @@ The bare `catch { /* already gone */ }` (`:11177`) treats every `fs.unlink` fail
 - **Negative:** After a successful delete with `deleteFile=true` and a pre-existing file, the plan's `.md` file is absent from `.switchboard/plans/` (not re-imported by the watcher).
 - **Positive:** A plan with zero `plan_events` rows still deletes successfully (regression guard).
 - **Positive:** A non-ENOENT unlink error is surfaced (response carries an `unlinkError` field or an equivalent diagnostic), not swallowed as `fileDeleted: false` with no log.
+
+## Fresh reproduction (2026-09-19) — and one detail of the analysis above is stale
+
+Hit deliberately while deleting a redundant plan
+(`8d250d8d-803f-4308-8bf0-b56f3b85d0f7`, "Multi-Agent Planning Team — Fan-Out Head
+Prompt and Peer-Planner Roster", which had shipped):
+
+```
+DELETE /kanban/plans?planId=<id>&deleteFile=true&workspaceRoot=<root>
+  → {"success":false,"fileDeleted":true}
+```
+
+**The foreign-key wall is confirmed.** `deletePlanByPlanId` is a bare
+`DELETE FROM plans WHERE plan_id = ?`; the plan had `plan_events` history, the
+delete failed, and `_persistedUpdate` returned `false`.
+
+**But the file DID unlink.** The goal above says the call "does neither" — on this
+build it does the second half: `fileDeleted: true`, and the `.md` is gone from
+`.switchboard/plans/`. So the failure is now WORSE than described rather than
+merely incomplete: the endpoint destroys the file and keeps the row, which is the
+one combination that cannot be recovered from either side. Re-verify that clause
+before implementing; the fix must not assume the unlink is still guarded behind a
+successful delete.
+
+**The row is left as a tombstone.** After the call the row survives with
+`status = 'missing'` (a watcher noticed the vanished file), still stamped
+`kanban_column = 'PLAN REVIEWED'`. It is off the board, because every board read
+filters `status = 'active'` — the column's active count went 351 → 350 — so the
+operator sees the card go and nothing reports that the deletion half-failed.
+A retry returns `{"success":false,"fileDeleted":false}` forever.
+
+That silent half-success is worth folding into this plan's verification: a delete
+that cannot remove the row must SAY so, rather than returning a shape the caller
+reads as "gone" while the row is still there.

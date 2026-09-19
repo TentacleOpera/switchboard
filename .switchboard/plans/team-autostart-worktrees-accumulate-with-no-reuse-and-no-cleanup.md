@@ -47,3 +47,26 @@ leaking today, so a cleanup path that depends on a graceful stop does not close 
 ### Goal Invariants
 
 1. Two consecutive autostarts of the same team do not produce two `tier='team'` worktree rows. *(Paired: a team that has never started still provisions one on first start.)*
+
+
+## Scope correction (2026-09-19) — autostart is gone, the leak is not
+
+The title and premise say **autostart**. There is no team autostart any more: the boot sweep
+was removed by `teams-start-when-a-card-needs-them-not-at-boot`, and the
+spawn-a-team-around-a-bare-head-role-terminal trigger is gone too (`findTeamForHeadRole` is
+now reached only by the autoban dispatch-target lookup).
+
+**The leak survives, on a different path.** `provisionTeamWorktree` is still called from
+`startAgentGroupById` (`KanbanProvider.ts`) and from `TaskViewerProvider`, on every
+EXPLICIT start of a team whose `worktreeMode` is `'auto'` — a fresh branch and worktree each
+time, with nothing reusing or removing them. Re-title around that; the accumulation
+analysis below stands unchanged.
+
+**It got worse on 2026-09-19.** The guard is
+`worktreeMode === 'auto' && !team.startWorktree`, and the per-team `startWorktree` text
+field was removed from the Teams tab that day because it never did what it claimed (it was
+read only as this negative guard, never as a spawn cwd, so typing a path silently suppressed
+provisioning and left the team in the workspace root). With no way to set it, the
+suppression can no longer be reached: an auto-mode team now provisions unconditionally on
+every start. Any reuse/cleanup design has to carry that, or restore a control that actually
+selects a worktree rather than one that only disables the feature.

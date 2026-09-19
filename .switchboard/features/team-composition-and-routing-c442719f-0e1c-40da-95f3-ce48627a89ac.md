@@ -14,3 +14,18 @@ Consolidated 2026-09-10: a review team with no coder seats, and two teams sharin
 - [ ] [A Team Declares What Work It Accepts, So a Low-Complexity Team and a Feature Team Are Different Things](../plans/a-team-declares-what-work-it-accepts.md) — **PLAN REVIEWED** — ID: 6e2b4992-c549-41b2-a0f7-26483bbf7025
 <!-- END SUBTASKS -->
 
+
+
+## Scope correction (2026-09-19)
+
+Both halves of this feature's goal line have moved:
+
+- *"a review team with no coder seats"* — **operator decision, 2026-09-19: it will not get
+  them.** Review is read-only by design; its subtask is rescoped to the reviewer verifying
+  that work exists and reporting when it does not, never to implementing it.
+- *"two teams sharing a head role with routing to decide between them"* — the sharing part is
+  **done**: the silent demotion (`unassigned`) is deleted and two `planner`-headed teams ship
+  and run together. Only the tie-break ladder remains, and it builds on
+  `resolveImplementationHead`'s `'role-order-fallback'` branch.
+
+Read each subtask's own scope-correction section before coding either.

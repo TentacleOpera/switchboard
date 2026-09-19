@@ -276,3 +276,25 @@ the per-subtask implementation record; the helper preserves the `catch` best-eff
 
 ## Outstanding Questions
 - None.
+
+
+## Scope correction (2026-09-19) — the Review team will NOT have coder seats
+
+**Operator decision, 2026-09-19: the Review team does not get coder seats.** This plan's
+goal — *"make the reviewer use the coder seats its team now has"* — cannot be coded, and the
+"companion preset plan" that was to supply them is not coming. The shipped `review-team` is a
+`reviewer` head plus 2 × `reviewer`, and that is the intended roster: review is a read-only
+job, and work that needs implementing goes to an implementation team as its own dispatch.
+
+**The underlying defect is still real and still worth fixing.** A reviewer handed an
+unimplemented subtask can only rubber-stamp it, because nothing makes it check that the work
+exists before reviewing it. Rescope to the reviewer's own side:
+
+- Before reviewing a subtask, verify the implementation is actually present (the plan's own
+  files changed, a commit exists for it) rather than reviewing an empty diff.
+- When it is absent, REPORT it — fail the subtask back with "not implemented" as a distinct
+  outcome from "reviewed and found wanting" — instead of passing it or trying to build it.
+- The head's existing triage already has a category for intent failures; an unimplemented
+  subtask is a fifth state that must not collapse into "needs no fixing".
+
+Nothing here dispatches code work from the review team. That is the point of the decision.

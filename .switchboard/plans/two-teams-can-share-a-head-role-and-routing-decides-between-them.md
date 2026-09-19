@@ -311,3 +311,28 @@ deleting one of the two implementations over guarding both.
   kind: feature 1, feature 2, plan 3, feature 4. No grouping by type, no implicit parallelism. The
   ladder must not fire at all in that case; one implicit stream, one team, today's behaviour exactly.
 - **[user]** When two teams share a head role and both carry `startOnLoad`, Change #6 proposes only the rung-4 nominated default auto-starts. Proceeding on the assumption that single-scope auto-start of one team per head role is the desired policy; confirm, or state the preferred rule (e.g. both start, ladder routes live heads).
+
+
+## Scope correction (2026-09-19) — the bug is fixed; the ladder is what is left
+
+The problem statement above — *"a second `lead` team is silently demoted, hidden from the
+UI, and unreachable"* — **no longer describes the code.** The demotion was
+`migrateAgentGroups`' head-role collision step, which wrote `unassigned: true` on the
+loser; that step and the `unassigned` / `unassignedReason` fields were deleted outright by
+`teams-are-four-defaults-and-you-can-switch-them-off`. Two teams sharing a head role is now
+an ordinary configuration that nothing objects to, and the shipped set relies on it: both
+`planning-team` and `multi-agent-planning` are `planner`-headed and are meant to run
+together.
+
+So the motivating defect is gone, and nothing needs to be un-hidden or made reachable.
+
+**What is genuinely left is the routing ladder** — runsheet, then worktree affinity, then
+whichever team is free, then a nominated default. Two hooks now exist to build it on,
+and it should extend them rather than introduce a third resolver:
+
+- `resolveImplementationHead(root, kind)` returns `'role-order-fallback'` with a warn log
+  whenever more than one live team could take the work and none disambiguates. That branch
+  is exactly where the ladder belongs.
+- `readTeamAutomatedDispatch` already decides the shipped planner case declaratively
+  (`'pool' | 'head-only-when-sole' | 'never'`), so the ladder must not re-answer it — a
+  team that declines automated dispatch is not a tie-break candidate at all.
