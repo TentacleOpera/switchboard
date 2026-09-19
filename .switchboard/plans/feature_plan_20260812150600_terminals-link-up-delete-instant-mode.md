@@ -283,3 +283,7 @@ Execution is **deferred by session directive (SKIP TESTS)**. No contract test in
 ---
 
 **Recommendation:** Complexity 3 — **Send to Intern.**
+
+---
+
+**Delivery summary (2026-09-19, Feature-coder-1).** Instant mode is deleted: the `#link-mode` select and its label are out of `terminals.html` (replaced by an explanatory comment), the footer button's static label is `SAVE`, and `terminals.js` lost `linkMode`, its `terminals.linkMode` load/persist, `buildLinkPrompt`, `syncModeAvailability`, the `modeSel` change listener, and the instant arm of `sendLinkMessage`. `openLinkModal`'s existence guard no longer names `modeSel`, so the modal still opens; when the store is unreachable it opens inert — textarea disabled, SAVE gated on `standingOrdersAvailable` (never `standingOrders.length`), and the reason asserted in `#link-error` after the open-path clear. The synchronous modal-open ordering (fetch after `hidden = false`) was preserved; `ptySendPrompt`'s `standingOrders: false` flag and `applyStandingOrdersClient` are untouched. All six static checks pass and `node --check` is clean; tests and compile skipped per session directive. Committed as `1e1163db`.

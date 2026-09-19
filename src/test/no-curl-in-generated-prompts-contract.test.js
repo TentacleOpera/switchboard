@@ -24,7 +24,6 @@
  *                             buildHeadCompletionFragment, buildHeadNextFragment,
  *                             GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY
  *  - linkPresets.ts         — LINK_PRESETS templates (via resolvePreset)
- *  - webview/terminals.js   — buildLinkPrompt (extracted and evaluated)
  *
  * Run with:
  *   node --require ./src/test/bootstrap/sandboxStateHome.js src/test/no-curl-in-generated-prompts-contract.test.js
@@ -205,31 +204,7 @@ function run() {
         }
     });
 
-    // ── 6. webview/terminals.js buildLinkPrompt ──────────────────────────
-
-    const TERMINALS_JS_SRC = fs.readFileSync(
-        path.join(ROOT, 'src', 'webview', 'terminals.js'), 'utf8'
-    );
-
-    check('terminals.js buildLinkPrompt: no curl/$BASE/api-server-port.txt in generated output', () => {
-        // Extract buildLinkPrompt from the source and evaluate it with a mock
-        // `location` object, since the function references `location.origin`.
-        // The function is self-contained (no external closures beyond
-        // `location` and `JSON`).
-        const fnMatch = TERMINALS_JS_SRC.match(
-            /function buildLinkPrompt\([^)]*\)\s*\{[\s\S]*?\n    \}/
-        );
-        assert.ok(fnMatch, 'buildLinkPrompt not found in terminals.js');
-        const fnSrc = fnMatch[0];
-        // Provide a mock location and evaluate.
-        const mockLocation = { origin: 'http://127.0.0.1:7777' };
-        const fn = new Function('location', 'JSON', fnMatch[0] + '\nreturn buildLinkPrompt;');
-        const buildLinkPrompt = fn(mockLocation, JSON);
-        const prompt = buildLinkPrompt('Parent-1', 'Child-1', 'review the diff');
-        assertNoForbidden(prompt, 'buildLinkPrompt');
-    });
-
-    // ── 7. standingOrders.ts reviewer callback ──────────────────────────
+    // ── 6. standingOrders.ts reviewer callback ──────────────────────────
 
     // The reviewer callback order is built by upsertReviewerCallbackOrder,
     // which composes a CLI-based instruction. We test the source text of the
