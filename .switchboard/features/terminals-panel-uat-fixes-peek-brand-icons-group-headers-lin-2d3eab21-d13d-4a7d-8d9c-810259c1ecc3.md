@@ -25,9 +25,33 @@ Four defects found in terminals.html during UAT, all in src/webview/terminals.js
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Make Peek Non-Destructive: Restore the Exact Grid the Peek Interrupted](../plans/feature_plan_20260812150300_terminals-peek-restore-slot-clobber.md) — **PLAN REVIEWED** — ID: 31e0cbb6-70bd-44e0-9c47-9ac73b902914
-- [ ] [Show the Antigravity Brand Icon Everywhere terminals.html Names an Agent](../plans/feature_plan_20260812150400_terminals-antigravity-brand-icon-coverage.md) — **PLAN REVIEWED** — ID: dd9c3c80-d2db-452d-a1aa-2f437795231a
-- [ ] [Stop the Terminals Sidebar Inventing Workspace Group Headers Nobody Asked For](../plans/feature_plan_20260812150500_terminals-sidebar-invented-workspace-groups.md) — **PLAN REVIEWED** — ID: 65b7e796-efeb-437f-bb55-0c3f074e8681
-- [ ] [Delete Link-Up's "Instant" Mode — Standing Orders Is the Only Mode](../plans/feature_plan_20260812150600_terminals-link-up-delete-instant-mode.md) — **PLAN REVIEWED** — ID: ff6eeb99-d208-4c95-99b0-4204f69d19ed
+- [ ] [Make Peek Non-Destructive: Restore the Exact Grid the Peek Interrupted](../plans/feature_plan_20260812150300_terminals-peek-restore-slot-clobber.md) — **LEAD CODED** — ID: 31e0cbb6-70bd-44e0-9c47-9ac73b902914
+- [ ] [Show the Antigravity Brand Icon Everywhere terminals.html Names an Agent](../plans/feature_plan_20260812150400_terminals-antigravity-brand-icon-coverage.md) — **LEAD CODED** — ID: dd9c3c80-d2db-452d-a1aa-2f437795231a
+- [ ] [Stop the Terminals Sidebar Inventing Workspace Group Headers Nobody Asked For](../plans/feature_plan_20260812150500_terminals-sidebar-invented-workspace-groups.md) — **LEAD CODED** — ID: 65b7e796-efeb-437f-bb55-0c3f074e8681
+- [ ] [Delete Link-Up's "Instant" Mode — Standing Orders Is the Only Mode](../plans/feature_plan_20260812150600_terminals-link-up-delete-instant-mode.md) — **LEAD CODED** — ID: ff6eeb99-d208-4c95-99b0-4204f69d19ed
 <!-- END SUBTASKS -->
 
+
+---
+
+**Delivery summary (2026-09-20, Feature team).** All four subtasks landed in five
+rounds, serialised one per round because every one edits `src/webview/terminals.js`.
+Link-up lost its Instant mode, its two serving functions and its silent
+fallback-to-Instant (`terminals.linkMode` orphaned in place per the shipped-state
+rule); the role picker now carries a brand icon and `Role · CLI NAME`, with the
+duplicated resolver collapsed onto `CLI_BRAND_ICON_KEYS`; the sidebar renders a
+workspace heading only when it separates something, with spawn-location choice moved
+onto the tab-strip `+`; and peek became a glance — a `peekRestoreState` snapshot
+(arrays, pins, modes, focus, group, membership including host-side `grp_` rosters)
+replayed by `dismissPeek`, with `peekSeatInProgress` gating `saveLayoutSettings` and
+`focusPaneTerminal` so the seat neither persists nor takes the caret.
+
+Three subtasks broke shipped contract assertions the plan never named — the stranded
+`buildLinkPrompt` check, and two peek contracts — each caught by running the suites
+during review rather than by the coders' own static checks, which the session's
+skip-tests directive leaves blind to them. One was deliberately inverted ("the peek is
+a presentation override" described the destructive peek being replaced); the rest were
+retired or repaired. Final state: `shell-terminal-strip` 75/0, `no-curl` all passed,
+`multi-parent` 24 passed with 5 pre-existing failures in the pty host and
+`ptyCreateTerminal` proxy that predate this feature and were left alone. One residual
+is recorded at `.switchboard/orchestrator/reports/question_20260920_peek-grp-host-membership.md`.
