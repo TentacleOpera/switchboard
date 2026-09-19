@@ -147,3 +147,7 @@ Delete the now-unreferenced rule (`~590`):
 8. **Exited state legible:** exit a terminal and confirm its row still carries the `(exited)` suffix and dimmed styling, so nothing that was in the badge is lost.
 9. **Collapse/expand + spawn:** confirm the chevron still toggles, the `+` still opens the role picker under the right header, and the spawn lands in the right workspace/worktree.
 10. **Console:** no `undefined` reference errors from the removed variables on any render, including the 5s fleet poll (leave the panel idle 30s).
+
+## Completion summary (2026-09-19, Feature-intern)
+
+Deleted the `N (Xa/Yx)` badge at all three render sites in `src/webview/terminals.js`: the workspace header, the worktree sub-header, and a third site the plan predated — the team-tier sub-header in `renderTeamTier`, which carried the identical badge and had to go for the `worktree-count` grep to reach zero. `totalItems` survives intact and still gates the `(no terminals — + to open)` notice; `activeCount`/`exitedCount`/`wtActive`/`wtExited`/the team tier's `active`/`exited` are gone with their only readers. The `.worktree-count` rule was deleted from `src/webview/terminals.css` (styles have moved out of `terminals.html` since the plan was written). One contract test asserted the removed `activeCount` accumulation line; it now asserts the surviving `totalItems` worktree aggregation instead. `node --check` parses clean; compile/tests skipped per dispatch orders.

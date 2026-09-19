@@ -160,31 +160,42 @@
     </div>
     <div id="terminals-main" class="terminals-main">
         <div class="layout-toolbar">
-            <div class="layout-picker">
-                <!-- The `data-layout` keys name the SPLIT AXIS ("2h" = one horizontal split →
-                     two columns); the labels name what the operator counts on screen ("2V" =
-                     two vertical terminals). They are deliberately inverted, and the keys are
-                     load-bearing: `terminals.layoutMode` persists them and .pane-grid.layout-*
-                     styles them. Change a label freely; never a key. -->
-                <!-- `active` here is the PRE-JS default only: loadLayoutSettings() is an async
-                     verb call, so something must be highlighted on the first frame. terminals.js
-                     calls syncLayoutPickerUI() once the persisted layout resolves. Do not remove
-                     this class, and do not add `active` to any other button. -->
-                <!-- AUTO is a PREFERENCE, not a grid: it stores "size this group to its
-                     roster" against the locked group, and the concrete mode is resolved
-                     from the membership each time the group is entered. It is inert with
-                     no group locked — there is nothing to store it against — and
-                     syncLayoutPickerUI disables it there rather than letting a click
-                     land silently. -->
-                <button type="button" class="btn-layout" data-layout="auto"
-                        title="Size this group's grid to its roster — grows and shrinks with the membership">AUTO</button>
-                <button type="button" class="btn-layout active" data-layout="1">1</button>
-                <button type="button" class="btn-layout" data-layout="2h" title="Two vertical terminals, side by side">2V</button>
-                <button type="button" class="btn-layout" data-layout="2v" title="Two horizontal terminals, stacked">2H</button>
-                <button type="button" class="btn-layout" data-layout="1x3" title="Three terminals side by side, one row">1x3</button>
-                <button type="button" class="btn-layout" data-layout="2x2">2x2</button>
-                <button type="button" class="btn-layout" data-layout="2x3">2x3</button>
-                <button type="button" class="btn-layout" data-layout="3x3">3x3</button>
+            <div class="layout-toolbar-left">
+                <div class="layout-picker">
+                    <!-- The `data-layout` keys name the SPLIT AXIS ("2h" = one horizontal split →
+                         two columns); the labels name what the operator counts on screen ("2V" =
+                         two vertical terminals). They are deliberately inverted, and the keys are
+                         load-bearing: `terminals.layoutMode` persists them and .pane-grid.layout-*
+                         styles them. Change a label freely; never a key. -->
+                    <!-- `active` here is the PRE-JS default only: loadLayoutSettings() is an async
+                         verb call, so something must be highlighted on the first frame. terminals.js
+                         calls syncLayoutPickerUI() once the persisted layout resolves. Do not remove
+                         this class, and do not add `active` to any other button. -->
+                    <!-- AUTO is a PREFERENCE, not a grid: it stores "size this group to its
+                         roster" against the locked group, and the concrete mode is resolved
+                         from the membership each time the group is entered. It is inert with
+                         no group locked — there is nothing to store it against — and
+                         syncLayoutPickerUI disables it there rather than letting a click
+                         land silently. -->
+                    <button type="button" class="btn-layout" data-layout="auto"
+                            title="Size this group's grid to its roster — grows and shrinks with the membership">AUTO</button>
+                    <button type="button" class="btn-layout active" data-layout="1">1</button>
+                    <button type="button" class="btn-layout" data-layout="2h" title="Two vertical terminals, side by side">2V</button>
+                    <button type="button" class="btn-layout" data-layout="2v" title="Two horizontal terminals, stacked">2H</button>
+                    <button type="button" class="btn-layout" data-layout="1x3" title="Three terminals side by side, one row">1x3</button>
+                    <button type="button" class="btn-layout" data-layout="2x2">2x2</button>
+                    <button type="button" class="btn-layout" data-layout="2x3">2x3</button>
+                    <button type="button" class="btn-layout" data-layout="3x3">3x3</button>
+                </div>
+                <!-- Group paging. A CONTROL, not a warning: it lives beside the
+                     grid-size buttons it responds to, in the panel's own chrome
+                     colours. It reserves its space (visibility, not display) so
+                     appearing never pushes the pane grid down. -->
+                <div id="group-pager" class="group-pager">
+                    <span id="group-pager-label" class="group-pager-label"></span>
+                    <button type="button" id="group-pager-prev" class="group-pager-btn" title="Previous page">‹</button>
+                    <button type="button" id="group-pager-next" class="group-pager-btn" title="Next page">›</button>
+                </div>
             </div>
             <div class="toolbar-actions">
                 <button type="button" id="btn-kanban-toolbar" class="secondary-btn"

@@ -593,6 +593,12 @@
             gap: 8px;
             z-index: 10;
         }
+        .layout-toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
         .layout-picker {
             display: flex;
             gap: 4px;
@@ -616,6 +622,47 @@
             border-color: var(--accent-teal);
             color: var(--accent-teal);
         }
+
+        /* Group paging. Same chrome family as .btn-layout — neutral by default,
+           --accent-teal on hover. --accent-teal is redeclared per theme
+           (:root -> var(--accent-primary), .theme-claudify -> #D97757), so this
+           tracks the theme. NOT --accent-violet: that token is never declared in
+           :root here, only ever used with a #c586c0 fallback, so it would stay
+           violet in Claudify.
+           visibility (not display) keeps the toolbar's height and the grid's
+           position fixed whether or not a group is over-subscribed. */
+        .group-pager {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            visibility: hidden;
+            min-width: 0;
+        }
+        .group-pager.visible { visibility: visible; }
+        .group-pager-label {
+            font-size: 10px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .group-pager-btn {
+            background: transparent;
+            border: 1px solid var(--border-bright);
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 11px;
+            line-height: 1;
+            padding: 2px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .group-pager-btn:hover:not(:disabled) {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal);
+        }
+        .group-pager-btn:disabled { opacity: 0.35; cursor: default; }
 
         /* Worktree Groups */
         .worktree-group {
@@ -654,13 +701,6 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-        }
-        .worktree-count {
-            font-size: 9px;
-            background: var(--border-color);
-            color: var(--text-secondary);
-            padding: 1px 4px;
-            border-radius: 8px;
         }
         .btn-group-new {
             background: none;
@@ -2059,27 +2099,18 @@
             color: var(--state-readonly);
         }
 
+        /* Window-too-small only. The paging control moved to the toolbar; what is
+           left here is a genuine transient warning, so it uses the panel's amber
+           state token rather than the red literal it used to hardcode. */
         .layout-fallback-banner {
-            background: rgba(248, 81, 73, 0.15);
-            color: #f85149;
-            border-bottom: 1px solid #f85149;
+            background: color-mix(in srgb, var(--state-connecting) 14%, transparent);
+            color: var(--state-connecting);
+            border-bottom: 1px solid var(--state-connecting);
             padding: 4px 12px;
             font-size: 11px;
             display: none;
         }
         .layout-fallback-banner.visible { display: block; }
-        .banner-page-btn {
-            background: none;
-            border: 1px solid currentColor;
-            color: inherit;
-            font-family: inherit;
-            font-size: 10px;
-            padding: 0 6px;
-            margin-left: 6px;
-            border-radius: 2px;
-            cursor: pointer;
-        }
-        .banner-page-btn:disabled { opacity: 0.4; cursor: default; }
 
         /* Browser-only gap: without this a plain browser stops painting dark
            scrollbars and form controls on a black surface. Unscoped on purpose —

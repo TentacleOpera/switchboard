@@ -374,6 +374,10 @@
     const groupTabStripEl = document.getElementById('group-tab-strip');
     const toastContainerEl = document.getElementById('toast-container');
     const fallbackBannerEl = document.getElementById('layout-fallback-banner');
+    const groupPagerEl = document.getElementById('group-pager');
+    const groupPagerLabelEl = document.getElementById('group-pager-label');
+    const groupPagerPrevEl = document.getElementById('group-pager-prev');
+    const groupPagerNextEl = document.getElementById('group-pager-next');
 
     /**
      * The one authority on whether a terminal holds a live socket.
@@ -943,6 +947,19 @@
                 }
             });
         });
+
+        // Group pager. Static markup, so the listeners attach once here instead
+        // of being rebuilt per render — the handler reads activeGroupPage at
+        // click time and the re-entrant applyLayoutFloor only updates labels and
+        // disabled flags, so there is no stale-closure risk.
+        const stepGroupPage = (delta) => {
+            activeGroupPage += delta;
+            seatActiveGroupPage();
+            applyLayoutFloor({ fit: false });
+            batchFitVisiblePanes();
+        };
+        if (groupPagerPrevEl) { groupPagerPrevEl.addEventListener('click', () => stepGroupPage(-1)); }
+        if (groupPagerNextEl) { groupPagerNextEl.addEventListener('click', () => stepGroupPage(1)); }
 
         const btnClearAll = document.getElementById('btn-clear-all');
         if (btnClearAll) {
@@ -5671,9 +5688,6 @@
         const div = document.createElement('div');
         div.className = 'team-group indent-team' + (isCollapsed ? ' collapsed' : '');
 
-        const active = bucket.items.filter(i => i.status !== 'exited').length;
-        const exited = bucket.items.length - active;
-
         const headerEl = document.createElement('div');
         headerEl.className = 'team-group-header';
         headerEl.title = `Team ${bucket.group.name}`;
@@ -5689,13 +5703,8 @@
         nameEl.className = 'worktree-name';
         nameEl.textContent = bucket.group.shortName || bucket.group.name;
 
-        const countEl = document.createElement('span');
-        countEl.className = 'worktree-count';
-        countEl.textContent = `${bucket.items.length} (${active}a/${exited}x)`;
-
         titleArea.appendChild(icon);
         titleArea.appendChild(nameEl);
-        titleArea.appendChild(countEl);
 
         const newBtn = document.createElement('button');
         newBtn.className = 'btn-group-new';
@@ -5971,14 +5980,16 @@
             const parentDiv = document.createElement('div');
             parentDiv.className = 'parent-group' + (isParentCollapsed ? ' collapsed' : '');
 
+            // totalItems survives: it gates the "no terminals" notice below,
+            // which is the else-arm of the row render — losing it renders the
+            // notice on every workspace AND suppresses every row. The
+            // active/exited split does not survive: the rows already announce
+            // their own state ((exited) suffix + .is-exited styling), and the
+            // encoded badge that reported it was unreadable.
             let totalItems = parentGroup.direct.length;
-            let activeCount = parentGroup.direct.filter(i => i.status !== 'exited').length;
-
             for (const wtGroup of parentGroup.worktreesMap.values()) {
                 totalItems += wtGroup.items.length;
-                activeCount += wtGroup.items.filter(i => i.status !== 'exited').length;
             }
-            const exitedCount = totalItems - activeCount;
 
             const headerEl = document.createElement('div');
             headerEl.className = 'parent-group-header';
@@ -5995,13 +6006,8 @@
             nameEl.className = 'worktree-name';
             nameEl.textContent = parentGroup.name;
 
-            const countEl = document.createElement('span');
-            countEl.className = 'worktree-count';
-            countEl.textContent = `${totalItems} (${activeCount}a/${exitedCount}x)`;
-
             titleArea.appendChild(icon);
             titleArea.appendChild(nameEl);
-            titleArea.appendChild(countEl);
 
             const groupNewBtn = document.createElement('button');
             groupNewBtn.className = 'btn-group-new';
@@ -6060,9 +6066,6 @@
                     const wtDiv = document.createElement('div');
                     wtDiv.className = 'worktree-group indent-worktree' + (isWtCollapsed ? ' collapsed' : '');
 
-                    const wtActive = wtGroup.items.filter(i => i.status !== 'exited').length;
-                    const wtExited = wtGroup.items.length - wtActive;
-
                     const wtHeaderEl = document.createElement('div');
                     wtHeaderEl.className = 'worktree-group-header';
                     wtHeaderEl.title = wtGroup.fullPath;
@@ -6078,13 +6081,8 @@
                     wtNameEl.className = 'worktree-name';
                     wtNameEl.textContent = wtGroup.basename;
 
-                    const wtCountEl = document.createElement('span');
-                    wtCountEl.className = 'worktree-count';
-                    wtCountEl.textContent = `${wtGroup.items.length} (${wtActive}a/${wtExited}x)`;
-
                     wtTitleArea.appendChild(wtIcon);
                     wtTitleArea.appendChild(wtNameEl);
-                    wtTitleArea.appendChild(wtCountEl);
 
                     const wtNewBtn = document.createElement('button');
                     wtNewBtn.className = 'btn-group-new';
@@ -9322,38 +9320,36 @@
         const activeGroup = activeGroupId ? getAllGroups().find(g => g.id === activeGroupId) : null;
         const members = activeGroup ? getGroupMembers(activeGroup).length : 0;
         const rendered = getSlotCount(effectiveLayout);
-        const shortfall = activeGroup && members > rendered;
+        const shortfall = !!activeGroup && members > rendered;
         const floored = effectiveLayout !== currentLayout;
-        fallbackBannerEl.classList.toggle('visible', floored || !!shortfall);
-        fallbackBannerEl.textContent = '';
-        if (activeGroup && shortfall) {
-            // Inside a lock the useful message is the shortfall, not "your layout was
-            // reduced" — and paging is the remedy, so it sits in the same place.
-            // Paging is keyed to RENDERED slots, not to nine.
-            const pageCount = Math.max(1, Math.ceil(members / rendered));
-            const start = activeGroupPage * rendered;
-            const label = document.createElement('span');
-            label.textContent =
-                `Showing ${start + 1}–${Math.min(start + rendered, members)} of ${members} — ${activeGroup.name} `;
-            fallbackBannerEl.appendChild(label);
-            const mkPage = (text, delta, disabled) => {
-                const b = document.createElement('button');
-                b.type = 'button';
-                b.className = 'banner-page-btn';
-                b.textContent = text;
-                b.disabled = disabled;
-                b.addEventListener('click', () => {
-                    activeGroupPage += delta;
-                    seatActiveGroupPage();
-                    applyLayoutFloor({ fit: false });
-                    batchFitVisiblePanes();
-                });
-                return b;
-            };
-            fallbackBannerEl.appendChild(mkPage('‹ prev', -1, activeGroupPage <= 0));
-            fallbackBannerEl.appendChild(mkPage('next ›', 1, activeGroupPage >= pageCount - 1));
-        } else if (floored) {
-            fallbackBannerEl.textContent = 'Window too small for requested layout — using simpler layout floor.';
+
+        // Banner: window-too-small ONLY. Paging is a control and lives in the toolbar.
+        fallbackBannerEl.classList.toggle('visible', floored);
+        fallbackBannerEl.textContent = floored
+            ? 'Window too small for requested layout — using simpler layout floor.'
+            : '';
+
+        // Pager: built after the slot count is known, so the page index it reads
+        // is the one seatActiveGroupPage() clamped against the floored layout.
+        // Idempotent in both branches — this function re-enters (see the
+        // no-lock path) and must be safe to run twice with no lock.
+        if (groupPagerEl) {
+            const pageCount = shortfall ? Math.max(1, Math.ceil(members / rendered)) : 1;
+            const show = shortfall && pageCount > 1;
+            groupPagerEl.classList.toggle('visible', show);
+            if (show) {
+                const start = activeGroupPage * rendered;
+                groupPagerLabelEl.textContent =
+                    `${activeGroup.name} ${start + 1}–${Math.min(start + rendered, members)} of ${members}`;
+                groupPagerLabelEl.title = `${activeGroup.name}: ${members} terminals, ${rendered} panes on screen`;
+                groupPagerPrevEl.disabled = activeGroupPage <= 0;
+                groupPagerNextEl.disabled = activeGroupPage >= pageCount - 1;
+            } else {
+                groupPagerLabelEl.textContent = '';
+                groupPagerLabelEl.title = '';
+                groupPagerPrevEl.disabled = true;
+                groupPagerNextEl.disabled = true;
+            }
         }
 
         if (changed) {

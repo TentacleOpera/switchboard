@@ -294,10 +294,12 @@ test('Unmapped renders only when it holds something', () => {
     );
 });
 
-test('the parent count aggregates its worktrees; each worktree counts only its own', () => {
+test('the parent total aggregates its worktrees — totalItems gates the empty notice', () => {
     const render = block(terminalsJs, 'for (const parentGroup of activeGroupsToRender) {', 'const headerEl = document.createElement');
-    assert.ok(/totalItems \+= wtGroup\.items\.length/.test(render), 'parent count must include nested worktree terminals');
-    assert.ok(/activeCount \+= wtGroup\.items\.filter/.test(render), 'the active half of the count must aggregate too');
+    assert.ok(
+        /totalItems \+= wtGroup\.items\.length/.test(render),
+        'a worktree-only parent must not render the empty notice — the total must include nested worktree terminals'
+    );
 });
 
 test('both levels collapse independently under one prefixed key set', () => {
