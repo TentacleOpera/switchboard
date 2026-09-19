@@ -3088,21 +3088,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <!-- CORE -->
           <div class="agents-group-label" style="margin-top:4px;">Core</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
-          <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists. Increase the number of terminals to spread multiple plans among different planners for faster processing of plan batches.</div>
-          <div class="startup-row planner-pool-row" style="padding-left:24px;">
-            <label style="min-width:70px;">Terminals</label>
-            <select id="agents-tab-planner-terminal-count" data-role="planner" style="flex:0 0 auto;">
-              <option value="1" selected>1</option>
-              <option value="2">2</option>
-              <option value="3">3</option>
-              <option value="4">4</option>
-              <option value="5">5</option>
-            </select>
-            <label class="cli-toggle-inline" style="margin-left:12px;" title="When advancing all, send at most one plan per available planner terminal (oldest plans first). Reducing the count does not close existing terminals — close them manually.">
-              <input type="checkbox" id="agents-tab-planner-limit-dispatch" data-role="planner" style="width:auto;margin:0;">
-              Limit dispatches to number of available terminals
-            </label>
-          </div>
+          <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="lead" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead" id="agents-tab-cmd-lead" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Implements high-complexity files, complex refactors, and core architecture changes.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="coder" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Coder</label><input type="text" data-role="coder" id="agents-tab-cmd-coder" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>

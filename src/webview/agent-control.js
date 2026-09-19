@@ -2639,9 +2639,7 @@
             // per-machine command map, not the legacy flat key. See the plan
             // `agents-are-saved-per-machine-and-a-team-picks-one`.
             machineId: agentsTabSelectedMachineId,
-            julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false,
-            plannerTerminalCount: parseInt(document.getElementById('agents-tab-planner-terminal-count')?.value || '1', 10),
-            plannerLimitDispatchToTerminals: document.getElementById('agents-tab-planner-limit-dispatch')?.checked ?? false
+            julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false
           };
         }
         function agentsTabSaveConfig() {
@@ -2659,8 +2657,6 @@
         document.querySelectorAll('#agents-tab-content input[type="text"][data-role], #teams-tab-content input[type="text"][data-role]').forEach(i => {
           i.addEventListener('blur', agentsTabSaveConfig);
         });
-        document.getElementById('agents-tab-planner-terminal-count')?.addEventListener('change', agentsTabSaveConfig);
-        document.getElementById('agents-tab-planner-limit-dispatch')?.addEventListener('change', agentsTabSaveConfig);
 
 
 
@@ -3899,10 +3895,6 @@
                   });
                   const julesSyncCb = document.getElementById('agents-tab-jules-auto-sync');
                   if (julesSyncCb) julesSyncCb.checked = !!msg.julesAutoSyncEnabled;
-                  const plannerCountSelect = document.getElementById('agents-tab-planner-terminal-count');
-                  if (plannerCountSelect) plannerCountSelect.value = String(msg.plannerTerminalCount ?? 1);
-                  const plannerLimitCb = document.getElementById('agents-tab-planner-limit-dispatch');
-                  if (plannerLimitCb) plannerLimitCb.checked = !!msg.plannerLimitDispatchToTerminals;
                   break;
                 }
                 case 'machinesList': {
