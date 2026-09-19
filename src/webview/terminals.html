@@ -332,11 +332,11 @@
                 <label class="link-field-label" for="link-child">Child — the terminal it will message</label>
                 <select id="link-child" class="link-select"></select>
 
-                <label class="link-field-label" for="link-mode">Mode</label>
-                <select id="link-mode" class="link-select">
-                    <option value="instant">Instant — send once, right now</option>
-                    <option value="standing">Standing orders — append to every future message</option>
-                </select>
+                <!-- Link-up has ONE mode: a standing order appended to every
+                     prompt sent to the parent. The old one-shot "Instant" mode
+                     fired a prompt into the parent terminal with no record,
+                     nothing to review and nothing to revoke — which is just
+                     typing into that terminal, and it was the DEFAULT. -->
 
                 <label class="link-field-label" for="link-preset">Preset</label>
                 <select id="link-preset" class="link-select"></select>
@@ -353,7 +353,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" id="link-cancel" class="secondary-btn">CANCEL</button>
-                <button type="button" id="link-send" class="secondary-btn is-teal" disabled>SEND</button>
+                <button type="button" id="link-send" class="secondary-btn is-teal" disabled>SAVE</button>
             </div>
         </div>
     </div>

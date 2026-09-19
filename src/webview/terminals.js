@@ -2374,8 +2374,10 @@
         const savedPreset = await loadSetting('terminals.linkPreset', LINK_PRESETS[0].id);
         linkPreset = LINK_PRESETS.some(p => p.id === savedPreset) ? savedPreset : LINK_PRESETS[0].id;
 
-        const savedLinkMode = await loadSetting('terminals.linkMode', 'instant');
-        linkMode = ['instant', 'standing'].includes(savedLinkMode) ? savedLinkMode : 'instant';
+        // `terminals.linkMode` is no longer read or written — Link-up has one
+        // mode (standing orders) since the one-shot "Instant" arm was removed.
+        // Any persisted row is left in place, unread: this codebase does not
+        // delete shipped settings to tidy up.
 
         const savedGroups = await loadSetting('terminals.groups', []);
         if (Array.isArray(savedGroups)) {
@@ -11883,7 +11885,6 @@
     // merely quotes the marker mid-text is not silently truncated.
     const STANDING_ORDERS_BLOCK_RE =
         /\n*=== STANDING ORDERS ===\n[\s\S]*?These apply to everything you do in this terminal until told otherwise\.\n$/;
-    let linkMode = 'instant';
     let standingOrders = [];
     let standingOrdersAvailable = false;
 
@@ -12006,8 +12007,12 @@
         const msg = document.getElementById('link-message');
         const sendBtn = document.getElementById('link-send');
         if (!msg || !sendBtn) { return; }
-        sendBtn.disabled = !msg.value.trim();
-        sendBtn.textContent = linkMode === 'standing' ? 'SAVE' : 'SEND';
+        // NOT standingOrders.length: an empty but reachable store is the
+        // first-use case and must be savable. `available` is false only when no
+        // DB is reachable (LocalApiServer._handleStandingOrdersList) or the
+        // fetch itself failed.
+        sendBtn.disabled = !msg.value.trim() || !standingOrdersAvailable;
+        // No label switch: SAVE is the only thing this button does now.
     }
 
     function liveNameSet() {
@@ -12353,21 +12358,6 @@
         standingOrdersAvailable = false;
     }
 
-    function syncModeAvailability(sel) {
-        if (!sel) { return; }
-        const standingOpt = sel.querySelector('option[value="standing"]');
-        if (standingOpt) { standingOpt.disabled = !standingOrdersAvailable; }
-        if (!standingOrdersAvailable && sel.value === 'standing') {
-            sel.value = 'instant';
-            // sendLinkMessage branches on the VARIABLE, not the select. Leaving
-            // linkMode === 'standing' here sends a "SAVE" to a store the gate just
-            // declared unreachable, under a dropdown reading "Instant".
-            // Deliberately NOT persisted: the operator's stored preference should
-            // survive a context that merely happens to lack the store.
-            linkMode = 'instant';
-        }
-    }
-
     function renderStandingList() {
         const list = document.getElementById('link-standing-list');
         if (!list) { return; }
@@ -12403,10 +12393,9 @@
         const modal = document.getElementById('link-modal');
         const parentSel = document.getElementById('link-parent');
         const childSel = document.getElementById('link-child');
-        const modeSel = document.getElementById('link-mode');
         const messageEl = document.getElementById('link-message');
         const presetSel = document.getElementById('link-preset');
-        if (!modal || !parentSel || !childSel || !modeSel || !messageEl || !presetSel) { return; }
+        if (!modal || !parentSel || !childSel || !messageEl || !presetSel) { return; }
 
         // Everything up to `modal.hidden = false` is SYNCHRONOUS: the modal must
         // appear on the frame the operator clicked LINK UP. A modal that waits on
@@ -12420,22 +12409,31 @@
         // open is the first option rather than the persisted preset.
         presetSel.value = linkPreset; // options already exist — built once in wireLinkModal
         syncChildOptions();
-        applyPresetToMessage(true);  // fills the box; SEND is live on open
-        modeSel.value = linkMode;
+        applyPresetToMessage(true);  // fills the box; SAVE stays gated until the store answers
         setLinkError(null);
 
         modal.hidden = false;
         presetSel.focus();           // the preset is now the primary control; Tab reaches the box
 
-        // Only the standing-orders list and its mode gate need the store, and
-        // neither is on the send-ready path — they render into an already-visible
-        // modal. Gated off when the store is not reachable (solo popout, headless,
-        // or no DB).
+        // The standing-orders list and the store gate are the only pieces that
+        // need the store, and neither is on the open path — they render into an
+        // already-visible modal. When the store is not reachable (solo popout,
+        // headless, or no DB) there is no fallback mode: the modal stays open,
+        // the instruction box is inert, and SAVE stays disabled with the reason
+        // in #link-error.
         await fetchStandingOrders();
-        syncModeAvailability(modeSel);
         renderStandingList();
-        syncSendEnabled();           // syncModeAvailability may have forced the mode
-                                     // back to instant; the button label follows it
+        syncSendEnabled();
+        // AFTER the setLinkError(null) on the open path: an unreachable store is
+        // a standing condition, not a per-attempt error, and the two share
+        // #link-error. Asserted last so the open-path clear cannot blink it out.
+        if (!standingOrdersAvailable) {
+            messageEl.disabled = true;
+            setLinkError('Standing orders are unavailable here — no store is reachable (solo popout, headless, or no database).');
+        } else {
+            messageEl.disabled = false;
+            setLinkError(null);
+        }
     }
 
     /**
@@ -12451,54 +12449,6 @@
         btn.title = btn.disabled
             ? 'Needs at least two live terminals'
             : 'Instruct one agent terminal to send a message to another';
-    }
-
-    /**
-     * Build the relay prompt. Two parts, in this order:
-     *   1. the operator's instruction verbatim, delimited — it is the point of
-     *      the message and comes first so the agent reads it before the recipe;
-     *   2. a single CLI call against the /terminals/relay endpoint.
-     *
-     * The prompt is an instruction, not an API tutorial. The old recipe handed
-     * the agent a /tmp heredoc, a python3 JSON builder, a clearBeforePrompt
-     * lecture and a 401 note — transport mechanics the agent should never see,
-     * and a loaded gun (clearBeforePrompt) it had to reproduce faithfully or
-     * silently arm a context wipe. /terminals/relay removes all of that: the
-     * endpoint takes {to, from, message}, hardcodes clearBeforePrompt:false so
-     * the capability to clear the recipient does not exist on the route, stamps
-     * provenance itself, and validates both ends against the live fleet. The
-     * agent can produce the call correctly in one attempt.
-     *
-     * The CLI resolves the running server, the port, and the auth header
-     * itself — the prompt no longer names curl, a port, or a token. The
-     * `<cliPath>` token is substituted server-side by `applyStandingOrders`
-     * (both hosts), which calls `substituteCliPath` on the prompt text before
-     * writing it to the terminal — the same path that substitutes the token
-     * in standing-order fragments and drive prefixes.
-     *
-     * Every line of the shell block starts at column 0: an indented heredoc
-     * terminator is not recognised and the shell hangs waiting for input.
-     */
-    function buildLinkPrompt(parentName, childName, message) {
-        return [
-            `You have been asked to relay something to another Switchboard terminal.`,
-            ``,
-            `TARGET TERMINAL: ${childName}`,
-            `YOUR TERMINAL:   ${parentName}`,
-            ``,
-            `OPERATOR INSTRUCTION:`,
-            `---`,
-            message,
-            `---`,
-            ``,
-            `To deliver this to ${childName}, run:`,
-            ``,
-            `node "<cliPath>" api POST /terminals/relay '{"to":${JSON.stringify(childName)},"from":${JSON.stringify(parentName)},"message":"<the operator instruction above, verbatim>"}'`,
-            ``,
-            `For a long or multi-line message, use a heredoc to build the JSON body instead of hand-escaping it into the command line.`,
-            ``,
-            `Carry out the operator instruction now.`,
-        ].join('\n');
     }
 
     async function sendLinkMessage() {
@@ -12519,67 +12469,23 @@
         const sendBtn = document.getElementById('link-send');
         if (sendBtn) { sendBtn.disabled = true; }
         try {
-            if (linkMode === 'standing') {
-                const res = await fetch('/terminals/standing-orders', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'add', parent: parentName, child: childName, instruction: message })
-                });
-                const data = await res.json();
-                if (!data.success) { setLinkError('Save failed: ' + (data.error || 'unknown')); return; }
-                await fetchStandingOrders();
-                renderStandingList();
-                document.getElementById('link-message').value = '';
-                showPaneToast(`Standing order saved for ${parentName}`);
-            } else {
-                // This hop is panel → PARENT (delivering the relay instruction to
-                // the parent agent), NOT panel → child. /terminals/relay is the
-                // parent → child hop that the parent agent will make itself (per
-                // buildLinkPrompt). The panel is not a fleet terminal, so
-                // /terminals/relay's `from`-validation and provenance stamp do
-                // not apply here — this is an instruction to the parent, so
-                // ptySendPrompt is the correct route. Routing the panel's own
-                // send through /terminals/relay would conflate the two hops and
-                // reject the call (the panel is not in the fleet).
-                //
-                // Relative URL + default credentials:'same-origin' — this is the idiom every
-                // other verb call in this file uses. It is what carries the HttpOnly
-                // sb_session cookie that _checkAuth accepts under standalone.
-                const res = await fetch('/terminals/verb/ptySendPrompt', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: parentName,
-                        data: buildLinkPrompt(parentName, childName, message),
-                        // Operator-initiated from the panel — attended cap.
-                        attended: true,
-                        // EXPLICIT false. The omitted-field default is now false
-                        // in BOTH hosts (TaskViewerProvider and bootstrap), so
-                        // omitting would be safe — but explicit beats inherited
-                        // on a destructive flag: a future refactor that reroutes
-                        // this send must not silently arm a /clear on the PARENT
-                        // and destroy the very context it is being asked to hand
-                        // over.
-                        clearBeforePrompt: false,
-                        // Link-up instructions must not themselves carry the parent's
-                        // standing-orders block, or the agent would see its own orders
-                        // quoted back inside the relay message.
-                        standingOrders: false,
-                        // An instruction to relay is a message, not work starting.
-                        // Declared rather than left to the default so the intent is
-                        // legible and the send stays off the undeclared-payload ratchet.
-                        kind: 'message'
-                    })
-                });
-                const data = await res.json();
-                if (!data.success) { setLinkError('Link failed: ' + (data.error || 'unknown')); return; }
-                // Close first, THEN toast: the modal out-stacks .toast-container (z 200 vs
-                // 100), so a toast raised while it is open would be painted behind it.
-                document.getElementById('link-modal').hidden = true;
-                showPaneToast(`Instructed ${parentName} to message ${childName}`);
+            if (!standingOrdersAvailable) {
+                setLinkError('Standing orders are unavailable here — no store is reachable (solo popout, headless, or no database).');
+                return;
             }
+            const res = await fetch('/terminals/standing-orders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'add', parent: parentName, child: childName, instruction: message })
+            });
+            const data = await res.json();
+            if (!data.success) { setLinkError('Save failed: ' + (data.error || 'unknown')); return; }
+            await fetchStandingOrders();
+            renderStandingList();
+            document.getElementById('link-message').value = '';
+            showPaneToast(`Standing order saved for ${parentName}`);
         } catch (err) {
-            setLinkError('Link failed: ' + (err.message || String(err)));
+            setLinkError('Save failed: ' + (err.message || String(err)));
         } finally {
             syncSendEnabled();
         }
@@ -12598,7 +12504,6 @@
         const sendBtn = document.getElementById('link-send');
         const parentSel = document.getElementById('link-parent');
         const childSel = document.getElementById('link-child');
-        const modeSel = document.getElementById('link-mode');
         const messageEl = document.getElementById('link-message');
         const standingList = document.getElementById('link-standing-list');
         const closeModal = () => {
@@ -12609,24 +12514,11 @@
         if (cancelBtn) { cancelBtn.addEventListener('click', closeModal); }
         if (sendBtn) { sendBtn.addEventListener('click', sendLinkMessage); }
         if (parentSel) { parentSel.addEventListener('change', syncChildOptions); }
-        for (const el of [messageEl, modeSel, childSel]) {
+        for (const el of [messageEl, childSel]) {
             if (el) { el.addEventListener('keydown', (e) => { e.stopPropagation(); }); }
         }
         if (messageEl) {
             messageEl.addEventListener('input', () => { presetDirty = true; syncSendEnabled(); });
-        }
-        if (modeSel) {
-            modeSel.addEventListener('change', () => {
-                if (!standingOrdersAvailable && modeSel.value === 'standing') {
-                    setLinkError('Standing orders are not available in this context');
-                    modeSel.value = 'instant';
-                } else {
-                    setLinkError(null);
-                    linkMode = modeSel.value;
-                    saveSetting('terminals.linkMode', linkMode);
-                }
-                syncSendEnabled();
-            });
         }
         buildPresetOptions();            // static options; the DOM is parsed by now
         const presetSel = document.getElementById('link-preset');
