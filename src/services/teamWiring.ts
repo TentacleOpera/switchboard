@@ -1022,7 +1022,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             // the note above this array.
             { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'Bulk planning. Send it a batch of cards and each planner seat takes one and writes its plan; the researcher seat digs through the codebase for them so a plan never comes back asking you to look something up. This is the team automated planning dispatch goes to.',
+        purpose: 'For getting a lot of plans written at once. Each planner seat takes one card, so a batch is planned in parallel instead of one at a time, and the researcher seat does the codebase digging for all of them so a plan never comes back asking you to look something up. Automated planning dispatch goes here.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
@@ -1054,7 +1054,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'coder', count: 2, label: '' },
             { role: 'intern', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'Whole features. The lead reads the feature, groups its subtasks into rounds, and the system deals one subtask at a time to each free seat — two coders and an intern — until the feature is done. Send it a feature, not a single plan.',
+        purpose: 'For big work that has to stay coherent. The lead reads the whole feature, orders its subtasks into rounds, and then REVIEWS each seat\'s subtask against the plan before accepting it — so mistakes are caught per subtask rather than at the end, and a seat that fails twice gets escalated instead of retried forever. That per-subtask review is what you are paying the lead seat for. Send it a feature, not a single plan.',
         acceptedKinds: ['feature'],
         acceptedKindsSource: 'default',
         pairProgramming: 'on',
@@ -1083,7 +1083,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         members: [
             { role: 'intern', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'One plan, two seats. The board splits the plan by difficulty and sends both halves at once: the coder gets the complex and risky work, the intern gets the routine work, and the coder integrates both before committing. No lead, no reviewer — it is the cheap team for a single plan.',
+        purpose: 'For getting one plan done cheaply. The board splits it by difficulty and sends both halves at once — the coder takes the complex and risky work, the intern takes the routine work, and the coder integrates both before committing. The split is the point: the routine half never burns expensive tokens, which makes the intern seat the ideal home for a local model. No lead and no reviewer, so you pay for two seats and nothing else.',
         acceptedKinds: ['plan'],
         acceptedKindsSource: 'default',
         // Written explicitly and NOT switchable off in the Teams tab: a coder and
@@ -1116,7 +1116,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         members: [
             { role: 'reviewer', count: 2, label: '' },
         ],
-        purpose: 'Review. The head hands each reviewer up to two plans to read without touching code, then triages what comes back and sends only the real fixes to the reviewer that found them. Send it work that has already been built.',
+        purpose: 'For reviewing several plans at once. The head hands each reviewer up to two plans to read without touching code, so a stack of finished work is reviewed in parallel rather than one plan at a time; it then triages what comes back and sends only the real fixes to the reviewer that found them, so nobody fixes code they never read. Send it work that has already been built.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
@@ -1155,7 +1155,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'planner', count: 3, label: '', scope: 'per-team', relationship: 'reports-to-head' },
             { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
-        purpose: 'Hard planning you oversee. Three planners attack the SAME problem from different angles and the head reconciles their drafts into one plan. It never receives automated dispatch — you drive it yourself with the copy-prompt buttons. Ships switched off.',
+        purpose: 'For one hard problem worth several opinions. Three planners attack the SAME problem from different angles and the head reconciles their drafts into one plan — you spend four seats on one question instead of four questions, which is worth it only when getting it wrong is expensive. You drive this one yourself with the copy-prompt buttons; it never receives automated dispatch. Ships switched off.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
