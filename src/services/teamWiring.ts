@@ -1023,6 +1023,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
         purpose: 'For getting a lot of plans written at once. Each planner seat takes one card, so a batch is planned in parallel instead of one at a time. The researcher seat does WEB research — when a plan turns on something nobody is sure of, an unfamiliar library, an API\'s real behaviour, which approach is standard, it goes and finds out instead of the plan shipping a guess. Automated planning dispatch goes here.',
+        trigger: 'Move cards to Planned. A batch move fans out one card per planner seat, so it plans as many at once as it has seats.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
@@ -1059,6 +1060,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'intern', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
         purpose: 'For big work that has to stay coherent. The lead reads the whole feature, orders its subtasks into rounds, and then REVIEWS each seat\'s subtask against the plan before accepting it — so mistakes are caught per subtask rather than at the end, and a seat that fails twice gets escalated instead of retried forever. That per-subtask review is what you are paying the lead seat for. Send it a feature, not a single plan.',
+        trigger: 'Dispatch a feature. It is the only team that accepts features, so a feature dispatch reaches it automatically.',
         acceptedKinds: ['feature'],
         acceptedKindsSource: 'default',
         pairProgramming: 'on',
@@ -1088,6 +1090,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'intern', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
         purpose: 'For getting one plan done cheaply. The board splits it by difficulty and sends both halves at once — the coder takes the complex and risky work, the intern takes the routine work, and the coder integrates both before committing. The split is the point: the routine half never burns expensive tokens, which makes the intern seat the ideal home for a local model. No lead and no reviewer, so you pay for two seats and nothing else.',
+        trigger: 'Move a plan to AUTOCODE. It is the only team that accepts single plans, so plan dispatches reach it automatically.',
         acceptedKinds: ['plan'],
         acceptedKindsSource: 'default',
         // Written explicitly and NOT switchable off in the Teams tab: a coder and
@@ -1121,6 +1124,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'reviewer', count: 2, label: '' },
         ],
         purpose: 'For reviewing several plans at once. The head hands each reviewer up to two plans to read without touching code, so a stack of finished work is reviewed in parallel rather than one plan at a time; it then triages what comes back and sends only the real fixes to the reviewer that found them, so nobody fixes code they never read. Send it work that has already been built.',
+        trigger: 'Move finished work to Reviewed.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
@@ -1160,6 +1164,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             { role: 'researcher', count: 1, label: '', scope: 'per-team', relationship: 'reports-to-head' },
         ],
         purpose: 'For one hard problem worth several opinions. Three planners attack the SAME problem from different angles and the head reconciles their drafts into one plan — you spend four seats on one question instead of four questions, which is worth it only when getting it wrong is expensive. You drive this one yourself with the copy-prompt buttons; it never receives automated dispatch. Ships switched off.',
+        trigger: 'Switch it on, start it, then use a copy-prompt button and paste into its head. It never takes work automatically.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'

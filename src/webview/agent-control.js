@@ -1417,6 +1417,17 @@
             rosterDiv.textContent = teamsTabRosterStrip(group);
             body.appendChild(rosterDiv);
 
+            // HOW TO USE IT. The purpose says why the team exists; this says the
+            // move that actually sends it work. Without it an operator knows a
+            // team is for features and still has to guess what "send it a feature"
+            // means in board terms.
+            if (group.trigger) {
+                const trigDiv = document.createElement('div');
+                trigDiv.className = 'teams-card-trigger';
+                trigDiv.textContent = group.trigger;
+                body.appendChild(trigDiv);
+            }
+
             // ── The in-use switch ────────────────────────────────────────
             // A team that exists is not automatically a team that plays. A
             // disabled team is GREYED WITH ITS SWITCH — not hidden, not deleted —
@@ -2498,6 +2509,7 @@
                 ...(Array.isArray(prevGroup?.acceptedKinds) ? { acceptedKinds: [...prevGroup.acceptedKinds] } : {}),
                 ...(prevGroup?.acceptedKindsSource ? { acceptedKindsSource: prevGroup.acceptedKindsSource } : {}),
                 ...(prevGroup?.purpose ? { purpose: prevGroup.purpose } : {}),
+                ...(prevGroup?.trigger ? { trigger: prevGroup.trigger } : {}),
                 // The team's own jet is its IDENTITY, not an editor field — this
                 // literal drops every key it does not name, so a rename would
                 // silently collapse Multi-agent planning back onto the shared
