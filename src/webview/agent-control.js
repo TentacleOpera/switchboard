@@ -1502,40 +1502,19 @@
                 body.appendChild(needDiv);
             }
 
-            // Worktree field — adopted teams only. Previously gated behind a
-            // START ON LOAD checkbox (auto-start is now removed); the field is
-            // load-bearing for MANUAL starts: startAgentGroupById and
-            // startTeamForWorkspace both read it as the spawn cwd / worktree
-            // trigger, so it stays authorable independent of the removed toggle.
-            // stopPropagation so editing does not also pick the card.
-            if (entry.adopted) {
-                const autoDiv = document.createElement('div');
-                autoDiv.className = 'teams-card-autostart';
-                autoDiv.addEventListener('click', (e) => e.stopPropagation());
-                // The field kept the START ON LOAD row's container but lost that
-                // checkbox's label with it, leaving an unexplained text box on
-                // every adopted card. Name it — the existing label class is
-                // already styled for exactly this position.
-                const wtLabel = document.createElement('span');
-                wtLabel.className = 'teams-card-autostart-label';
-                wtLabel.textContent = 'WORKTREE';
-                autoDiv.appendChild(wtLabel);
-                const wtInput = document.createElement('input');
-                wtInput.type = 'text';
-                wtInput.className = 'teams-card-autostart-wt';
-                wtInput.value = group.startWorktree || '';
-                wtInput.placeholder = '';
-                wtInput.addEventListener('change', () => {
-                    const g = agentsTabAgentGroups.find(x => x.id === group.id);
-                    if (!g) return;
-                    const val = wtInput.value.trim();
-                    if (val) { g.startWorktree = val; }
-                    else { delete g.startWorktree; }
-                    postKanbanMessage({ type: 'saveAgentGroup', group: { ...g } });
-                });
-                autoDiv.appendChild(wtInput);
-                body.appendChild(autoDiv);
-            }
+            // NO per-team worktree text field. It used to sit on every card,
+            // unlabelled at first and then labelled WORKTREE, with a comment
+            // claiming startAgentGroupById and startTeamForWorkspace "read it as
+            // the spawn cwd". Neither does. `startWorktree` is read in exactly two
+            // places and both use it as a NEGATIVE GUARD —
+            // `worktreeMode === 'auto' && !startWorktree` — so typing a path into
+            // it never put the team in that worktree; it only suppressed
+            // auto-provisioning and the team then spawned in the workspace root.
+            // A control whose stated effect and real effect differ is worse than
+            // no control, so the input is gone. `worktreeMode` (the edit form's
+            // checkbox) still works and still provisions; the badge below still
+            // reports it. Any stored `startWorktree` is carried on save rather
+            // than wiped — see teamsTabSaveAgentGroup.
 
             // WORKTREE badge
             if (group.worktreeMode === 'auto') {
