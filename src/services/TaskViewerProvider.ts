@@ -90,8 +90,7 @@ import {
     buildKanbanColumns,
     parseDefaultPromptOverrides,
     DefaultPromptOverride,
-    reweightSequence
-} from './agentConfig';
+    reweightSequence, featureSafeColumn } from './agentConfig';
 import {
     BatchPromptPlan,
     partitionPlansByFeature,
@@ -6967,7 +6966,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (!sessionId) return false;
             const plan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
             if (plan && plan.isFeature) {
-                return db.cascadeFeatureByPlanId(plan.planId, column);
+                // A feature never enters a seat column — same rule as the two
+                // KanbanProvider writers. This is the third cascade site.
+                return db.cascadeFeatureByPlanId(plan.planId, featureSafeColumn(column));
             }
             return !!(await db.updateColumn(sessionId, column));
         }

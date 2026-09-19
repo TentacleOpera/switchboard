@@ -79,17 +79,32 @@ t('the API call site passes isFeature instead of dropping it', () => {
 // choose a column, and the webview predicts one of its own and sends it
 // explicitly — guarding them one at a time kept missing whichever path was
 // actually used. Every path funnels through moveCardToColumnWithReason.
-t('the column write refuses to put a feature in a seat column', () => {
-  const i = KP.indexOf('public async moveCardToColumnWithReason(');
-  const fn = KP.slice(i, KP.indexOf('\n    public async moveCardToColumn(', i));
-  assert.ok(/CODED_SEAT_COLUMNS\.has\(targetColumn\)/.test(fn),
-    'the write must reject a seat column for a feature, whoever chose it');
-  assert.ok(/targetColumn = 'LEAD CODED'/.test(fn), 'and redirect it to LEAD CODED');
-  const guard = fn.indexOf('CODED_SEAT_COLUMNS');
-  const write = fn.indexOf('cascadeFeatureByPlanId');
-  assert.ok(guard > 0 && write > 0 && guard < write, 'it must run BEFORE the row is written');
-  assert.ok(/new Set\(\['CODER CODED', 'INTERN CODED'\]\)/.test(KP),
-    'the set is the two seat columns — LEAD CODED is the one coded column a feature may enter');
+t('every feature cascade writer routes through the shared safe-column rule', () => {
+  const TVP = fs.readFileSync(path.resolve(__dirname,'..','services','TaskViewerProvider.ts'),'utf8');
+  const AC  = fs.readFileSync(path.resolve(__dirname,'..','services','agentConfig.ts'),'utf8');
+  assert.ok(/FEATURE_FORBIDDEN_COLUMNS[^\n]*Set\(\['CODER CODED', 'INTERN CODED'\]\)/.test(AC),
+    'the rule is declared ONCE, beside the column table');
+  assert.ok(/featureSafeColumn/.test(AC), 'and exposed as one helper');
+  const kpSites = (KP.match(/isFeature\) \{ targetColumn = featureSafeColumn\(targetColumn\); \}/g) || []).length;
+  assert.strictEqual(kpSites, 2,
+    'both KanbanProvider cascade writers (sessionId-keyed and plan-file-keyed) must use it');
+  assert.ok(/cascadeFeatureByPlanId\(plan\.planId, featureSafeColumn\(column\)\)/.test(TVP),
+    'the TaskViewerProvider cascade fallback must use it too — it is the third writer');
+});
+
+// THE DEFECT THAT ACTUALLY SHIPPED: the composition root's lambda took two
+// parameters while LocalApiServer passed three, so isFeature was dropped between
+// the caller that had it and the resolver that needed it. Four correct guards sat
+// in code the live path never reached because of this one wrapper.
+t('the bootstrap lambda forwards isFeature to the resolver', () => {
+  const BS = fs.readFileSync(path.resolve(__dirname,'..','standalone','bootstrap.ts'),'utf8');
+  const i = BS.indexOf('resolveAutoDispatchColumn: async');
+  assert.ok(i > 0, 'the option must be wired in the standalone composition root');
+  const lambda = BS.slice(i, i + 320);
+  assert.ok(/isFeature\??: boolean/.test(lambda),
+    'the lambda must ACCEPT isFeature — a two-arg wrapper silently drops the third');
+  assert.ok(/resolveAutoDispatchColumn\(_wsRoot, complexity, isFeature\)/.test(lambda),
+    'and must FORWARD it; accepting without forwarding is the same bug one line later');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

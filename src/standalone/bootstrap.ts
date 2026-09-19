@@ -5142,8 +5142,15 @@ Each plan file must include:
         // `recommendedRole` on plan reads so a lead dispatches by the board's
         // policy rather than a split baked into its prompt. Both hosts wire it.
         resolveRoutedRole: (score: number) => kanbanProvider.resolveRoutedRole(score),
-        resolveAutoDispatchColumn: async (_wsRoot: string, complexity: string | null) => {
-            return kanbanProvider.resolveAutoDispatchColumn(_wsRoot, complexity);
+        // Forwards EVERY parameter. This lambda took two arguments while
+        // LocalApiServer passed three, so `isFeature` was dropped between the
+        // caller that had it and the resolver that needed it — and a feature
+        // dispatched from the command view (which sends no targetColumn) routed on
+        // complexity alone, straight onto a coder seat that cannot fan it out.
+        // Nothing failed: a wrapper that silently discards an argument is the
+        // composition-root trap where "never wired" and "working" look identical.
+        resolveAutoDispatchColumn: async (_wsRoot: string, complexity: string | null, isFeature?: boolean) => {
+            return kanbanProvider.resolveAutoDispatchColumn(_wsRoot, complexity, isFeature);
         },
         // Same `ptyReady` guard the kanbanVerb entry point carries: a page loaded
         // before a restart (or a direct API caller) can still reach these verbs, and

@@ -19,8 +19,7 @@ import {
     parseCustomKanbanColumns,
     parseDefaultPromptOverrides,
     BUILT_IN_AGENT_LABELS,
-    BuiltInAgentRole
-} from './agentConfig';
+    BuiltInAgentRole, featureSafeColumn } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
@@ -238,10 +237,6 @@ export function normalizeFeatureWorktreeMode(value: unknown): 'none' | 'per-feat
  * Provides a Kanban board WebviewPanel in the editor area.
  * Cards represent active plans and columns represent workflow stages.
  */
-/** The coded columns a FEATURE must never be routed into. A feature goes to
- *  the lead, which is the only seat that orders its subtasks into rounds. */
-const CODED_SEAT_COLUMNS = new Set(['CODER CODED', 'INTERN CODED']);
-
 export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
     /** Ceilings for bulk moves (plan: a-bulk-move-cannot-outgrow-the-board). */
@@ -9661,9 +9656,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // Only the team head orders a feature's subtasks into rounds; a coder or
             // intern seat cannot fan it out, so the feature stalls owned and
             // undispatched. LEAD CODED is the only coded column a feature may enter.
-            if (plan && plan.isFeature && CODED_SEAT_COLUMNS.has(targetColumn)) {
-                targetColumn = 'LEAD CODED';
-            }
+            if (plan && plan.isFeature) { targetColumn = featureSafeColumn(targetColumn); }
             let outcome: ColumnUpdateOutcome;
             let subtaskSessionIds: string[] = [];
             let subtaskKeys: string[] = [];  // sessionId or planId — for runsheet fan-out
@@ -10127,6 +10120,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
             const previousRecord = await db.getPlanByPlanFile(planFile, workspaceId);
 
+            // Same rule as the sessionId-keyed write above: a feature never enters a
+            // seat column, whoever chose it.
+            if (previousRecord && previousRecord.isFeature) { targetColumn = featureSafeColumn(targetColumn); }
             let outcome: ColumnUpdateOutcome;
             let subtaskSessionIds: string[] = [];
             if (previousRecord && previousRecord.isFeature) {

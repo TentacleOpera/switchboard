@@ -245,6 +245,25 @@ export const LEGACY_COLUMN_LABELS: Record<string, { label: string; displayModeOf
 /** Display-only labels with no stored column ID — an agent may be asked about
  *  these by name but can never write to them. Keyed by the canonical uppercase
  *  form of the label. */
+/**
+ * The coded columns a FEATURE must never enter. A feature is not work a seat
+ * does — only the team head orders its subtasks into rounds and registers them,
+ * so a coder or intern seat that receives one cannot fan it out and the feature
+ * stalls owned and undispatched. `LEAD CODED` is the one coded column it may
+ * enter.
+ *
+ * Declared here, beside the column table, because THREE separate writers cascade
+ * a feature and each needs the same answer. Guarding them one at a time is how a
+ * complexity-6 feature kept reaching a coder while three different "fixes" sat in
+ * code the live path never ran.
+ */
+export const FEATURE_FORBIDDEN_COLUMNS: ReadonlySet<string> = new Set(['CODER CODED', 'INTERN CODED']);
+
+/** The column a feature must go to when something aimed it at a seat column. */
+export function featureSafeColumn(targetColumn: string): string {
+    return FEATURE_FORBIDDEN_COLUMNS.has(targetColumn) ? 'LEAD CODED' : targetColumn;
+}
+
 export const DISPLAY_ONLY_COLUMN_LABELS: Record<string, { aliasOf: string[] }> = {
     'AUTOCODE': { aliasOf: ['LEAD CODED', 'CODER CODED', 'INTERN CODED'] },
 };
