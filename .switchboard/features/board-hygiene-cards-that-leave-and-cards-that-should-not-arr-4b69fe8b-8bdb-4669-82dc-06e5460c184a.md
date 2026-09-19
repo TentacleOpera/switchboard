@@ -81,3 +81,29 @@ Five plans on board population: stars that never expire, completed cards that ne
 ix, and Escalates Backwards](../plans/a-reviewer-defers-what-it-should-fix-and-escalates-backwards.md) — **PLAN REVIEWED** — ID: 73a271e9-c47b-42d9-8db3-afe4f177fe23
 <!-- END SUBTASKS -->
 
+
+## Conflict with a subtask plan (recorded 2026-09-20) — read the plan, not this file
+
+**`ccffc96a` — "Archive on Startup What Has Been in Completed Two Weeks" — was superseded
+in part on 2026-09-18 and this feature file still describes the retired mechanism.**
+
+This file says the subtask *"archives cards already in COMPLETED for two or more weeks"*
+and pins a clause that *"no periodic sweep runs"*. That plan now opens with **"Superseded
+in part 2026-09-18 — the dwell window is replaced by bin semantics"**: the operator decided
+COMPLETED **is the bin** — a card moved there archives immediately and leaves the board,
+with an ARCHIVES view to see what is in it. **There is no dwell period**, so a two-week
+startup pass is not the mechanism any more.
+
+Anyone implementing or reviewing this subtask must take the PLAN as authoritative. Reviewing
+it against the summary above will reject a correct implementation for not doing something
+that was deliberately removed.
+
+That is not hypothetical. It happened on this board on 2026-09-19 with a different feature:
+a lead reviewed subtask `9d453d11` against its feature file, rejected a correct
+implementation, and sent a fix round demanding three things the plan had removed as
+BREAKING. It was only caught because the operator intervened. See
+`.switchboard/orchestrator/reports/feature-summary-contradicts-trimmed-plan-9d453d11.md`.
+
+The durable fix is not more notes like this one: it is that a subtask plan carrying a dated
+supersede or trim heading should win over its feature file's summary by rule, and that
+trimming a plan should flag every feature that references it.
