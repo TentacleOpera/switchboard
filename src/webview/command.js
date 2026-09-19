@@ -38,7 +38,17 @@
                 }
             }
             if (!head && role) {
-                const idx = pool.findIndex(t => t.role === role);
+                // A HEAD IS UNPARENTED. Matching on role alone let a team that is
+                // not running claim someone else's SEAT: the Coding team is
+                // `coder`-headed, so with only the Feature team up it claimed
+                // `Feature-coder-1` — a delegate — and reported "1 live" for a team
+                // with nothing running.
+                //
+                // `parentInstanceId` is the membership fact: a delegate is parented
+                // by construction, a head never is. Same predicate startTeamById's
+                // double-start guard uses ("a live, unparented terminal on the head
+                // role"), so the view and the start path agree on what a head is.
+                const idx = pool.findIndex(t => t.role === role && !t.parentInstanceId);
                 if (idx !== -1) {
                     head = pool[idx];
                     pool.splice(idx, 1);

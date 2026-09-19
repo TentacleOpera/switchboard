@@ -464,3 +464,30 @@ test('instantiateAgentGroupCore never passes the definition name as the head sea
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failed > 0) { process.exitCode = 1; }
 })();
+
+// A TEAM HEAD IS UNPARENTED. Matching a head on role alone let a team that is not
+// running claim another team's SEAT: the Coding team is `coder`-headed, so with only
+// the Feature team up it claimed `Feature-coder-1` — a delegate — and the command
+// panel reported "1 live" for a team with nothing running.
+{
+    const fleet = [
+        { friendlyName: 'Feature', role: 'lead', status: 'active', agentInstanceId: 'A' },
+        { friendlyName: 'Feature-coder-1', role: 'coder', status: 'active', agentInstanceId: 'B', parentInstanceId: 'A' },
+        { friendlyName: 'Feature-coder-2', role: 'coder', status: 'active', agentInstanceId: 'C', parentInstanceId: 'A' },
+        { friendlyName: 'Feature-intern', role: 'intern', status: 'active', agentInstanceId: 'D', parentInstanceId: 'A' },
+    ];
+    const teams = [
+        { id: 'feature-implementation', headRole: 'lead', head: 'Feature' },
+        { id: 'coding-team', headRole: 'coder' },
+    ];
+    const got = resolveTeamSeats(teams, fleet);
+    const feature = got.get('feature-implementation');
+    const coding = got.get('coding-team');
+    assert.strictEqual(feature.head && feature.head.friendlyName, 'Feature');
+    assert.strictEqual(feature.members.length, 3, 'the Feature team keeps all three of its seats');
+    assert.strictEqual(coding.head, null,
+        'a dormant coder-headed team must NOT claim another team\'s coder delegate as its head');
+    assert.strictEqual(coding.members.length, 0, 'and therefore reports no live seats');
+    console.log('  \u2705 a dormant team does not claim another team\'s delegate as its head');
+}
+
