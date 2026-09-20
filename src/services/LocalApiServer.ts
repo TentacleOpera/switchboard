@@ -35,7 +35,7 @@ import {
     makeStandingOrder,
     makeStandingOrderDefinition,
 } from './standingOrders';
-import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders, resolveTeamByIdIncludingDisabled, DEFAULT_TEAM_DEFINITIONS } from './teamWiring';
+import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders, resolveTeamByIdIncludingDisabled, DEFAULT_TEAM_DEFINITIONS, readTeamCompletionAuthority } from './teamWiring';
 import { resolveMissionStageFromTeam, releaseVerdict, heldMembers, type PipelineStage } from './missionStage';
 import { computeRosterClearTargets } from './workContextResolver';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
@@ -7526,7 +7526,16 @@ export class LocalApiServer {
                             const { group } = await this._resolveTeamGroupForSeat(workspaceRoot, from);
                             const headName = group ? teamHeadName(group) : undefined;
                             const externalHead = !!(group && group.externalHead === true);
-                            if (headName && headName !== from && !externalHead) {
+                            // A 'seat'-authority team has NO ONE to report to. Its seats
+                            // assert completion to the system and accept their own work;
+                            // the head terminal is a peer doing the same job, not a lead.
+                            const authority = group ? readTeamCompletionAuthority(group) : null;
+                            if (authority && authority.value === 'seat') {
+                                console.log(
+                                    `[LocalApiServer] queue/done: no completion relay for '${from}' — `
+                                    + `its team's completionAuthority is 'seat' (source: ${authority.source}).`
+                                );
+                            } else if (headName && headName !== from && !externalHead) {
                                 relayHead = headName;
                             }
                         } catch (groupErr) {
@@ -7680,7 +7689,18 @@ export class LocalApiServer {
                         // mismatch guard above already proved they agree when
                         // the caller supplies one.
                         const relayPlanId = held.planId || planId;
-                        const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
+                        // Same rule as the queue/done relay: a 'seat'-authority team has no
+                    // lead to receive a report. Suppresses the REPORT only — the
+                    // clear-and-dispatch steps below still run, so the round still closes.
+                    const roundAuthority = readTeamCompletionAuthority(group);
+                    const relayToHead = roundAuthority.value !== 'seat';
+                    if (!relayToHead) {
+                        console.log(
+                            `[LocalApiServer] round-complete: no relay to '${headName}' — `
+                            + `team completionAuthority is 'seat' (source: ${roundAuthority.source}).`
+                        );
+                    }
+                    const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                             + (relayPlanId ? ` (plan ${relayPlanId})` : '')
                             + `${composeCompletionEvidence(held, Date.now())}.`
                             // A standalone plan (no featureId) has no next subtask,
@@ -10368,7 +10388,7 @@ export class LocalApiServer {
                         + (planId ? ` (plan ${planId})` : '')
                         + `. The system preserves ${from}'s context for review and fix requests.`
                         + composeAcceptanceInstruction(headName, planId, workspaceRoot);
-                    if (this._options.terminalVerb) {
+                    if (relayToHead && this._options.terminalVerb) {
                         try {
                             await this._options.terminalVerb('ptySendPrompt', {
                                 name: headName,
