@@ -213,7 +213,6 @@ export const DEFAULT_VISIBLE_AGENTS: Record<string, boolean> = {
 
 export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', dragDropMode: 'cli' },
-    { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review', source: 'built-in', dragDropMode: 'prompt' },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', dragDropMode: 'cli' },
     { id: 'STAGING', label: 'Staging', order: 115, kind: 'staging', source: 'built-in', dragDropMode: 'cli' },
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },

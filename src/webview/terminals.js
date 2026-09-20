@@ -10911,7 +10911,6 @@
      * lockstep with it (the new contract test enforces the match).
      */
     const KANBAN_ROLE_ORDER_FALLBACK = {
-        researcher: 110,
         planner: 100,
         lead: 180,
         coder: 190,

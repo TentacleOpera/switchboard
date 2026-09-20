@@ -3418,7 +3418,13 @@ export class KanbanDatabase {
      * Idempotent — once no cards remain in those columns, this is a no-op.
      */
     public async migrateDeprecatedColumns(workspaceId: string): Promise<number> {
-        const deprecatedColumns = ['CONTEXT GATHERER', 'CODE_RESEARCHER', 'SPLITTER'];
+        // RESEARCHER retired 2026-09-20 (plan: the-researcher-is-a-team-seat-not-a-board-column).
+        // It sorted at order 110, directly after PLAN REVIEWED (100), so the webview's
+        // getNextColumn — which skips only ROLE-LESS columns — advanced cards straight
+        // into it and they stopped there. PLAN REVIEWED is the correct destination: a
+        // card that reached a review-kind column at 110 had already been planned, and
+        // sending it to CREATED would re-enter it as unplanned and discard that work.
+        const deprecatedColumns = ['CONTEXT GATHERER', 'CODE_RESEARCHER', 'SPLITTER', 'RESEARCHER'];
         const placeholders = deprecatedColumns.map(() => '?').join(', ');
         const now = new Date().toISOString();
         const sql = `UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;

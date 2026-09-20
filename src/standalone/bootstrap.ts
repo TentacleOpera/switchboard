@@ -870,6 +870,27 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // unchanged, so it is safe on every subsequent launch.
     await db.createIfMissing();
 
+    // Migrate cards stranded in retired columns (CONTEXT GATHERER, CODE_RESEARCHER,
+    // SPLITTER, RESEARCHER) to PLAN REVIEWED. Idempotent — a no-op once no cards
+    // remain, and it logs only when it moved something.
+    //
+    // WIRED HERE BECAUSE IT WAS WIRED NOWHERE. `migrateDeprecatedColumns` existed
+    // from 2026 and was called from `extension.ts:754` ONLY, so on the standalone
+    // host — the one that actually runs the board — a card in a retired column was
+    // never migrated at all. Exactly the composition-root trap CLAUDE.md names: the
+    // seam exists, one root wires it, and "never called" and "nothing to do" are the
+    // same observable value.
+    try {
+        const migrateWsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+        if (migrateWsId) {
+            await db.migrateDeprecatedColumns(migrateWsId);
+        } else {
+            console.warn('[standalone] Retired-column migration skipped: no workspace id resolved (source: getWorkspaceId+getDominantWorkspaceId both empty)');
+        }
+    } catch (migrateErr) {
+        console.warn('[standalone] Retired-column migration failed (non-fatal):', migrateErr);
+    }
+
     // Apply workspace exclusions (managed gitignore for .agents, .claude, etc.)
     try {
         await new WorkspaceExcludeService(workspaceRoot).apply();

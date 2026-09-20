@@ -2458,7 +2458,6 @@
                     return 'Copy Prompt';
                 }
                 // Non-standard lanes — handle by explicit id (kind overlaps standard columns)
-                if (plan.column === 'RESEARCHER') return 'Copy Researcher Prompt';
                 if (plan.column === 'TICKET UPDATER') return 'Copy Ticket Updater Prompt';
                 // Terminal lanes — no next stage
                 if (plan.column === 'ACCEPTANCE TESTED' || kind === 'completed') return null;

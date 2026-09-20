@@ -141,7 +141,6 @@ suite('KanbanProvider', () => {
         const defaultColumns: KanbanColumnDefinition[] = [
             { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', dragDropMode: 'cli' },
             { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', dragDropMode: 'cli' },
-            { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review', source: 'built-in', dragDropMode: 'prompt' },
             { id: 'STAGING', label: 'Staging', order: 115, kind: 'staging', source: 'built-in', dragDropMode: 'cli' },
             { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
             { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
@@ -160,16 +159,30 @@ suite('KanbanProvider', () => {
             sandbox.stub(provider as any, '_isAcceptanceTesterActive').resolves(acceptanceTesterActive);
         };
 
-        test('PLAN REVIEWED -> next skips hidden RESEARCHER to LEAD CODED', async () => {
+        test('PLAN REVIEWED -> next is LEAD CODED', async () => {
             stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED');
         });
 
-        test('PLAN REVIEWED -> next goes to RESEARCHER when researcher visible', async () => {
+        // The retired RESEARCHER column sorted at order 110, immediately after
+        // PLAN REVIEWED (100). The host skipped it via visibleAgents, but the
+        // webview's getNextColumn skips only ROLE-LESS columns, so a card
+        // advanced out of PLAN REVIEWED landed in RESEARCHER and stopped there.
+        // Asserted with researcher VISIBLE: a regression that merely re-hid the
+        // column would pass the negative test above while restoring the stall.
+        test('PLAN REVIEWED -> next is LEAD CODED even with researcher visible', async () => {
             stubDeps({ researcher: true, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
-            assert.strictEqual(next, 'RESEARCHER');
+            assert.strictEqual(next, 'LEAD CODED');
+        });
+
+        test('no RESEARCHER column exists in the shipped catalogue', () => {
+            const { DEFAULT_KANBAN_COLUMNS } = require('../agentConfig');
+            assert.strictEqual(
+                DEFAULT_KANBAN_COLUMNS.some((c: any) => c.id === 'RESEARCHER'), false,
+                'RESEARCHER is a team seat, not a pipeline stage'
+            );
         });
 
         test('CODE REVIEWED -> next returns null when tester inactive (skips ACCEPTANCE TESTED and COMPLETED bypass)', async () => {
