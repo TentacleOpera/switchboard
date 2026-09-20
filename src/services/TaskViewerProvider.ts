@@ -57,7 +57,6 @@ import { readBuildRenderOptions } from './buildTarget';
 import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName, killTmuxSession, killTmuxSessionGroup } from '../standalone/tmuxBackend';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from './workContextResolver';
-import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
 import { detectSyncFolder } from './cloudSyncMigration';
 import { attachDirectoryWatcher, type DirectoryWatcherHandle } from './directoryWatcher';
 
@@ -1588,54 +1587,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Relay standing orders to freshly created seats. Fire-and-forget: the
-     * terminal is the product, and a relay that fails must cost nothing.
-     * The no-orders decision is made inside _ptyHostVerb (orientationOnly), so
-     * this method never resolves standing orders itself.
-     *
-     * The orientation is for a seat a human will prompt by hand — a planner or
-     * controller the operator types into. A dispatch-driven seat (a team coder,
-     * a lead) never receives one: every work dispatch attaches the standing
-     * orders by default, and the after-clear envelope restores them via the
-     * reserved `orders-refresh` kind. Team seats are suppressed at every call
-     * site via `suppressStartupOrientation`.
-     */
-    private _relayStartupOrientation(names: string[]): void {
-        for (const name of names) {
-            if (!name) { continue; }
-            void (async () => {
-                const ok = await waitForSeatQuiescence(async () => {
-                    const listed = await this._ptyHostVerb('ptyListTerminals', {});
-                    const rows = [...(listed?.terminals || []), ...(listed?.hiddenTerminals || [])];
-                    const row = rows.find((t: any) => t?.friendlyName === name);
-                    return row ? { lastDataAt: row.lastDataAt || 0, status: row.status || '' } : null;
-                });
-                if (!ok) { return; }
-                // Send-time dispatch check: if the seat has already received a
-                // prompt (promptCount > 0), a dispatch arrived during the
-                // quiescence wait. The hard cap means "send if still idle", not
-                // "send regardless" — log the drop rather than delivering an
-                // orientation onto a seat that already has work.
-                const listed = await this._ptyHostVerb('ptyListTerminals', {});
-                const rows = [...(listed?.terminals || []), ...(listed?.hiddenTerminals || [])];
-                const row = rows.find((t: any) => t?.friendlyName === name);
-                if (row && typeof row.promptCount === 'number' && row.promptCount > 0) {
-                    console.log(`[TaskViewerProvider] Startup orientation for '${name}' dropped: seat already dispatched (promptCount=${row.promptCount}).`);
-                    return;
-                }
-                await this._ptyHostVerb('ptySendPrompt', {
-                    name,
-                    data: ORIENTATION_PREAMBLE,
-                    clearBeforePrompt: false,
-                    seatBlock: false,
-                    orientationOnly: true,
-                    kind: 'dispatch',
-                });
-            })().catch(err => console.warn(`[TaskViewerProvider] Startup orientation relay for '${name}' failed:`, err));
-        }
-    }
-
-    /**
      * Resolve standing-orders data for the VS Code terminal delivery path
      * (`sendRobustText`). Reads orders + groups from the same DB the PTY host
      * chokepoint uses, and builds a live-names set that spans BOTH PTY fleet
@@ -2774,240 +2725,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string, startupCommand?: string): void {
         this._terminalAgentInfo.set(suffixedName, { role, displayName });
         this._notifyTerminalAgentNamesChanged();
-        // Fire-and-forget: deliver applicable standing orders as a one-shot
-        // prompt so the terminal sees its orders on establishment, not after
-        // the first dispatch. The registration sweep (20882/20950) calls
-        // _terminalAgentInfo.set directly and is therefore excluded by
-        // structure — only fresh-spawn sites route through this method.
-        // The establish delay is family-aware (not a flat 1500ms): a Devin seat
-        // needs ~15s to boot, a Claude seat ~8s. The flat 1500ms was typed into
-        // a boot screen and lost on any CLI slower than Claude. See
-        // prompt-delivery-should-be-patient-not-precise.md.
-        const family = startupCommand ? deriveCliFamily(startupCommand) : 'unknown';
-        this._deliverStandingOrdersOnEstablish(suffixedName, role, {
-            skipMissionControl: true,
-            readyDelayMs: TaskViewerProvider.familyEstablishDelayMs(family),
-        }).catch((err) => {
-            console.error(`[TaskViewerProvider] Standing-orders establish delivery failed for '${suffixedName}':`, err);
-        });
-    }
-
-    /**
-     * Family-aware establish delay — replaces the flat 1500ms
-     * `ESTABLISH_ORDERS_READY_DELAY_MS` that used to sit on the send path (now
-     * deleted, so it cannot regrow as a bare flat wait). Uses the
-     * clear-path timeout as the floor (the same value a cleared seat would
-     * wait at maximum), so a freshly-spawned seat waits as long as a cleared
-     * one before the standing-orders one-shot is typed in. `unknown` resolves
-     * to the Devin floor (patient default). See
-     * prompt-delivery-should-be-patient-not-precise.md.
-     */
-    private static familyEstablishDelayMs(family: CliFamily): number {
-        if (family === 'devin') { return DEVIN_DEFAULT_TIMEOUT_MS; }
-        if (family === 'claude') { return CLAUDE_DEFAULT_TIMEOUT_MS; }
-        if (family === 'antigravity') { return ANTIGRAVITY_DEFAULT_TIMEOUT_MS; }
-        return DEVIN_DEFAULT_TIMEOUT_MS; // unknown — patient default
-    }
-
-    /**
-     * One-shot standing-orders delivery on terminal establish. Loads the
-     * effective orders, builds a roleMap from _terminalAgentInfo, renders the
-     * standalone block, and sends it via _dispatchExecuteMessage (reusing the
-     * per-terminal withTerminalSendLock and PTY fleet resolution). Skips the
-     * Mission Control role (its kickoff dispatch carries the orders block). Skips
-     * when no orders apply (renderStandaloneOrdersBlock returns null → no
-     * prompt sent, no noise).
-     */
-    private async _deliverStandingOrdersOnEstablish(
-        terminalName: string,
-        role: string,
-        opts?: { skipMissionControl?: boolean; readyDelayMs?: number; isAfterClear?: boolean }
-    ): Promise<void> {
-        // Mission Control skip — on ESTABLISH only. Mission Control's spawn is
-        // immediately followed by the kickoff dispatch, which carries the orders
-        // block via applyStandingOrders; a one-shot there is a redundant second
-        // block in the same spawn sequence. After a CLEAR there is no such
-        // follow-up, so the caller passes skipMissionControl: false and the
-        // Mission Control gets its orders back like any other seat.
-        if (opts?.skipMissionControl && role === 'mission-control') { return; }
-
-        const workspaceRoot = this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
-        if (!workspaceRoot) { return; }
-
-        try {
-            const db = await this._getKanbanDb(workspaceRoot);
-            if (!db) { return; }
-
-            const orders = await loadEffectiveStandingOrders(db);
-            if (!orders || orders.length === 0) { return; }
-
-            // Build live-names set spanning PTY fleet + VS Code terminals (same
-            // pattern as _resolveStandingOrdersForVsCode).
-            const live = new Set<string>();
-            let targetMachineId: string | undefined;
-            try {
-                const listed = await this._ptyHostVerb('ptyListTerminals', {});
-                for (const t of (listed?.terminals || [])) {
-                    if (t?.status === 'active' && t?.friendlyName) { live.add(t.friendlyName); }
-                    if (t?.friendlyName === terminalName && typeof t?.machineId === 'string') {
-                        targetMachineId = t.machineId;
-                    }
-                }
-            } catch { /* PTY host may be unavailable */ }
-            if (this._registeredTerminals) {
-                for (const [name, term] of this._registeredTerminals) {
-                    if (term && term.exitStatus === undefined) { live.add(name); }
-                }
-            }
-            for (const t of (vscode.window.terminals || [])) {
-                if (t.exitStatus === undefined) { live.add(t.name); }
-            }
-
-            // Resolve groups from the same source the dispatch path uses.
-            let groups: TerminalGroup[] = [];
-            try {
-                groups = this._kanbanProvider
-                    ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
-                    : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
-            } catch { /* empty groups is safe */ }
-
-            // Per-machine CLI resolution — the establish/clear block carries the
-            // completion directive's `node "<cliPath>" done`, so a remote seat must
-            // resolve its own CLI, not the host's (same seam as the ptySendPrompt
-            // composition above).
-            const cliInvocation = await GlobalIntegrationConfigService.resolveCliInvocationForMachineId(targetMachineId).catch(() => undefined);
-
-            // Build roleMap from _terminalAgentInfo — the terminal-to-role
-            // registry. Index each entry under BOTH its registry key (IDE-suffixed,
-            // e.g. "Coder 1-Visual Studio Code") and its stripped base name: the two
-            // callers arrive in different keyspaces. Establish passes the suffixed
-            // key it just wrote; clear passes the PTY friendlyName / terminal.name,
-            // which carries no suffix. selectOrders looks the target up exactly, so a
-            // single-keyspace map silently resolves no role at all on one of the two
-            // paths — the failure is invisible (orders just don't include the role
-            // rules) and would not fail any gate.
-            const roleMap = new Map<string, string>();
-            for (const [name, info] of this._terminalAgentInfo.entries()) {
-                if (!name || !info?.role) { continue; }
-                roleMap.set(name, info.role);
-                const base = this._stripIdeSuffix(name);
-                if (base && base !== name) { roleMap.set(base, info.role); }
-            }
-
-            // Resolve the seat's subagent policy so the subagent-policy standing
-            // order fragment composes into the establish/clear block — the same
-            // durable channel git safety uses. The role argument is '' on the
-            // clear path (deliverStandingOrdersAfterClear); fall back to the
-            // roleMap lookup so a cleared seat still gets its policy.
-            let subagentPolicy: SeatDirectiveOptions['subagentPolicy'] | undefined;
-            let customSubagentName: string | undefined;
-            if (this._kanbanProvider) {
-                try {
-                    const resolvedRole = role || roleMap.get(terminalName) || '';
-                    const seatOpts = await this._kanbanProvider.resolveSeatPromptOptions(resolvedRole);
-                    subagentPolicy = seatOpts.subagentPolicy;
-                    customSubagentName = seatOpts.customSubagentName;
-                } catch { /* a degraded block beats a lost policy */ }
-            }
-
-            // Coding Rounds: resolve whether this seat's team has registered
-            // rounds so the establish/clear block switches the lead-head
-            // fragments to the register/mark-done loop. Reads coding_rounds
-            // DIRECTLY (never inferred from card counts). False is the safe
-            // default — an unresolved team keeps the legacy dispatch + done
-            // --from pop instructions on its establish/clear delivery.
-            let hasRegisteredRounds = false;
-            try {
-                hasRegisteredRounds = await resolveHasRegisteredRoundsForSeat(db, terminalName, orders, groups || []);
-            } catch { /* safe default — keep legacy instructions */ }
-
-            const block = renderStandaloneOrdersBlock(orders, terminalName, live, groups || [], roleMap, {
-                subagentPolicy,
-                customSubagentName,
-                hasRegisteredRounds,
-                cliInvocation,
-            });
-            if (block === null) { return; }
-
-            // After a clear, wrap the block in a non-action envelope so the
-            // recipient reads it as a reference update, not a task. The block
-            // itself stays byte-identical — the envelope sits outside the
-            // renderer, composed here at the send site.
-            let payload = block;
-            if (opts?.isAfterClear) {
-                const isLead = roleMap.get(terminalName) === 'lead';
-                const leadLine = isLead
-                    ? '\nThe roster and membership rules below apply to your next dispatch. They are not a request to check the roster now.\n'
-                    : '';
-                payload =
-                    'This delivery restores your standing orders after a context clear. No action is required. Wait for your next dispatch.\n'
-                    + leadLine
-                    + block
-                    + '\nNo action is required. Wait for your next dispatch.\n';
-            }
-
-            // A freshly-spawned terminal is still booting its CLI. The delay is the
-            // caller's call (establish waits, clear does not — clearTerminalContext
-            // already waited out its own clear delay).
-            const readyDelayMs = opts?.readyDelayMs ?? 0;
-            if (readyDelayMs > 0) { await new Promise(r => setTimeout(r, readyDelayMs)); }
-
-            // Send via _dispatchExecuteMessage so the per-terminal
-            // withTerminalSendLock and PTY fleet resolution are reused.
-            // promptComposed=true → addonsComposed=true (the block is the payload,
-            // not a suffix on a dispatch; the delivery layer must not append a
-            // seat directive block).
-            //
-            // clearBeforePrompt: false is load-bearing, not tidiness. The default is
-            // ON, so without the override this delivery pastes /clear before its own
-            // payload: on establish it resets a terminal that just booted, and after a
-            // clear it re-clears — and because the send is fire-and-forget it races the
-            // dispatch the clear-then-dispatch chain issues next, so a late one-shot
-            // would wipe the task prompt that seat was just given.
-            // standingOrders: false stops the delivery layer recomposing a block we
-            // already rendered (which would drop the role-scoped rules on the VS Code
-            // path, whose resolver carries no roleMap).
-            await this._dispatchExecuteMessage(
-                workspaceRoot, terminalName, payload, {}, 'sidebar', true,
-                { clearBeforePrompt: false, standingOrders: false }
-            );
-        } catch (err) {
-            console.error(`[TaskViewerProvider] Standing-orders establish delivery failed for '${terminalName}':`, err);
-        }
-    }
-
-    /**
-     * One-shot standing-orders delivery after a terminal clear. Called from
-     * clearTerminalContext at both cleared:true return points (PTY fleet and
-     * VS Code terminal). Resolves the terminal's role from _terminalAgentInfo
-     * (the role does not change on clear) and delegates to the shared
-     * _deliverStandingOrdersOnEstablish method. AWAITED by both callers: the
-     * clear does not report `cleared: true` until the orders have been
-     * delivered, so the queue's next pop cannot race this write into the same
-     * seat. Never rejects — the delivery's own failures are logged, not thrown,
-     * so awaiting it cannot fail a clear. A terminal with no applicable orders
-     * is a no-op
-     * (renderStandaloneOrdersBlock returns null inside the shared method).
-     */
-    public async deliverStandingOrdersAfterClear(terminalName: string): Promise<void> {
-        // No role argument and no Mission Control skip: role is only consulted for the
-        // establish-time Mission Control skip, and that skip exists because the kickoff
-        // dispatch follows a spawn. Nothing follows a clear — for either
-        // clearTerminalContext caller the next dispatch usually goes to a DIFFERENT
-        // seat — so this one-shot is the cleared terminal's only orders delivery.
-        // No ready delay either: clearTerminalContext has already waited out its own
-        // clear delay, so the CLI is up.
-        //
-        // Returns a Promise (not fire-and-forget) so callers can AWAIT it —
-        // serializing the standing-orders delivery against the next dispatch.
-        // Without the await, the clear returns `cleared: true` immediately, the
-        // queue pops the next card, and the card's prompt races the orders
-        // delivery into the same seat. See prompt-delivery-should-be-patient-not-precise.md.
-        try {
-            await this._deliverStandingOrdersOnEstablish(terminalName, '', { skipMissionControl: false, isAfterClear: true });
-        } catch (err) {
-            console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
-        }
+        // Standing orders are NOT pushed on establish. They ride every prompt
+        // delivery (see _ptyHostVerb: the only gate is an explicit
+        // `standingOrders: false`), so a seat has its orders on its first real
+        // dispatch. The one-shot here fired into a booting CLI before the seat
+        // could act on it, which is why it was removed.
     }
 
     private static CLI_BRAND_NAMES: Record<string, string> = { ...SHARED_CLI_BRAND_NAMES };
@@ -4607,17 +4329,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                     }
                 }
-            }
-            if (verb === 'ptyCreateTerminal' && result && result.success !== false && result.terminal?.friendlyName
-                && payload?.suppressStartupOrientation !== true) {
-                this._relayStartupOrientation([
-                    result.terminal.friendlyName,
-                    ...(Array.isArray(result.delegates) ? result.delegates.map((d: any) => d?.friendlyName) : []),
-                ].filter(Boolean));
-            }
-            if (verb === 'ptyCreateBatch' && result && Array.isArray(result.created)
-                && payload?.suppressStartupOrientation !== true) {
-                this._relayStartupOrientation(result.created.map((c: any) => c?.friendlyName).filter(Boolean));
             }
             if (verb === 'ptyListTerminals' && result && result.success !== false && Array.isArray(result.terminals)) {
                 // Split the hidden seats out, exactly as standalone's arm does
@@ -12648,8 +12359,7 @@ Each plan file must include:
                             // resolves on max(delay, readiness). So this clear does hold for the
                             // detector on a Devin seat — the earlier claim that it short-circuits
                             // to a flat delay is no longer true, and the wait is the point: this
-                            // call is awaited, and _deliverStandingOrdersAfterClear writes
-                            // immediately after it returns. Manual is kept because the delay is
+                            // call is awaited. Manual is kept because the delay is
                             // still the floor for an `unknown`-family seat, where there is no
                             // signal to detect.
                             clearReadinessMode: 'manual',
@@ -12663,7 +12373,6 @@ Each plan file must include:
                             kind: 'message'
                         });
                         if (clearRes?.success) {
-                            await this.deliverStandingOrdersAfterClear(target.friendlyName);
                             return { cleared: true, reason: clearRes?.readiness?.reason };
                         }
                         return { cleared: false, error: clearRes?.error || 'ptySendPrompt clear reported failure' };
@@ -12708,7 +12417,6 @@ Each plan file must include:
                 terminal!.sendText('', true);
                 await new Promise(r => setTimeout(r, clearDelay));
             });
-            await this.deliverStandingOrdersAfterClear(terminal.name || terminalName);
             return { cleared: true };
         } catch (err) {
             console.error(`[TaskViewerProvider] clearTerminalContext clipboard paste failed for '${terminalName}':`, err);

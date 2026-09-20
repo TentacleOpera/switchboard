@@ -533,25 +533,31 @@ test('standalone triggerAction dispatches through the roster barrier, not delive
     );
 });
 
-test('standalone clearTerminalContext delivers standing orders after a clear', () => {
+test('standalone clearTerminalContext does NOT push standing orders after a clear', () => {
     const ctxStart = BOOT.indexOf('const clearTerminalContext');
     const ctxSrc = ctxStart > 0
         ? BOOT.slice(ctxStart, ctxStart + 6000)
         : BOOT;
     assert.ok(
-        /deliverStandingOrdersAfterClear\(terminalName\)/.test(ctxSrc),
-        'standalone clearTerminalContext must deliver standing orders after a clear — relayStartupOrientation alone left this host with no after-clear orders delivery'
+        !/deliverStandingOrdersAfterClear/.test(ctxSrc),
+        'standalone clearTerminalContext must NOT push standing orders after a clear: orders ride every '
+        + 'prompt delivery, so the next dispatch carries them. The push fired into a seat that was still '
+        + 'settling and delivered a task-less orders block nobody acted on.'
     );
 });
 
-test('the after-clear orders delivery is wrapped in a non-action envelope', () => {
+test('no after-clear orders envelope survives anywhere', () => {
+    // The envelope ("No action is required. Wait for your next dispatch.") existed
+    // only to reframe a bare orders block pushed at a seat that had no task. With
+    // the push gone there is no task-less delivery to reframe, so the text must not
+    // reappear -- in the provider or in the shared renderer.
     assert.ok(
-        /No action is required\. Wait for your next dispatch\./.test(TVP),
-        'the after-clear envelope must carry an explicit imperative — a vague note does not suppress the verification impulse'
+        !/No action is required\. Wait for your next dispatch\./.test(TVP),
+        'the after-clear envelope must be gone with the delivery it wrapped'
     );
     assert.ok(
-        /isAfterClear/.test(TVP),
-        'the envelope must be gated on the after-clear caller, not applied to every establish-time delivery'
+        !/isAfterClear/.test(TVP),
+        'nothing should still branch on an after-clear delivery that no longer exists'
     );
     const so = read('src/services/standingOrders.ts');
     assert.ok(

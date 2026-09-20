@@ -103,7 +103,6 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, resolveLiveGroupHeads, isTeamEnabled, DEFAULT_TEAM_IDS, DEFAULT_TEAM_BATCH_SIZE, recommendedAgentRoles, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
 import { readBuildRenderOptions } from '../services/buildTarget';
 import { setStandingOrdersApplier } from '../services/standingOrdersDelivery';
-import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from '../services/startupOrientation';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from '../services/workContextResolver';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
@@ -806,44 +805,6 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         return receipt;
     };
 
-    // The startup orientation is for a seat a human will prompt by hand — a
-    // planner or controller the operator types into. A dispatch-driven seat
-    // (a team coder, a lead) never receives one: every work dispatch attaches
-    // the standing orders by default, and the after-clear envelope restores
-    // them via the reserved `orders-refresh` kind. The orientation adds only a
-    // hold instruction in a window where a dispatch-driven seat has no work to
-    // hold off from, and — observed 2026-09-04 — it can land on a mid-clear
-    // CLI as literal bracketed-paste escape sequences. Team seats are
-    // suppressed at every call site; the remaining call sites (ptyCreateTerminal,
-    // ptyCreateBatch) serve hand-driven seats and honour `suppressStartupOrientation`
-    // for parity with the extension host.
-    const relayStartupOrientation = async (names: string[]): Promise<void> => {
-        // Awaitable so the clear callback can serialize the standing-orders relay
-        // against the next dispatch. Creation-site callers keep `void` — awaiting
-        // there would block seat creation on a 15s relay. See
-        // prompt-delivery-should-be-patient-not-precise.md.
-        await Promise.all(names.filter(Boolean).map((name) =>
-            (async () => {
-                const ok = await waitForSeatQuiescence(async () => {
-                    const h = ptyFleetService.get(name);
-                    return h ? { lastDataAt: h.lastDataAt || 0, status: h.status || '' } : null;
-                });
-                if (!ok) { return; }
-                const handle = ptyFleetService.get(name);
-                if (!handle || handle.status !== 'active') { return; }
-                // Send-time dispatch check: if the seat has already received a
-                // prompt (promptCount > 0), a dispatch arrived during the
-                // quiescence wait. The hard cap means "send if still idle", not
-                // "send regardless" — log the drop rather than delivering an
-                // orientation onto a seat that already has work.
-                if (handle.promptCount > 0) {
-                    console.log(`[bootstrap] Startup orientation for '${name}' dropped: seat already dispatched (promptCount=${handle.promptCount}).`);
-                    return;
-                }
-                await deliverPrompt(handle, ORIENTATION_PREAMBLE, { clearBeforePrompt: false }, true, false, undefined, false, true);
-            })().catch(err => console.warn(`[bootstrap] Startup orientation relay for '${name}' failed:`, err))
-        ));
-    };
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
 
@@ -2590,12 +2551,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // the boot root and reports success. Same UI, same behaviour required.
                     const targetCwd = payload.cwd
                         || (!payload.worktreePath && payload.parentRoot ? payload.parentRoot : undefined);
-                    // Capture and strip the host-only suppressStartupOrientation flag —
-                    // same boundary strip as TaskViewerProvider.handlePtyVerb. The flag
-                    // tells this relay to skip the startup orientation for a seat that is
-                    // dispatch-driven (e.g. a team member created over HTTP). The fleet
-                    // never sees it.
-                    const suppressStartupOrientation = payload?.suppressStartupOrientation === true;
+                    // `suppressStartupOrientation` is still STRIPPED at this boundary so
+                    // an old caller's flag never reaches the fleet, but nothing acts on it:
+                    // the startup orientation it suppressed no longer exists.
                     if (payload?.suppressStartupOrientation !== undefined) { delete payload.suppressStartupOrientation; }
                     // Delegate definitions are HOST-resolved, never caller-supplied —
                     // mirror TaskViewerProvider.handlePtyVerb exactly. Each delegate
@@ -2675,15 +2633,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // before their next whole-array save can clobber it.
                         try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
                     }
-                    if (!suppressStartupOrientation) {
-                        void relayStartupOrientation([terminal.friendlyName, ...spawned.children.map(c => c.friendlyName)]);
-                    }
                     return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}), ...(teamGroupId ? { teamGroupId } : {}) };
                 }
 
                 case 'ptyCreateBatch': {
                     // Same boundary strip as ptyCreateTerminal above.
-                    const suppressStartupOrientation = payload?.suppressStartupOrientation === true;
                     if (payload?.suppressStartupOrientation !== undefined) { delete payload.suppressStartupOrientation; }
                     const result = await ptyFleetService.createBatch(
                         Array.isArray(payload.allocation) ? payload.allocation : [],
@@ -2692,9 +2646,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // HOST-resolved, never from the wire — see CreateOptions.
                         configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
                     );
-                    if (result && Array.isArray(result.created) && !suppressStartupOrientation) {
-                        void relayStartupOrientation(result.created.map((c: any) => c.friendlyName));
-                    }
                     return {
                         success: result.success,
                         created: result.created,
@@ -5149,21 +5100,6 @@ Each plan file must include:
             } catch (err: any) {
                 return { cleared: false, error: err instanceof Error ? err.message : String(err) };
             }
-            // Deliver standing orders after clear — the extension host calls
-            // deliverStandingOrdersAfterClear from its clearTerminalContext, and
-            // standalone must do the same so a cleared seat gets its orders back.
-            // This REPLACES relayStartupOrientation rather than joining it: both
-            // deliver the same orders block, so keeping the relay sent the seat two
-            // prompts and one of them was the bare, task-less block the after-clear
-            // envelope exists to reframe.
-            //
-            // AWAITED (not fire-and-forget) so the standing-orders delivery
-            // serializes against the next dispatch. Without the await, the clear
-            // returns `cleared: true` immediately, the queue pops the next card,
-            // and the card's prompt (which now has the family floor) races the
-            // relay's standing-orders delivery into the same seat. See
-            // prompt-delivery-should-be-patient-not-precise.md.
-            await taskViewerProvider.deliverStandingOrdersAfterClear(terminalName);
             // The log session boundary is NOT rolled here. Every caller of this
             // seam (LocalApiServer's lead-acceptance clear, the queue/done pop,
             // and POST /terminals/clear) fires `onTerminalContextCleared` right
