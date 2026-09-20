@@ -206,3 +206,40 @@ deliberately removed from its head prompt; nothing here may put it back.
 **Nothing may be silently dropped.** Every plan is delivered or visibly queued.
 
 **Teams are unreleased dev work** — clean break, no migration shims.
+
+## Implementation Summary
+
+Landed as `b230799b`. Pause is now STORED: `missions.paused INTEGER DEFAULT 0` (V85
+migration + `SCHEMA_TABLES_SQL`'s `CREATE TABLE`, so a fresh DB and a shipped one
+agree), read back as a boolean by both `getMissions` and `getMissionById`, written
+by `updateMission` only when named (a rename never silently resumes a stopped
+mission), and carried to the board automatically because `boardMissions` is
+`getMissions`. `_runQueuePop` refuses a paused mission inside the serialised
+section, beside the member read, returning Mission 01's mission-named empty shape
+with `reason: 'paused: mission <id> is paused …'` and `paused: true` — so "paused",
+"drained" and "held" are three different strings. Because every release path
+funnels through that pop, the refusal also holds a completion-driven wave/round
+advance (Mission 04's trigger is not landed at HEAD; the pop is where any advance
+must go). Resume is `updateMission(paused:false)` and nothing else — no
+`launchMission`, no re-hold, no second worktree — and the next mission-scoped pop
+selects the highest-precedence member still in `STAGING`, i.e. the next undelivered
+one. The mission card renders PAUSED and UNARMED as two separate chips with two
+different strings (backed by two different columns in the row), plus a Pause/Resume
+button that rides `mcUpdateMission`; that arm now accepts `paused` and refreshes the
+board so the card updates. Part 4 lands as `KanbanDatabase.pauseMissionsForTeam` +
+`POST /kanban/mission/pause-team`, called by the operator's team-stop gesture
+(`closeTeam`) before the seats die: a mission of that team with a member still in
+`STAGING` is paused, a fully delivered one and an already-paused one are reported in
+`skipped`, and a team with no mission is untouched. `launchMission` now names the
+pause instead of returning a bare "Dispatch refused."
+
+**Verification note (this run):** per the dispatch directive, no compilation and no
+test execution were performed — the checks below remain written down, not executed.
+`src/test/mission-pause-resume-contract.test.js` (npm `test:contract:mission-pause-resume`,
+CI-wired) implements them: paused delivers nothing and keeps members + queue order;
+the three reasons differ; resume dispatches the third of five; the pop never calls
+`launchMission` and never clears owner stamps; the card and the row keep the two
+facts apart; `pauseMissionsForTeam` pauses only the undelivered; the team-stop path
+and the card button carry the write. Also note: `src/services/LocalApiServer.ts` and
+`src/services/KanbanProvider.ts` additionally carry a concurrent seat's in-flight
+Mission 04 hunks — the tree is shared and the two could not be staged apart.
