@@ -40,7 +40,7 @@ import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveW
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { resolveCommandlessRoles } from './agentGroupInstantiation';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders, isPairDispatchingHeadRole, resolveTeamHeadRoles, refreshShippedTeamDefaults } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders, isPairDispatchingHeadRole, resolveTeamHeadRoles, resolveHeadForTerminal, refreshShippedTeamDefaults, resolveAutomatedDispatchExclusions, readTeamAutomatedDispatch } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { readBuildConfig, setBuildTarget, recordBuildResult, resolveBuildResult, lastResultPerTarget, probeBuildTargets, isBuildTargetId, type BuildResult } from './buildTarget';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
@@ -6222,6 +6222,29 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         teamId: string | null;
         def: any | null;
     }>> {
+        const all = await this._liveTeams(workspaceRoot);
+        return all.filter(t => t.headRole === 'lead' || t.headRole === 'coder' || t.headRole === 'intern');
+    }
+
+    /**
+     * EVERY live team, whatever its head role — the same read
+     * {@link _liveImplementationTeams} filters, without the implementation-role
+     * filter. A batch destined for a `planner`- or `reviewer`-headed team needs
+     * the same answer as one destined for a lead, and two derivations of "which
+     * teams are live" is the drift this seam exists to prevent.
+     *
+     * Liveness comes from `getFleetLiveness()` — the PTY fleet's own view, never
+     * a second registry. A team switched off is not a candidate: it exists, it
+     * does not play. A live group with no resolvable definition is kept with
+     * `def: null` and `teamId: null` (an operator-built row whose definition was
+     * deleted while it runs); callers that need a definition must handle null.
+     */
+    private async _liveTeams(workspaceRoot: string): Promise<Array<{
+        head: string;
+        headRole: string;
+        teamId: string | null;
+        def: any | null;
+    }>> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
             if (!db || !(await db.ensureReady())) return [];
@@ -6259,7 +6282,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const head = String(g.name);
                 if (!aliveNames.has(head)) continue;
                 const headRole = String(g.headRole).toLowerCase().replace(/[_-]+/g, ' ').trim();
-                if (headRole !== 'lead' && headRole !== 'coder' && headRole !== 'intern') continue;
+                if (!headRole) continue;
                 let def: any = null;
                 try { def = await resolveDefinitionForGroup(db, g); } catch { def = null; }
                 // A team switched off does not receive dispatches. `enabled` is
@@ -9875,12 +9898,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
     private async _resolveStageablePlanIds(
         workspaceRoot: string,
         ids: string[]
-    ): Promise<{ planIds: string[]; refused: number; workspaceId: string }> {
+    ): Promise<{ planIds: string[]; refused: number; refusals: Array<{ id: string; reason: string }>; workspaceId: string }> {
         const db = this._getKanbanDb(workspaceRoot);
         const workspaceId = (db && await db.ensureReady()) ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
         const planIds: string[] = [];
-        let refused = 0;
-        if (!db || !workspaceId) return { planIds, refused: ids.length, workspaceId };
+        const refusals: Array<{ id: string; reason: string }> = [];
+        if (!db || !workspaceId) return { planIds, refused: ids.length, refusals, workspaceId };
         // Plans in coded/reviewed/tested/completed columns have already been
         // dispatched and must not be re-queued. STAGING itself is stageable
         // (re-positioning). Mirrors the frontend STAGEABLE_COLUMNS gate.
@@ -9888,17 +9911,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
         for (const id of ids) {
             let plan = await db.getPlanByPlanId(id);
             if (!plan) { plan = await db.getPlanBySessionId(id); }
-            if (!plan) { refused++; continue; }
+            if (!plan) { refusals.push({ id, reason: 'no plan resolved for this id' }); continue; }
             // Subtasks (non-empty featureId) are refused — features stage as one
             // card, never as their subtasks. Mirrors the staged-count contract
             // (!c.featureId) on the toggle and the Send-all set.
-            if (plan.featureId && !plan.isFeature) { refused++; continue; }
+            if (plan.featureId && !plan.isFeature) {
+                refusals.push({ id, reason: 'a subtask stages as part of its feature, never on its own' });
+                continue;
+            }
             // Refuse plans already past the dispatch stage — they have been
             // dispatched and coding/review has begun or completed.
-            if (!stageableColumns.has(plan.kanbanColumn)) { refused++; continue; }
+            if (!stageableColumns.has(plan.kanbanColumn)) {
+                refusals.push({ id, reason: `already dispatched — '${plan.kanbanColumn}' is not a stageable column` });
+                continue;
+            }
             planIds.push(plan.planId);
         }
-        return { planIds, refused, workspaceId };
+        return { planIds, refused: refusals.length, refusals, workspaceId };
     }
 
     /**
@@ -10457,6 +10486,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
         skippedUnknownComplexity: number;
         dispatched: boolean;
         error?: string;
+        // One sentence per mission this operation created and launched. The
+        // caller appends them to the ONE status message it posts, so the
+        // operator sees a declared thing ("mission 'x', 5 members, launched to
+        // Lead 1") rather than a per-column card count that hides it.
+        missionSummaries?: string[];
     }> {
         const sourceColumn = options.sourceColumn;
         const mayDispatch = options.dispatch !== false;
@@ -10495,11 +10529,39 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const moved: Array<{ id: string; targetColumn: string }> = [];
             const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
             let dispatched = false;
+            const codedAutoMissions: string[] = [];
 
             for (const [role, sids] of groups) {
                 if (sids.length === 0) { continue; }
                 const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
                 const dispatchRole = this._columnToRole(targetCol) || role;
+
+                // ── Mission branch (per group) ────────────────────────
+                // A complexity-routed batch splits by card, and each group lands
+                // on a real column. A group bound for a team that works a batch
+                // as one declared thing becomes a MISSION — one per group, since
+                // one batch destined for two teams is two declared things. The
+                // same gate and the same fall-through as the specific-target
+                // branch below: nothing claimable (a STAGING batch, whose cards
+                // already belong to the mission that staged them) means no
+                // mission and today's path.
+                if (mayDispatch && sids.length > 1 && (this._boardMoveCliTriggersEnabled || options.bypassTriggerGate)) {
+                    const missionOutcome = await this._tryBatchMission(workspaceRoot, sids, sourceColumn, targetCol);
+                    if (missionOutcome) {
+                        moved.push(...missionOutcome.moved);
+                        failures.push(...missionOutcome.failures);
+                        if (missionOutcome.summary) { codedAutoMissions.push(missionOutcome.summary); }
+                        if (missionOutcome.moved.length > 0) {
+                            this.postMessage({ type: 'moveCards', sessionIds: missionOutcome.moved.map(m => m.id), targetColumn: 'STAGING' });
+                        }
+                        if (missionOutcome.failures.length > 0) {
+                            this.postMessage({ type: 'moveCardsFailed', failures: missionOutcome.failures });
+                        }
+                        if (missionOutcome.dispatched) { dispatched = true; }
+                        continue;
+                    }
+                }
+
                 const movedSids: string[] = [];
                 // Forward movers only — backward moves never dispatch.
                 const forwardSids: string[] = [];
@@ -10557,7 +10619,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._notifySkippedUnknownComplexity(skippedCount, moved.length);
             }
 
-            return { success: true, moved, failures, skippedUnknownComplexity: skippedCount, dispatched };
+            return { success: true, moved, failures, skippedUnknownComplexity: skippedCount, dispatched, ...(codedAutoMissions.length > 0 ? { missionSummaries: codedAutoMissions } : {}) };
         }
 
         // Specific target column — move all cards there, no routing. Direction
@@ -10570,6 +10632,38 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
         const movedIds: string[] = [];
         const dispatchIds: string[] = [];
+        const missionSummaries: string[] = [];
+
+        // ── Mission branch ────────────────────────────────────────────
+        // A batch move to a team's own column is a DISPATCH, and a dispatch to
+        // one of the teams that works a batch as a single declared thing is a
+        // MISSION: a new team-bound mission, its cards claimed into STAGING, and
+        // launched immediately. The classification is shared
+        // (`resolveBatchTeam`), so both composition roots answer identically —
+        // only the prompt-delivery half is per-root.
+        //
+        // Gated on the same dispatch gate every other advance affordance obeys:
+        // with CLI triggers off the batch keeps today's move-only behaviour, and
+        // no half-built mission (created but never launched) can exist.
+        //
+        // If nothing can be claimed — the cards already belong to a mission (a
+        // STAGING batch) or are already dispatched — NO mission is created and
+        // this falls through to today's path, unchanged.
+        if (mayDispatch && sessionIds.length > 1 && (this._boardMoveCliTriggersEnabled || options.bypassTriggerGate)) {
+            const missionOutcome = await this._tryBatchMission(workspaceRoot, sessionIds, sourceColumn, target);
+            if (missionOutcome) {
+                moved.push(...missionOutcome.moved);
+                failures.push(...missionOutcome.failures);
+                if (missionOutcome.summary) { missionSummaries.push(missionOutcome.summary); }
+                if (missionOutcome.moved.length > 0) {
+                    this.postMessage({ type: 'moveCards', sessionIds: missionOutcome.moved.map(m => m.id), targetColumn: 'STAGING' });
+                }
+                if (missionOutcome.failures.length > 0) {
+                    this.postMessage({ type: 'moveCardsFailed', failures: missionOutcome.failures });
+                }
+                return { success: true, moved, failures, skippedUnknownComplexity: 0, dispatched: missionOutcome.dispatched, missionSummaries };
+            }
+        }
 
         for (const sid of sessionIds) {
             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
@@ -12359,6 +12453,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         bypassTriggerGate: msg?.bypassTriggerGate
                     });
                     this._scheduleBoardRefresh(workspaceRoot);
+                    // A mission the operation created is named here: this arm
+                    // posts no other status message, and the cards' destination
+                    // is STAGING (their mission's home), not the routed column.
+                    if (result.missionSummaries && result.missionSummaries.length > 0) {
+                        this.postMessage({ type: 'showStatusMessage', message: result.missionSummaries.join(' '), isError: false });
+                    }
                     return { success: result.success, role: undefined, targetColumn, moved: result.moved, failures: result.failures, skippedUnknownComplexity: result.skippedUnknownComplexity, dispatched: result.dispatched, error: result.error };
                 }
 
@@ -12416,6 +12516,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     });
                 }
                 this._scheduleBoardRefresh(workspaceRoot ?? undefined);
+                // A mission the shared operation created is named here: a drop
+                // posts no other status message, and its members' destination is
+                // STAGING (their mission's home), not the dropped-on column.
+                if (result.missionSummaries && result.missionSummaries.length > 0) {
+                    this.postMessage({ type: 'showStatusMessage', message: result.missionSummaries.join(' '), isError: false });
+                }
                 return { success: result.success, role, targetColumn, moved: result.moved, failures: result.failures, dispatched: result.dispatched };
             }
             case 'moveCardBackwards': {
@@ -13105,7 +13211,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                             const movedParts = [...perColumn.entries()].map(([col, n]) => `${n} → ${col}`);
                             const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                            this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
+                            // A mission this operation created is named in the SAME
+                            // message the operator reads, so a batch that became one
+                            // declared thing does not report as a bare card count.
+                            const missionSuffix = result.missionSummaries && result.missionSummaries.length > 0
+                                ? ` ${result.missionSummaries.join(' ')}`
+                                : '';
+                            this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}${missionSuffix}`, isError: false });
                         }
                     } else {
                         const nextCol = await this._getNextColumnId(column, workspaceRoot);
@@ -13140,6 +13252,31 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                         } else {
                             const role = this._columnToRole(nextCol);
+                            // ── Mission branch ────────────────────────────
+                            // A planner-headed team that works a batch as one
+                            // declared thing (Multi-agent planning: three peer
+                            // planners draft ONE problem and the head reconciles)
+                            // takes the batch as a MISSION, not as a round of
+                            // seats. A POOL planner team resolves to 'fanout'
+                            // here and keeps the round fan-out below — one
+                            // resolver (`resolveBatchTeam`) decides which, so the
+                            // two branches cannot disagree about a given team.
+                            if (this._boardMoveCliTriggersEnabled && msg.sessionIds.length > 1) {
+                                const shape = await this.resolveBatchTeam(workspaceRoot, nextCol, msg.sessionIds.length);
+                                if (shape.kind === 'mission') {
+                                    const missionOutcome = await this._tryBatchMission(workspaceRoot, msg.sessionIds, column, nextCol);
+                                    if (missionOutcome) {
+                                        if (missionOutcome.moved.length > 0) {
+                                            this.postMessage({ type: 'moveCards', sessionIds: missionOutcome.moved.map(m => m.id), targetColumn: 'STAGING' });
+                                        }
+                                        if (missionOutcome.failures.length > 0) {
+                                            this.postMessage({ type: 'moveCardsFailed', failures: missionOutcome.failures });
+                                        }
+                                        this.postMessage({ type: 'showStatusMessage', message: missionOutcome.summary || 'Mission created.', isError: false });
+                                        return { success: true, column, targetColumn: 'STAGING', missionSummaries: missionOutcome.summary ? [missionOutcome.summary] : undefined };
+                                    }
+                                }
+                            }
                             if (role === 'planner' && this._boardMoveCliTriggersEnabled) {
                                 const selectedCards = this._lastCards.filter(card =>
                                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
@@ -13161,6 +13298,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 });
                                 if (!advResult.success) {
                                     return { success: false, error: advResult.error };
+                                }
+                                // This arm posts no generic status message, so a
+                                // mission the operation created is named here or
+                                // the operator sees nothing at all.
+                                if (advResult.missionSummaries && advResult.missionSummaries.length > 0) {
+                                    this.postMessage({ type: 'showStatusMessage', message: advResult.missionSummaries.join(' '), isError: false });
                                 }
                                 if (!role) {
                                     console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
@@ -13236,10 +13379,21 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                         const movedParts = [...perColumn.entries()].map(([col, n]) => `${n} → ${col}`);
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
+                        // A mission this operation created is named in the SAME
+                        // message the operator reads — see the 'move selected' arm.
+                        const missionSuffix = result.missionSummaries && result.missionSummaries.length > 0
+                            ? ` ${result.missionSummaries.join(' ')}`
+                            : '';
+                        this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}${missionSuffix}`, isError: false });
                     } else {
                         const nextCol = await this._getNextColumnId(column, workspaceRoot);
                         if (!nextCol) { return { success: false, error: `No next column after '${column}'` }; }
+                        // A mission the shared operation created is named in this
+                        // arm's ONE status message — the generic "Moved N plans
+                        // from X to Y" would otherwise overwrite it AND name the
+                        // wrong destination (a mission's members go to STAGING,
+                        // their home, not to the team column).
+                        let generalMissionSummary = '';
                         const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
                         if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
                             const allMovedIds: string[] = [];
@@ -13269,6 +13423,27 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                         } else {
                             const role = this._columnToRole(nextCol);
+                            // ── Mission branch ────────────────────────────
+                            // Same as the 'move selected' arm above: a planner
+                            // team that works a batch as one declared thing takes
+                            // it as a MISSION; a pool planner team resolves to
+                            // 'fanout' and keeps the round fan-out below.
+                            if (this._boardMoveCliTriggersEnabled && sessionIds.length > 1) {
+                                const shape = await this.resolveBatchTeam(workspaceRoot, nextCol, sessionIds.length);
+                                if (shape.kind === 'mission') {
+                                    const missionOutcome = await this._tryBatchMission(workspaceRoot, sessionIds, column, nextCol);
+                                    if (missionOutcome) {
+                                        if (missionOutcome.moved.length > 0) {
+                                            this.postMessage({ type: 'moveCards', sessionIds: missionOutcome.moved.map(m => m.id), targetColumn: 'STAGING' });
+                                        }
+                                        if (missionOutcome.failures.length > 0) {
+                                            this.postMessage({ type: 'moveCardsFailed', failures: missionOutcome.failures });
+                                        }
+                                        this.postMessage({ type: 'showStatusMessage', message: missionOutcome.summary || 'Mission created.', isError: false });
+                                        return { success: true, column, targetColumn: 'STAGING', missionSummaries: missionOutcome.summary ? [missionOutcome.summary] : undefined };
+                                    }
+                                }
+                            }
                             if (role === 'planner' && this._boardMoveCliTriggersEnabled) {
                                 await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
                                 // _distributePlannerDispatch persists + posts its own targeted
@@ -13292,6 +13467,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 if (!advResult.success) {
                                     return { success: false, error: advResult.error };
                                 }
+                                if (advResult.missionSummaries && advResult.missionSummaries.length > 0) {
+                                    generalMissionSummary = ` ${advResult.missionSummaries.join(' ')}`;
+                                }
                                 if (!role) {
                                     console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
                                 }
@@ -13300,7 +13478,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         // No full refresh — the custom-user and general branches each posted their
                         // own targeted moveCards delta. Persist already happened; the move sticks
                         // independent of dispatch.
-                        this.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`, isError: false });
+                        this.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.${generalMissionSummary}`, isError: false });
                     }
                     return { success: true, column, moved: sessionIds.length };
                 } finally {
@@ -16521,6 +16699,368 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
+     * The shared mission interception for both batch arms of
+     * {@link _advanceCards}. Returns null when this batch is NOT a mission —
+     * the target column's role heads no live team, the team it heads is a
+     * round-robin pool (Mission 05's fan-out), or nothing could be claimed —
+     * and the caller then takes today's path, unchanged.
+     *
+     * On success the cards are in STAGING (their mission's home) and the mission
+     * is launched. The returned `summary` is the ONE sentence naming the mission
+     * and its member count, so the operator's status message reports a declared
+     * thing rather than N moved cards.
+     */
+    private async _tryBatchMission(
+        workspaceRoot: string,
+        ids: string[],
+        sourceColumn: string | null | undefined,
+        targetColumn: string
+    ): Promise<{
+        moved: Array<{ id: string; targetColumn: string }>;
+        failures: Array<{ id: string; sourceColumn: string; reason: string }>;
+        summary?: string;
+        dispatched: boolean;
+    } | null> {
+        const shape = await this.resolveBatchTeam(workspaceRoot, targetColumn, ids.length);
+        if (shape.kind !== 'mission') {
+            if (shape.kind === 'fanout') {
+                console.log(`[KanbanProvider] batch to '${targetColumn}': ${shape.reason}`);
+            }
+            return null;
+        }
+        const claim = await this.claimBatchAsMission(workspaceRoot, ids, sourceColumn, shape);
+        if (!claim.created) {
+            // Nothing was claimed, so nothing was dropped: the caller's plain
+            // path moves and dispatches these cards exactly as it did before
+            // this branch existed. The common cause is a batch whose cards
+            // already belong to a mission (a STAGING batch) — which is the right
+            // answer, not a failure, and is logged rather than toasted.
+            console.log(
+                `[KanbanProvider] batch to '${targetColumn}' stayed on the plain path: `
+                + `${claim.refused.length} card(s) could not be claimed`
+                + `${claim.error ? ` (${claim.error})` : claim.refused[0] ? ` (${claim.refused[0].reason})` : ''}.`
+            );
+            return null;
+        }
+        const source = String(sourceColumn || '').trim() || 'the board';
+        const label = claim.missionName || claim.missionId || 'mission';
+        const summary = claim.launched
+            ? `Mission '${label}' created from ${source} — ${claim.claimed.length} member(s), launched to ${shape.headTerminal || 'the team head'}.`
+            : `Mission '${label}' created from ${source} — ${claim.claimed.length} member(s), but the launch was refused: ${claim.error || 'unknown reason'}. The mission is on the board; launch it from its card.`;
+        return {
+            moved: claim.claimed.map(id => ({ id, targetColumn: 'STAGING' })),
+            failures: claim.refused.map(r => ({ id: r.id, sourceColumn: String(sourceColumn || ''), reason: r.reason })),
+            summary,
+            dispatched: claim.launched,
+        };
+    }
+
+    /**
+     * DOES THIS BATCH MOVE BELONG TO A TEAM? The one resolver every batch arm
+     * calls, so the extension and the standalone host cannot classify the same
+     * batch differently.
+     *
+     * Returns one of three shapes:
+     *  - `'mission'` — a live team heads the target column's role AND the team
+     *    works a batch as ONE declared thing. The caller creates the mission,
+     *    claims the cards and launches it (see {@link claimBatchAsMission}).
+     *  - `'fanout'` — a live team heads the role, but it is a ROUND-ROBIN POOL:
+     *    each seat takes its own card (Planning's planners, Review's reviewers).
+     *    Mission 05 owns that branch; until it lands the caller keeps today's
+     *    fan-out path, which is what `_distributePlannerDispatch` already is.
+     *  - `'plain'` — no live team owns the role (or the batch is one card):
+     *    today's dispatch path, unchanged.
+     *
+     * The mission/fanout split is DERIVED from the team's own definition, never
+     * hand-listed:
+     *  - a team with a cheaper seat (`coder`/`intern` member) is the
+     *    pair-dispatching pipeline shape — its head takes the batch and feeds its
+     *    seats, one plan at a time. Feature (`lead`) and Coding (`coder`) are
+     *    exactly these two.
+     *  - a `head-only-when-sole` team is driven by its head too (Multi-agent
+     *    planning: three peer planners draft ONE problem, the head reconciles).
+     *  - any other live team is a pool: its seats each take their own card, so a
+     *    batch is a round of seats, not a mission (Planning's `planner` pool,
+     *    Review's `reviewer` pool).
+     *
+     * Eligibility uses the SAME source the dispatch pool uses —
+     * `resolveAutomatedDispatchExclusions`, which decides from the live
+     * `terminals.groups` rows and each team's `automatedDispatch` policy whether
+     * a head may receive an automated dispatch at all. That is what separates two
+     * `planner`-headed teams: with the pooled Planning team live the
+     * `head-only-when-sole` Multi-agent planning head is excluded and the batch
+     * is a fan-out; with Multi-agent planning sole and switched on, its head is
+     * the target and the batch is a mission.
+     *
+     * A single plan is never a mission — one card keeps today's routing (Mission
+     * 06 restates this).
+     */
+    public async resolveBatchTeam(
+        workspaceRoot: string,
+        targetColumn: string | null | undefined,
+        planCount: number
+    ): Promise<{ kind: 'mission' | 'fanout' | 'plain'; teamId?: string; headTerminal?: string; reason: string }> {
+        const column = String(targetColumn || '').trim();
+        if (!column) { return { kind: 'plain', reason: 'no target column' }; }
+        if (!(planCount > 1)) { return { kind: 'plain', reason: 'a single plan keeps today\'s routing' }; }
+        const role = this._columnToRole(column);
+        if (!role) { return { kind: 'plain', reason: `column '${column}' maps to no role` }; }
+
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) { return { kind: 'plain', reason: 'kanban database unavailable' }; }
+        const live = await this._liveTeams(workspaceRoot);
+        const candidates = live.filter(t => t.headRole === role);
+        if (candidates.length === 0) {
+            return { kind: 'plain', reason: `no live team heads role '${role}'` };
+        }
+
+        // The dispatch pool's own eligibility rule, so a head that could not
+        // receive an automated dispatch does not receive a mission either.
+        let excluded = new Set<string>();
+        try {
+            const res = await resolveAutomatedDispatchExclusions({
+                db,
+                liveNames: candidates.map(t => t.head),
+            });
+            excluded = res.excluded;
+        } catch (err) {
+            console.warn('[KanbanProvider] resolveBatchTeam: automated-dispatch policy read failed:', err);
+            return { kind: 'plain', reason: 'the team dispatch policy could not be read' };
+        }
+
+        const eligible = candidates.filter(t => !excluded.has(t.head));
+        if (eligible.length === 0) {
+            return { kind: 'plain', reason: `every live '${role}'-headed team is excluded from automated dispatch` };
+        }
+        // Deterministic pick: `_liveTeams` sorts by head name, so two eligible
+        // teams of the same role resolve the same way twice running.
+        const team = eligible[0];
+        const teamId = team.teamId || undefined;
+        const policy = readTeamAutomatedDispatch(team.def).value;
+        const members = (team.def && Array.isArray(team.def.members)) ? team.def.members : [];
+        const hasCheaperSeat = members.some((m: any) => m && (m.role === 'coder' || m.role === 'intern'));
+        const kind: 'mission' | 'fanout' = (policy === 'head-only-when-sole' || hasCheaperSeat) ? 'mission' : 'fanout';
+        return {
+            kind,
+            ...(teamId ? { teamId } : {}),
+            headTerminal: team.head,
+            reason: kind === 'mission'
+                ? `team '${teamId || team.head}' (${team.headRole}-headed, ${policy}) works a batch as one declared thing`
+                : `team '${teamId || team.head}' (${team.headRole}-headed, ${policy}) is a round-robin pool — its seats each take their own card`
+        };
+    }
+
+    /**
+     * A BATCH BECOMES A MISSION: create, claim, launch. One operation, so a
+     * half-built mission (members claimed but nothing launched, or a mission with
+     * no members) cannot exist between two callers.
+     *
+     * A **new** mission is created, never `resolveOrCreateOpenMission`. That
+     * resolver returns the most recently created `not-started` mission in the
+     * workspace whatever its team or stage, so joining it would drop this batch
+     * into another team's mission — the cross-contamination Mission 01 exists to
+     * prevent, one layer up.
+     *
+     * The claim is `STAGING` + `column_order` through the existing
+     * `appendQueuePositions` (whose global-monotonic floor already keeps one
+     * mission's numbering from jumping another's), plus one `mission_members`
+     * row per card. `_resolveStageablePlanIds` gates it: a card already
+     * dispatched out of a stageable column, or a subtask, is refused rather than
+     * re-queued — the same refusal `stageForQueue` returns.
+     *
+     * Nothing is silently dropped. A card that cannot be claimed is named in
+     * `refused` with its reason, and if NOTHING could be claimed no mission is
+     * created at all (`created: false`) — the caller then takes today's path,
+     * which is the honest answer for a batch of cards that already belong to a
+     * mission (a STAGING batch) or that are already dispatched.
+     *
+     * `mission_members` carries `UNIQUE(member_id)` (V65), so a card belongs to
+     * one mission. Mission 08 owns the claim's TRANSFER semantics; until it
+     * lands, a card already owned by another mission is refused visibly here
+     * rather than silently absorbed by `INSERT OR IGNORE`.
+     *
+     * The `team` argument is the SHAPE `resolveBatchTeam` returned, and a shape
+     * that is not `'mission'` refuses outright. The check is repeated here
+     * rather than trusted from the caller because "no live team heads this
+     * column" and "this team is a round-robin pool" must both mean no mission
+     * exists, whatever a caller does with the resolver's answer.
+     */
+    public async claimBatchAsMission(
+        workspaceRoot: string,
+        ids: string[],
+        sourceColumn: string | null | undefined,
+        team: { kind: 'mission' | 'fanout' | 'plain'; teamId?: string; headTerminal?: string }
+    ): Promise<{
+        created: boolean;
+        missionId?: string;
+        missionName?: string;
+        claimed: string[];
+        refused: Array<{ id: string; reason: string }>;
+        launched: boolean;
+        error?: string;
+    }> {
+        const refused: Array<{ id: string; reason: string }> = [];
+        const claimed: string[] = [];
+        // The SHAPE is re-checked here, not trusted from the caller. "No live
+        // team heads this column" and "this team is a round-robin pool" must
+        // both mean NO MISSION EXISTS — an operator seeing a mission card and a
+        // HELD team that is not there is the fallback-that-looks-like-a-value
+        // failure in a new place, and this is the one place it can be prevented
+        // for every caller at once.
+        if (team?.kind !== 'mission') {
+            return {
+                created: false, claimed, refused, launched: false,
+                error: `this batch is not a mission ('${team?.kind || 'unknown'}')`,
+            };
+        }
+        // A mission with no team launches into the workspace-wide candidate list
+        // (the pre-mission behaviour), so an unidentified team would hand this
+        // batch to whichever head happens to sort first. Refuse instead: the
+        // mission must carry the team whose head will receive it.
+        if (!team.teamId) {
+            return {
+                created: false, claimed, refused, launched: false,
+                error: 'the team this batch belongs to could not be identified (no team definition behind the live group)',
+            };
+        }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { created: false, claimed, refused, launched: false, error: 'Kanban database not ready' };
+        }
+        const { planIds, refusals, workspaceId } = await this._resolveStageablePlanIds(workspaceRoot, ids);
+        refused.push(...refusals);
+        if (planIds.length === 0) {
+            return { created: false, claimed, refused, launched: false };
+        }
+
+        // One card, one mission: a card already owned by another mission cannot
+        // be claimed here. Named, never absorbed — `addMissionMember` is
+        // `INSERT OR IGNORE`, which would silently leave the card in the OLD
+        // mission while it sat in this one's STAGING queue.
+        const claimable: string[] = [];
+        for (const pid of planIds) {
+            let owned: string[] = [];
+            try {
+                owned = typeof db.getMissionsForMember === 'function' ? await db.getMissionsForMember(pid) : [];
+            } catch (err) {
+                console.warn(`[KanbanProvider] claimBatchAsMission: membership read failed for '${pid}':`, err);
+                refused.push({ id: pid, reason: 'mission membership could not be read' });
+                continue;
+            }
+            if (owned.length > 0) {
+                refused.push({ id: pid, reason: `already a member of mission '${owned[0]}' — one card, one mission` });
+                continue;
+            }
+            claimable.push(pid);
+        }
+        if (claimable.length === 0) {
+            return { created: false, claimed, refused, launched: false };
+        }
+
+        const source = String(sourceColumn || '').trim();
+        let mission: any;
+        try {
+            mission = await db.createMission({
+                workspaceId,
+                team: team.teamId || '',
+                ready: true,
+                goal: `${claimable.length} plan(s) from ${source || 'the board'}`,
+            });
+        } catch (err) {
+            return {
+                created: false, claimed, refused, launched: false,
+                error: `could not create the mission: ${err instanceof Error ? err.message : String(err)}`,
+            };
+        }
+        if (!mission || !mission.id) {
+            return { created: false, claimed, refused, launched: false, error: 'the mission could not be created' };
+        }
+
+        const ok = await db.appendQueuePositions(workspaceId, claimable, mission.id);
+        if (!ok) {
+            await this._discardEmptyMission(db, mission.id);
+            return {
+                created: false, claimed, refused, launched: false,
+                error: `mission '${mission.id}' was created but its cards could not be staged — nothing was claimed`,
+            };
+        }
+
+        for (const pid of claimable) {
+            try {
+                const plan = await db.getPlanByPlanId(pid);
+                await db.addMissionMember(mission.id, pid, plan && plan.isFeature ? 'feature' : 'plan');
+            } catch (err) {
+                console.warn(`[KanbanProvider] claimBatchAsMission: membership write failed for '${pid}':`, err);
+            }
+        }
+        // Read the membership back rather than trusting the write: `INSERT OR
+        // IGNORE` reports nothing, so a card that did not join would otherwise
+        // be counted as a member of a mission that does not contain it.
+        let members: Array<{ memberId: string }> = [];
+        try {
+            members = await db.getMissionMembers(mission.id);
+        } catch (err) {
+            console.warn('[KanbanProvider] claimBatchAsMission: membership read-back failed:', err);
+        }
+        const memberSet = new Set(members.map(m => String(m.memberId)));
+        for (const pid of claimable) {
+            if (memberSet.has(pid)) { claimed.push(pid); }
+            else { refused.push({ id: pid, reason: `the card did not join mission '${mission.id}' (membership row not written)` }); }
+        }
+        if (claimed.length === 0) {
+            await this._discardEmptyMission(db, mission.id);
+            return {
+                created: false, missionId: mission.id, claimed, refused, launched: false,
+                error: `mission '${mission.id}' has no members — nothing was launched`,
+            };
+        }
+
+        const launch = await this.launchMission(workspaceRoot, mission.id);
+        if (!launch.success) {
+            // The mission exists and holds its members, but nothing is running.
+            // Say so with the launch's own words; the card stays for a manual launch.
+            return {
+                created: true, missionId: mission.id, missionName: mission.name,
+                claimed, refused, launched: false,
+                error: launch.error || 'the launch was refused',
+            };
+        }
+        return {
+            created: true, missionId: mission.id, missionName: mission.name,
+            claimed, refused, launched: true,
+        };
+    }
+
+    /**
+     * Roll back a mission this operation created and then could not fill. Only
+     * ever called on a mission created in the same call, before anything is
+     * launched — an empty mission card is a declared thing with nothing in it,
+     * which is worse than no card at all.
+     */
+    private async _discardEmptyMission(db: any, missionId: string): Promise<void> {
+        try {
+            if (typeof db.deleteMission === 'function') { await db.deleteMission(missionId); }
+        } catch (err) {
+            console.warn(`[KanbanProvider] could not discard the empty mission '${missionId}':`, err);
+        }
+    }
+
+    /**
+     * The live head terminal of the team a mission is bound to
+     * (`missions.team` holds a team DEFINITION id). Resolved from the live
+     * `terminals.groups` rows, so a team that is defined but not seated resolves
+     * nothing and the launch fails loudly instead of reaching another team's
+     * head. Returns null when no live team carries that definition id.
+     */
+    private async _resolveLiveTeamHead(workspaceRoot: string, teamId: string): Promise<string | null> {
+        const wanted = String(teamId || '').trim();
+        if (!wanted) { return null; }
+        const live = await this._liveTeams(workspaceRoot);
+        const hit = live.find(t => t.teamId === wanted);
+        return hit ? hit.head : null;
+    }
+
+    /**
      * The Completion Tested stage is active exactly when the Acceptance Tester role
      * is visible. ONE switch, one meaning: the role ships Optional and unchecked, so
      * enabling it in Setup is the deliberate act that gives the pipeline this stage.
@@ -16788,17 +17328,46 @@ ${FOCUS_DIRECTIVE}`;
             }
             streams = anyEdges ? Math.max(1, roots) : 1;
         }
-        const codingRoles = await this.resolveCodingRolesFromGroups(workspaceRoot);
+        // ── The head comes from the MISSION'S TEAM ─────────────────────
+        // A team-bound mission (`missions.team` carries a team definition id —
+        // every mission this feature creates) launches into THAT team's head.
+        // The workspace-wide candidate list below is the pre-mission behaviour:
+        // it walks every live lead and then every live coder, so a mission
+        // created for the Coding team would launch into the Feature team's lead
+        // — the same class of mis-route as Mission 01's unscoped pop, one layer
+        // up. A team that is defined but not seated fails LOUDLY rather than
+        // falling back to the workspace list, because a silent fallback here
+        // hands another team's work to a head that never asked for it.
+        //
+        // A mission with no team (a STAGING-assembled one) keeps today's
+        // candidate logic byte-for-byte.
+        const missionTeamId = String(mission.team || '').trim();
         const candidateHeads: string[] = [];
-        if (codingRoles.leads.length > 0) candidateHeads.push(...codingRoles.leads);
-        if (codingRoles.coders.length > 0) {
-            for (const c of codingRoles.coders) {
-                if (!candidateHeads.includes(c)) candidateHeads.push(c);
+        if (missionTeamId) {
+            const teamHead = await this._resolveLiveTeamHead(workspaceRoot, missionTeamId);
+            if (!teamHead) {
+                return {
+                    success: false,
+                    error: `No coding terminal is live — seat the mission's team ('${missionTeamId}') before launching.`,
+                };
             }
-        }
-        if (candidateHeads.length === 0) {
-            const alive = this._taskViewerProvider?.getAliveCodingTerminalNames() ?? [];
-            candidateHeads.push(...alive);
+            candidateHeads.push(teamHead);
+            // One team head is one stream. The wave cadence (how many members a
+            // single release delivers) is Mission 04's; this launch hands the
+            // team head the first member and the release path walks the rest.
+            streams = 1;
+        } else {
+            const codingRoles = await this.resolveCodingRolesFromGroups(workspaceRoot);
+            if (codingRoles.leads.length > 0) candidateHeads.push(...codingRoles.leads);
+            if (codingRoles.coders.length > 0) {
+                for (const c of codingRoles.coders) {
+                    if (!candidateHeads.includes(c)) candidateHeads.push(c);
+                }
+            }
+            if (candidateHeads.length === 0) {
+                const alive = this._taskViewerProvider?.getAliveCodingTerminalNames() ?? [];
+                candidateHeads.push(...alive);
+            }
         }
         if (candidateHeads.length === 0) {
             return { success: false, error: 'No coding terminal is live — seat a team before launching.' };

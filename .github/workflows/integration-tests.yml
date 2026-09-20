@@ -1826,6 +1826,22 @@ jobs:
       - name: Mission-scoped launch contract
         run: npm run test:contract:mission-scoped-launch
 
+      # A batch move to a team column becomes a mission and launches itself
+      # (Mission 03 of "Every Batch Move Becomes One Declared Thing"). Pins the
+      # ONE resolver that decides which team receives a batch and which shape it
+      # takes (mission vs round fan-out vs today's plain path) — the planner
+      # column is headed by TWO teams that only the dispatch policy and liveness
+      # separate, so a resolver that read the column alone would send a Planning
+      # batch to Multi-agent planning's head. Pins create-never-join (a batch is
+      # one declared thing, so it must not land in an open mission), one card /
+      # one mission, and that the launch head comes from `missions.team` — with a
+      # Feature lead and a Coding coder both live, a Coding mission must reach
+      # the coder, not `leads[0]`.
+      # Drives the real compiled services from out/, so this step must stay AFTER
+      # "Compile test outputs".
+      - name: Batch → mission launch contract
+        run: npm run test:contract:batch-mission-launch
+
       # External-headed team mode: the lead is a non-terminal agent, so every
       # failure mode is a silent mis-route. The head must stay out of the group
       # roster (a head name in `members` seats a pane that can never exist), the
