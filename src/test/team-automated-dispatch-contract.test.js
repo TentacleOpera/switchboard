@@ -160,7 +160,10 @@ const defOf = (id) => tw.DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === id);
     await test('the team-blind fleet first-match filters BEFORE matching', () => {
         const body = TVP_SRC.slice(TVP_SRC.indexOf('private async _resolveExactAgentTerminalForPlan('));
         const fn = body.slice(0, body.indexOf('\n    private async _resolveAgentTerminalForPlan('));
-        assert.ok(/_automatedDispatchExclusions\(workspaceRoot\)/.test(fn),
+        // The kind argument is optional here on purpose: this contract is about the
+        // hands-on-only exclusion, which applies whether or not a work kind is known.
+        // `team-kind-routing-contract` is what pins the kind being passed.
+        assert.ok(/_automatedDispatchExclusions\(workspaceRoot(?:, kind)?\)/.test(fn),
             'the single-card resolver takes whichever terminal of the role appears first, which can be '
             + 'a seat of a hands-on-only team');
         const filterAt = fn.indexOf('excluded.has(t.friendlyName)');

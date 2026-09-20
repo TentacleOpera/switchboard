@@ -859,6 +859,20 @@ export async function resolveAutomatedDispatchExclusions(opts: {
     db: any;
     /** Live terminal names — the caller's liveness view, never re-derived here. */
     liveNames: Set<string> | string[];
+    /**
+     * The kind of work being dispatched. When given, a live team that declares
+     * `acceptedKinds` WITHOUT this kind is excluded — head and seats — provided
+     * some other live team does declare it.
+     *
+     * Without this, the role→terminal resolvers are team-blind: they take the
+     * first live terminal of the routed role, and with both implementation teams
+     * up that is whichever appears first in the fleet. A complexity-6 single plan
+     * routes to role `coder` and lands on the FEATURE team's coder, while the
+     * Coding team — the only team that declares `['plan']` — is never a candidate.
+     * `resolveImplementationHead` already reads `acceptedKinds` for the queue
+     * paths; this is the same read, for the paths that resolve a seat by role.
+     */
+    kind?: TeamWorkKind;
 }): Promise<{ excluded: Set<string>; reasons: Map<string, string> }> {
     const excluded = new Set<string>();
     const reasons = new Map<string, string>();
@@ -931,6 +945,54 @@ export async function resolveAutomatedDispatchExclusions(opts: {
         if (role && pooledHeadRoles.has(role) && r.head) {
             excluded.add(r.head);
             reasons.set(r.head, `head of '${teamLabel}' (automatedDispatch=head-only-when-sole) — a pooled '${role}'-headed team is live and takes the dispatch`);
+        }
+    }
+
+    // Kind exclusions. A team that declares `acceptedKinds` is declaring what it
+    // is FOR, and the declaration has to bind the seat resolvers or it is decoration.
+    //
+    // Guarded on some live team actually declaring the kind. With only the Feature
+    // team up, a single plan must still reach it — excluding the sole live team
+    // would turn "the Coding team is not running" into "nothing is running", which
+    // is a worse answer than the one this filter exists to fix. That mirrors
+    // `resolveImplementationHead`'s sole-live-team arm.
+    //
+    // Teams with NO declaration (`value === null` — planning, review) are never
+    // excluded here: they are not implementation teams, their head roles do not
+    // collide with `lead`/`coder`/`intern`, and excluding them by a kind they
+    // never claimed would strand planner and reviewer dispatch.
+    if (opts.kind) {
+        const declares = (def: any) => {
+            const { value } = readTeamAcceptedKinds(def);
+            return Array.isArray(value) && value.indexOf(opts.kind as TeamWorkKind) >= 0;
+        };
+        const anyDeclares = resolved.some(r => declares(r.def));
+        if (anyDeclares) {
+            for (const r of resolved) {
+                if (declares(r.def)) { continue; }
+                const def = r.def || {};
+                const { value } = readTeamAcceptedKinds(def);
+                if (value === null) { continue; }
+                const teamLabel = def.name || def.id || r.group.id;
+                const why = `'${teamLabel}' accepts ${JSON.stringify(value)}, not '${opts.kind}'`;
+                const members: string[] = Array.isArray(r.group.members) ? r.group.members : [];
+                for (const m of members) {
+                    if (!m) { continue; }
+                    excluded.add(m);
+                    if (!reasons.has(m)) { reasons.set(m, `seat of ${why}`); }
+                }
+                if (r.head) {
+                    excluded.add(r.head);
+                    if (!reasons.has(r.head)) { reasons.set(r.head, `head of ${why}`); }
+                }
+            }
+        } else {
+            // Say so. "No live team declared this kind" and "the kind filter
+            // narrowed the pool" must not look the same in a log.
+            console.warn(
+                `[teamWiring] dispatch kind '${opts.kind}': no live team declares it `
+                + `(${resolved.length} live team(s)) — resolving by role alone, team-blind.`
+            );
         }
     }
     return { excluded, reasons };

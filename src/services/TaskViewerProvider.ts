@@ -52,7 +52,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveAutomatedDispatchExclusions, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveTeamBatchSizeForHead, DEFAULT_TEAM_BATCH_SIZE, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveAutomatedDispatchExclusions, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveTeamBatchSizeForHead, DEFAULT_TEAM_BATCH_SIZE, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor, type TeamWorkKind } from './teamWiring';
 import { readBuildRenderOptions } from './buildTarget';
 import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName, killTmuxSession, killTmuxSessionGroup } from '../standalone/tmuxBackend';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
@@ -9150,7 +9150,8 @@ Each plan file must include:
      * one dispatch; failing closed would stop the board dispatching at all.
      */
     private async _automatedDispatchExclusions(
-        workspaceRoot: string
+        workspaceRoot: string,
+        kind?: TeamWorkKind
     ): Promise<{ excluded: Set<string>; reasons: Map<string, string> }> {
         try {
             const db = await this._getKanbanDb(workspaceRoot);
@@ -9159,7 +9160,7 @@ Each plan file must include:
             for (const e of this.getFleetLiveness() || []) {
                 if (e && e.friendlyName && e.status !== 'exited') { liveNames.add(e.friendlyName); }
             }
-            return await resolveAutomatedDispatchExclusions({ db, liveNames });
+            return await resolveAutomatedDispatchExclusions({ db, liveNames, kind });
         } catch (err) {
             console.warn('[TaskViewerProvider] automated-dispatch exclusions failed (failing open):', err);
             return { excluded: new Set(), reasons: new Map() };
@@ -12374,7 +12375,8 @@ Each plan file must include:
         role: string,
         workspaceRoot: string,
         worktreePath?: string,
-        originTerminal?: string
+        originTerminal?: string,
+        kind?: TeamWorkKind
     ): Promise<string | undefined> {
         if (worktreePath) {
             const wtTerminal = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role, false);
@@ -12409,7 +12411,7 @@ Each plan file must include:
                 // whose seats must never receive an automated dispatch. Filter
                 // before matching rather than after, so the SECOND eligible
                 // terminal is still found instead of the resolver giving up.
-                const { excluded, reasons } = await this._automatedDispatchExclusions(workspaceRoot);
+                const { excluded, reasons } = await this._automatedDispatchExclusions(workspaceRoot, kind);
                 const match = res.terminals.filter((t: any) => t.status === 'active')
                     .filter((t: any) => {
                         if (!t || !excluded.has(t.friendlyName)) { return true; }
@@ -12430,9 +12432,10 @@ Each plan file must include:
         role: string,
         workspaceRoot: string,
         worktreePath?: string,
-        originTerminal?: string
+        originTerminal?: string,
+        kind?: TeamWorkKind
     ): Promise<string | undefined> {
-        const exactMatch = await this._resolveExactAgentTerminalForPlan(role, workspaceRoot, worktreePath, originTerminal);
+        const exactMatch = await this._resolveExactAgentTerminalForPlan(role, workspaceRoot, worktreePath, originTerminal, kind);
         if (exactMatch) { return exactMatch; }
 
         const normalized = this._normalizeAgentKey(role);
@@ -12458,7 +12461,7 @@ Each plan file must include:
             }
             const degradedRole = resolveRoleWithDegradation(normalized as 'intern' | 'coder' | 'lead', available);
             if (degradedRole && degradedRole !== normalized) {
-                return this._resolveExactAgentTerminalForPlan(degradedRole, workspaceRoot, worktreePath, originTerminal);
+                return this._resolveExactAgentTerminalForPlan(degradedRole, workspaceRoot, worktreePath, originTerminal, kind);
             }
         }
         return undefined;
@@ -23466,6 +23469,18 @@ Each plan file must include:
         // the reviewer, not the coder). Only computed when no explicit override wins,
         // since the override is authoritative. Same filter as the API dispatch path.
         let originTerminal: string | undefined;
+        // The KIND of work this card is, which decides WHICH TEAM may take it.
+        // Complexity decides the role; `acceptedKinds` decides the team. Without
+        // this the seat resolver is team-blind and a single plan lands on whichever
+        // team's seat of that role is first in the fleet.
+        //
+        // A SUBTASK COUNTS AS 'feature'. It carries `is_feature = 0`, but it is a
+        // member of a feature and the team that owns the feature owns its subtasks.
+        // Calling it 'plan' would hand the Feature lead's own fan-out to the Coding
+        // team mid-round. `originTerminal` usually keeps a subtask on its own team,
+        // but it is best-effort and resolves to nothing often enough that it cannot
+        // be the only thing standing between a subtask and the wrong team.
+        let workKind: TeamWorkKind | undefined;
         if (!options?.targetTerminalOverride) {
             try {
                 const db = await this._getKanbanDb(resolvedWorkspaceRoot);
@@ -23474,9 +23489,21 @@ Each plan file must include:
                     if (rec) {
                         const origin = plausibleOriginTerminal(rec);
                         if (origin) { originTerminal = origin; }
+                        const isFeature = Number((rec as any).isFeature) === 1;
+                        const belongsToFeature = !!((rec as any).featureId);
+                        workKind = (isFeature || belongsToFeature) ? 'feature' : 'plan';
                     }
                 }
             } catch { /* origin resolution is best-effort; fall back to team-blind */ }
+        }
+        if (!workKind && !options?.targetTerminalOverride) {
+            // The record did not read. Leave `workKind` undefined so the resolver
+            // stays team-blind rather than guessing a kind — a guessed 'plan' would
+            // route a feature's subtask to the Coding team and look deliberate.
+            console.warn(
+                `[TaskViewerProvider] dispatch: no plan record for '${sessionId}' — `
+                + 'work kind unresolved, team selection falls back to role order.'
+            );
         }
         if (options?.targetTerminalOverride && this._isValidAgentName(options.targetTerminalOverride)) {
             targetAgent = options.targetTerminalOverride;
@@ -23494,7 +23521,7 @@ Each plan file must include:
                 targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, originTerminal);
             }
         } else {
-            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, originTerminal);
+            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, originTerminal, workKind);
         }
 
         if (!targetAgent) {
