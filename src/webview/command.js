@@ -124,6 +124,9 @@
     let selectedMissionId = null;
     let teamRoster = [];
     let liveFleet = [];
+    // Why `liveFleet` is empty, when it is. An unread fleet and a genuinely empty
+    // one must not render the same — see the DORMANT bug below.
+    let fleetReadError = '';
     // The interactive terminal viewer state. The viewport controller
     // (window.SwitchboardTerminalViewport) owns the xterm instance and its
     // WebSocket; command.js holds only the controller and the per-seat
@@ -699,6 +702,44 @@
             if (fleetRes.ok) {
                 const fleetData = await fleetRes.json();
                 liveFleet = Array.isArray(fleetData?.terminals) ? fleetData.terminals : [];
+                fleetReadError = '';
+            } else {
+                // A FAILED READ IS NOT AN EMPTY FLEET. Measured 2026-09-20: with a
+                // `workspaceRoot` the host does not recognise, this POST returns
+                // HTTP 400 `UNKNOWN_WORKSPACE_ROOT`. `fleetRes.ok` was the only
+                // thing checked, so `liveFleet` silently kept its initial `[]` and
+                // EVERY team rendered `0 live · DORMANT` — including one that was
+                // running with its intern. Pressing START then drew the host's
+                // correct refusal, "already running", on a card that said DORMANT.
+                //
+                // Retry unscoped before giving up: the host resolves its own known
+                // root when none is supplied, and that is the right answer far more
+                // often than "no seats exist". The error is still reported either
+                // way, so a degraded read never passes as a clean one.
+                let detail = `fleet read failed (HTTP ${fleetRes.status})`;
+                try {
+                    const errBody = await fleetRes.json();
+                    if (errBody && errBody.error) { detail = String(errBody.error); }
+                } catch { /* non-JSON error body — keep the status line */ }
+                let recovered = false;
+                try {
+                    const retryRes = await fetch('/terminals/verb/ptyListTerminals', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    });
+                    if (retryRes.ok) {
+                        const retryData = await retryRes.json();
+                        if (Array.isArray(retryData?.terminals)) {
+                            liveFleet = retryData.terminals;
+                            recovered = true;
+                        }
+                    }
+                } catch { /* retry failed — fall through to the error state */ }
+                fleetReadError = recovered
+                    ? `Showing all seats — this workspace was not recognised: ${detail}`
+                    : detail;
+                if (!recovered) { liveFleet = []; }
             }
 
             // Team definitions
@@ -1250,6 +1291,9 @@
             .sort((a, b) => (a.seed - b.seed) || (a.i - b.i))
             .map(entry => entry.team);
         const resolvedSeats = resolveTeamSeats(claimOrder, liveFleet);
+        // Say so when the roster below was drawn against a fleet we could not read.
+        // Without this the operator sees a confident DORMANT on a live team.
+        if (fleetReadError) { setTeamsNotice(fleetReadError); }
 
         // Hide unstarted seeds: a seed id with no declared members AND no
         // RESOLVED head. Resolution runs FIRST (above) precisely so this test
@@ -1401,7 +1445,11 @@
 
         let stateLabel = 'IDLE';
         let stateClass = 'team-state-idle';
-        if (isDormant) {
+        if (isDormant && fleetReadError && liveFleet.length === 0) {
+            // "We could not read the fleet" is not "this team is not running".
+            stateLabel = 'UNKNOWN';
+            stateClass = 'team-state-dormant';
+        } else if (isDormant) {
             stateLabel = 'DORMANT';
             stateClass = 'team-state-dormant';
         } else if (isHeld) {
