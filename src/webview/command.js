@@ -1297,7 +1297,7 @@
         const resolvedSeats = resolveTeamSeats(claimOrder, liveFleet);
         // Say so when the roster below was drawn against a fleet we could not read.
         // Without this the operator sees a confident DORMANT on a live team.
-        if (fleetReadError) { setTeamsNotice(fleetReadError); }
+        if (fleetReadError) { setTeamNotice(fleetReadError); }
 
         // Hide unstarted seeds: a seed id with no declared members AND no
         // RESOLVED head. Resolution runs FIRST (above) precisely so this test
@@ -1440,46 +1440,14 @@
         return 1 + members.reduce((n, m) => n + (Number(m && m.count) || 0), 0);
     }
 
-    async function seatTeam(team, btn) {
-        if (btn) { btn.disabled = true; }
-        try {
-            const res = await fetch('/terminals/verb/ptyStartTeam', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ teamId: team.id, cwd: currentWorkspaceRoot })
-            });
-            let data = null;
-            try { data = await res.json(); } catch { /* ignore */ }
-            if (!data || data.success === false) {
-                setTeamNotice((data && data.error) || 'Could not seat this team');
-            } else {
-                setTeamNotice('');
-            }
-            // REFRESH ON BOTH OUTCOMES, and the FAILURE path is the one that
-            // matters. The host refuses a start with "Team X is already running
-            // as Y. Stop it first." — which only happens when this view's
-            // picture is already stale: the host knows the team is up and the
-            // client is still drawing it DORMANT with a START button.
-            //
-            // Refreshing only on success made that self-reinforcing. A stale
-            // card offered START, the host correctly refused, nothing refetched,
-            // so the card stayed stale and the next press refused again. Every
-            // server-side check looked healthy throughout, because it was — the
-            // client simply never asked again.
-            //
-            // `fetchTeamsState` swallows its own errors, so this cannot turn a
-            // refusal into a thrown render.
-            await fetchTeamsState();
-            renderTeamsView();
-        } catch (err) {
-            setTeamNotice('Outcome unknown (connection dropped)');
-            // Same reasoning: an unknown outcome is the other case where the
-            // view must not keep asserting what it last drew.
-            try { await fetchTeamsState(); renderTeamsView(); } catch { /* offline — keep the notice */ }
-        } finally {
-            if (btn) { btn.disabled = false; }
-        }
-    }
+    // `seatTeam` is deleted. The command view does not start teams — the rail and
+    // the TERMINALS panel own that gesture. It existed only because a card tap fell
+    // through to it when the view believed a team was dormant, which is how a stale
+    // roster turned "open this team" into "start this team", and then into the host
+    // telling the operator to shut down a team that was already running.
+    //
+    // A surface that cannot start a team cannot show a start refusal.
+
 
     function setTeamNotice(text) {
         if (!teamsNotice) { return; }
@@ -1619,11 +1587,21 @@
             }
 
             card.addEventListener('click', () => {
-                if (isDormant) {
-                    seatTeam(team, null);
-                } else {
-                    openTerminalViewer(team, headName, allLiveSeats);
-                }
+                // A CARD TAP OPENS THE TEAM. IT NEVER STARTS ONE.
+                //
+                // This used to call `seatTeam` whenever the view believed the team
+                // was dormant, so tapping a card to LOOK at its terminals silently
+                // tried to start a team. When the view was stale about a running
+                // team — which it is, because it derives liveness from a fleet
+                // snapshot — the host correctly refused with "Team X is already
+                // running as Y. Stop it first", and the operator was told to shut
+                // down a team they could see running, having never asked to start
+                // anything.
+                //
+                // Teams are not started from the command view. The rail and the
+                // TERMINALS panel own that gesture. A surface that does not offer
+                // starting cannot show a start refusal.
+                openTerminalViewer(team, headName, allLiveSeats);
             });
 
             teamsRosterList.appendChild(card);
@@ -1690,11 +1668,8 @@
             }
 
             railItem.addEventListener('click', () => {
-                if (isDormant) {
-                    seatTeam(team, null);
-                } else {
-                    openTerminalViewer(team, headName, allLiveSeats);
-                }
+                // Opens the team. Never starts one — see the card handler above.
+                openTerminalViewer(team, headName, allLiveSeats);
             });
 
             tabletTeamsRail.appendChild(railItem);
