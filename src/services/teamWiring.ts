@@ -1781,6 +1781,68 @@ const SEED_MEMBER_MIGRATION_DEFAULTS: Record<string, string> = {
 };
 
 /**
+ * Fields on a SHIPPED default team that belong to the PRODUCT, not the operator.
+ *
+ * Product copy and routing behaviour ship with the build and must reach a board
+ * that already seeded. Everything absent from this list is the operator's and is
+ * never touched — `enabled`/`enabledSource` (a team you switched off stays off),
+ * `machine`, `startOnLoad`, `startWorktree`, `icon`.
+ *
+ * `members` is DELIBERATELY EXCLUDED. Re-syncing a roster would silently delete a
+ * seat an operator added in the TEAMS tab, and losing configured work is a worse
+ * failure than a stale seat count. Roster changes to a shipped default still need
+ * a one-shot reset.
+ */
+const PRODUCT_OWNED_TEAM_FIELDS = [
+    'name', 'headRole', 'purpose', 'trigger', 'prompt', 'headPrompt', 'jet',
+    'acceptedKinds', 'acceptedKindsSource',
+    'pairProgramming',
+    'completionAuthority', 'completionAuthoritySource',
+    'automatedDispatch', 'automatedDispatchSource',
+] as const;
+
+/**
+ * Re-sync the product-owned fields of every SHIPPED default from
+ * `DEFAULT_TEAM_DEFINITIONS`. Returns the mutated array, or `null` when nothing
+ * changed (so the caller can skip the write).
+ *
+ * WHY THIS EXISTS. The five defaults were seeded ONCE, behind a marker, and from
+ * then on the load path only ADDED missing definitions — it never refreshed one
+ * it already had. So every later fix to a shipped prompt reached the source and
+ * stopped there. Measured 2026-09-20: `coding-team.headPrompt` still carried the
+ * retired "Hand your intern its half by name" hand-dispatch, and
+ * `planning-team.prompt` still told seats to report to a head that team does not
+ * have. Both had been corrected in the seed hours earlier.
+ *
+ * It is worse than a stale row, because `wireSpawnedTeam` writes a team's
+ * standing orders FROM its stored definition on every spawn. So a stale
+ * definition actively rewrites the corrected order back to the old text the next
+ * time the team starts — a fix by hand cannot survive, and the old copy reappears
+ * looking like a regression.
+ *
+ * Teams have only ever existed in unreleased dev work, so this is a clean break
+ * (CLAUDE.md: unreleased features take clean breaks). Shipped copy wins; operator
+ * settings are preserved.
+ */
+export function refreshShippedTeamDefaults(groups: any[]): any[] | null {
+    if (!Array.isArray(groups)) { return null; }
+    let changed = false;
+    for (const def of DEFAULT_TEAM_DEFINITIONS) {
+        const stored = groups.find((g: any) => g && g.id === def.id);
+        if (!stored) { continue; }
+        for (const key of PRODUCT_OWNED_TEAM_FIELDS) {
+            if (!(key in def)) { continue; }
+            const next = (def as any)[key];
+            const clone = Array.isArray(next) ? [...next] : next;
+            if (JSON.stringify(stored[key]) === JSON.stringify(clone)) { continue; }
+            stored[key] = clone;
+            changed = true;
+        }
+    }
+    return changed ? groups : null;
+}
+
+/**
  * Group-level keys the SEED gained after rows had already been persisted, and
  * which a pre-upgrade row therefore does not carry. Same tolerance as `machine`
  * above, and for the same reason: a strict key-set match reads every row written

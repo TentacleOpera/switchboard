@@ -30,6 +30,67 @@ const { resolveTeamSeats, filterByProjectFor } = require('../webview/command');
 let passed = 0;
 let failed = 0;
 
+// ── Shipped-default refresh ─────────────────────────────────────────────
+//
+// Measured 2026-09-20: the five defaults were seeded once behind a marker, and
+// the load path only ever ADDED a missing definition — it never refreshed one it
+// already had. `coding-team.headPrompt` still carried the retired "Hand your
+// intern its half by name" hand-dispatch and `planning-team.prompt` still told
+// seats to report to a head that team does not have, hours after both were
+// corrected in the seed.
+//
+// Worse than stale: `wireSpawnedTeam` writes a team's standing orders FROM its
+// stored definition on every spawn, so a stale definition rewrites a corrected
+// order back to the old text the next time the team starts.
+
+test('a shipped default re-syncs its product-owned fields from the seed', () => {
+    const { refreshShippedTeamDefaults, DEFAULT_TEAM_DEFINITIONS } = require('../../out/services/teamWiring');
+    const seedOf = (id) => DEFAULT_TEAM_DEFINITIONS.find(d => d.id === id);
+    const stored = [
+        { id: 'coding-team', headPrompt: 'STALE hand-dispatch text', prompt: 'stale' },
+        { id: 'planning-team', prompt: 'STALE report-to-head text' },
+    ];
+    const out = refreshShippedTeamDefaults(stored);
+    assert.ok(out, 'a stale definition must report a change');
+    assert.strictEqual(out.find(g => g.id === 'coding-team').headPrompt,
+        seedOf('coding-team').headPrompt, 'coding-team headPrompt must come from the seed');
+    assert.strictEqual(out.find(g => g.id === 'planning-team').prompt,
+        seedOf('planning-team').prompt, 'planning-team prompt must come from the seed');
+    console.log('  \u2705 a shipped default re-syncs its product-owned fields from the seed');
+});
+
+test('the refresh never touches what the operator owns', () => {
+    const { refreshShippedTeamDefaults } = require('../../out/services/teamWiring');
+    const stored = [{
+        id: 'coding-team',
+        headPrompt: 'stale',
+        enabled: false, enabledSource: 'operator',
+        machine: 'dell', icon: 'custom.svg', startOnLoad: true,
+        members: [{ role: 'intern', count: 3 }],
+    }];
+    const out = refreshShippedTeamDefaults(stored);
+    const c = out.find(g => g.id === 'coding-team');
+    assert.strictEqual(c.enabled, false, 'a team switched off stays off');
+    assert.strictEqual(c.enabledSource, 'operator', 'and keeps the source that says who decided');
+    assert.strictEqual(c.machine, 'dell', 'machine is the operator\'s');
+    assert.strictEqual(c.icon, 'custom.svg', 'so is the icon');
+    assert.strictEqual(c.startOnLoad, true, 'so is startOnLoad');
+    assert.strictEqual(c.members[0].count, 3,
+        'members are deliberately excluded — a re-sync must not delete a seat the operator added');
+    console.log('  \u2705 the refresh never touches what the operator owns');
+});
+
+test('the refresh is idempotent and leaves custom teams alone', () => {
+    const { refreshShippedTeamDefaults, DEFAULT_TEAM_DEFINITIONS } = require('../../out/services/teamWiring');
+    const fresh = DEFAULT_TEAM_DEFINITIONS.map(d => ({ ...d }));
+    assert.strictEqual(refreshShippedTeamDefaults(fresh), null,
+        'an already-current store must report no change, so the caller skips the write');
+    const custom = [{ id: 'my-own-team', prompt: 'mine' }];
+    assert.strictEqual(refreshShippedTeamDefaults(custom), null, 'a custom team is not a shipped default');
+    assert.strictEqual(custom[0].prompt, 'mine', 'and is never rewritten');
+    console.log('  \u2705 the refresh is idempotent and leaves custom teams alone');
+});
+
 function test(name, fn) {
     try { fn(); console.log(`  ok — ${name}`); passed++; }
     catch (e) { console.error(`  FAIL — ${name}`); console.error(e && e.stack ? e.stack : e); failed++; }
