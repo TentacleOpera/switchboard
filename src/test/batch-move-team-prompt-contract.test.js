@@ -323,13 +323,19 @@ function testNoCallSitePassesALiteralLead() {
     const read = rel => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
     const kanban = read('services/KanbanProvider.ts');
-    // The gate itself.
+    // The gate itself. Scope the reads to the METHOD BODY: `role !== 'lead'` and
+    // `role === 'lead'` appear elsewhere in this file for other questions
+    // (resolveCodingRolesFromGroups, the inline-challenge and drive-mode branches),
+    // and a whole-file regex for them asserts nothing about the gate.
+    const gateStart = kanban.indexOf('public async isCodingTeamHead(');
+    assert.ok(gateStart > 0, 'isCodingTeamHead must exist');
+    const gateBody = kanban.slice(gateStart, kanban.indexOf('\n    public ', gateStart + 10));
     assert.ok(
-        !/if \(role !== 'lead'\)/.test(kanban),
+        !/role !== 'lead'/.test(gateBody),
         "isCodingTeamHead must not open with a 'lead' guard — that refuses to look up a coder- or reviewer-headed team"
     );
     assert.ok(
-        kanban.includes('resolveTeamHeadRoles({ db })'),
+        /resolveTeamHeadRoles\(\{ db \}\)/.test(gateBody),
         'the gate must pre-filter on the derived head-role set'
     );
     // No call site passes the literal.
@@ -457,7 +463,20 @@ async function testGenerateUnifiedPromptBatchTeamHead() {
     assert.ok(prompt.includes('STAGING (one call per plan):'), 'Should contain STAGING section');
     assert.ok(prompt.includes('verb ptySendPrompt'), 'Should contain ptySendPrompt CLI recipe');
     assert.ok(prompt.includes('CLOSE OUT EVERY PLAN — ALWAYS, no judgement call.'), 'Should contain close out per plan instruction');
-    assert.ok(prompt.includes('/kanban/task/complete'), 'Should contain /kanban/task/complete instruction');
+    // REPAIRED STALE EXPECTATION (not Mission 02's). This asserted
+    // `prompt.includes('/kanban/task/complete')`, which was true when the
+    // assertion was written (4c11b342) and stopped being true in `de89e8d3`
+    // "the CLI is the only way to assert completion, and the directives say so" —
+    // that commit rewrote the close-out line to the CLI form and did not touch
+    // this file, so the suite has been red since. The current contract is the
+    // opposite of the old assertion: the directive must NOT hand out the raw
+    // endpoint (the CSRF guard refuses a POST with no `X-Switchboard-Client`
+    // marker; the CLI is what sets it). Asserting the CLI recipe AND the absence
+    // of the endpoint is strictly stronger than the assertion it replaces, and
+    // Mission 02's own criteria — the derived head-role set and the literal
+    // `'lead'` grep gate — are untouched by it.
+    assert.ok(prompt.includes('accept --plan "<that plan\'s planId>"'), 'Should carry the CLI accept instruction, not the raw endpoint');
+    assert.ok(!prompt.includes('/kanban/task/complete'), 'Must NOT hand out the raw completion endpoint — the CLI is the only way to assert completion');
     assert.ok(prompt.includes('BATCH RULES:'), 'Should contain BATCH RULES');
     assert.ok(prompt.includes('- The plans in this batch are independent and possibly unrelated.'), 'Should state plans are independent');
     assert.ok(prompt.includes('- Read each individual plan file for requirements, seat assignments, and scope constraints.'), 'Should instruct to read individual plan files');
@@ -640,7 +659,12 @@ async function testPlannerFanOutRegression() {
     }));
 
     const executedDispatches = [];
+    const advanced = [];
     const provider = makeProvider();
+    provider._advanceCards = async (ws, ids, opts) => {
+        advanced.push({ ids, target: opts && opts.target });
+        return { moved: ids.map(id => ({ id })) };
+    };
     provider._taskViewerProvider = {
         getRoleTerminalSet: async () => ({
             terminals: ['Planner-1', 'Planner-2'],
@@ -667,15 +691,30 @@ async function testPlannerFanOutRegression() {
 
     await provider._distributePlannerDispatch('/ws', plans, 'PLAN REVIEWED');
 
-    // Assert that 2 buckets were dispatched
+    // REPAIRED STALE EXPECTATION (not Mission 02's). This asserted 3 plans per
+    // bucket, the pre-`beedc468` round-robin that stacked several plans on one
+    // seat. `beedc468` "fix(planner): one plan per seat is automatic, with nothing
+    // left to configure" made the fan-out width a property of the ROSTER —
+    // `ordered.slice(0, terminals.length)` — and did not touch this file, so this
+    // case has been red since. One plan per seat is the current contract, and the
+    // assertions below pin it harder than the old ones did: the moved set is
+    // exactly the dispatched set, no plan reaches two seats, and the rest of the
+    // column stays for the next round.
     assert.strictEqual(executedDispatches.length, 2, 'Should dispatch 2 buckets to 2 planner terminals');
     assert.strictEqual(executedDispatches[0].term, 'Planner-1', 'First bucket to Planner-1');
-    assert.strictEqual(executedDispatches[0].ids.length, 3, 'First bucket receives 3 plans');
+    assert.strictEqual(executedDispatches[0].ids.length, 1, 'First bucket receives exactly one plan — one plan per seat');
     assert.strictEqual(executedDispatches[0].workflow, 'improve-plan', 'First bucket uses improve-plan workflow');
 
     assert.strictEqual(executedDispatches[1].term, 'Planner-2', 'Second bucket to Planner-2');
-    assert.strictEqual(executedDispatches[1].ids.length, 3, 'Second bucket receives 3 plans');
+    assert.strictEqual(executedDispatches[1].ids.length, 1, 'Second bucket receives exactly one plan — one plan per seat');
     assert.strictEqual(executedDispatches[1].workflow, 'improve-plan', 'Second bucket uses improve-plan workflow');
+
+    // The fan-out width is the roster width, not the selection width.
+    const dispatchedIds = new Set(executedDispatches.flatMap(d => d.ids));
+    assert.strictEqual(dispatchedIds.size, 2, 'No plan is handed to two seats');
+    assert.strictEqual(advanced.length, 1, 'The fan-out advances the dispatched set once');
+    assert.deepStrictEqual([...advanced[0].ids].sort(), [...dispatchedIds].sort(), 'The moved set is exactly the dispatched set');
+    assert.strictEqual(plans.length - dispatchedIds.size, 4, 'The rest of the column stays for the next round');
 
     // Ensure neither bucket leaks improve-feature
     for (const d of executedDispatches) {

@@ -1,6 +1,6 @@
 # Every Batch Move Becomes One Declared Thing — a Mission or a Fan-Out Pipeline
 
-**Complexity:** 5
+**Complexity:** 7
 
 ## Goal
 
@@ -335,16 +335,15 @@ second interpretation.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Mission 01 — A Launch Touches Only Its Own Members](../plans/mission-01-a-launch-touches-only-its-own-members.md) — **PLAN REVIEWED** — ID: d45d58bb-59e3-48b0-94b2-c3496b33731c
-- [ ] [Mission 02 — One Derived Gate for "Is This a Team Head"](../plans/mission-02-one-derived-gate-for-is-this-a-team-head.md) — **PLAN REVIEWED** — ID: 614269ec-a5d2-412d-aa68-6f93e1e1b836
-- [ ] [Mission 03 — A Batch Move to a Team Creates a Mission and Launches It](../plans/mission-03-a-batch-move-to-a-team-creates-a-mission-and-launches-it.md) — **PLAN REVIEWED** — ID: eaba9825-3fcd-4623-8452-2232e6dd92f5
-- [ ] [Mission 04 — The Drain Delivers at the Team's Cadence](../plans/mission-04-the-drain-delivers-at-the-teams-cadence.md) — **PLAN REVIEWED** — ID: bf7a7c18-e8ff-4e4d-935e-f73eb3df250c
-- [ ] [Mission 05 — Planning and Review Fan Out in Rounds, and Nothing Is Dropped](../plans/mission-05-planning-and-review-fan-out-in-rounds-and-nothing-is-dropped.md) — **PLAN REVIEWED** — ID: f6d3e138-828f-442c-8f1f-2c6de58c116d
-- [ ] [Mission 06 — A Mission Owns Its Members' Columns; a Single Plan Still Routes](../plans/mission-06-a-mission-owns-its-members-columns.md) — **PLAN REVIEWED** — ID: 2839dbea-8395-456e-b4dc-7d595caeb0af
-- [ ] [Mission 07 — A Mission Can Be Paused and Resumed](../plans/mission-07-a-mission-can-be-paused-and-resumed.md) — **PLAN REVIEWED** — ID: 4f6de297-19f4-43a7-aaf4-3839196956c6
-- [ ] [Mission 08 — One Mission per Stage, and No Card Skips a Column](../plans/mission-08-one-mission-per-stage-and-no-card-skips-a-column.md) — **PLAN REVIEWED** — ID: 4a2078e4-a21b-49ce-9b6b-06320bb975b7
+- [ ] [Mission 01 — A Launch Touches Only Its Own Members](../plans/mission-01-a-launch-touches-only-its-own-members.md) — **LEAD CODED** — ID: d45d58bb-59e3-48b0-94b2-c3496b33731c
+- [ ] [Mission 02 — One Derived Gate for "Is This a Team Head"](../plans/mission-02-one-derived-gate-for-is-this-a-team-head.md) — **LEAD CODED** — ID: 614269ec-a5d2-412d-aa68-6f93e1e1b836
+- [ ] [Mission 03 — A Batch Move to a Team Creates a Mission and Launches It](../plans/mission-03-a-batch-move-to-a-team-creates-a-mission-and-launches-it.md) — **LEAD CODED** — ID: eaba9825-3fcd-4623-8452-2232e6dd92f5
+- [ ] [Mission 04 — The Drain Delivers at the Team's Cadence](../plans/mission-04-the-drain-delivers-at-the-teams-cadence.md) — **LEAD CODED** — ID: bf7a7c18-e8ff-4e4d-935e-f73eb3df250c
+- [ ] [Mission 05 — Planning and Review Fan Out in Rounds, and Nothing Is Dropped](../plans/mission-05-planning-and-review-fan-out-in-rounds-and-nothing-is-dropped.md) — **LEAD CODED** — ID: f6d3e138-828f-442c-8f1f-2c6de58c116d
+- [ ] [Mission 06 — A Mission Owns Its Members' Columns; a Single Plan Still Routes](../plans/mission-06-a-mission-owns-its-members-columns.md) — **LEAD CODED** — ID: 2839dbea-8395-456e-b4dc-7d595caeb0af
+- [ ] [Mission 07 — A Mission Can Be Paused and Resumed](../plans/mission-07-a-mission-can-be-paused-and-resumed.md) — **LEAD CODED** — ID: 4f6de297-19f4-43a7-aaf4-3839196956c6
+- [ ] [Mission 08 — One Mission per Stage, and No Card Skips a Column](../plans/mission-08-one-mission-per-stage-and-no-card-skips-a-column.md) — **LEAD CODED** — ID: 4a2078e4-a21b-49ce-9b6b-06320bb975b7
 <!-- END SUBTASKS -->
-
 
 ## Completion Summary
 

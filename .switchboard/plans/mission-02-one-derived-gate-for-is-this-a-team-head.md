@@ -234,3 +234,53 @@ deliberately removed from its head prompt; nothing here may put it back.
 **Nothing may be silently dropped.** Every plan is delivered or visibly queued.
 
 **Teams are unreleased dev work** — clean break, no migration shims.
+
+---
+
+## Completion Summary (Feature-coder-2, 2026-09-20)
+
+Landed on `main` as `7bb7f435`. `isCodingTeamHead` now pre-filters on
+`teamWiring.resolveTeamHeadRoles({db})` — derived from every row's `headRole`
+across the shipped defaults, the configured definitions (`terminals.agentGroups`)
+and the live rows (`terminals.groups`) — with `resolveTeamMembersForHead` still the
+identity half, so a role in the set whose terminal heads no team still answers
+false. All four literal `'lead'` sites are gone: `:7003` goes through the new
+private `_hasAnyTeamHead` (a board-wide question has no single role to pass), the
+batch branch keys on the derived set, and both cap arms — `TaskViewerProvider` and
+`standalone/bootstrap` — drop their own `role === 'lead'` pre-filter and cap through
+the same gate, so the two composition roots cannot diverge.
+`pairDispatchingHeadRoles()` was NOT reused and is unchanged at `{lead, coder}`;
+`batch-move-team-prompt-contract.test.js` has its `coder`/`reviewer`/`planner`
+"must never gate as a team head" assertion inverted, plus a derived per-head-role
+case, a pair-dispatch-unchanged case, and a source-text gate over the four sites.
+Not verified against the running host: this run's directive skips compilation and
+tests, so `dist/` still holds the pre-change bundle and the live board is answering
+with the old gate — the plan's Verification Plan is written down but unexecuted.
+
+---
+
+## Fix Round (Feature-coder-2, 2026-09-20) — suite green
+
+`npm run compile-tests && npm run test:contract:batch-move-team-prompt` now exits 0
+with all 22 cases PASS. Three defects, all in the contract test, none in the
+shipped gate. (1) MY defect, the reported one: the grep gate used the whole-file
+regex `/if \(role !== 'lead'\)/`, which also matches the unrelated
+`if (role !== 'lead') continue;` in `resolveCodingRolesFromGroups`
+(`KanbanProvider.ts:6489`) — it asserted nothing about the gate and was red on a
+tree where the gate was already correct. It now slices the `isCodingTeamHead`
+method body and asserts against that. (2) and (3) are PRE-EXISTING reds I did not
+cause and had to repair to get the suite green, both from another agent's
+completed plan that changed behaviour without updating this file, both verifiable
+as ancestors of the commit before mine: `de89e8d3` made the CLI the only way to
+assert completion (so `prompt.includes('/kanban/task/complete')` in
+`testGenerateUnifiedPromptBatchTeamHead` was stale — replaced with the CLI recipe
+`accept --plan "<that plan's planId>"` AND the absence of the raw endpoint, which
+is strictly stronger), and `beedc468` made planner fan-out one-plan-per-seat (so
+the "3 plans per bucket" assertions in `testPlannerFanOutRegression` were stale —
+replaced with one-per-seat plus the moved-set-is-dispatched-set and
+remainder-stays properties). No Mission 02 criterion was weakened: its two
+invariants (the derived head-role set, and no call site passing a literal `lead`)
+are asserted exactly as before and pass. Left UNCOMMITTED in the working tree on
+the head's instruction — coders do not run git verbs on this team; the earlier
+commit `7bb7f435` carries the loose regex, so `main` goes green when the head
+commits this repair.

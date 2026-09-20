@@ -228,3 +228,39 @@ deliberately removed from its head prompt; nothing here may put it back.
 **Nothing may be silently dropped.** Every plan is delivered or visibly queued.
 
 **Teams are unreleased dev work** — clean break, no migration shims.
+
+## Completion summary (Feature-coder-1, 2026-09-20)
+
+Landed on `main` as `8faae581`. `dispatchNextFromQueue` now takes an optional
+`missionId`, threaded into `_runQueuePop`, which resolves the member set inside
+the serialised critical section (beside the dependency gate), validates the
+mission against the pop's own workspace (unknown id → 400, foreign workspace →
+400), and adds membership to `isQueueable` as a filter — precedence stays a
+sort. A scoped pop with no eligible member returns
+`reason: "queue empty for mission <id>"` plus `missionId`; the dependency-blocked
+branch keeps priority and is itself scoped to the mission so it can never name a
+foreign card's blocker. Absent `missionId` is unchanged: the Run queue button,
+the schedule timer, `queue/next` and the handoff still pop workspace-wide.
+
+Both mission-launch call sites send the id: `launchMission` passes
+`missionId: mission.id` on every pop in its stream loop, and the webview LAUNCH
+MISSION body carries `activeMission.id` (the HTTP `queue/next` route reads and
+validates it). The seat-paced `queue/done` release — the one unattended path —
+is scoped from the completing card's own `getMissionsForMember`, and a
+membership read that FAILS refuses the pop loudly instead of silently widening
+it. `switchboard done`'s plain output now names a mission-scoped empty rather
+than printing nothing.
+
+New suite `src/test/mission-scoped-launch-contract.test.js`
+(`npm run test:contract:mission-scoped-launch`, wired into
+`.github/workflows/integration-tests.yml`) covers the two-mission leak with the
+foreign card sorting FIRST, the unscoped path unchanged, no member twice in one
+launch, the named empty result, the scoped dependency-blocked diagnosis, unknown
+and foreign-workspace mission ids, the scoped seat-paced release, and
+source-shape guards on the two call sites that must SEND the id.
+
+Not verified by execution this run: compilation and the automated suites were
+skipped by dispatch directive, so the new suite has not been run. The live board
+answers at :7777 with an empty mission list (`{"success":true,"missions":[]}`),
+so no scoped pop could be exercised against it, and the running host is on
+pre-change bytes anyway.
