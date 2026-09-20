@@ -42,6 +42,27 @@ const DEFAULT_HOST_CAPABILITIES: HostCapabilities = {
     featureAdvanced: false,
 };
 
+/**
+ * The CLI brand-icon table, as body data attributes.
+ *
+ * ONE SOURCE. It was inlined in the terminals panel's `bodyAttr` only, so the
+ * command panel had no brand icons at all and its seat rows fell back to role
+ * art — which pointed at `team-*.png` files that had been replaced by SVGs and
+ * 404'd. Any panel that draws a seat needs this table; a second inline copy is
+ * how the two drift.
+ */
+function brandIconAttrs(dir: string): string {
+    const families = [
+        'claude', 'antigravity', 'devin', 'jules', 'gemini', 'openai', 'cursor',
+        'copilot', 'windsurf', 'qwen', 'amp', 'cline', 'kiro', 'kilo', 'trae',
+        'opencode', 'zed', 'ollama',
+    ];
+    const brands = families
+        .map(f => `data-brand-icon-${f}="${dir}/brand-${f}.svg"`)
+        .join(' ');
+    return `${brands} data-brand-icon-default="${dir}/brand-cli-default.svg"`;
+}
+
 export function findFile(candidates: string[]): string | undefined {
     for (const c of candidates) {
         try {
@@ -536,7 +557,7 @@ export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabi
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/terminals.js"></script>`);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const brandIconDir = '/static/icons';
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-xterm-uri="/static/webview/vendor/xterm/xterm.js" data-xterm-fit-uri="/static/webview/vendor/xterm/addon-fit.js" data-xterm-webgl-uri="/static/webview/vendor/xterm/addon-webgl.js" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js" data-brand-icon-claude="${brandIconDir}/brand-claude.svg" data-brand-icon-antigravity="${brandIconDir}/brand-antigravity.svg" data-brand-icon-devin="${brandIconDir}/brand-devin.svg" data-brand-icon-jules="${brandIconDir}/brand-jules.svg" data-brand-icon-gemini="${brandIconDir}/brand-gemini.svg" data-brand-icon-openai="${brandIconDir}/brand-openai.svg" data-brand-icon-cursor="${brandIconDir}/brand-cursor.svg" data-brand-icon-copilot="${brandIconDir}/brand-copilot.svg" data-brand-icon-windsurf="${brandIconDir}/brand-windsurf.svg" data-brand-icon-qwen="${brandIconDir}/brand-qwen.svg" data-brand-icon-amp="${brandIconDir}/brand-amp.svg" data-brand-icon-cline="${brandIconDir}/brand-cline.svg" data-brand-icon-kiro="${brandIconDir}/brand-kiro.svg" data-brand-icon-kilo="${brandIconDir}/brand-kilo.svg" data-brand-icon-trae="${brandIconDir}/brand-trae.svg" data-brand-icon-opencode="${brandIconDir}/brand-opencode.svg" data-brand-icon-zed="${brandIconDir}/brand-zed.svg" data-brand-icon-ollama="${brandIconDir}/brand-ollama.svg" data-brand-icon-default="${brandIconDir}/brand-cli-default.svg" data-ufo-animated="${brandIconDir}/switchboard-ufo.svg" data-ufo-static="${brandIconDir}/switchboard-ufo-static.svg" data-ufo-claudify-animated="${brandIconDir}/switchboard-ufo-claudify.svg" data-ufo-claudify-static="${brandIconDir}/switchboard-ufo-claudify-static.svg"`;
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-xterm-uri="/static/webview/vendor/xterm/xterm.js" data-xterm-fit-uri="/static/webview/vendor/xterm/addon-fit.js" data-xterm-webgl-uri="/static/webview/vendor/xterm/addon-webgl.js" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js" ${brandIconAttrs(brandIconDir)} data-ufo-animated="${brandIconDir}/switchboard-ufo.svg" data-ufo-static="${brandIconDir}/switchboard-ufo-static.svg" data-ufo-claudify-animated="${brandIconDir}/switchboard-ufo-claudify.svg" data-ufo-claudify-static="${brandIconDir}/switchboard-ufo-claudify-static.svg"`;
     content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
@@ -651,7 +672,7 @@ export function getCommandHtml(repoRoot: string, workspaceRoot: string, capabili
     // terminal viewer lazy-loads xterm.js, addon-fit, addon-webgl, and
     // addon-canvas from these attributes, so the viewport module can inject
     // them without parser-blocking <script> tags.
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="command" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-xterm-uri="/static/webview/vendor/xterm/xterm.js" data-xterm-fit-uri="/static/webview/vendor/xterm/addon-fit.js" data-xterm-webgl-uri="/static/webview/vendor/xterm/addon-webgl.js" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js"`;
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="command" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-xterm-uri="/static/webview/vendor/xterm/xterm.js" data-xterm-fit-uri="/static/webview/vendor/xterm/addon-fit.js" data-xterm-webgl-uri="/static/webview/vendor/xterm/addon-webgl.js" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js" ${brandIconAttrs('/static/icons')}`;
     content = injectBodyAttributes(content, bodyAttr);
     // `is-solo` is carried THROUGH applyThemeClass, not left on the template's
     // own `<body class="is-solo">`. applyThemeClass strips the existing class

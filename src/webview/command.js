@@ -753,6 +753,10 @@
                 teamRoster = (groupsData && groupsData.success && Array.isArray(groupsData.groups))
                     ? groupsData.groups
                     : [];
+                // The host names its own shipped defaults; we never guess.
+                if (groupsData && Array.isArray(groupsData.defaultTeamIds)) {
+                    SEED_TEAM_IDS = new Set(groupsData.defaultTeamIds.filter(id => typeof id === 'string'));
+                }
             }
         } catch (err) {
             console.warn('[Command] Failed to fetch teams state:', err);
@@ -1319,13 +1323,36 @@
     // so the role arm MUST map through this allow-list and never interpolate
     // the raw role string into a path — otherwise the static serve route
     // becomes a traversal vector. An unknown role falls through to nav-jet.
+    // SVG, not PNG. These were `team-*.png` and every one of them 404'd: the art
+    // was converted to SVG (the originals are parked in `icons/_replaced-team-pngs/`)
+    // and this table was never updated, so each card rendered a broken-image glyph.
+    // A local copy of an asset list is a copy that cannot be updated with the assets.
     const TEAM_ROLE_ART = {
-        lead: '/static/icons/team-lead.png',
-        coder: '/static/icons/team-coder.png',
-        reviewer: '/static/icons/team-reviewer.png',
-        planner: '/static/icons/team-planner.png',
-        intern: '/static/icons/team-intern.png',
+        lead: '/static/icons/team-lead.svg',
+        coder: '/static/icons/team-coder.svg',
+        reviewer: '/static/icons/team-reviewer.svg',
+        planner: '/static/icons/team-planner.svg',
+        intern: '/static/icons/team-intern.svg',
     };
+
+    /**
+     * A seat's icon is its CLI BRAND, not its role — a Devin coder and a Claude
+     * coder are different agents and the roster should say so.
+     *
+     * The table comes from the HOST, as `data-brand-icon-*` body attributes
+     * (`headlessPanelHtml.ts`), the same table the terminals panel reads. The
+     * command panel was not being given it, which is why seat rows fell back to
+     * role art in the first place. Read it; do not rebuild it here.
+     */
+    function resolveSeatBrandArt(cliFamily) {
+        const ds = (document.body && document.body.dataset) || {};
+        const fam = String(cliFamily || '').trim().toLowerCase();
+        // dataset camel-cases `data-brand-icon-claude` to `brandIconClaude`.
+        const key = fam ? 'brandIcon' + fam.charAt(0).toUpperCase() + fam.slice(1) : '';
+        // An unknown or absent family is an explicit default, never a guess at
+        // which CLI this is.
+        return (key && ds[key]) || ds.brandIconDefault || null;
+    }
 
     /**
      * Resolve a team's icon URI through the full fallback chain:
@@ -1341,7 +1368,7 @@
             if (v.startsWith('data:')) { return v; }
             if (v.startsWith('art:')) {
                 const name = v.slice('art:'.length).trim();
-                return name ? '/static/icons/' + encodeURIComponent(name) + '.png' : null;
+                return name ? '/static/icons/' + encodeURIComponent(name) + '.svg' : null;
             }
             if (v.startsWith('pack:')) {
                 const file = v.slice('pack:'.length).trim();
@@ -1355,7 +1382,18 @@
 
     // The three DEFAULT_TEAM_DEFINITIONS ids that ship as starter seeds.
     // Used to hide unstarted seeds from the roster — never to delete them.
-    const SEED_TEAM_IDS = new Set(['planning-team', 'feature-implementation', 'review-team']);
+    // FROM THE HOST, not typed here. `ptyListAgentGroups` already returns
+    // `defaultTeamIds`, derived from DEFAULT_TEAM_DEFINITIONS, and its own comment
+    // says why: "the shipped default ids ... come from DEFAULT_TEAM_DEFINITIONS, so
+    // a roster edit changes them by construction. The webviews consume these rather
+    // than keeping their own copy."
+    //
+    // This was a hard-coded list of THREE while the product shipped FIVE, so
+    // `coding-team` and `multi-agent-planning` were treated as operator-made: never
+    // hidden when unstarted, and sorted ahead of real seeds in the claim order. A
+    // custom team also had no way to be anything but a non-seed, which is the other
+    // half of why a typed list is the wrong mechanism.
+    let SEED_TEAM_IDS = new Set();
 
     /**
      * Resolve every team's head seat and member seats in a single exclusive
@@ -1477,7 +1515,13 @@
             stateClass = 'team-state-working';
         }
 
-        const teamIconUri = resolveTeamArt(team.icon, team.headRole);
+        // `jet` is a team's own art override (Multi-agent planning ships one so it
+        // is tellable apart from Planning — both are planner-headed). It rides
+        // through the groups payload as a plain field; role art is the fallback.
+        const teamIconUri = resolveTeamArt(
+            team.icon || (team.jet ? `art:team-${team.jet}` : null),
+            team.headRole
+        );
 
         // All live seats for this team (head + members), for the viewer.
         const allLiveSeats = liveSeat ? [liveSeat, ...memberSeats] : [];
@@ -1495,7 +1539,9 @@
             // on the seat's own role — a coder row and an intern row draw
             // distinct art from their lead's. No explicit `icon` on a seat.
             const seatIcon = document.createElement('img');
-            seatIcon.src = resolveTeamArt(null, seat.role);
+            // Brand first — a seat IS a CLI. Role art is the fallback for a seat
+            // whose family the fleet could not identify.
+            seatIcon.src = resolveSeatBrandArt(seat.cliFamily) || resolveTeamArt(null, seat.role);
             seatIcon.alt = '';
             seatIcon.style.cssText = 'width:18px;height:18px;flex-shrink:0;object-fit:contain;';
             row.appendChild(seatIcon);
