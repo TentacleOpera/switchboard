@@ -1225,6 +1225,47 @@ export function isDefaultTeamId(id: any): boolean {
 }
 
 /**
+ * The head roles whose dispatch should also send the Routine (Band A) half to a
+ * cheaper seat — derived from the shipped team definitions, never hand-listed.
+ *
+ * A team qualifies when it has a `coder` or `intern` member to route the routine
+ * half to; its `headRole` is then a pair-dispatching role. For the shipped five
+ * that is `lead` (Feature team: coder + intern) and `coder` (Coding team:
+ * intern). Planning, Review and Multi-agent planning have no cheaper coding seat
+ * and are correctly excluded.
+ *
+ * WHY THIS EXISTS: every call site of `_dispatchWithPairProgrammingIfNeeded`
+ * gated on `role === 'lead'`, which is the Feature team's shape. The Coding team
+ * is `coder`-headed with a `CODER CODED` column, so its intern was never
+ * dispatched and its head had to hand out work with `ptySendPrompt` — the exact
+ * thing its prompt now tells it not to do. The resolver INSIDE that function had
+ * already been fixed for coder-headed teams; the callers had not. Deriving the
+ * set here means a new team shape cannot reintroduce the gap.
+ */
+export function pairDispatchingHeadRoles(
+    definitions: any[] = DEFAULT_TEAM_DEFINITIONS
+): Set<string> {
+    const roles = new Set<string>();
+    for (const def of definitions || []) {
+        if (!def || typeof def.headRole !== 'string') { continue; }
+        const members = Array.isArray(def.members) ? def.members : [];
+        const hasCheaperSeat = members.some((m: any) =>
+            m && (m.role === 'coder' || m.role === 'intern'));
+        if (hasCheaperSeat) { roles.add(def.headRole); }
+    }
+    return roles;
+}
+
+/**
+ * Whether a dispatch to `role` should also send the routine half to a cheaper
+ * seat. False for a role that heads no team with a coder/intern seat.
+ */
+export function isPairDispatchingHeadRole(role: unknown): boolean {
+    return typeof role === 'string' && role.length > 0
+        && pairDispatchingHeadRoles().has(role);
+}
+
+/**
  * Who asserts a card complete for this team — and which source said so.
  *
  * `'head'`: a lead reviews the member's work and posts /kanban/task/complete.

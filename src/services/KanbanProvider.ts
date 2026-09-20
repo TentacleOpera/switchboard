@@ -40,7 +40,7 @@ import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveW
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { resolveCommandlessRoles } from './agentGroupInstantiation';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders, isPairDispatchingHeadRole } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { readBuildConfig, setBuildTarget, recordBuildResult, resolveBuildResult, lastResultPerTarget, probeBuildTargets, isBuildTargetId, type BuildResult } from './buildTarget';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
@@ -12089,7 +12089,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         if (dispatched && plannerCursorLocationKey && tvp) {
                             await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
                         }
-                        if (dispatched && role === 'lead') {
+                        if (dispatched && isPairDispatchingHeadRole(role)) {
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, targetTerminalOverride);
@@ -12201,7 +12201,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                             // Pair programming: when a high-complexity card is dispatched to Lead,
                             // also dispatch the Coder terminal with the Routine prompt.
-                            if (role === 'lead' && targetColumn === 'LEAD CODED') {
+                            if (isPairDispatchingHeadRole(role)) {
                                 const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                                 if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                     await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, targetTerminalOverride);
@@ -12864,7 +12864,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         instruction,
                         workspaceRoot: workspaceRoot || undefined
                     });
-                    if (dispatched && dispatchSpec.role === 'lead') {
+                    if (dispatched && isPairDispatchingHeadRole(dispatchSpec.role)) {
                         const highComplexityCards = sourceCards.filter(c => !this._isLowComplexity(c) && c.complexity !== 'Unknown');
                         if (highComplexityCards.length > 0) {
                             await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
@@ -13078,7 +13078,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                     instruction,
                                     workspaceRoot: workspaceRoot || undefined
                                 });
-                                if (dispatched && dispatchSpec.role === 'lead') {
+                                if (dispatched && isPairDispatchingHeadRole(dispatchSpec.role)) {
                                     const leadCards = this._lastCards.filter(card =>
                                         card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                                     ).filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
@@ -13208,7 +13208,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                     instruction,
                                     workspaceRoot: workspaceRoot || undefined
                                 });
-                                if (dispatched && dispatchSpec.role === 'lead') {
+                                if (dispatched && isPairDispatchingHeadRole(dispatchSpec.role)) {
                                     const leadCards = sourceCards
                                         .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                                     if (leadCards.length > 0) {
@@ -13356,7 +13356,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         instruction,
                         workspaceRoot: workspaceRoot || undefined
                     });
-                    if (dispatched && dispatchSpec.role === 'lead') {
+                    if (dispatched && isPairDispatchingHeadRole(dispatchSpec.role)) {
                         const leadCards = sourceCards
                             .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                         if (leadCards.length > 0) {
@@ -13463,7 +13463,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         instruction,
                         workspaceRoot: workspaceRoot || undefined
                     });
-                    if (dispatched && dispatchSpec.role === 'lead') {
+                    if (dispatched && isPairDispatchingHeadRole(dispatchSpec.role)) {
                         const leadCards = sourceCards
                             .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                         if (leadCards.length > 0) {
