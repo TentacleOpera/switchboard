@@ -208,3 +208,39 @@ deliberately removed from its head prompt; nothing here may put it back.
 **Nothing may be silently dropped.** Every plan is delivered or visibly queued.
 
 **Teams are unreleased dev work** — clean break, no migration shims.
+
+## Completion summary (Feature-coder-1, 2026-09-20 — uncommitted, working tree)
+
+The release column itself landed with Mission 08's work in this same tree (it was
+incoherent without it: the no-skip gate could release a member into the wrong
+column, and `Mission 08`'s own note says a gate that releases a card into the
+wrong column is not a gate). The pop computes `rawColumn = overrideRole ?
+roleToCodingColumn(overrideRole) : (missionStage ? missionStage.column :
+undefined)` — the escalation override first, the mission's stage column second,
+nothing otherwise — and passes it through the EXISTING explicit-column channel, so
+`_resolveKanbanDispatchPreDelivery` needed no change and an operator drag, a
+mission release and the escalation ladder all share one precedence rule (no
+`skipAutoRoute` flag). The column is Mission 08's derivation
+(`resolveStageForHeadRole` / `resolveMissionStageFromTeam`), not a second
+team→column map.
+
+This subtask's own deliverable is the verification, and it is green:
+`npm run compile-tests && npm run test:contract:mission-release-column` = 11/11,
+exit 0. It pins the unit rule (a cx-2 plan alone still reaches the intern, cx-5
+the coder, cx-8/unknown the lead, a feature always the lead, routing-off the
+lead), the mission rule (a Coding mission's cx-2/cx-5/cx-8 members all land in
+CODER CODED — one distinct release column — and a Feature-team mission in LEAD
+CODED, a Planning mission in PLAN REVIEWED, each equal to Mission 08's derived
+column), the precedence (the escalation override's LEAD CODED still wins over the
+mission's CODER CODED on a failed release, and a named column still beats
+auto-routing), the negative (a mission-scoped release never passes an empty column,
+so the auto-route cannot re-decide a member; the pop never calls
+`resolveAutoDispatchColumn`), the unchanged path (a non-mission pop passes NO
+column, so the plain queue still complexity-routes), and the loud failure (an
+unplaceable team dispatches nothing instead of falling back to auto-routing).
+The existing `resolveAutoDispatchColumn` fixtures are the gate for the single-plan
+half and are unmodified: `feature-not-complexity-routed` and `dispatch-evidence`
+both run clean, and the sibling suites in this feature (mission-stage-claim 20,
+batch-mission-launch 19, mission-scoped-launch, dependency-gate) stay green.
+Vacuity checked: a scratch copy with the one-column expectation inverted fails
+exactly that case and exits 1.

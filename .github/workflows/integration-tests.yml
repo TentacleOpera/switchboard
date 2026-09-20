@@ -1859,6 +1859,24 @@ jobs:
       - name: Mission stage + claim contract
         run: npm run test:contract:mission-stage-claim
 
+      # A mission owns its members' columns; a single plan still routes
+      # (Mission 06). Complexity routing decides the SEAT for ONE plan — a cx-2
+      # card alone still reaches the Coding team's intern — and stops deciding for
+      # a batch, whose mission now delivers each member into the column its team
+      # works at. Pins that a Coding mission's three members (cx-2, cx-5, cx-8)
+      # land in ONE column rather than scattering across INTERN/CODER/LEAD CODED,
+      # that the column is Mission 08's derivation and not a second team→column
+      # map, that the escalation override's column still wins over it, that a
+      # non-mission pop still passes NO column (so the auto-route decides), that an
+      # explicit column still wins (one precedence rule, no `skipAutoRoute` flag),
+      # and that an unplaceable team fails loudly instead of falling back to
+      # auto-routing. The existing `resolveAutoDispatchColumn` fixtures are the
+      # gate for the single-plan half and are unmodified.
+      # Drives the real compiled services from out/, so this step must stay AFTER
+      # "Compile test outputs".
+      - name: Mission release column contract
+        run: npm run test:contract:mission-release-column
+
       # External-headed team mode: the lead is a non-terminal agent, so every
       # failure mode is a silent mis-route. The head must stay out of the group
       # roster (a head name in `members` seats a pane that can never exist), the
