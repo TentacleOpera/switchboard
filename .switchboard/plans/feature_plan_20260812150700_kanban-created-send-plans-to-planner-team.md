@@ -1,5 +1,27 @@
 # Replace the Created Column's Blank-Feature Button with an Explicit "Send N plans to planner team"
 
+> **PARTIALLY SUPERSEDED 2026-09-20 by
+> `every-batch-move-becomes-one-declared-thing-a-mission-or-a-fan-out-pipeline`
+> (feature `8ecfdaee`).**
+>
+> **Half 2 — the "Send N plans to planner team" button — is redundant.** That
+> plan makes a batch move to the Planning team's column a fan-out pipeline of
+> `ceil(total plans / live seats)` rounds, launched immediately. The gesture is
+> the move you already make; a second, bespoke button on the Created column is a
+> parallel way to start the same work, and this repo's recurring defect is two
+> paths for one thing.
+>
+> It also fixes the defect this plan would have shipped with. The button fans out
+> **once**, and `_distributePlannerDispatch` ends at
+> `ordered.slice(0, terminals.length)` — so "Send 10 plans" with three seats
+> sends three and silently drops seven. The pipeline delivers all ten.
+>
+> **Half 1 — retiring the blank-feature button — still stands and is untouched.**
+> `addBlankFeature` is still wired (`kanban.html:4368`, `:4681`) and still opens
+> the feature-create modal in blank mode, and a feature with no subtasks is still
+> a ghost card on the board. That is an independent defect with nothing to do
+> with missions or fan-out. Implement that half; drop the other.
+
 ## Goal
 
 Give the planner fan-out a named, discoverable button on the Created column that states exactly how many plans it will send and hides itself when there is no planner pool to send them to. Retire the blank-feature button from that column to make room.

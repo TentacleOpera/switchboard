@@ -9,6 +9,93 @@ const CopyPlugin = require('copy-webpack-plugin');
 //@ts-check
 /** @typedef {import('webpack').Configuration} WebpackConfig **/
 
+/**
+ * Assets BOTH composition roots need on disk under `dist/`.
+ *
+ * These live here, not inside one config's plugin list, because the standalone
+ * host serves `dist/webview/**` (bootstrap.ts resolves
+ * `[dist/webview, src/webview]`, dist first). While these patterns belonged to
+ * `extensionConfig` alone, `npm run compile:standalone` rebuilt the host and
+ * left the UI it serves untouched — a board could run today's server code and
+ * a week-old webview with nothing reporting the mismatch.
+ *
+ * Every `to` is ABSOLUTE and anchored at `dist/` deliberately: CopyPlugin
+ * resolves a relative `to` against the OWNING config's `output.path`, which is
+ * `dist/` for the extension but `dist/standalone/` for the standalone host. A
+ * relative path here would copy the board's UI to `dist/standalone/webview/`,
+ * where nothing serves it.
+ */
+const distDir = path.resolve(__dirname, 'dist');
+const sharedCopyPatterns = [
+    {
+        from: 'src/webview/*.html',
+        to: path.join(distDir, 'webview', '[name][ext]')
+    },
+    {
+        from: 'src/webview/external-ai-hub.html',
+        to: path.join(distDir, 'webview', '[name][ext]')
+    },
+    {
+        from: 'src/webview/*.js',
+        to: path.join(distDir, 'webview', '[name][ext]'),
+        noErrorOnMissing: true
+    },
+    {
+        from: 'src/webview/*.css',
+        to: path.join(distDir, 'webview', '[name][ext]')
+    },
+    {
+        // The web app manifest. `_handleServeManifest` looks in
+        // dist/webview before src/webview, and src/** is excluded from
+        // the VSIX — without this pattern a dist-only layout answers
+        // 404 and the board installs as a plain bookmark.
+        from: 'src/webview/manifest.{json,webmanifest}',
+        to: path.join(distDir, 'webview', '[name][ext]'),
+        noErrorOnMissing: true
+    },
+    {
+        from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
+        to: path.join(distDir, 'sql-wasm.js')
+    },
+    {
+        from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        to: path.join(distDir, 'sql-wasm.wasm')
+    },
+    {
+        from: 'node_modules/@xterm/xterm/lib/xterm.js',
+        to: path.join(distDir, 'webview', 'vendor', 'xterm', 'xterm.js')
+    },
+    {
+        from: 'node_modules/@xterm/xterm/css/xterm.css',
+        to: path.join(distDir, 'webview', 'vendor', 'xterm', 'xterm.css')
+    },
+    {
+        from: 'node_modules/@xterm/addon-fit/lib/addon-fit.js',
+        to: path.join(distDir, 'webview', 'vendor', 'xterm', 'addon-fit.js')
+    },
+    {
+        from: 'node_modules/@xterm/addon-webgl/lib/addon-webgl.js',
+        to: path.join(distDir, 'webview', 'vendor', 'xterm', 'addon-webgl.js')
+    },
+    {
+        from: 'node_modules/@xterm/addon-canvas/lib/addon-canvas.js',
+        to: path.join(distDir, 'webview', 'vendor', 'xterm', 'addon-canvas.js')
+    },
+    {
+        from: 'pty-host-artifacts.json',
+        to: path.join(distDir, 'pty-host-artifacts.json'),
+        noErrorOnMissing: true
+    },
+    {
+        // Same reason as the PTY manifest: cliPathToken probes for this
+        // beside the bundle. Without it the extension resolves no Go
+        // client and every dispatched prompt keeps naming the Node bundle.
+        from: 'client-artifacts.json',
+        to: path.join(distDir, 'client-artifacts.json'),
+        noErrorOnMissing: true
+    }
+];
+
 /** @type WebpackConfig */
 const extensionConfig = {
     name: 'extension',
@@ -78,77 +165,7 @@ const extensionConfig = {
         level: "log", // enables logging required for problem matchers
     },
     plugins: [
-        new CopyPlugin({
-            patterns: [
-                {
-                    from: 'src/webview/*.html',
-                    to: 'webview/[name][ext]'
-                },
-                {
-                    from: 'src/webview/external-ai-hub.html',
-                    to: 'webview/[name][ext]'
-                },
-                {
-                    from: 'src/webview/*.js',
-                    to: 'webview/[name][ext]',
-                    noErrorOnMissing: true
-                },
-                {
-                    from: 'src/webview/*.css',
-                    to: 'webview/[name][ext]'
-                },
-                {
-                    // The web app manifest. `_handleServeManifest` looks in
-                    // dist/webview before src/webview, and src/** is excluded from
-                    // the VSIX — without this pattern a dist-only layout answers
-                    // 404 and the board installs as a plain bookmark.
-                    from: 'src/webview/manifest.{json,webmanifest}',
-                    to: 'webview/[name][ext]',
-                    noErrorOnMissing: true
-                },
-                {
-                    from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
-                    to: 'sql-wasm.js'
-                },
-                {
-                    from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-                    to: 'sql-wasm.wasm'
-                },
-                {
-                    from: 'node_modules/@xterm/xterm/lib/xterm.js',
-                    to: 'webview/vendor/xterm/xterm.js'
-                },
-                {
-                    from: 'node_modules/@xterm/xterm/css/xterm.css',
-                    to: 'webview/vendor/xterm/xterm.css'
-                },
-                {
-                    from: 'node_modules/@xterm/addon-fit/lib/addon-fit.js',
-                    to: 'webview/vendor/xterm/addon-fit.js'
-                },
-                {
-                    from: 'node_modules/@xterm/addon-webgl/lib/addon-webgl.js',
-                    to: 'webview/vendor/xterm/addon-webgl.js'
-                },
-                {
-                    from: 'node_modules/@xterm/addon-canvas/lib/addon-canvas.js',
-                    to: 'webview/vendor/xterm/addon-canvas.js'
-                },
-                {
-                    from: 'pty-host-artifacts.json',
-                    to: 'pty-host-artifacts.json',
-                    noErrorOnMissing: true
-                },
-                {
-                    // Same reason as the PTY manifest: cliPathToken probes for this
-                    // beside the bundle. Without it the extension resolves no Go
-                    // client and every dispatched prompt keeps naming the Node bundle.
-                    from: 'client-artifacts.json',
-                    to: 'client-artifacts.json',
-                    noErrorOnMissing: true
-                }
-            ]
-        })
+        new CopyPlugin({ patterns: sharedCopyPatterns })
     ]
 };
 
@@ -196,7 +213,11 @@ const standaloneConfig = {
             banner: '#!/usr/bin/env node',
             raw: true,
             entryOnly: true
-        })
+        }),
+        // The standalone host SERVES dist/webview — so the build that produces
+        // the host produces its UI. Without this, `compile:standalone` shipped a
+        // new server against whatever webview copy happened to be on disk.
+        new CopyPlugin({ patterns: sharedCopyPatterns })
     ]
 };
 

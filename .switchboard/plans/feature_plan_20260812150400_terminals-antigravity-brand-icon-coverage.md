@@ -226,3 +226,9 @@ Execution is **deferred by session directive (SKIP TESTS)**. No new test files a
 ---
 
 **Recommendation:** Complexity 2 — **Send to Intern.**
+
+---
+
+## Completion summary (Feature-coder-1, 2026-09-19)
+
+Implemented in commit `2e18b0c3` on `main`. The dead `CLI_BRAND_ICON_KEYS` table and the duplicated `startsWith` chain were collapsed into one resolver in `brandIconForCliLabel` (longest-prefix-first; `agy` now resolves to `antigravity` — the only behavioural change). A shared `brandIconImgForRole` builder sits next to `brandIconUri`, and `buildRolePicker` now prepends the brand `<img>` and renders `Role · CLI NAME`, with CLI-less roles keeping icon-free text and the plain-shell title. The picker CSS lives in `src/webview/terminals.css` (moved since this plan was written): `.role-option` became `inline-flex` and a `.role-option-icon` rule was added, modelled on `.item-role-icon`. Verified: node smoke test on the extracted functions (28/28, including `agy`→antigravity and all null cases), the live host on :7777 serves the rebuilt bundle with `brandIconImgForRole`/`role-option-icon` present, all 19 `data-brand-icon-*` attributes are stamped on `/terminals`, and `getStartupCommands` returns the `agentNames` map the picker reads.

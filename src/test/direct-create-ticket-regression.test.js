@@ -45,7 +45,7 @@ async function run() {
     const providerSource = await fs.promises.readFile(providerPath, 'utf8');
 
     assert.ok(
-        providerSource.includes("public async createDraftPlanTicket(): Promise<void>"),
+        providerSource.includes("public async createDraftPlanTicket(initiatorProject?: string | null): Promise<boolean>"),
         'TaskViewerProvider should expose a direct draft ticket helper'
     );
     assert.ok(
@@ -91,7 +91,7 @@ async function run() {
     assert.ok(
         // Verb Engine · 4: the arm is seam-routed (registry-first HostCommands)
         // but still dispatches the shared initiatePlan command.
-        kanbanSource.includes("await this._seams().commands.executeCommand('switchboard.initiatePlan');"),
+        kanbanSource.includes("await this._seams().commands.executeCommand<boolean>('switchboard.initiatePlan');"),
         'kanban create action should keep using the shared initiatePlan command'
     );
 

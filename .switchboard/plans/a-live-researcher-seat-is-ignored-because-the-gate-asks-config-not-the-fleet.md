@@ -10,10 +10,10 @@ idle beside it.
 ### Problem analysis
 
 **The hand-off already exists, end to end.** The planner prompt carries a `RESEARCHER HAND-OFF`
-directive (`agentPromptBuilder.ts:1236`) telling it to POST the research prompt to
+directive (`agentPromptBuilder.ts:1247`) telling it to POST the research prompt to
 `/research/dispatch` before showing it to the operator. `LocalApiServer` serves that route
-(`:14597`) and delegates to the host's `onDispatchResearch` callback (`:10038`). The standalone
-host's arm (`bootstrap.ts:5153-5171`) does exactly the right thing:
+(`:10135`) and delegates to the host's `onDispatchResearch` callback (`:10180`). The standalone
+host's arm (`bootstrap.ts:5202-5210`) does exactly the right thing:
 
 ```ts
 const active = ptyFleetService.listActive();
@@ -24,9 +24,9 @@ if (!researcher || researcher.status !== 'active') { return { dispatched: false,
 **It asks the live fleet.** That is the seat-exists rule, correctly implemented.
 
 **But the planner is never told the door is there.** The directive is split in two at build time on
-`options.researcherConfigured` (`agentPromptBuilder.ts:1228-1232`, `:2152`) — when false, the
+`options.researcherConfigured` (`agentPromptBuilder.ts:1972`, `:2163`) — when false, the
 planner *never sees the POST instructions at all* and goes straight to the chat-paste fallback. That
-flag is resolved by `isResearcherConfigured` (`TaskViewerProvider.ts:9186`):
+flag is resolved by `isResearcherConfigured` (`TaskViewerProvider.ts:9212`):
 
 ```ts
 const name = await this._getAgentNameForRole('researcher', resolvedRoot);
@@ -66,10 +66,24 @@ the flag's failure value (`false`) is indistinguishable from an honest "no resea
 
 **Second defect — a shared member is shared with one team, not with planners.** `spawnDelegates`
 names a `scope: 'shared'` member `` `${teamName}-${d.label || d.role}` `` and reuses a live instance
-only under that exact name (`ptyFleetService.ts:1038-1051`). So Planning spawns
-`Planning-researcher` and Multi-agent planning spawns `Multi-agent planning-researcher` — two
-researcher CLIs, each idle most of the time, when the operator asked for one researcher serving many
-planners. The reuse key is team-scoped; the facility is meant to be role-scoped.
+only under that exact name (`goPtyFleetProjection.ts:668-690`). So a `Planning` team spawns
+`Planning-researcher` and a `Multi-agent planning` team spawns `Multi-agent planning-researcher` —
+two researcher CLIs, each idle most of the time, when what was asked for was one researcher serving
+many planners. The reuse key is team-scoped; the facility is meant to be role-scoped.
+
+**This defect no longer touches the shipped defaults.** Operator decision, 2026-09-18, recorded on
+`teams-are-four-defaults-and-you-can-switch-them-off`: the researcher seat on both planner-headed
+defaults is an ordinary `per-team` member, **not** `scope: 'shared'`. Shared scope spawns unparented,
+is skipped by the commandless-roles report (`agentGroupInstantiation.ts:164`) so an unconfigured
+researcher is announced by nothing, and is exempt from the delegate cap (`:654`) so its RAM is
+unaccounted — while its one benefit does not currently occur, for the reason just given. With
+Multi-agent planning shipped off there is one planner team on first run, so per-team costs no extra
+seat.
+
+So this defect is now a **latent one, for operator-built teams that opt into `scope: 'shared'`** —
+still worth fixing (Change 3), no longer on the path of anything that ships. Nothing else in this
+plan depends on it: the gate fix below matches a researcher seat on `role`, never on parentage or
+team membership, so it works identically for a per-team seat.
 
 ### The rule
 
@@ -84,15 +98,20 @@ A researcher seat is a facility any planner uses if it is there.
 
 **Complexity:** 3
 **Tags:** researcher, planner, prompt-composition, standalone, divergence, bugfix
-**Scope:** `agentPromptBuilder.ts` gate resolution, `KanbanProvider.ts:6985`, the standalone
-composition root, and `ptyFleetService.ts`'s shared-member reuse key. The extension host is not
+**Scope:** `agentPromptBuilder.ts` gate resolution, `KanbanProvider.ts:7060`, the standalone
+composition root, and `goPtyFleetProjection.ts`'s shared-member reuse key. The extension host is not
 wired for this — it is being removed, and its `_registeredTerminals` researcher path goes with it.
 
 ## Dependencies
 
 None blocking. **Blocks** `teams-are-four-defaults-and-you-can-switch-them-off` from delivering on
-its researcher seat: that plan puts a shared researcher on both planner-headed defaults, and without
-this fix the seat spawns, idles, and the planner still hands its research to the operator.
+its researcher seat: that plan puts a researcher on both planner-headed defaults, and without this
+fix the seat spawns, idles, and the planner still hands its research to the operator — because the
+gate asks whether an agent *name* is configured, not whether a seat is live.
+
+That seat is a **`per-team`** member, not a shared one (decision of 2026-09-18 — see *Second defect*
+above). Changes 1 and 2 are what that plan depends on and are unaffected by the distinction.
+**Change 3 is not a prerequisite for it** and exercises nothing in the shipped default set.
 
 ## Proposed Changes
 
@@ -108,21 +127,25 @@ Return the answer **tagged** — `{ live: boolean, seat?: string, source: 'fleet
 build can record which seat it promised the planner, per the repo's fallback rule. "Why did the
 planner paste the prompt?" must be answerable after the fact.
 
-### 2. Resolve `researcherConfigured` from that predicate (`KanbanProvider.ts:6985`)
+### 2. Resolve `researcherConfigured` from that predicate (`KanbanProvider.ts:7060`)
 
 Replace the `isResearcherConfigured` call with the fleet predicate, and rename the option to
 `researcherSeatLive` — `configured` is the word that caused this, and leaving it invites the same
-substitution again. Update the directive's own copy at `agentPromptBuilder.ts:1236`, which currently
+substitution again. Update the directive's own copy at `agentPromptBuilder.ts:1247`, which currently
 tells the planner *"A Researcher agent is configured for this workspace"*, to say a researcher seat
 is live.
 
-`isResearcherConfigured` (`TaskViewerProvider.ts:9186`) loses its only caller and is deleted along
+`isResearcherConfigured` (`TaskViewerProvider.ts:9212`) loses its only caller and is deleted along
 with the docblock asserting a mirror that was never true in the host that ships.
 
-### 3. Make a shared member shared across teams (`ptyFleetService.ts:1034-1063`)
+### 3. Make a shared member shared across teams (`goPtyFleetProjection.ts:668-690`)
+
+**Not a prerequisite for the defaults** — no shipped default uses `scope: 'shared'` (see *Second
+defect*). This is the fix for operator-built teams that opt into it, and it can land after Changes 1
+and 2 or in a separate pass.
 
 Key the shared-member reuse on **role** (plus machine), not on `${teamName}-${role}`, so the second
-planner team that starts adopts the live researcher instead of spawning its own. The seat is already
+team that starts adopts the live seat instead of spawning its own. The seat is already
 spawned unparented on this branch, so no ownership model changes — only the name it is looked up by.
 
 Name it for what it is (`researcher`, suffixed on genuine collision) rather than after whichever team
@@ -159,8 +182,11 @@ what this role is. Do not widen it.
 - The gate and `onDispatchResearch` resolve through the same predicate — assert one implementation,
   by call site, not by comparing two outputs.
 - `POST /research/dispatch` with a live researcher seat returns `dispatched:true` and names the seat.
-- Two planner-headed teams started in sequence produce **one** researcher seat, and the second team's
-  registered roster names that same seat.
+- Two teams whose researcher is declared `scope: 'shared'` and started in sequence produce **one**
+  researcher seat, and the second team's registered roster names that same seat. This is Change 3's
+  assertion and it must be written against explicitly-shared definitions — **the shipped defaults are
+  `per-team` and correctly produce one researcher each**, so asserting it over the defaults would
+  fail and asserting it over "two planner teams" would silently stop testing anything.
 - Run `npm run compile-tests` before any `test:contract:*` script — contract suites run against
   `out/`.
 
@@ -168,7 +194,9 @@ what this role is. Do not widen it.
 
 - A live researcher seat is used. There is no configuration a user must also set.
 - Every prompt build can say which seat it promised, or that there was none.
-- One researcher serves many planners.
+- One researcher serves many planners **wherever the seat is declared shared**. Where it is
+  declared `per-team` — as every shipped default declares it — each team has its own, and the gate
+  finds it just the same.
 
 ### Manual
 
@@ -183,7 +211,8 @@ pasted into chat for the operator to run.
   their own code reading. The shipped preset prose and its non-blocking contract are both correct and
   stay as they are. An earlier draft of this plan proposed rewriting them for in-repo code search —
   that was wrong and is struck.
-- **[ANSWERED 2026-09-17 — AUTO-START WITH PLANNING]** The researcher comes up as part of the
-  Planning team's start, via the `scope: 'shared'` member on the Planning default. The operator never
-  starts it by hand. This is team-start-time, not boot-time — it does not reintroduce the boot sweep
-  that `Delete Auto-Start` removed.
+- **[ANSWERED 2026-09-17 — AUTO-START WITH PLANNING; AMENDED 2026-09-18]** The researcher comes up as
+  part of the Planning team's start, via the researcher member on the Planning default. The operator
+  never starts it by hand. This is team-start-time, not boot-time — it does not reintroduce the boot
+  sweep that `Delete Auto-Start` removed. **Amended:** that member is `scope: 'per-team'`, not
+  `scope: 'shared'` — the start behaviour described here is unchanged either way.

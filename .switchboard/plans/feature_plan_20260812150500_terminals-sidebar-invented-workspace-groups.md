@@ -277,3 +277,13 @@ Execution is **deferred by session directive (SKIP TESTS)**. The assertion inver
 ---
 
 **Recommendation:** Complexity 5 — **Send to Coder.**
+
+---
+
+## Completion summary (Feature-coder-1, 2026-09-19)
+
+Implemented in commit `a146c0c7` on `main`. `renderSidebarList` now filters `parentGroups` through a `populated()` helper (direct + worktree terminals, exited included), spells the `Unmapped` condition out longhand for the contract test, and computes `suppressSoleHeader` — a sole populated non-Unmapped group with no worktree children renders headerless, covering both the webview and backend `workspace-root` synthetics. The `empty-parent-notice` branch and its CSS rule are deleted, and the contract test was inverted in the same change (neighbouring assertions on the fold gate, the longhand Unmapped condition, and the `const headerEl` ordering all preserved). `buildRolePicker` gained a `.role-picker-location` select — shown only when the picker opens without a pinned target and `buildWorkspaceList()` returns more than one root — with both click handlers passing `chosenTarget`. Verified live on :7777: the backend sends one synthetic `workspace-root` parent holding all 4 terminals, so the sidebar now renders flat rows; the served bundle carries `suppressSoleHeader`/`role-picker-location` and zero `empty-parent-notice`.
+
+## Fix round (Feature-coder-1, 2026-09-19, uncommitted)
+
+Review of `a146c0c7` found the spawn-location choice did not survive re-renders: `chosenTarget` was a `buildRolePicker` closure local and the `<select>` was DOM, so `renderSidebarList()` reverts both to `roots[0]`. The selection now lives on `pickerState.spawnTarget` — the state object the renderer rebuilds the picker from — is restored into the rebuilt `<select>` on every render, and is validated against the current `buildWorkspaceList()` so a mapping deleted mid-open falls back to `roots[0]` in state and DOM together. Left uncommitted for the lead to commit.

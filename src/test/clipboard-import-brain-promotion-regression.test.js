@@ -25,7 +25,7 @@ function run() {
 
     assert.match(
         source,
-        /public async createDraftPlanTicket\(\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, idea, false, \{ createdAt, projectName \}\);/,
+        /public async createDraftPlanTicket\(initiatorProject\?: string \| null\): Promise<boolean> \{[\s\S]*await this\._createInitiatedPlan\(title, idea, false, \{ createdAt, projectName \}\);/,
         'Expected normal draft plan creation to keep the default brain-promotion behavior while inheriting the active project filter.'
     );
 
