@@ -371,3 +371,40 @@ Sequencing: 01 → 02 → 03 → (08's stage derivation with 06) → 04/05/07. T
 prerequisite is `memo-missions-cannot-be-opened-scoped-or-tested`: finding 2 is
 Mission 01, the other four findings are not covered by this feature and the
 mission card they concern becomes load-bearing here.
+
+## Feature Delivery Report (Feature lead, 2026-09-20)
+
+All eight subtasks landed on `main` across seven commits, dispatched as four
+rounds on the feature's own sequencing (01+02 → 03+05 → 08 → 06+04+07). Every
+goal invariant is now asserted by a contract suite rather than argued: a batch
+move produces one declared thing (`resolveBatchTeam` → mission / fanout / plain,
+19 cases), nothing is dropped (`ceil(n/seats)` durable rounds with the union
+asserted equal to the batch, replacing `ordered.slice(0, terminals.length)`), one
+card belongs to one mission (`claimIntoMission` transfers and records on both,
+replacing the `INSERT OR IGNORE` that dropped a second claim in silence), and a
+team is held once and released once (a stop pauses via stored `missions.paused`
+rather than releasing).
+
+Five review rounds were needed and every one of them was found by running the
+suite, never by reading a report: three subtasks arrived with their own tests red
+or unrunnable, and three arrived marked UNVERIFIED by the seat itself because the
+dispatch directive told it to skip compilation and tests. Two were real
+behavioural bugs — a card at a mission's own stage stayed in the candidate list
+and could be re-dispatched while being worked, and Review shipped with no declared
+`batchSize` so its cadence read `default:absent` while Coding's read `group-row`.
+Three were the seats' own assertions over-matching comments instead of code; their
+gates were rewritten stronger (declarations in comment-stripped source) rather
+than relaxed.
+
+Final state: `mission-stage-claim` 20/20, `batch-mission-launch` 19/19,
+`mission-release-column` 11/11, `mission-pause-resume` 14/14,
+`mission-scoped-launch` 12/12, `batch-move-team-prompt` 28/28, `queue-pipeline`
+72 pass. Two `queue-pipeline` failures remain and are NOT this feature: both are
+red at pristine HEAD (verified by read-only `git archive` extraction) and are
+stale fixtures contradicting committed behaviour — NULLs-first ordering against
+V81's comparator, and a deleted in-flight refusal. Also unaddressed and recorded
+in `.switchboard/orchestrator/reports/`: `kanbanColumnDerivationImpl.js` is a
+plain `.js` that `compile-tests` never copies into `out/`, so every contract suite
+dies `MODULE_NOT_FOUND` until it is copied by hand. The open prerequisite named in
+this file — `memo-missions-cannot-be-opened-scoped-or-tested` — is still open, and
+this feature has now put that mission card in front of every batch.
