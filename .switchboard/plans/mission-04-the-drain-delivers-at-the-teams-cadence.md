@@ -266,3 +266,59 @@ deliberately removed from its head prompt; nothing here may put it back.
 **Nothing may be silently dropped.** Every plan is delivered or visibly queued.
 
 **Teams are unreleased dev work** — clean break, no migration shims.
+
+---
+
+## Completion Summary (Feature-coder-2, 2026-09-20) — UNVERIFIED (this run skipped compilation and tests)
+
+The cadence is a team field read exactly like `pacing`: `readTeamBatchSize` /
+`resolveTeamBatchSizeForHead` in `teamWiring.ts` (tagged `{value, source}`, absent
+/ invalid / `< 1` → 1, above `TEAM_BATCH_PLAN_CAP` → clamped and logged), shipped as
+`batchSize` + `batchSizeSource` on the definitions (Feature 5, Coding 1,
+Multi-agent planning 1, Planning/Review 1) and re-synced to a seeded board through
+`PRODUCT_OWNED_TEAM_FIELDS`; a `resolveTeamBatchSize` seam is wired into BOTH
+composition roots beside `resolveTeamPacing`. `_runQueuePop` reads it inside the
+critical section: a cadence above one releases ONE batch dispatch to the mission's
+head (`kanbanVerb('triggerBatchAction')`, which reaches the same
+`triggerBatchAgentFromKanban` builder, so `_buildBatchDrivePrefix` applies) carrying
+up to N members, moved into the stage column Mission 08 derives; a cadence of one
+is today's single-card pop unchanged. The advance is asserted completion only: the
+accept path (`_handleKanbanTaskComplete`) asks for a mission-scoped pop on
+`_queueNextChain`, and the pop itself recomputes "is anything of mine still out?"
+— so two completions racing release one wave, not two, and a paused mission
+(Mission 07's gate lives in the same pop) releases nothing.
+
+**In-flight is derived, never ledgered**: a mission releases only when none of its
+members sits at or past its stage with `completed_at IS NULL`. That makes "Coding
+one" one and stops a second wave stacking on the first. A wave whose seat died
+stays held — the queue watch is the existing nudge and no timer releases work.
+
+**Deviations / notes for the lead.** (1) The wave is addressed to the head that
+asked (`targetTerminal` threaded through the `triggerBatchAction` verb and
+`_advanceCards`), because the batch arm would otherwise re-resolve the role's
+terminal workspace-wide; a seat-paced team with a cadence above one (no shipped
+team has that shape) would have its wave addressed to the asking seat. (2) A wave
+whose selection contains a FEATURE falls back to the single-card path — features
+are never distributed, and a Feature mission would otherwise stall with a clear
+error. (3) The cadence-1 in-flight hold is new for missions (the drain was
+pull-anytime); it is what "Coding one" means, and the teamless STAGING-assembled
+mission is untouched (`missionStage` null → no hold, no wave). (4) The CLI renders
+a wave as `wave of N plan(s)` instead of the bare word `dispatched`.
+
+---
+
+## Fix Round (Feature-coder-2, 2026-09-20) — suite re-run
+
+`npm run compile-tests` exit 0, then `npm run test:contract:queue-pipeline`:
+**72 pass / 2 fail** (was 71 / 3). The one failure that was mine is fixed:
+`review-team` carried no `batchSize`, so Review's cadence of one was a DEFAULT
+wearing the same face as Coding's DECLARED one — `readTeamBatchSize` would have
+answered `default:absent`, which is exactly the "a fallback must never be
+indistinguishable from a real value" clause (AGENTS.md / the feature file's
+Constraints). The Review definition now declares `batchSize: 1` +
+`batchSizeSource: 'default'` like the other four, so "Review is deliberately one"
+is a fact and "Review was never given a cadence" is no longer the same read. All
+eight Mission 04 cases pass. The two remaining failures — "the pop takes the
+lowest column_order, NULLs first" and "the in-flight refusal is deleted from
+LocalApiServer" — are red at pristine HEAD (64f8bba3) and are not this subtask's;
+they were left alone.

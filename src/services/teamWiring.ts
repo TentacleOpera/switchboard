@@ -22,6 +22,7 @@ import {
     TEAM_HEAD_COMMIT_FRAGMENT_BODY,
 } from './standingOrderFragments';
 import { resolvePreset, resolvePresetMeta, DEFAULT_MEMBER_RELATIONSHIP } from './linkPresets';
+import { TEAM_BATCH_PLAN_CAP } from './agentPromptBuilder';
 import { substituteCliPath } from '../utils/cliPathToken';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { bootstrapTeamReportsDirectory } from './ScheduledJobsService';
@@ -124,6 +125,105 @@ export const TERMINALS_STORABLE_LAYOUTS: ReadonlySet<string> = new Set([
  */
 export function readTeamPacing(group: any): 'head' | 'seat' {
     return group && group.pacing === 'seat' ? 'seat' : 'head';
+}
+
+/**
+ * The cadence a team with no declared `batchSize` releases at: ONE member per
+ * release. This is the pre-cadence behaviour, so an install that has never
+ * written the field keeps exactly today's drain — the regression gate.
+ */
+export const DEFAULT_TEAM_BATCH_SIZE = 1;
+
+/**
+ * Read a team group's `batchSize` — how many members ONE release delivers to
+ * this team's head. A wave of N is one batch dispatch, not N pops.
+ *
+ * Absent / non-numeric / `< 1` reads as `DEFAULT_TEAM_BATCH_SIZE`, and the
+ * source is returned alongside the value because this is a ROUTING read: "the
+ * team declares 1" and "nobody ever set it" must not be the same answer after
+ * the fact (AGENTS.md). Values above `TEAM_BATCH_PLAN_CAP` are clamped — the cap
+ * is the prompt path's own limit on how many plans one batch prompt may carry,
+ * and a cadence above it would ask the builder for a batch it refuses to build.
+ */
+export function readTeamBatchSize(group: any): { value: number; source: 'group-row' | 'default:absent' | 'default:invalid' | 'default:capped' } {
+    if (!group || group.batchSize === undefined || group.batchSize === null) {
+        return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:absent' };
+    }
+    const raw = Number(group.batchSize);
+    if (!Number.isFinite(raw) || raw < 1) {
+        return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:invalid' };
+    }
+    const value = Math.floor(raw);
+    if (value > TEAM_BATCH_PLAN_CAP) {
+        return { value: TEAM_BATCH_PLAN_CAP, source: 'default:capped' };
+    }
+    return { value, source: 'group-row' };
+}
+
+/**
+ * Resolve the release cadence of the team headed by `originName`, tagged with
+ * the store that answered. Modelled line-for-line on
+ * {@link resolveTeamPacingForHead}: it reads the SAME team group (the group the
+ * origin HEADS, else the first group containing it), so the cadence and the
+ * roster cannot derive from two different definitions.
+ *
+ * Returns `{ value: 1, source: 'default:no-team' }` when the terminal heads no
+ * live team — never null — so callers can use it as a defaulting oracle.
+ */
+export async function resolveTeamBatchSizeForHead(opts: {
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
+    originName: string;
+}): Promise<{ value: number; source: string }> {
+    const { db, settings, originName } = opts;
+    if ((!db && !settings) || !originName) {
+        return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:no-team' };
+    }
+
+    let groups: any[] = [];
+    try {
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+    } catch { return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:unreadable' }; }
+    if (!Array.isArray(groups) || groups.length === 0) {
+        return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:no-team' };
+    }
+
+    // Preferred: the group the origin HEADS (same id derivation as
+    // resolveTeamMembersForHead / resolveTeamPacingForHead).
+    const headId = 'team_' + encodeURIComponent(originName).replace(/[^a-zA-Z0-9_]/g, '_');
+    let group: any = groups.find(g => g && g.id === headId);
+    // Otherwise: first group (in stored order) that contains the origin.
+    if (!group) {
+        group = groups.find(g => g && Array.isArray(g.members) && g.members.includes(originName));
+    }
+    if (!group) { return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:no-team' }; }
+    const read = readTeamBatchSize(group);
+    if (read.source === 'default:capped') {
+        console.warn(
+            `[teamWiring] team '${group.id}': batchSize ${group.batchSize} exceeds the ${TEAM_BATCH_PLAN_CAP}-plan batch cap — clamped to ${read.value}`
+        );
+    }
+    return { value: read.value, source: read.source };
 }
 
 /**
@@ -1050,6 +1150,10 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         // Pooled: head and seats are ordinary automated-dispatch targets.
         automatedDispatch: 'pool',
         automatedDispatchSource: 'default',
+        // ONE AT A TIME. A planning mission releases one card to its head, which
+        // hands it to a seat — the fan-out is the head's job, not the drain's.
+        batchSize: 1,
+        batchSizeSource: 'default',
     },
     {
         id: 'feature-implementation',
@@ -1090,6 +1194,14 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         // Pooled: head and seats are ordinary automated-dispatch targets.
         automatedDispatch: 'pool',
         automatedDispatchSource: 'default',
+        // FIVE IN FLIGHT. The Feature lead's contract is a WAVE: five members in
+        // one batch dispatch carrying the drive prefix, the next five released
+        // when the in-flight five are accepted. One at a time would hand the lead
+        // five unrelated single-plan prompts and discard the drive contract
+        // entirely — the failure mode this cadence exists to prevent. Five is
+        // `TEAM_BATCH_PLAN_CAP`, the cap the batch prompt builder already enforces.
+        batchSize: 5,
+        batchSizeSource: 'default',
     },
     {
         id: 'coding-team',
@@ -1127,6 +1239,12 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         // Pooled: head and seats are ordinary automated-dispatch targets.
         automatedDispatch: 'pool',
         automatedDispatchSource: 'default',
+        // ONE AT A TIME. The coder takes the complex half and the intern takes the
+        // routine half of a SINGLE plan — the pair split applies per plan and is
+        // automatic since 7a78665b. A wave here would hand the head several plans
+        // it is meant to split one at a time.
+        batchSize: 1,
+        batchSizeSource: 'default',
     },
     {
         id: 'review-team',
@@ -1157,6 +1275,15 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         // Pooled: head and seats are ordinary automated-dispatch targets.
         automatedDispatch: 'pool',
         automatedDispatchSource: 'default',
+        // ONE AT A TIME, and DECLARED rather than defaulted. A review mission
+        // hands the head one finished plan to triage; a wave would ask it to
+        // apportion several at once before any reviewer has read one. Written
+        // explicitly because `readTeamBatchSize` returns the value WITH its
+        // source: leaving this off would make "Review was never given a cadence"
+        // and "Review is deliberately one" the same read (AGENTS.md: a fallback
+        // must never be indistinguishable from a real value).
+        batchSize: 1,
+        batchSizeSource: 'default',
     },
     {
         id: 'multi-agent-planning',
@@ -1209,6 +1336,10 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         // clipboard and it is pasted into the head, which this field never gates.
         automatedDispatch: 'head-only-when-sole',
         automatedDispatchSource: 'default',
+        // ONE AT A TIME: the head reconciles three drafts of ONE problem, so a
+        // wave would hand it several unrelated problems to reconcile as one.
+        batchSize: 1,
+        batchSizeSource: 'default',
     },
 ];
 
@@ -1897,6 +2028,12 @@ const PRODUCT_OWNED_TEAM_FIELDS = [
     'pairProgramming',
     'completionAuthority', 'completionAuthoritySource',
     'automatedDispatch', 'automatedDispatchSource',
+    // The release cadence is ROUTING behaviour shipped with the build (Feature
+    // five, Coding one), so a cadence fix reaches a board that already seeded —
+    // the same argument `automatedDispatch` is here for. The operator's own
+    // choice lives on the group row and is never overwritten by this refresh
+    // unless it is a SHIPPED default's row (see the list's own contract).
+    'batchSize', 'batchSizeSource',
 ] as const;
 
 /**

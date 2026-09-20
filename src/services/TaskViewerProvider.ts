@@ -52,7 +52,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveAutomatedDispatchExclusions, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveAutomatedDispatchExclusions, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveTeamBatchSizeForHead, DEFAULT_TEAM_BATCH_SIZE, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { readBuildRenderOptions } from './buildTarget';
 import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName, killTmuxSession, killTmuxSessionGroup } from '../standalone/tmuxBackend';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
@@ -4795,6 +4795,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             resolveTeamRoleTerminal: async (wsRoot, originTerminal, role) => this.resolveTeamRoleTerminal(wsRoot, originTerminal, role),
             resolveTeamMembers: async (wsRoot, headTerminal) => this.resolveTeamMembers(wsRoot, headTerminal),
             resolveTeamPacing: async (wsRoot, headTerminal) => this.resolveTeamPacing(wsRoot, headTerminal),
+            resolveTeamBatchSize: async (wsRoot, headTerminal) => this.resolveTeamBatchSize(wsRoot, headTerminal),
             clearTerminalContext: async (wsRoot, terminalName) => this.clearTerminalContext(wsRoot, terminalName),
             // Roll the terminal log file (session boundary) when a seat's context
             // is cleared via queue/done. The log writer lives in the pty host child
@@ -12543,6 +12544,32 @@ Each plan file must include:
         } catch (err) {
             console.warn('[TaskViewerProvider] resolveTeamPacing failed:', err);
             return 'head';
+        }
+    }
+
+    /**
+     * Resolve the release CADENCE of the team headed by `headTerminal` (Mission
+     * 04): how many members one release delivers to its head. Delegates to
+     * `resolveTeamBatchSizeForHead`, which reads the SAME `terminals.groups` row
+     * `resolveTeamPacingForHead` reads. Public so the LocalApiServer composition
+     * root can wire it as the `resolveTeamBatchSize` callback.
+     *
+     * Returns `{ value: 1, source: 'default:…' }` on any failure — one at a time
+     * is the visible, safe direction, and the source names which store answered.
+     */
+    public async resolveTeamBatchSize(
+        workspaceRoot: string,
+        headTerminal: string
+    ): Promise<{ value: number; source: string }> {
+        try {
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (!db || !await db.ensureReady()) {
+                return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:no-db' };
+            }
+            return await resolveTeamBatchSizeForHead({ db, originName: headTerminal });
+        } catch (err) {
+            console.warn('[TaskViewerProvider] resolveTeamBatchSize failed:', err);
+            return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:error' };
         }
     }
 

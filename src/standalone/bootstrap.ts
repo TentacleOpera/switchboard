@@ -99,7 +99,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // The pure migrators are deliberately NOT imported here — see the note at the
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
-import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, resolveLiveGroupHeads, isTeamEnabled, DEFAULT_TEAM_IDS, recommendedAgentRoles, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, resolveLiveGroupHeads, isTeamEnabled, DEFAULT_TEAM_IDS, DEFAULT_TEAM_BATCH_SIZE, recommendedAgentRoles, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
 import { readBuildRenderOptions } from '../services/buildTarget';
 import { setStandingOrdersApplier } from '../services/standingOrdersDelivery';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from '../services/startupOrientation';
@@ -5213,6 +5213,14 @@ Each plan file must include:
         resolveTeamPacing: async (wsRoot: string, headTerminal: string) => {
             try { return await kanbanProvider.resolveTeamPacing(wsRoot, headTerminal); }
             catch { return 'head' as const; }
+        },
+        // Queue release cadence (Mission 04): how many members one release
+        // delivers to this team's head. Host parity with the extension's
+        // TaskViewerProvider wiring — one read of the same group row, or the two
+        // roots would drain the same mission at two different rates.
+        resolveTeamBatchSize: async (wsRoot: string, headTerminal: string) => {
+            try { return await kanbanProvider.resolveTeamBatchSize(wsRoot, headTerminal); }
+            catch { return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:error' }; }
         },
         // Team-scoped reviewer routing for POST /kanban/dispatch. The helper is
         // pure over (db, liveTerminals) so the standalone host needs no

@@ -2726,7 +2726,13 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
     } else if (code === 0) {
         console.log(`[switchboard] Done signal recorded for seat '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
         if (data?.dispatched) {
-            console.log(`  Next card popped: ${data.dispatched.title || data.dispatched.planId || 'dispatched'}`);
+            // A WAVE is one dispatch carrying several members (Mission 04), so the
+            // single-card fields are absent by construction. Naming the count keeps
+            // a five-member release from rendering as the bare word "dispatched".
+            const waveLabel = Array.isArray(data.dispatched.planIds) && data.dispatched.planIds.length > 0
+                ? `wave of ${data.dispatched.planIds.length} plan(s)`
+                : '';
+            console.log(`  Next card popped: ${data.dispatched.title || data.dispatched.planId || waveLabel || 'dispatched'}`);
         } else if (data?.reason === 'queue empty') {
             // The fragments tell the agent that "queue empty" ends the run. Say it
             // in the plain output too, or only `--json` callers can see it.

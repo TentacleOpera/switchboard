@@ -85,6 +85,8 @@ function makeServer(board, opts = {}) {
         }),
         resolveTeamMembers: opts.resolveTeamMembers,
         resolveTeamPacing: opts.resolveTeamPacing,
+        resolveTeamBatchSize: opts.resolveTeamBatchSize,
+        kanbanVerb: opts.kanbanVerb,
         resolveKanbanDispatch: opts.resolveKanbanDispatch,
         getRegisteredTerminals: opts.getRegisteredTerminals,
         getFleetOrdersDatabase: opts.getFleetOrdersDatabase,
@@ -1504,6 +1506,190 @@ async function run() {
             'the pop must fall back to any live coding seat — a teamless PTY grid still pops the queue');
         assert.ok(!/getAliveRoleTerminalNames/.test(block),
             'the fallback must not reach the deprecated state.json registry (invisible to PTY seats)');
+    });
+
+    // ── Mission 04: the drain delivers at the team's cadence ──────────────
+
+    /** A mission-scoped db: the pop's stage gate needs the mission, its members,
+     *  and a dependency read that answers "no edges" (a missing read BLOCKS every
+     *  candidate — the gate refuses rather than dispatching unchecked). */
+    function missionDb(mission, members) {
+        return {
+            getMissionById: async id => (String(id) === String(mission.id) ? mission : null),
+            getMissionMembers: async () => members.map(memberId => ({ memberId })),
+            getPlanDependencies: async () => [],
+            getPlanByPlanId: async () => null,
+        };
+    }
+
+    function batchSpy() {
+        const calls = [];
+        return {
+            calls,
+            kanbanVerb: async (verb, payload) => {
+                calls.push({ verb, payload });
+                return {
+                    success: true,
+                    dispatched: true,
+                    role: 'lead',
+                    moved: payload.sessionIds.map(id => ({ id, targetColumn: payload.targetColumn })),
+                };
+            },
+        };
+    }
+
+    const FEATURE_MISSION = { id: 'm1', name: 'Feature batch', team: 'feature-implementation', workspaceId: 'ws1' };
+
+    await check('a Feature mission releases FIVE members in ONE dispatch', async () => {
+        const members = Array.from({ length: 12 }, (_, i) => `m${i + 1}`);
+        const board = members.map((id, i) => card(id, 'STAGING', { columnOrder: i + 1 }));
+        const spy = batchSpy();
+        const { server, dispatched } = makeServer(board, {
+            db: missionDb(FEATURE_MISSION, members),
+            resolveTeamBatchSize: async () => ({ value: 5, source: 'group-row' }),
+            kanbanVerb: spy.kanbanVerb,
+        });
+
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Lead 1', missionId: 'm1' });
+
+        assert.strictEqual(out.status, 200, out.payload.error || '');
+        assert.strictEqual(spy.calls.length, 1, 'a wave is ONE dispatch, not five pops');
+        assert.strictEqual(spy.calls[0].verb, 'triggerBatchAction');
+        assert.strictEqual(spy.calls[0].payload.sessionIds.length, 5, 'five members in one prompt');
+        assert.strictEqual(spy.calls[0].payload.targetColumn, 'LEAD CODED', 'released into the stage the team works at');
+        assert.strictEqual(spy.calls[0].payload.targetTerminal, 'Lead 1', 'addressed to the head that asked');
+        assert.strictEqual(spy.calls[0].payload.bypassTriggerGate, true, 'a drain dispatches regardless of the webview drag toggle');
+        assert.deepStrictEqual(dispatched, [], 'the wave does not go through the single-card dispatch');
+        assert.deepStrictEqual(out.payload.dispatched.planIds, spy.calls[0].payload.sessionIds, 'the reply names what was released');
+        assert.strictEqual(out.payload.wave.cadence.size, 5, 'the reply states the cadence');
+        assert.strictEqual(out.payload.wave.remaining, 7, 'the reply states what remains');
+    });
+
+    await check('a wave in flight holds the next release — no second wave stacks', async () => {
+        const members = Array.from({ length: 12 }, (_, i) => `m${i + 1}`);
+        const board = members.map((id, i) => card(id, 'STAGING', { columnOrder: i + 1 }));
+        // The first five have been released and have NOT asserted completion.
+        for (const id of members.slice(0, 5)) {
+            board.find(c => c.planId === id).kanbanColumn = 'LEAD CODED';
+        }
+        const spy = batchSpy();
+        const { server, dispatched } = makeServer(board, {
+            db: missionDb(FEATURE_MISSION, members),
+            resolveTeamBatchSize: async () => ({ value: 5, source: 'group-row' }),
+            kanbanVerb: spy.kanbanVerb,
+        });
+
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Lead 1', missionId: 'm1' });
+
+        assert.strictEqual(out.payload.dispatched, null, 'nothing may be released while the wave is out');
+        assert.ok(/wave in flight/.test(String(out.payload.reason)), `the hold must name itself: ${out.payload.reason}`);
+        assert.strictEqual(out.payload.inFlight.length, 5, 'the five in-flight members are named');
+        assert.strictEqual(spy.calls.length, 0, 'no second dispatch');
+        assert.deepStrictEqual(dispatched, [], 'no card was popped');
+    });
+
+    await check('the next wave releases once every in-flight member has asserted completion', async () => {
+        const members = Array.from({ length: 12 }, (_, i) => `m${i + 1}`);
+        const board = members.map((id, i) => card(id, 'STAGING', { columnOrder: i + 1 }));
+        for (const id of members.slice(0, 5)) {
+            const c = board.find(x => x.planId === id);
+            c.kanbanColumn = 'LEAD CODED';
+            c.completedAt = '2026-09-20T10:00:00Z';
+        }
+        const spy = batchSpy();
+        const { server } = makeServer(board, {
+            db: missionDb(FEATURE_MISSION, members),
+            resolveTeamBatchSize: async () => ({ value: 5, source: 'group-row' }),
+            kanbanVerb: spy.kanbanVerb,
+        });
+
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Lead 1', missionId: 'm1' });
+
+        assert.strictEqual(spy.calls.length, 1, 'the drained wave releases the next one');
+        assert.deepStrictEqual(spy.calls[0].payload.sessionIds, ['m6', 'm7', 'm8', 'm9', 'm10'],
+            'the next five, in queue order');
+        assert.strictEqual(out.payload.wave.remaining, 2, 'two members remain after the second wave');
+    });
+
+    await check('Coding cadence one: exactly one member in flight, the next released on completion', async () => {
+        const members = ['m1', 'm2', 'm3', 'm4'];
+        const board = members.map((id, i) => card(id, 'STAGING', { columnOrder: i + 1 }));
+        const codingMission = { id: 'm2', name: 'Coding batch', team: 'coding-team', workspaceId: 'ws1' };
+        const spy = batchSpy();
+        const { server, dispatched } = makeServer(board, {
+            db: missionDb(codingMission, members),
+            resolveTeamBatchSize: async () => ({ value: 1, source: 'group-row' }),
+            kanbanVerb: spy.kanbanVerb,
+        });
+
+        // Nothing in flight: one card goes, through the single-card path.
+        const first = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coder', missionId: 'm2' });
+        assert.deepStrictEqual(dispatched, ['m1'], 'a cadence of one is today\'s pop');
+        assert.strictEqual(spy.calls.length, 0, 'a cadence of one is not a wave');
+        assert.ok(first.payload.dispatched, 'the pop reports the dispatch');
+
+        // Now that member is out and incomplete: nothing else may go.
+        board.find(c => c.planId === 'm1').kanbanColumn = 'CODER CODED';
+        const second = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coder', missionId: 'm2' });
+        assert.strictEqual(second.payload.dispatched, null, 'one means one');
+        assert.ok(/in flight/.test(String(second.payload.reason)), `the hold must name itself: ${second.payload.reason}`);
+        assert.deepStrictEqual(dispatched, ['m1'], 'no second card was popped');
+
+        // The in-flight member asserts completion: the next one releases.
+        board.find(c => c.planId === 'm1').completedAt = '2026-09-20T10:00:00Z';
+        await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coder', missionId: 'm2' });
+        assert.deepStrictEqual(dispatched, ['m1', 'm2'], 'the completion releases the next member');
+    });
+
+    await check('a wave that would carry a feature goes one card at a time', async () => {
+        // Features are never distributed (the batch arm refuses a set containing
+        // one), so a wave is not available for them.
+        const members = ['f1', 'm2', 'm3', 'm4', 'm5', 'm6'];
+        const board = [
+            card('f1', 'STAGING', { columnOrder: 1, isFeature: true }),
+            ...members.slice(1).map((id, i) => card(id, 'STAGING', { columnOrder: i + 2 })),
+        ];
+        const spy = batchSpy();
+        const { server, dispatched } = makeServer(board, {
+            db: missionDb(FEATURE_MISSION, members),
+            resolveTeamBatchSize: async () => ({ value: 5, source: 'group-row' }),
+            kanbanVerb: spy.kanbanVerb,
+        });
+
+        await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Lead 1', missionId: 'm1' });
+
+        assert.strictEqual(spy.calls.length, 0, 'a set containing a feature is never distributed as a wave');
+        assert.deepStrictEqual(dispatched, ['f1'], 'the feature is dispatched to its lead on the single-card path');
+    });
+
+    await check('the shipped cadence is Feature five, everything else one', async () => {
+        const { DEFAULT_TEAM_DEFINITIONS } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
+        const byId = id => DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === id);
+        assert.strictEqual(byId('feature-implementation').batchSize, 5, 'the Feature lead takes a wave of five');
+        for (const id of ['coding-team', 'multi-agent-planning', 'planning-team', 'review-team']) {
+            assert.strictEqual(byId(id).batchSize, 1, `${id} releases one at a time`);
+        }
+    });
+
+    await check('an absent or invalid cadence reads as one, tagged with its source', async () => {
+        const { readTeamBatchSize, DEFAULT_TEAM_BATCH_SIZE } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
+        const { TEAM_BATCH_PLAN_CAP } = require(path.join(process.cwd(), 'out', 'services', 'agentPromptBuilder.js'));
+        assert.strictEqual(DEFAULT_TEAM_BATCH_SIZE, 1);
+        assert.deepStrictEqual(readTeamBatchSize({}), { value: 1, source: 'default:absent' });
+        assert.deepStrictEqual(readTeamBatchSize({ batchSize: 'nonsense' }), { value: 1, source: 'default:invalid' });
+        assert.deepStrictEqual(readTeamBatchSize({ batchSize: 0 }), { value: 1, source: 'default:invalid' });
+        assert.deepStrictEqual(readTeamBatchSize({ batchSize: 5 }), { value: 5, source: 'group-row' });
+        assert.deepStrictEqual(readTeamBatchSize({ batchSize: 99 }), { value: TEAM_BATCH_PLAN_CAP, source: 'default:capped' });
+    });
+
+    await check('the drain carries no cadence constant — the value comes from the team read', async () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        const start = src.indexOf('private async _runQueuePop(');
+        assert.ok(start > 0, 'the pop must exist');
+        const body = src.slice(start, src.indexOf('\n    /**', start + 10));
+        assert.ok(/resolveTeamBatchSize/.test(body), 'the cadence is read from the team, through the seam');
+        assert.ok(!/batchSize\s*=\s*\d/.test(body), 'no cadence constant is written into the drain');
     });
 
     console.log('');
