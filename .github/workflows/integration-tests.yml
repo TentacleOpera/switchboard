@@ -1877,6 +1877,22 @@ jobs:
       - name: Mission release column contract
         run: npm run test:contract:mission-release-column
 
+      # A mission can be paused and resumed (Mission 07). Pause cannot be
+      # derived — `runState` is computed from member state on every read, so a
+      # paused mission with no in-flight member is indistinguishable from one
+      # that never started, and `ready` is arm-ness — so the fact is STORED
+      # (`missions.paused`, V85) and refused inside the serialised pop. Pins that
+      # a paused mission delivers nothing and keeps its members and their queue
+      # order; that "paused", "drained" and "held" are three different strings;
+      # that resume continues from the next UNDELIVERED member rather than the
+      # first and never re-launches; that stopping a team pauses its mission
+      # rather than releasing it; and that PAUSED and UNARMED are different
+      # strings on the card and different columns in the row.
+      # Drives the real compiled services from out/, so this step must stay AFTER
+      # "Compile test outputs".
+      - name: Mission pause/resume contract
+        run: npm run test:contract:mission-pause-resume
+
       # External-headed team mode: the lead is a non-terminal agent, so every
       # failure mode is a silent mis-route. The head must stay out of the group
       # roster (a head name in `members` seats a pane that can never exist), the

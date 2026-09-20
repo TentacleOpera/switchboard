@@ -11601,6 +11601,25 @@
             return t && t.status !== 'exited';
         });
         if (liveMembers.length === 0) { showPaneToast('No live members to close'); return; }
+        // STOPPING A TEAM MID-FLIGHT PAUSES ITS MISSION (Mission 07). A team
+        // closed with members undelivered used to leave its mission wedged — the
+        // seats are gone, nothing is in flight, and a mission with no in-flight
+        // member is indistinguishable from one that never started. So the pause
+        // is written BEFORE the seats die, server-side, in one call: the mission
+        // keeps its members, its queue order and its hold, and a resumed mission
+        // continues from the next undelivered member. A team with no mission, or
+        // whose mission is fully delivered, is reported in `skipped` and stops
+        // exactly as it did before. Best-effort by design: an operator close must
+        // never be blocked by a pause write, and the pause is idempotent.
+        if (snap.definitionId) {
+            try {
+                await fetch('/kanban/mission/pause-team', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ teamId: snap.definitionId })
+                });
+            } catch { /* best-effort — the close must not be blocked by the pause */ }
+        }
         const results = await teamFanOut(liveMembers, async (name) => {
             await fetch('/terminals/verb/ptyCloseTerminal', {
                 method: 'POST',

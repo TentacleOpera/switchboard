@@ -2441,6 +2441,27 @@ body.theme-claudify .shared-tab-btn.active {
     text-transform: uppercase;
     cursor: help;
 }
+/* PAUSED and UNARMED are two different STORED facts (Mission 07) and must never
+   look the same: `paused` holds the drain, `ready` is arm-ness. Different
+   colours, different strings — a card that is both draws both. */
+.kanban-card.mission-card .mission-paused {
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(120,160,255,.18);
+    color: #7aa0ff;
+    text-transform: uppercase;
+    cursor: help;
+}
+.kanban-card.mission-card .mission-unarmed {
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255,255,255,.08);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    cursor: help;
+}
 
 body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
@@ -5842,6 +5863,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const streamDepth = mission.sequencing?.length ? `${mission.sequencing.length} step(s)` : '';
             const statusLabel = runState === 'in-flight' ? 'IN FLIGHT' : (runState === 'completed' ? 'COMPLETED' : 'READY');
             const statusClass = runState === 'in-flight' ? ' is-working' : '';
+            // PAUSED and UNARMED are two DIFFERENT stored facts (Mission 07):
+            // `paused` stops the drain, `ready` is arm-ness. Neither may render as
+            // the other, and a mission that is both renders both — collapsing them
+            // is how a state field becomes a fallback that looks like a value. The
+            // strings differ ("PAUSED" vs "UNARMED") and so do the classes.
+            const isPaused = mission.paused === true;
+            const isUnarmed = mission.ready !== true;
+            const pausedSpan = isPaused
+                ? `<span class="mission-paused" data-tooltip="Paused — no member is released, the queue order is kept, and the team stays held. Resume continues from the next undelivered member.">PAUSED</span>`
+                : '';
+            const unarmedSpan = isUnarmed
+                ? `<span class="mission-unarmed" data-tooltip="Not armed — a scheduler will not take this mission.">UNARMED</span>`
+                : '';
             // Members the release gate holds (Mission 08). The reason is a fact
             // about where the card sits, so it rides in the tooltip — one span on
             // the existing card, never a second card element.
@@ -5851,18 +5885,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 ? `<span class="mission-held" data-tooltip="${escapeAttr(heldTip)}">${held.length} held</span>`
                 : '';
             return `
-                <div class="kanban-card mission-card${statusClass}" draggable="true" data-mission-id="${escapeAttr(mission.id)}" data-mission-name="${escapeAttr(mission.name)}" data-run-state="${escapeAttr(runState)}" data-workspace-root="${escapeAttr(currentWorkspaceRoot || '')}">
+                <div class="kanban-card mission-card${statusClass}" draggable="true" data-mission-id="${escapeAttr(mission.id)}" data-mission-name="${escapeAttr(mission.name)}" data-run-state="${escapeAttr(runState)}" data-paused="${isPaused ? '1' : '0'}" data-workspace-root="${escapeAttr(currentWorkspaceRoot || '')}">
                     <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
                         <span class="card-topic" style="font-weight:600;">${name}</span>
                         <span class="mission-badge">${statusLabel}</span>
                     </div>
                     <div class="card-meta" style="font-size:10px; color:var(--text-secondary); margin-top:4px; display:flex; justify-content:space-between;">
                         <span>${memberCount} member(s)</span>
+                        ${pausedSpan}
+                        ${unarmedSpan}
                         ${heldSpan}
                         ${streamDepth ? `<span>${streamDepth}</span>` : ''}
                     </div>
                     <div class="card-actions" style="margin-top:6px; display:flex; gap:4px;">
                         <button class="card-btn mission-launch-btn" data-mission-id="${escapeAttr(mission.id)}" data-tooltip="Launch mission" ${runState === 'in-flight' ? 'disabled' : ''}>Launch</button>
+                        <button class="card-btn mission-pause-btn" data-mission-id="${escapeAttr(mission.id)}" data-paused="${isPaused ? '1' : '0'}" data-tooltip="${isPaused ? 'Resume — continue from the next undelivered member' : 'Pause — stop releasing members without losing the queue order'}">${isPaused ? 'Resume' : 'Pause'}</button>
                     </div>
                 </div>
             `;
@@ -6268,6 +6305,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const launchBtn = e.target.closest('.mission-launch-btn');
                 if (launchBtn) {
                     postKanbanMessage({ type: 'mcLaunchMission', missionId: card.dataset.missionId, workspaceRoot: root });
+                    return;
+                }
+                // Pause/resume is a stored flag (Mission 07) and goes through the
+                // mission's own update verb — the same door the panel uses, so
+                // there is no second write path for the drain to disagree with.
+                const pauseBtn = e.target.closest('.mission-pause-btn');
+                if (pauseBtn) {
+                    const nextPaused = pauseBtn.dataset.paused !== '1';
+                    postKanbanMessage({
+                        type: 'mcUpdateMission',
+                        missionId: card.dataset.missionId,
+                        field: 'paused',
+                        value: nextPaused,
+                        workspaceRoot: root
+                    });
                     return;
                 }
                 postKanbanMessage({ type: 'openSetupPanel', section: 'mission-control', workspaceRoot: root });

@@ -525,6 +525,7 @@ CREATE TABLE IF NOT EXISTS missions (
     type                TEXT NOT NULL DEFAULT 'mission',
     goal                TEXT DEFAULT '',
     ready               INTEGER DEFAULT 0,
+    paused              INTEGER DEFAULT 0,
     team                TEXT DEFAULT '',
     max_extra_worktrees INTEGER DEFAULT 0,
     workspace_id        TEXT NOT NULL,
@@ -1098,6 +1099,17 @@ const MIGRATION_V65_SQL = [
 const MIGRATION_V66_SQL = [
     `CREATE TABLE IF NOT EXISTS mission_milestones (mission_id TEXT PRIMARY KEY, milestone_id TEXT NOT NULL, project_id TEXT NOT NULL, workspace_id TEXT NOT NULL, synced_at TEXT NOT NULL)`,
     `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
+];
+
+// V85: missions.paused — the stored pause (Mission 07). Pause CANNOT be derived:
+// `runState` is computed from member state on every read (so a paused mission
+// with no in-flight member is indistinguishable from an unstarted one) and
+// `ready` is arm-ness, not a run state. A stored flag is the only place the fact
+// can live, and `DEFAULT 0` is the correct reading for every pre-existing row — a
+// mission that could not be paused was never paused. Additive; fresh DBs already
+// get the column from SCHEMA_TABLES_SQL, so the ALTER is a no-op there.
+const MIGRATION_V85_SQL = [
+    `ALTER TABLE missions ADD COLUMN paused INTEGER DEFAULT 0`,
 ];
 
 // V67: plans.priority (1-4 or NULL for no priority).
@@ -11790,6 +11802,18 @@ export class KanbanDatabase {
             }
         }
 
+        // V85: missions.paused — the stored pause (Mission 07). See
+        // MIGRATION_V85_SQL for why pause cannot be derived. Additive; fresh DBs
+        // already get the column from SCHEMA_TABLES_SQL.
+        const v85 = await this.getMigrationVersion();
+        if (v85 < 85) {
+            for (const sql of MIGRATION_V85_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(85);
+            console.log('[KanbanDatabase] V85 migration completed: missions.paused column added');
+        }
+
         // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue
         // continuously (a plan deleted or archived elsewhere leaves this machine's
         // runtime row behind), so this is maintenance rather than a migration step.
@@ -16572,7 +16596,7 @@ FROM plans
     public async getMissions(workspaceId: string): Promise<any[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
-            'SELECT id, name, type, goal, ready, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE workspace_id = ? ORDER BY created_at ASC',
+            'SELECT id, name, type, goal, ready, paused, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE workspace_id = ? ORDER BY created_at ASC',
             [workspaceId]
         );
         const list: any[] = [];
@@ -16585,6 +16609,7 @@ FROM plans
                     type: String(r.type || 'mission'),
                     goal: String(r.goal || ''),
                     ready: Number(r.ready || 0) === 1,
+                    paused: Number(r.paused || 0) === 1,
                     team: String(r.team || ''),
                     maxExtraWorktrees: Number(r.max_extra_worktrees || 0),
                     workspaceId: String(r.workspace_id || ''),
@@ -16688,7 +16713,7 @@ FROM plans
     public async getMissionById(missionId: string): Promise<any | null> {
         if (!(await this.ensureReady()) || !this._db || !missionId) return null;
         const stmt = this._db.prepare(
-            'SELECT id, name, type, goal, ready, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE id = ?',
+            'SELECT id, name, type, goal, ready, paused, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE id = ?',
             [missionId]
         );
         let m: any = null;
@@ -16701,6 +16726,7 @@ FROM plans
                     type: String(r.type || 'mission'),
                     goal: String(r.goal || ''),
                     ready: Number(r.ready || 0) === 1,
+                    paused: Number(r.paused || 0) === 1,
                     team: String(r.team || ''),
                     maxExtraWorktrees: Number(r.max_extra_worktrees || 0),
                     workspaceId: String(r.workspace_id || ''),
@@ -16806,6 +16832,7 @@ FROM plans
         type: string;
         goal: string;
         ready: boolean;
+        paused: boolean;
         team: string;
         maxExtraWorktrees: number;
     }>): Promise<boolean> {
@@ -16817,15 +16844,73 @@ FROM plans
         const type = updates.type !== undefined ? updates.type : existing.type;
         const goal = updates.goal !== undefined ? updates.goal : existing.goal;
         const ready = updates.ready !== undefined ? (updates.ready ? 1 : 0) : (existing.ready ? 1 : 0);
+        // The stored pause (Mission 07). Written only when named, so an unrelated
+        // edit (a rename, a goal) never silently unpauses a stopped mission.
+        const paused = updates.paused !== undefined ? (updates.paused ? 1 : 0) : (existing.paused ? 1 : 0);
         const team = updates.team !== undefined ? updates.team : existing.team;
         let maxExtraWorktrees = updates.maxExtraWorktrees !== undefined ? updates.maxExtraWorktrees : existing.maxExtraWorktrees;
         if (type === 'mission' && maxExtraWorktrees > 1) maxExtraWorktrees = 1;
         if (maxExtraWorktrees < 0) maxExtraWorktrees = 0;
 
         return this._persistedUpdate(
-            `UPDATE missions SET name = ?, type = ?, goal = ?, ready = ?, team = ?, max_extra_worktrees = ?, updated_at = datetime('now') WHERE id = ?`,
-            [name, type, goal, ready, team, maxExtraWorktrees, missionId]
+            `UPDATE missions SET name = ?, type = ?, goal = ?, ready = ?, paused = ?, team = ?, max_extra_worktrees = ?, updated_at = datetime('now') WHERE id = ?`,
+            [name, type, goal, ready, paused, team, maxExtraWorktrees, missionId]
         );
+    }
+
+    /**
+     * Pause every mission a TEAM holds that still has undelivered members — the
+     * write behind "stopping a team mid-flight pauses its mission" (Mission 07).
+     *
+     * A stop must not read as a release. Clearing the holder would make the
+     * mission read `not-started` again, which is indistinguishable from a mission
+     * that was never launched — the exact reason pause is STORED. So this writes
+     * `paused = 1` and touches nothing else: members keep their columns, the queue
+     * order (`column_order`) is untouched, and the owner stamps that hold the
+     * team are left in place. Resume then continues from the next undelivered
+     * member rather than re-holding the team.
+     *
+     * "Undelivered" is the plan's own definition: a member whose card is still in
+     * `STAGING`. A member the pop has already moved out of STAGING has been
+     * delivered — `mission_members` survives the move, so membership alone is not
+     * delivery.
+     *
+     * A mission whose members are all delivered is NOT paused: a fully delivered
+     * mission stops and releases exactly as it does today. A team with no mission
+     * matches nothing and stops exactly as today. Both are reported in `skipped`,
+     * with the reason, so "nothing was paused" is never a silent outcome.
+     */
+    public async pauseMissionsForTeam(
+        teamId: string,
+        workspaceId: string
+    ): Promise<{ paused: string[]; skipped: Array<{ missionId: string; reason: string }> }> {
+        const id = String(teamId || '').trim();
+        if (!id) { return { paused: [], skipped: [] }; }
+        if (!(await this.ensureReady()) || !this._db) { return { paused: [], skipped: [] }; }
+        const missions = await this.getMissions(workspaceId);
+        const board = await this.getBoard(workspaceId);
+        const cardOf = (memberId: string) =>
+            board.find((p: any) => p && String(p.planId) === String(memberId));
+        const paused: string[] = [];
+        const skipped: Array<{ missionId: string; reason: string }> = [];
+        for (const m of missions) {
+            if (String(m.team || '') !== id) { continue; }
+            if (m.paused) {
+                skipped.push({ missionId: m.id, reason: 'already paused' });
+                continue;
+            }
+            const members = [...(m.plans || []), ...(m.features || [])];
+            const undelivered = members.some((memberId: string) => {
+                const card = cardOf(String(memberId));
+                return !!card && !card.completedAt && String(card.kanbanColumn || '') === 'STAGING';
+            });
+            if (!undelivered) {
+                skipped.push({ missionId: m.id, reason: 'every member is delivered — stopping releases as today' });
+                continue;
+            }
+            if (await this.updateMission(m.id, { paused: true })) { paused.push(m.id); }
+        }
+        return { paused, skipped };
     }
 
     public async deleteMission(missionId: string): Promise<boolean> {

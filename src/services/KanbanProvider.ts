@@ -41,7 +41,7 @@ import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexi
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { resolveCommandlessRoles } from './agentGroupInstantiation';
 import { PIPELINE_POSITION, isParallelCodedLane, heldMembers, resolveMissionStageFromTeam, type PipelineStage } from './missionStage';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders, isPairDispatchingHeadRole, resolveTeamHeadRoles, resolveHeadForTerminal, refreshShippedTeamDefaults, resolveAutomatedDispatchExclusions, readTeamAutomatedDispatch } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, DEFAULT_TEAM_BATCH_SIZE, resolveTeamBatchSizeForHead, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders, isPairDispatchingHeadRole, resolveTeamHeadRoles, resolveHeadForTerminal, refreshShippedTeamDefaults, resolveAutomatedDispatchExclusions, readTeamAutomatedDispatch } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { readBuildConfig, setBuildTarget, recordBuildResult, resolveBuildResult, lastResultPerTarget, probeBuildTargets, isBuildTargetId, type BuildResult } from './buildTarget';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
@@ -6454,6 +6454,41 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
+     * Resolve the RELEASE CADENCE of the team headed by `headTerminal`: how many
+     * members one release delivers to that team's head (Mission 04). Feature
+     * declares five — one batch dispatch carrying the drive prefix — while Coding
+     * and Multi-agent planning declare one, which is today's pop unchanged.
+     *
+     * Reads the same `terminals.groups` row `resolveTeamPacing` reads (the group
+     * the head leads, by id then by name), so the cadence and the pacing derive
+     * from one definition. Returns the value WITH its source: a routing read whose
+     * "the team declares 1" and "nobody ever set it" must be distinguishable after
+     * the fact. Absent/invalid reads as one — the pre-cadence drain, which is the
+     * regression gate.
+     *
+     * Public so the LocalApiServer composition roots can wire it as the
+     * `resolveTeamBatchSize` callback, exactly as `resolveTeamPacing` is wired.
+     */
+    public async resolveTeamBatchSize(
+        workspaceRoot: string,
+        headTerminal: string | null
+    ): Promise<{ value: number; source: string }> {
+        if (!headTerminal) {
+            return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:no-head' };
+        }
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) {
+                return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:no-db' };
+            }
+            return await resolveTeamBatchSizeForHead({ db, originName: headTerminal });
+        } catch (err) {
+            console.warn('[KanbanProvider] resolveTeamBatchSize failed:', err);
+            return { value: DEFAULT_TEAM_BATCH_SIZE, source: 'default:error' };
+        }
+    }
+
+    /**
      * Resolve the team roster (members minus the head) with per-member roles and
      * liveness, for injection into the drive-mode dispatch prompt. Reads
      * `terminals.groups` from the DB (same path as `resolveCodingRolesFromGroups`),
@@ -10700,6 +10735,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // that resolved the role through _resolveKanbanDispatchSpec hands it
             // in explicitly rather than letting the operation re-derive null.
             dispatchRole?: string;
+            // The terminal this batch is addressed TO, when the caller knows it.
+            // Mission 04's wave release is the case: the drain releases a wave to
+            // the MISSION'S head, and letting the batch command re-resolve the
+            // role's default terminal would hand a two-team board's wave to
+            // whichever head happens to sort first. Omitted (every other caller)
+            // leaves today's resolution untouched.
+            dispatchTerminal?: string;
         }
     ): Promise<{
         success: boolean;
@@ -10916,9 +10958,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const role = options.dispatchRole ?? this._columnToRole(target);
             if (role) {
                 if (dispatchIds.length === 1) {
-                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], undefined, workspaceRoot, undefined);
+                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], undefined, workspaceRoot, options.dispatchTerminal);
                 } else {
-                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined);
+                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, options.dispatchTerminal);
                 }
                 dispatched = true;
             }
@@ -12064,14 +12106,22 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // panel. `runState` is deliberately absent: it is DERIVED from
                 // member state on read (see `_deriveMissionRunState`), never
                 // stored, so a run that dies mid-flight cannot leave a mission
-                // reading "in-flight" forever.
-                const MC_EDITABLE = new Set(['name', 'type', 'goal', 'ready', 'team', 'maxExtraWorktrees']);
+                // reading "in-flight" forever. `paused` IS stored (V85) — pause
+                // cannot be derived, and it is the operator's hold on the drain
+                // (Mission 07), so it is editable here.
+                const MC_EDITABLE = new Set(['name', 'type', 'goal', 'ready', 'paused', 'team', 'maxExtraWorktrees']);
                 if (!msg.field || !MC_EDITABLE.has(String(msg.field))) {
                     return { success: false, error: `Field '${String(msg.field)}' is not editable on a mission` };
                 }
                 const updates: any = { [String(msg.field)]: msg.value };
                 await ctx.db.updateMission(msg.missionId, updates);
                 await this._postMissions(ctx);
+                // `paused` (like `ready`) is rendered on the BOARD's mission card,
+                // not only in this panel — `mcMissions` alone would leave the card
+                // showing the state the operator just changed.
+                if (String(msg.field) === 'paused' || String(msg.field) === 'ready') {
+                    await this._refreshBoard(ctx.workspaceRoot);
+                }
                 return { success: true };
             }
             case 'mcDeleteMission': {
@@ -12712,7 +12762,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     initiatorProject: msg.initiatorProject,
                     bypassTriggerGate: msg?.bypassTriggerGate,
                     dispatch: dispatchSpec?.source !== 'custom-user',
-                    dispatchRole: role ?? undefined
+                    dispatchRole: role ?? undefined,
+                    // The drain's wave release names the head it is addressing
+                    // (Mission 04); every webview caller leaves this undefined.
+                    dispatchTerminal: typeof msg.targetTerminal === 'string' && msg.targetTerminal.trim()
+                        ? msg.targetTerminal.trim()
+                        : undefined
                 });
                 const dispatchIds = result.moved.map(m => m.id);
 
@@ -17729,6 +17784,9 @@ ${FOCUS_DIRECTIVE}`;
 
         const dispatchedHeads: string[] = [];
         let firstDispatched: string | null = null;
+        // Set when a pop refused because the mission is PAUSED, so the refusal
+        // below can name the pause rather than a generic "Dispatch refused."
+        let pausedRefusal = false;
         const toDispatch = Math.min(streams, candidateHeads.length);
 
         for (let i = 0; i < toDispatch; i++) {
@@ -17746,12 +17804,22 @@ ${FOCUS_DIRECTIVE}`;
             if (pop && pop.status === 200 && pop.payload?.dispatched) {
                 dispatchedHeads.push(head);
                 if (!firstDispatched) firstDispatched = pop.payload.dispatched;
+            } else if (pop && pop.payload?.paused) {
+                // A paused mission releases nothing (Mission 07). Saying so beats
+                // the generic refusal below — the operator asked to launch a
+                // mission they had stopped, and that is a fact worth naming.
+                pausedRefusal = true;
             }
         }
 
         await this._refreshBoard(workspaceRoot);
         if (dispatchedHeads.length === 0) {
-            return { success: false, error: 'Dispatch refused.' };
+            return {
+                success: false,
+                error: pausedRefusal
+                    ? 'Mission is paused — resume it before launching.'
+                    : 'Dispatch refused.'
+            };
         }
         // The shortfall is measured against what was actually SEATED, not against
         // how many candidate terminals were listed. Several candidates can belong

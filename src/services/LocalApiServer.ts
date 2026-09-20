@@ -563,6 +563,19 @@ interface LocalApiServerOptions {
      */
     resolveTeamPacing?: (workspaceRoot: string, headTerminal: string) => Promise<'head' | 'seat'>;
     /**
+     * How many members ONE release delivers to this team's head (Mission 04) —
+     * the team's declared cadence, read from the same live group row `pacing`
+     * comes from. Feature declares five (one batch dispatch carrying the drive
+     * prefix); Coding and Multi-agent planning declare one, which is the pop
+     * unchanged.
+     *
+     * Returns the value WITH its source, because this is a routing read: "the
+     * team declares 1" and "nothing ever set it" must be distinguishable after
+     * the fact. A missing callback leaves the drain at one — the pre-cadence
+     * behaviour — and says so in the log rather than silently ignoring the field.
+     */
+    resolveTeamBatchSize?: (workspaceRoot: string, headTerminal: string) => Promise<{ value: number; source: string }>;
+    /**
      * Clear a seat terminal's context (clipboard-paste `/clear`) after it
      * reports a card done via `POST /kanban/queue/done`, so a finisher does
      * not keep the prior card's context indefinitely. Reuses the dispatch
@@ -4079,6 +4092,37 @@ export class LocalApiServer {
                 if (missionWs && wsId && missionWs !== String(wsId)) {
                     return fail(400, `missionId '${missionId}' belongs to workspace '${missionWs}', not '${wsId}'`);
                 }
+
+                // ── Pause stops the drain (Mission 07) ─────────────────────
+                // A paused mission releases NOTHING: no member is dispatched,
+                // `column_order` is untouched, the owner stamps that hold the team
+                // are left in place, and no wave/round advances — every release
+                // path in this host funnels through this pop, so refusing here
+                // covers a completion-driven advance as well as an explicit
+                // `queue/next`.
+                //
+                // The check lives INSIDE the serialised section, beside the member
+                // read, not in a caller: a caller-side check races a resume, and
+                // `launchMission` / the seat-paced `queue/done` release both reach
+                // the pop in-process.
+                //
+                // `paused` is a STORED fact (V85) — `runState` is derived on every
+                // read and `ready` is arm-ness, so neither can express it, and a
+                // paused mission with no in-flight member would otherwise be
+                // indistinguishable from one that never started.
+                //
+                // The empty result NAMES the pause, so "paused" and "drained" are
+                // never the same string. 200, not a refusal: the queue is simply
+                // held, and a resume picks up from the next undelivered member.
+                if (mission.paused === true || Number(mission.paused) === 1) {
+                    return { status: 200, payload: {
+                        success: true, dispatched: null,
+                        reason: `paused: mission ${missionId} is paused — no member is released while paused`,
+                        missionId,
+                        paused: true,
+                    } };
+                }
+
                 const members = await db.getMissionMembers(missionId);
                 missionMemberIds = new Set(members.map((m: any) => String(m.memberId)));
 
@@ -4381,6 +4425,166 @@ export class LocalApiServer {
                     ...(missionId && missionStageReason ? { stageReason: missionStageReason } : {}),
                 } };
             }
+            // ── The cadence: how many members ONE release delivers (Mission 04) ──
+            //
+            // The rate is a property of the TEAM the mission is bound to, read the
+            // same way `pacing` is (a team-group field through a resolver seam), so
+            // the drain carries no cadence constant of its own. Feature declares
+            // five — one batch dispatch carrying the drive prefix — Coding and
+            // Multi-agent planning declare one, which is today's pop unchanged.
+            //
+            // The value is read INSIDE the critical section, so a cadence flip is
+            // picked up by the next release rather than at host start.
+            let waveSize = 1;
+            let waveSizeSource = 'default:unscoped';
+            if (missionId && missionStage && this._options.resolveTeamBatchSize) {
+                try {
+                    const cadence = await this._options.resolveTeamBatchSize(workspaceRoot, from);
+                    waveSize = Math.max(1, Math.floor(Number(cadence?.value) || 1));
+                    waveSizeSource = String(cadence?.source || 'unknown');
+                } catch (cadenceErr) {
+                    // A read that FAILED is not "the team declares one": it is a
+                    // routing read with no answer, and delivering one at a time is
+                    // the visible, safe direction. Say which source answered.
+                    console.warn(`[LocalApiServer] mission '${missionId}': cadence read failed for head '${from}' — releasing one at a time:`, cadenceErr);
+                    waveSize = 1;
+                    waveSizeSource = 'default:error';
+                }
+                console.log(`[LocalApiServer] mission '${missionId}': cadence ${waveSize} (${waveSizeSource}) for head '${from}'`);
+            }
+
+            // IN FLIGHT — the members this mission has already released and which
+            // have not asserted completion. Derived from the mission's own cards,
+            // never from a ledger: V81 deleted the in-flight refusal, so there is
+            // no accounting to read, and the asserted-completion fact is the same
+            // one the dependency gate and the stage gate already read.
+            //
+            // A mission releases ONLY when nothing of its own is in flight. That is
+            // what makes "Coding one" one, and it is what stops a second pop from
+            // stacking a second wave on top of the first — the release is
+            // idempotent under the serialised chain because this is computed
+            // inside it.
+            const inFlightMembers: string[] = [];
+            if (missionId && missionMemberIds && missionStage) {
+                for (const memberId of missionMemberIds) {
+                    const card = board.find((row: any) => row && String(row.planId) === memberId);
+                    if (!card || card.completedAt) { continue; }
+                    const verdict = releaseVerdict(missionStage, card.kanbanColumn);
+                    if (verdict.verdict === 'delivered') { inFlightMembers.push(memberId); }
+                }
+            }
+
+            // ── The wave release ────────────────────────────────────────
+            // A cadence above one is ONE batch dispatch to the mission's head
+            // carrying up to N members — the same builder the batch path uses, so
+            // `_buildBatchDrivePrefix` applies. N pops would hand the Feature lead N
+            // unrelated single-plan prompts and silently discard the drive contract
+            // that makes five-in-flight work at all; that is the failure this plan
+            // exists to prevent.
+            if (waveSize > 1 && missionId && missionStage) {
+                if (inFlightMembers.length > 0) {
+                    // The previous wave is still out. Holding is the whole point of
+                    // a cadence: releasing now would put more members in flight than
+                    // the team asked for. A wave whose seat died stays held — the
+                    // queue watch is the existing nudge, and no timer releases work.
+                    return { status: 200, payload: {
+                        success: true, dispatched: null,
+                        reason: `wave in flight: ${inFlightMembers.length} member(s) of mission ${missionId} have not asserted completion`,
+                        missionId,
+                        inFlight: inFlightMembers,
+                        cadence: { size: waveSize, source: waveSizeSource },
+                    } };
+                }
+                if (!this._options.kanbanVerb) {
+                    console.warn(`[LocalApiServer] mission '${missionId}': cadence ${waveSize} but this host wires no kanbanVerb — releasing one member instead`);
+                } else {
+                    const wave = candidates.slice(0, waveSize);
+                    const waveIds = wave.map((p: any) => String(p.planId));
+                    // FEATURES ARE NEVER DISTRIBUTED. A set containing one is
+                    // refused whole by the batch arm (a feature always resolves to
+                    // ONE lead), so a wave that would carry one is not a wave:
+                    // fall through to the single-card path below, which resolves a
+                    // feature to its lead. A feature mission then runs one feature
+                    // at a time, which is what its own routing demands.
+                    const waveHasFeature = wave.some((p: any) => p && p.isFeature === true);
+                    if (waveHasFeature) {
+                        console.log(`[LocalApiServer] mission '${missionId}': the next ${waveIds.length} member(s) include a feature — features are never distributed, so this release goes one card at a time`);
+                    } else {
+                        const waveOutcome = await this._options.kanbanVerb('triggerBatchAction', {
+                            sessionIds: waveIds,
+                            targetColumn: missionStage.column,
+                            workspaceRoot,
+                            // The pop IS an explicit dispatch: the webview's CLI-triggers
+                            // toggle governs a DRAG, and a drain that stopped at it would
+                            // deliver nothing on a board with triggers off.
+                            bypassTriggerGate: true,
+                            // The wave is addressed to the head that asked — the mission's
+                            // head — not to whatever terminal the role resolves to
+                            // workspace-wide.
+                            targetTerminal: from,
+                        }, workspaceRoot);
+                        const released = waveOutcome && waveOutcome.success !== false && waveOutcome.dispatched === true;
+                        if (!released) {
+                            // Nothing was delivered. The members this attempted are
+                            // named so the caller does not read a bare null as "the
+                            // mission is drained".
+                            console.warn(`[LocalApiServer] mission '${missionId}': wave of ${waveIds.length} to '${from}' was not delivered: ${waveOutcome?.error || 'dispatch did not confirm'}`);
+                            return { status: 200, payload: {
+                                success: true, dispatched: null,
+                                reason: `wave not delivered: ${waveOutcome?.error || 'the batch dispatch did not confirm delivery'}`,
+                                missionId,
+                                wave: { attempted: waveIds, cadence: { size: waveSize, source: waveSizeSource } },
+                                ...(missionHeld.size > 0
+                                    ? { heldMembers: [...missionHeld.entries()].map(([planId, reason]) => ({ planId, reason })) }
+                                    : {}),
+                            } };
+                        }
+                        if (this._options.armQueueWatch) {
+                            try { await this._options.armQueueWatch(workspaceRoot, from, { onDispatch: true }); }
+                            catch (armErr) { console.warn('[LocalApiServer] armQueueWatch (wave) failed:', armErr); }
+                        }
+                        return { status: 200, payload: {
+                            success: true,
+                            // The count is what was RELEASED, never what was selected —
+                            // the rule the batch prompt builder already states.
+                            dispatched: {
+                                wave: true,
+                                planIds: waveIds,
+                                terminal: from,
+                                column: missionStage.column,
+                                role: waveOutcome?.role ?? null,
+                                moved: Array.isArray(waveOutcome?.moved) ? waveOutcome.moved.map((m: any) => m.id) : waveIds,
+                            },
+                            from,
+                            wave: {
+                                released: waveIds,
+                                cadence: { size: waveSize, source: waveSizeSource },
+                                remaining: Math.max(0, candidates.length - waveIds.length),
+                            },
+                            missionId,
+                            ...(missionHeld.size > 0
+                                ? { heldMembers: [...missionHeld.entries()].map(([planId, reason]) => ({ planId, reason })) }
+                                : {}),
+                        } };
+                    }
+                }
+            }
+
+            // A mission-scoped pop whose previous member is still out releases
+            // NOTHING at cadence one either: "Coding one" means one, and the next
+            // member is released by the completion that drains it. Same rule as the
+            // wave above, one branch for both so the two cadences cannot disagree
+            // about what "in flight" means.
+            if (missionId && missionStage && inFlightMembers.length > 0) {
+                return { status: 200, payload: {
+                    success: true, dispatched: null,
+                    reason: `in flight: ${inFlightMembers.length} member(s) of mission ${missionId} have not asserted completion`,
+                    missionId,
+                    inFlight: inFlightMembers,
+                    cadence: { size: waveSize, source: waveSizeSource },
+                } };
+            }
+
             // Precedence decides the order; it never decides eligibility. Anything
             // that makes a card ineligible — complete, a subtask, or a dependency
             // predecessor that has not asserted
@@ -4553,6 +4757,61 @@ export class LocalApiServer {
             console.error('[LocalApiServer] _runQueuePop error:', err);
             return fail(500, err instanceof Error ? err.message : 'dispatchNextFromQueue failed');
         }
+    }
+
+    /**
+     * Release a mission's next wave after one of its members asserted
+     * completion (Mission 04).
+     *
+     * The signal is asserted completion, never a timer and never silence: a wave
+     * that advanced on a clock would dispatch work nobody asked for, which is the
+     * failure the board's whole completion contract exists to prevent. The
+     * release itself is the POP's job — this only asks for one, scoped to the
+     * mission, and the pop recomputes "is anything of mine still out?" inside the
+     * serialised chain. That is what makes two completions racing release one
+     * wave rather than two: the second pop finds the first wave in flight and
+     * holds.
+     *
+     * Fire-and-forget by design: the accept has already succeeded, and a release
+     * that fails must not turn a completion into an error. Enqueued on
+     * `_queueNextChain` directly rather than through `dispatchNextFromQueue`,
+     * which would re-enqueue and deadlock.
+     *
+     * A no-op for a card in no mission — the unscoped drain keeps its pull
+     * semantics exactly as they are.
+     */
+    private _releaseNextWaveAfterCompletion(
+        workspaceRoot: string,
+        from: string,
+        planId: string,
+        _ownerSeat?: string | null
+    ): void {
+        void (async () => {
+            try {
+                const head = String(from || '').trim();
+                if (!head || !planId) { return; }
+                const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+                if (!db || typeof db.getMissionsForMember !== 'function') { return; }
+                const missions = await db.getMissionsForMember(planId);
+                const missionId = Array.isArray(missions) && missions.length > 0 ? String(missions[0]) : '';
+                if (!missionId) { return; }
+                _queueNextChain = _queueNextChain.then(async () => {
+                    try {
+                        const pop = await this._runQueuePop(workspaceRoot, head, undefined, missionId);
+                        const released = pop?.payload?.dispatched ?? null;
+                        if (released) {
+                            console.log(`[LocalApiServer] mission '${missionId}': released the next wave to '${head}' after '${planId}' asserted completion`);
+                        } else {
+                            console.log(`[LocalApiServer] mission '${missionId}': nothing released after '${planId}' asserted completion — ${pop?.payload?.reason || 'no reason reported'}`);
+                        }
+                    } catch (popErr) {
+                        console.warn('[LocalApiServer] mission wave release failed:', popErr);
+                    }
+                });
+            } catch (err) {
+                console.warn('[LocalApiServer] mission wave release lookup failed:', err);
+            }
+        })();
     }
 
     /**
@@ -5495,6 +5754,21 @@ export class LocalApiServer {
                         console.warn('[LocalApiServer] onTeamReleased hook error:', releaseErr);
                     }
                 })();
+            }
+
+            // ── The advance (Mission 04) ───────────────────────────────
+            // A mission releases its next wave when EVERY member of the in-flight
+            // wave has asserted completion. This is where that fact lands for a
+            // head-paced team: the head accepts per plan (`accept --plan`), so the
+            // last accept is the signal. Fire-and-forget and enqueued on the pop's
+            // own chain — the release is idempotent there (it recomputes "is
+            // anything of mine still out?" inside the critical section), so two
+            // completions racing release one wave, not two.
+            //
+            // It is a no-op for a card in no mission and for an unscoped drain:
+            // only a mission member's completion can release a mission's next wave.
+            if (result.success) {
+                this._releaseNextWaveAfterCompletion(workspaceRoot, from, planId, result.ownerSeat);
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -6957,6 +7231,33 @@ export class LocalApiServer {
                 const ok = await db.updateMission(missionId, body);
                 res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: ok, missionId }));
+                return;
+            }
+
+            // Stopping a TEAM mid-flight pauses the missions it holds rather than
+            // releasing them (Mission 07). The operator's team-stop gesture is a
+            // client fan-out over `ptyCloseTerminal`, which knows nothing about
+            // missions, so the pause is one server call the client makes before it
+            // closes the seats. A mission with no undelivered member is left alone
+            // and reported in `skipped` — a fully delivered mission stops and
+            // releases exactly as it does today, and so does a team with no
+            // mission at all.
+            if (pathname === '/kanban/mission/pause-team' && req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const teamId = String(body?.teamId || '').trim();
+                if (!teamId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Missing required field: teamId' }));
+                    return;
+                }
+                if (typeof db.pauseMissionsForTeam !== 'function') {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'This host\'s kanban database cannot pause missions' }));
+                    return;
+                }
+                const result = await db.pauseMissionsForTeam(teamId, wsId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, teamId, ...result }));
                 return;
             }
 
