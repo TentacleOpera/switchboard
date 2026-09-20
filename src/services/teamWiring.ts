@@ -2072,6 +2072,12 @@ export async function startTeamById(opts: {
         if (ownHead && liveNames.has(ownHead)) {
             return {
                 success: false,
+                // A MACHINE-READABLE CODE, because callers were matching on the
+                // prose and the prose changed. `terminals.js` tested for
+                // "already live" while this message says "already running", so a
+                // benign skip rendered as an error toast. A caller that needs to
+                // tell "already running" from a real failure reads `code`.
+                code: 'TEAM_ALREADY_RUNNING',
                 error: `Team "${team.name}" is already running as "${ownHead}". Stop it first — a second head is not started.`,
             };
         }

@@ -1183,26 +1183,30 @@
                     showPaneToast('No teams defined — add one in the TEAMS tab.');
                     return;
                 }
-                const liveHeadRoles = new Set(
-                    (Array.isArray(fleetList) ? fleetList : [])
-                        .filter(t => t && t.status === 'active' && !t.parentInstanceId && t.role)
-                        .map(t => t.role)
-                );
-                const toStart = teams.filter(team => {
-                    if (!team || !team.id) { return false; }
-                    // Mirror startTeamById's guard EXACTLY (teamWiring.ts): it compares
-                    // `t.role === team.headRole` with no default, so a team carrying no
-                    // headRole is never refused. Defaulting to 'lead' here would skip
-                    // such a team whenever any unparented lead is live — a start the
-                    // backend would have allowed.
-                    if (!team.headRole) { return true; }
-                    return !liveHeadRoles.has(team.headRole);
-                });
-                const skippedCount = teams.length - toStart.length;
+                // NO CLIENT-SIDE PRE-FILTER. This used to mirror
+                // `startTeamById`'s guard by hand — "is any unparented terminal
+                // of this head role live" — and the host guard changed
+                // (`408101ac`) to ask whether THIS TEAM'S OWN group is running.
+                // The copy was not updated, so it kept refusing starts the host
+                // would allow.
+                //
+                // The case it broke is one the shipped set requires: Planning
+                // and Multi-agent planning are BOTH `planner`-headed by design
+                // (`teamWiring.ts` — "two teams sharing a head role is an
+                // ordinary configuration that nothing objects to"). With
+                // Planning up, the mirror silently skipped Multi-agent planning
+                // and reported everything already running.
+                //
+                // The host is the only authority on whether a team can start.
+                // Ask it per team and read the answer — the refusal is already
+                // handled below. A mirrored rule cannot drift if there is no
+                // mirror.
+                const toStart = teams.filter(team => team && team.id);
                 if (toStart.length === 0) {
-                    showPaneToast('All teams already running.');
+                    showPaneToast('No teams defined — add one in the TEAMS tab.');
                     return;
                 }
+                let skippedCount = 0;
                 btnStartAllTeams.disabled = true;
                 const label = btnStartAllTeams.textContent;
                 btnStartAllTeams.textContent = 'STARTING…';
@@ -1214,9 +1218,14 @@
                         const data = await startTeam({ id: team.id }, targetSpec, { silent: true });
                         if (data && data.success) {
                             startedCount++;
-                        } else if (data && typeof data.error === 'string' && data.error.includes('already live')) {
-                            // The team started between the pre-filter read (up to one
-                            // poll stale) and this call — a benign skip, not an error.
+                        } else if (data && (data.code === 'TEAM_ALREADY_RUNNING'
+                                || (typeof data.error === 'string' && /already (running|live)/i.test(data.error)))) {
+                            // Already running is a benign skip, not an error.
+                            // Read the CODE; the prose fallback is for a host
+                            // older than `TEAM_ALREADY_RUNNING`. Matching prose
+                            // alone is what broke this: the test was for
+                            // "already live" and the message became "already
+                            // running", so a skip surfaced as a failure toast.
                             finalSkippedCount++;
                         } else if (data) {
                             showPaneToast(`Could not start team '${team.name || team.id}': ${data.error || 'request failed'}`);
