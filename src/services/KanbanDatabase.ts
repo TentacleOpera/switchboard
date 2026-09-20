@@ -683,18 +683,31 @@ CREATE TABLE IF NOT EXISTS control_plane (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (name, kind)
 );
--- coding_rounds: one row per coding round (Coding Rounds feature, subtask 01).
--- Records the durable round state that previously lived only in the lead's context:
--- which feature/team the round belongs to, its ordinal among the registered rounds,
--- the SET of subtask plan ids, the round state, and the registered/dispatched/closed
--- timestamps. This is RECORD-KEEPING state only. V81 reduced subtask_seats from a
--- per-subtask { seat, delivered, delivered_at } object to a bare plan-id list:
--- seat assignment is advisory and read off the cards' owner_seat, and delivery
--- history lives in plan_events — a stored copy is a second record of the same
--- fact that can disagree with the card.
+-- coding_rounds: one row per round (Coding Rounds feature, subtask 01; generalised
+-- to a team-scoped round by Mission 05). Records the durable round state that
+-- previously lived only in the lead's context: which feature/team the round belongs
+-- to, its ordinal among the registered rounds, the SET of plan ids, the round state,
+-- and the registered/dispatched/closed timestamps. This is RECORD-KEEPING state only.
+-- V81 reduced subtask_seats from a per-subtask { seat, delivered, delivered_at }
+-- object to a bare plan-id list: seat assignment is advisory and read off the cards'
+-- owner_seat, and delivery history lives in plan_events — a stored copy is a second
+-- record of the same fact that can disagree with the card.
+--
+-- ONE round concept, one table. feature_id is NULLABLE: a planning or review
+-- batch has no feature, and a NOT NULL column could not key its rounds at all
+-- (Mission 05). Feature rounds keep passing their feature_id, so their rows and
+-- reads are unchanged; the reader normalises NULL to '' (a real feature id is
+-- never empty, so "featureless" is not confusable with a feature).
+--
+-- The key is (team_id, feature_id, ordinal), NOT the (team_id, ordinal) the plan
+-- sketched: two features run by the SAME lead share a team_id and both start at
+-- ordinal 1, so (team_id, ordinal) would refuse the second feature's first round
+-- and break the shipped feature path. SQLite treats NULLs as distinct in a UNIQUE
+-- index, so the featureless case is ordered by construction instead — registration
+-- continues after the team's highest existing ordinal.
 CREATE TABLE IF NOT EXISTS coding_rounds (
     round_id         TEXT PRIMARY KEY,
-    feature_id       TEXT NOT NULL,
+    feature_id       TEXT DEFAULT NULL,
     team_id          TEXT NOT NULL,
     workspace_id     TEXT NOT NULL,
     ordinal          INTEGER NOT NULL,
@@ -704,7 +717,7 @@ CREATE TABLE IF NOT EXISTS coding_rounds (
     registered_at    TEXT NOT NULL,
     dispatched_at    TEXT DEFAULT NULL,
     closed_at        TEXT DEFAULT NULL,
-    UNIQUE(feature_id, ordinal)
+    UNIQUE(team_id, feature_id, ordinal)
 );
 -- plan_write_sets: the dispatch-analysis pass's extracted write set per plan —
 -- the repo-relative files a plan will create/modify, plus its declared plan-level
@@ -792,6 +805,7 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_team ON coding_rounds(team_id, ordinal)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_workspace ON plan_runtime_state(workspace_id)`,
     // NO device_id-leading index here, deliberately. V78 added one to mitigate a
     // device-scoped runtime overlay (`WHERE device_id = ?`, no plan_id list); that
@@ -1160,10 +1174,15 @@ const MIGRATION_V72_SQL = [
 // DB (which gets the table at creation) and an upgraded DB (which gets it here)
 // end up with the same shape. Additive CREATE TABLE IF NOT EXISTS; idempotent
 // under the version gate. Never edit a shipped V70–V72 body.
+//
+// Mission 05 generalised `feature_id` to NULLABLE and re-keyed the row on
+// (team_id, feature_id, ordinal) — see SCHEMA_TABLES_SQL for why not
+// (team_id, ordinal). A database that already ran this body keeps the old shape,
+// which is what V84 rebuilds.
 const MIGRATION_V73_SQL = [
     `CREATE TABLE IF NOT EXISTS coding_rounds (
         round_id         TEXT PRIMARY KEY,
-        feature_id       TEXT NOT NULL,
+        feature_id       TEXT DEFAULT NULL,
         team_id          TEXT NOT NULL,
         workspace_id     TEXT NOT NULL,
         ordinal          INTEGER NOT NULL,
@@ -1173,10 +1192,11 @@ const MIGRATION_V73_SQL = [
         registered_at    TEXT NOT NULL,
         dispatched_at    TEXT DEFAULT NULL,
         closed_at        TEXT DEFAULT NULL,
-        UNIQUE(feature_id, ordinal)
+        UNIQUE(team_id, feature_id, ordinal)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_team ON coding_rounds(team_id, ordinal)`,
 ];
 
 // V74: Split shared board state from machine-local runtime state.
@@ -1355,6 +1375,45 @@ const MIGRATION_V83_SQL = [
         PRIMARY KEY (workspace_id, provider, remote_team_id, board_project)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_remote_project_bindings_ws ON remote_project_bindings(workspace_id, provider)`,
+];
+
+// V84: coding_rounds becomes a TEAM-SCOPED round (Mission 05). `feature_id` goes
+// NULLABLE — a planning or review batch has no feature, and a NOT NULL column
+// cannot key its rounds at all — and the row is keyed on
+// (team_id, feature_id, ordinal). NOT (team_id, ordinal): two features run by the
+// same lead share a team_id and both start at ordinal 1, so that key would refuse
+// the second feature's first round. See the SCHEMA_TABLES_SQL comment.
+//
+// A rebuild, not an ALTER: SQLite cannot drop a NOT NULL or a table-level UNIQUE
+// in place. The copy is lossless — the new key's column set is a SUPERSET of the
+// old key's, so no existing row can collide and none is dropped. The table is
+// unreleased (it has never shipped in a version), so this is a shape change and
+// not a data migration; the rows that do exist are a dev board's and are carried
+// over verbatim rather than discarded.
+const MIGRATION_V84_SQL = [
+    `CREATE TABLE IF NOT EXISTS coding_rounds_new (
+        round_id         TEXT PRIMARY KEY,
+        feature_id       TEXT DEFAULT NULL,
+        team_id          TEXT NOT NULL,
+        workspace_id     TEXT NOT NULL,
+        ordinal          INTEGER NOT NULL,
+        total_registered INTEGER NOT NULL DEFAULT 0,
+        state            TEXT NOT NULL DEFAULT 'registered',
+        subtask_seats    TEXT NOT NULL DEFAULT '[]',
+        registered_at    TEXT NOT NULL,
+        dispatched_at    TEXT DEFAULT NULL,
+        closed_at        TEXT DEFAULT NULL,
+        UNIQUE(team_id, feature_id, ordinal)
+    )`,
+    `INSERT OR IGNORE INTO coding_rounds_new
+        (round_id, feature_id, team_id, workspace_id, ordinal, total_registered, state, subtask_seats, registered_at, dispatched_at, closed_at)
+     SELECT round_id, feature_id, team_id, workspace_id, ordinal, total_registered, state, subtask_seats, registered_at, dispatched_at, closed_at
+     FROM coding_rounds`,
+    `DROP TABLE coding_rounds`,
+    `ALTER TABLE coding_rounds_new RENAME TO coding_rounds`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_team ON coding_rounds(team_id, ordinal)`,
 ];
 
 /**
@@ -8439,17 +8498,44 @@ export class KanbanDatabase {
     }
 
     /**
+     * Delete a single coding_rounds row by round_id. Used to roll back a batch
+     * registration that failed part-way (Mission 05): a batch that registered
+     * rounds 1..2 of 4 and then failed must not leave a half-registered round set
+     * behind, because the advance path would release rounds that were never part
+     * of a complete registration. Best-effort: a failure warns and returns false.
+     */
+    public async deleteCodingRound(roundId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            const result = this._db.run(
+                'DELETE FROM coding_rounds WHERE round_id = ?',
+                [roundId]
+            );
+            return Number(result?.changes ?? 0) > 0;
+        } catch (e) {
+            console.warn(`[KanbanDatabase] deleteCodingRound failed for round ${roundId}:`, e);
+            return false;
+        }
+    }
+
+    /**
      * Insert a single coding_rounds row. Called by the round/register handler
-     * (subtask 02) for each round in the lead's posted plan. subtask_seats
-     * stores the ordered list of subtask plan IDs — the caller-defined set and
-     * order, nothing else. Seat assignment is derived by reading each subtask
-     * card's ownerSeat; delivery state is not stored (the board never refuses
-     * a dispatch, so a re-sent prompt is just a dispatch event, not a round
-     * mutation). This is RECORD-KEEPING state.
+     * (subtask 02) for each round in the lead's posted plan, and by
+     * `KanbanProvider._registerBatchRounds` for the rounds of a planning or
+     * review batch (Mission 05). subtask_seats stores the ordered list of plan
+     * IDs — the caller-defined set and order, nothing else. Seat assignment is
+     * derived by reading each subtask card's ownerSeat; delivery state is not
+     * stored (the board never refuses a dispatch, so a re-sent prompt is just a
+     * dispatch event, not a round mutation). This is RECORD-KEEPING state.
+     *
+     * `featureId` is NULL for a team-scoped round with no feature (a planning or
+     * review batch). It is a real NULL, not an empty string or a sentinel: a
+     * featureless round and a round whose feature id is unknown must not be the
+     * same row, and `getCodingRoundsByFeature` must not match either.
      */
     public async insertCodingRound(params: {
         roundId: string;
-        featureId: string;
+        featureId: string | null;
         teamId: string;
         workspaceId: string;
         ordinal: number;
@@ -11662,6 +11748,46 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(83);
             console.log('[KanbanDatabase] V83 migration completed: remote_project_bindings destination mapping added');
+        }
+
+        // V84: coding_rounds becomes a team-scoped round — `feature_id` nullable
+        // and the row keyed on (team_id, feature_id, ordinal), so a planning or
+        // review batch (which has no feature) can register rounds at all. A
+        // rebuild, not an ALTER: SQLite cannot drop a NOT NULL or a table-level
+        // UNIQUE in place. Guarded on the DDL actually being the old shape, so a
+        // fresh DB (which gets the new shape from SCHEMA_TABLES_SQL) is untouched.
+        // The version is stamped only after a successful rebuild, so a failure
+        // retries on the next open instead of skipping the change forever.
+        const v84 = await this.getMigrationVersion();
+        if (v84 < 84) {
+            try {
+                const existing = this._getExistingTableNames();
+                // Recover from an interrupted prior run before deciding anything.
+                if (!existing.has('coding_rounds') && existing.has('coding_rounds_new')) {
+                    this._db.exec('ALTER TABLE coding_rounds_new RENAME TO coding_rounds');
+                    existing.add('coding_rounds');
+                    existing.delete('coding_rounds_new');
+                } else if (existing.has('coding_rounds_new')) {
+                    this._db.exec('DROP TABLE IF EXISTS coding_rounds_new');
+                    existing.delete('coding_rounds_new');
+                }
+                const ddlStmt = this._db.prepare(
+                    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'coding_rounds'`
+                );
+                let ddl = '';
+                try {
+                    if (ddlStmt.step()) { ddl = String((ddlStmt.getAsObject() as any).sql || ''); }
+                } finally {
+                    ddlStmt.free();
+                }
+                if (ddl && /UNIQUE\(feature_id, ordinal\)/.test(ddl)) {
+                    for (const sql of MIGRATION_V84_SQL) { this._db.exec(sql); }
+                    console.log('[KanbanDatabase] V84 migration completed: coding_rounds rebuilt as a team-scoped round (feature_id nullable, key (team_id, feature_id, ordinal))');
+                }
+                await this.setMigrationVersion(84);
+            } catch (e) {
+                console.warn('[KanbanDatabase] V84 migration (team-scoped coding_rounds) failed — retrying on the next open:', e);
+            }
         }
 
         // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue

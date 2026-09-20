@@ -246,3 +246,38 @@ deliberately removed from its head prompt; nothing here may put it back.
 **Nothing may be silently dropped.** Every plan is delivered or visibly queued.
 
 **Teams are unreleased dev work** — clean break, no migration shims.
+
+---
+
+## Completion Summary (Feature-coder-2, 2026-09-20) — UNVERIFIED (this run skipped compilation and tests)
+
+The batch is now `ceil(n / live seats)` REGISTERED rounds and every plan is in one.
+`_distributePlannerDispatch` became `_distributeRoleRound(role, instruction)`
+(planner wrapper kept for the existing fixture), which registers the partition as
+durable, team-scoped `coding_rounds` rows before dispatching round 1 exactly as
+before; the reviewer column takes the same path with the reviewer terminal set and
+its own workflow (`undefined`, never `improve-plan`). Round N+1 is released by the
+existing accept-path advance in `LocalApiServer`, generalised for a featureless
+round: it is found by PLAN (a planning seat asserts its own card, so the
+poster-derived team id is not the team's), its cards MOVE to the destination as
+they are dispatched (`targetColumn` on `_dispatchRoundCore`), its seat pool is the
+seats that just finished (`seatsOverride`, read off the cards' advisory
+`ownerSeat`), and a featureless last round closes without delegating to
+`_completeFeatureCore`. Nothing may be silently dropped, so a planner pool that
+belongs to no team delivers the WHOLE batch in one prompt, and a board with no
+round store keeps the pre-change fan-out while saying the remainder is held with
+nothing to release it.
+
+**Deviations, each deliberate (see the report for the argument):** the row key is
+`UNIQUE(team_id, feature_id, ordinal)`, not the plan's `(team_id, ordinal)` — that
+key would refuse a second feature's first round for the same lead team and break
+the shipped feature path; `feature_id` is nullable as specified. A V84 rebuild
+migration was added despite "clean break, no migration shims": a pre-existing dev
+DB has `feature_id NOT NULL`, so without the rebuild every planning-round insert
+fails and the feature cannot work at all; the table is unreleased, so it is a shape
+change with the rows copied verbatim, not a user-data migration. The status message
+reports "X of Y dispatched" plus the registered round count rather than the plan's
+"10 of 10" example, which would be a lie at round 1; one-round batches keep the
+exact pre-change wording. Mission 03's `resolveBatchTeam` is already in the tree
+(another seat's uncommitted work) and routes pool planner/reviewer teams to
+`fanout` — this change is that branch's implementation and re-derives nothing.

@@ -5117,6 +5117,33 @@ export class LocalApiServer {
                     teamRounds = [];
                 }
 
+                // TEAM-SCOPED rounds (a planning or review batch, Mission 05) are
+                // asserted by the SEAT that took the card, not by the head — the
+                // Planning team's `completionAuthority` is 'seat', so `from` is
+                // 'Planning-planner-2' and the team id derived from it is not the
+                // registering team's id. The lookup that finds them is therefore
+                // scoped by PLAN, not by poster: read the workspace's rounds and
+                // keep the ones that belong to no feature.
+                if (!teamRounds.some(r => (r.state === 'dispatched' || r.state === 'partial')
+                    && (r.subtaskPlanIds || []).includes(planId))) {
+                    try {
+                        const wsIdForRounds = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+                        if (wsIdForRounds && typeof db.getCodingRoundsByWorkspace === 'function') {
+                            const wsRounds: any[] = (await db.getCodingRoundsByWorkspace(wsIdForRounds)) || [];
+                            const featureless = wsRounds.filter(r => !r.featureId);
+                            if (featureless.length > 0) {
+                                // Concatenate, not replace: a team round and a
+                                // feature round can both be in flight, and the
+                                // first match below is the one that contains this
+                                // card.
+                                teamRounds = [...teamRounds, ...featureless];
+                            }
+                        }
+                    } catch (wsRoundsErr) {
+                        console.warn('[LocalApiServer] task/complete: team-scoped round lookup failed:', wsRoundsErr);
+                    }
+                }
+
                 if (teamRounds.length > 0) {
                     // Find the in-flight round that contains THIS subtask. A
                     // subtask that belongs to no registered round completes and
@@ -5205,7 +5232,16 @@ export class LocalApiServer {
                                     roster = [from];
                                 }
 
-                                if (isLast) {
+                                if (isLast && !currentRound.featureId) {
+                                    // A TEAM-SCOPED round (no feature, Mission 05) has
+                                    // nothing to complete: closing it IS the whole
+                                    // outcome. Delegating to `_completeFeatureCore`
+                                    // with an empty featureId would release a team
+                                    // that has no feature and complete a feature that
+                                    // does not exist. The round is closed above; the
+                                    // existing release path runs as usual.
+                                    console.log(`[LocalApiServer] task/complete: team-scoped round ${currentRound.ordinal} of '${currentRound.teamId}' closed — no feature to complete`);
+                                } else if (isLast) {
                                     const featureResult = await this._completeFeatureCore({
                                         db,
                                         workspaceRoot,
@@ -5232,12 +5268,61 @@ export class LocalApiServer {
                                         console.warn(`[LocalApiServer] task/complete: feature-complete delegation failed for feature '${currentRound.featureId}': ${featureResult.error}`);
                                     }
                                 } else {
+                                    // A TEAM-SCOPED round's cards are still in the
+                                    // source column; they move to the batch's
+                                    // destination AS they are dispatched. Two facts
+                                    // the release needs come off the round that just
+                                    // closed, because it is the pipeline's own record
+                                    // of them:
+                                    //
+                                    //  - the DESTINATION: round N's cards already sit
+                                    //    in it (they moved there when round N was
+                                    //    dispatched), so the closed round says where
+                                    //    round N+1 goes. A feature round keeps its
+                                    //    cards where they are (targetColumn
+                                    //    undefined).
+                                    //  - the SEAT POOL: the seats that just finished
+                                    //    round N, read off the cards' advisory
+                                    //    `ownerSeat`. NOT `roster minus the poster` —
+                                    //    for a planning round the poster is a SEAT,
+                                    //    so that form would drop the seat that just
+                                    //    became free AND could hand the next plan to
+                                    //    the team's researcher, which has no seat in
+                                    //    the role's pool at all. The pool must stay
+                                    //    the same width as round 1 or the round
+                                    //    count stops being ceil(n / seats).
+                                    let nextTargetColumn: string | undefined;
+                                    let nextSeats: string[] | undefined;
+                                    if (!currentRound.featureId) {
+                                        const closedIds = new Set<string>(currentRound.subtaskPlanIds || []);
+                                        const closedCards = board.filter(p => p && p.planId && closedIds.has(String(p.planId)));
+                                        const landedColumns = closedCards
+                                            .map(p => String(p.kanbanColumn || ''))
+                                            .filter(Boolean);
+                                        nextTargetColumn = landedColumns[0];
+                                        if (nextTargetColumn && landedColumns.some(c => c !== nextTargetColumn)) {
+                                            console.warn(`[LocalApiServer] task/complete: round ${currentRound.ordinal} of '${currentRound.teamId}' has cards in ${[...new Set(landedColumns)].join(', ')} — using '${nextTargetColumn}' for round ${nextRound.ordinal}`);
+                                        }
+                                        if (!nextTargetColumn) {
+                                            console.warn(`[LocalApiServer] task/complete: round ${currentRound.ordinal} of '${currentRound.teamId}' has no card column to derive round ${nextRound.ordinal}'s destination from — its cards will keep their current column`);
+                                        }
+                                        const finishedSeats = [...new Set(closedCards
+                                            .map(p => String(p.ownerSeat || ''))
+                                            .filter(Boolean))];
+                                        if (finishedSeats.length > 0) {
+                                            nextSeats = finishedSeats;
+                                        } else {
+                                            console.warn(`[LocalApiServer] task/complete: round ${currentRound.ordinal} of '${currentRound.teamId}' recorded no owner seat on its cards — falling back to the team roster minus the poster for round ${nextRound.ordinal}`);
+                                        }
+                                    }
                                     const nextDispatch = await this._dispatchRoundCore({
                                         db,
                                         workspaceRoot,
                                         from,
                                         round: nextRound,
                                         roster,
+                                        ...(nextTargetColumn ? { targetColumn: nextTargetColumn } : {}),
+                                        ...(nextSeats ? { seatsOverride: nextSeats } : {}),
                                     });
                                     nextRoundInfo = {
                                         ordinal: nextRound.ordinal,
@@ -6033,6 +6118,22 @@ export class LocalApiServer {
         from: string;
         round: any;
         roster: string[];
+        /**
+         * The column a TEAM-SCOPED round's cards are moved to as they are
+         * dispatched (Mission 05). Omitted for a feature round, whose cards the
+         * feature cascade already placed and which the round must leave alone
+         * (`keepColumn` = the card's current column, so no move is attempted).
+         */
+        targetColumn?: string;
+        /**
+         * An explicit seat pool for a TEAM-SCOPED round — the seats that finished
+         * the previous round. Omitted for a feature round, whose pool is the team
+         * roster minus the lead. A team round must NOT use `roster minus the
+         * poster`: its poster is a seat, not the lead, and the team roster also
+         * carries members (the Planning team's researcher) that hold no seat in
+         * the role's pool.
+         */
+        seatsOverride?: string[];
     }): Promise<{
         success: boolean;
         roundId: string;
@@ -6042,10 +6143,14 @@ export class LocalApiServer {
         subtasks: Array<{ planId: string; seat: string | null; delivered: boolean; deliveredAt: string | null; error?: string }>;
         error?: string;
     }> {
-        const { db, workspaceRoot, from, round, roster } = args;
+        const { db, workspaceRoot, from, round, roster, targetColumn, seatsOverride } = args;
         const roundId = round.roundId;
         // The lead is never a dispatched seat. Exclude the lead from the pool.
-        const seats = roster.filter(s => s !== from);
+        // A TEAM-SCOPED round passes its pool explicitly (the seats that finished
+        // the previous round) — the poster there is a seat, not the lead.
+        const seats = (seatsOverride && seatsOverride.length > 0)
+            ? seatsOverride
+            : roster.filter(s => s !== from);
         const subtaskPlanIds: string[] = round.subtaskPlanIds || [];
 
         // An empty seat pool (a roster that is the lead alone) is a real state on
@@ -6107,8 +6212,16 @@ export class LocalApiServer {
             // Keep the card where it is. A team decides who works what; complexity
             // routing is the NON-team path.
             const subtaskRec = await db.getPlanByPlanId(planId);
-            const keepColumn = subtaskRec?.kanbanColumn || undefined;
-            const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, keepColumn, {
+            // A FEATURE round keeps the card where it is — the feature cascade put
+            // it there and the round must not second-guess the column.
+            //
+            // A TEAM-SCOPED round (no feature) MOVES it: the batch's later rounds are
+            // still sitting in the source column, and "round N's cards move to the
+            // next column when round N is dispatched" is what stops an undelivered
+            // card from looking dispatched. The caller passes the destination; the
+            // dispatch arm below persists the move FIRST and then delivers.
+            const columnForDispatch = targetColumn ?? subtaskRec?.kanbanColumn ?? undefined;
+            const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, columnForDispatch, {
                 targetTerminalOverride: seat,
                 originTerminal: from,
                 skipClear: true,

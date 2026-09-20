@@ -8495,17 +8495,56 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
+    /**
+     * A batch bound for the Planning team — the `planner` / `improve-plan` case
+     * of {@link _distributeRoleRound}. Kept as a named entry point because the
+     * planner fan-out predates the generalisation and is what the planner fixtures
+     * exercise.
+     */
     private async _distributePlannerDispatch(
         workspaceRoot: string,
         sourceCards: KanbanCard[],
         nextCol: string
     ): Promise<void> {
+        await this._distributeRoleRound(workspaceRoot, sourceCards, nextCol, 'planner', 'improve-plan');
+    }
+
+    /**
+     * Fan a batch out to a team's seats, ONE PLAN PER SEAT PER ROUND (Mission 05).
+     *
+     * The batch becomes `ceil(n / live seats)` ROUNDS. Round 1 dispatches exactly
+     * as the planner fan-out always has — one plan per seat, in precedence order —
+     * and the later rounds are REGISTERED as durable `coding_rounds` rows so they
+     * are released when round N's cards assert completion, instead of being left
+     * in the column with nothing recording that they were ever part of a batch.
+     * Before this, `ordered.slice(0, seats.length)` silently dropped the remainder:
+     * ten cards and three seats dispatched three and lost seven.
+     *
+     * `role` is the seat role (`planner`, `reviewer`) and `instruction` is the
+     * per-role workflow the seats are handed — `'improve-plan'` for a planning
+     * seat, `undefined` for a reviewer (the review turn is the role's own
+     * configured workflow; handing a reviewer the planner's instruction would ask
+     * it to WRITE the plan it is supposed to read).
+     *
+     * Rounds are registered only when the batch belongs to a TEAM (a head
+     * resolves for the seats). With no team there is no team round to register and
+     * no seat roster to release one, so the batch takes the single-trigger
+     * fallback below — every card delivered, none held.
+     */
+    private async _distributeRoleRound(
+        workspaceRoot: string,
+        sourceCards: KanbanCard[],
+        nextCol: string,
+        role: string,
+        instruction: string | undefined
+    ): Promise<void> {
         const tvp = this._taskViewerProvider;
         if (!tvp) return;
 
-        // Enumerate live, non-backup planner terminals plus a stable location key
-        // for this physical terminal set (worktree path / repo root). The key drives
-        // the persistent rotation cursor so sequential moves keep rotating.
+        // Enumerate live, non-backup terminals for THIS role (planner or reviewer)
+        // plus a stable location key for this physical terminal set (worktree path
+        // / repo root). The key drives the persistent rotation cursor so sequential
+        // moves keep rotating.
         // allowPtyFleet is unconditional, NOT gated on a caller-surface flag. That is
         // the host-derived policy the rest of the dispatch path already follows: when a
         // PTY fleet exists it IS the authoritative terminal set, so _resolveAgentTerminalForPlan
@@ -8515,20 +8554,20 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // terminal; gating it on an apiOriginated flag would restore that for the sidebar
         // and would also leave the standalone host — where PTY is the ONLY fleet —
         // permanently empty.
-        const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot, { allowPtyFleet: true });
+        const { terminals, locationKey } = await tvp.getRoleTerminalSet(role, workspaceRoot, { allowPtyFleet: true });
         if (terminals.length === 0) {
-            // No live planner terminals — fall back to single trigger via default resolution.
+            // No live seats — fall back to single trigger via default resolution.
             // V81: no in-flight filter — the board never refuses a dispatch. A card
             // already being worked on is re-dispatched; the agent reads the plan,
             // sees the work is done, and says so.
-            // Move half is the shared operation (dispatch: false — the
-            // 'improve-plan' batch trigger below owns dispatch).
+            // Move half is the shared operation (dispatch: false — the batch
+            // trigger below owns dispatch).
             const moveResult = await this._advanceCards(workspaceRoot, sourceCards.map(c => this._cardId(c)), {
                 target: nextCol,
                 dispatch: false
             });
             const dispatchIds = moveResult.moved.map(m => m.id);
-            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot, undefined);
+            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot, undefined);
             return;
         }
 
@@ -8538,20 +8577,51 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const orderByMode = this._resolveOrderByModeSync(workspaceRoot);
         const ordered = [...sourceCards].sort((a, b) => compareByPrecedence(a, b, sortColumn, orderByMode));
 
-        // ONE PLAN PER SEAT. The batch is the oldest N plans where N is the number
-        // of ELIGIBLE planner terminals, so a fan-out hands each planning seat
-        // exactly one prompt and leaves the rest of the column for the next round.
-        // This is automatic and has no control: the fan-out width is a property of
-        // the team's roster, not a preference.
-        //
-        // It used to be gated on `plannerLimitDispatchToTerminals`, a checkbox that
-        // defaulted OFF and was written for the VS Code product before teams
-        // existed. Off, the round-robin silently stacked several plans on one seat
-        // — which is not a fan-out, it is a queue with extra steps.
+        // ONE PLAN PER SEAT PER ROUND. The batch is partitioned into rounds of
+        // `terminals.length` plans in precedence order, and each round hands each
+        // seat exactly one prompt. The fan-out WIDTH is a property of the team's
+        // roster, not a preference — it used to be gated on
+        // `plannerLimitDispatchToTerminals`, a checkbox that defaulted OFF and was
+        // written for the VS Code product before teams existed. Off, the round-robin
+        // silently stacked several plans on one seat — which is not a fan-out, it is
+        // a queue with extra steps.
         //
         // `terminals` is already filtered by the automated-dispatch policy
         // (getRoleTerminalSet), so a hands-on-only team's seats neither receive a
         // plan nor inflate this count.
+        const orderedIds = ordered.map(c => this._cardId(c));
+        // The round's plan-id list is read by the ADVANCE, which compares against
+        // the `planId` an accept posts — so register PLAN ids, not the dispatch
+        // handle (`_cardId` prefers `sessionId`, which the completion path never
+        // sends). A card with no planId cannot be tracked by the advance; it keeps
+        // its sessionId and simply never releases a round.
+        const orderedPlanIds = ordered.map(c => String(c.planId || this._cardId(c)));
+        const registration = await this._registerBatchRounds(workspaceRoot, orderedPlanIds, terminals, role);
+        if (registration.kind === 'no-team') {
+            // The seats belong to no registered team, so there is no roster to
+            // release a later round and no team to own one. Deliver the WHOLE batch
+            // in one prompt rather than the first round's slice: nothing may be
+            // silently dropped, and a held remainder with no round behind it is
+            // exactly the loss this plan exists to remove.
+            const moveResult = await this._advanceCards(workspaceRoot, orderedIds, { target: nextCol, dispatch: false });
+            const dispatchIds = moveResult.moved.map(m => m.id);
+            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot, undefined);
+            this.postMessage({
+                type: 'showStatusMessage',
+                message: `Distributed all ${dispatchIds.length} plan(s) to ${role} — no team head resolved for the ${role} seats, so the batch is not a team round and went in one prompt.`,
+                isError: false
+            });
+            return;
+        }
+        if (registration.kind === 'unregistered') {
+            // Nothing was written: an older board with no round store, a failed
+            // read, or an insert that was rolled back. Keep the pre-change fan-out
+            // — one plan per seat for round 1 — and say plainly that the remainder
+            // is held with nothing recording it, because that is the truth here.
+            // Folded into the status message below rather than posted here: two
+            // posts in one turn leave only the last one on screen.
+            console.warn(`[KanbanProvider] ${role} batch: nothing was registered — plans past round 1 are held with nothing to release them`);
+        }
         const plans = ordered.slice(0, terminals.length);
 
         if (plans.length === 0) {
@@ -8598,7 +8668,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             bucketEntries.map(([terminalName, ids]) =>
                 this._seams().commands.executeCommand(
                     'switchboard.triggerBatchAgentFromKanban',
-                    'planner', ids, 'improve-plan', workspaceRoot, terminalName
+                    role, ids, instruction, workspaceRoot, terminalName
                 )
             )
         );
@@ -8616,26 +8686,147 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // Advance the rotation so the next move continues after the last plan's terminal.
         await tvp.advancePlannerRotationCursor(locationKey, plans.length);
 
-        // Say what was held and WHY, without naming a setting: there is no setting.
-        // The old suffix reported the state of a checkbox that no longer exists, and
-        // a message naming a control the operator cannot find is worse than one that
-        // explains the rule.
-        const limitSuffix = ordered.length > terminals.length
-            ? ` (${ordered.length - terminals.length} plan(s) held for the next round — one plan per planner seat)`
-            : '';
+        // Say what is registered, what went, and what is still to come — without
+        // naming a setting: there is no setting. The old suffix reported the state
+        // of a checkbox that no longer exists, and a message naming a control the
+        // operator cannot find is worse than one that explains the rule.
+        //
+        // The counts are ROUND 1's, not the batch's: reporting "10 of 10
+        // dispatched" while seven cards are still registered and undelivered would
+        // be the exact lie this plan exists to remove. The batch total is stated
+        // separately so "4 rounds" and "3 of 10 now" cannot be read as a loss.
+        const roundCount = registration.kind === 'rounds' ? registration.rounds.length : 1;
+        const heldCount = ordered.length - plans.length;
+        const limitSuffix = registration.kind === 'unregistered'
+            ? (heldCount > 0
+                ? ` No round was registered: ${heldCount} plan(s) are held with nothing to release them.`
+                : ' No round was registered.')
+            : (roundCount > 1
+                ? ` ${roundCount} round(s) registered for ${ordered.length} plan(s); ${heldCount} plan(s) hold for round 2 and release when round 1's cards assert completion.`
+                : '');
+        // A single-round batch keeps the EXACT pre-change wording ("Distributed N
+        // plan(s) across M planner terminal(s)."): it is the regression gate, and a
+        // "3 of 3" that only ever appears for a one-round batch would be noise
+        // dressed as information.
+        const singleRound = registration.kind === 'rounds' && roundCount === 1;
+        const lead = singleRound
+            ? `Distributed ${dispatchedIds.length} plan(s) across ${terminals.length} ${role} terminal(s)`
+            : `Distributed ${dispatchedIds.length} of ${ordered.length} plan(s) across ${terminals.length} ${role} terminal(s)`;
         if (failedBuckets.length > 0) {
             this.postMessage({
                 type: 'showStatusMessage',
-                message: `Distributed ${dispatchedIds.length} plan(s) across ${terminals.length} planner terminal(s); ${failedBuckets.length} bucket(s) failed: ${failedBuckets.join(', ')}.${limitSuffix}`,
+                message: `${lead}; ${failedBuckets.length} bucket(s) failed: ${failedBuckets.join(', ')}.${limitSuffix}`,
                 isError: true
             });
         } else {
             this.postMessage({
                 type: 'showStatusMessage',
-                message: `Distributed ${dispatchedIds.length} plan(s) across ${terminals.length} planner terminal(s).${limitSuffix}`,
+                message: `${lead}.${limitSuffix}`,
                 isError: false
             });
         }
+    }
+
+    /**
+     * Register a batch as `ceil(n / seats)` durable, TEAM-SCOPED rounds and return
+     * the partition, or an explicit reason why the batch is not a team round.
+     *
+     * Two outcomes, deliberately NOT collapsed into one null — the caller must
+     * treat them differently, and a single "no rounds" would make a board that
+     * cannot register (or a read that failed) indistinguishable from a batch that
+     * belongs to no team:
+     *   - `unregistered`: nothing was written — the store has no round
+     *     registration, the read of the team's existing rounds failed, or an insert
+     *     failed and was rolled back. The caller keeps the pre-change fan-out and
+     *     says plainly that the remainder is held with nothing to release it.
+     *   - `no-team`: no team head resolves for the seats, so there is no team to
+     *     own a round and no roster to release one. Registering under a fabricated
+     *     team id would make "a solo planner" indistinguishable from "the Planning
+     *     team"; the caller delivers the whole batch instead of holding a remainder
+     *     nothing can release.
+     *
+     * Ordinals continue after the team's highest existing ordinal, so a second
+     * batch to the same team is an independent round set rather than a collision on
+     * (team_id, feature_id, ordinal). A partial registration is rolled back: a
+     * half-registered round set would let the advance release rounds that were
+     * never part of a complete registration.
+     */
+    private async _registerBatchRounds(
+        workspaceRoot: string,
+        orderedIds: string[],
+        seats: string[],
+        role: string
+    ): Promise<{ kind: 'rounds'; rounds: string[][]; teamId: string } | { kind: 'unregistered' } | { kind: 'no-team' }> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || typeof db.insertCodingRound !== 'function' || typeof db.getCodingRoundsByTeam !== 'function') {
+            console.warn(`[KanbanProvider] ${role} batch: store has no coding_rounds registration — the batch is not registered as rounds`);
+            return { kind: 'unregistered' };
+        }
+        let head: string | null = null;
+        try {
+            head = await resolveHeadForTerminal({ db, terminal: seats[0] });
+        } catch (err) {
+            console.warn(`[KanbanProvider] ${role} batch: head resolution failed for seat '${seats[0]}':`, err);
+            return { kind: 'no-team' };
+        }
+        if (!head) {
+            console.warn(`[KanbanProvider] ${role} batch: no team head resolved for seat '${seats[0]}' — this batch belongs to no registered team, so no rounds were registered`);
+            return { kind: 'no-team' };
+        }
+        const teamId = 'team_' + encodeURIComponent(head).replace(/[^a-zA-Z0-9_]/g, '_');
+        let maxOrdinal = 0;
+        try {
+            const existing = await db.getCodingRoundsByTeam(teamId);
+            if (Array.isArray(existing) && existing.length > 0) {
+                maxOrdinal = existing.reduce((max: number, r: any) => Math.max(max, Number(r?.ordinal) || 0), 0);
+            }
+        } catch (err) {
+            // The read failed, so the next free ordinal is UNKNOWN. Registering
+            // anyway could collide on (team_id, feature_id, ordinal) and lose a
+            // round; the honest move is to register nothing and say so.
+            console.warn(`[KanbanProvider] ${role} batch: reading existing rounds for '${teamId}' failed — refusing to register, so the batch is not held as rounds:`, err);
+            return { kind: 'unregistered' };
+        }
+
+        const rounds: string[][] = [];
+        for (let i = 0; i < orderedIds.length; i += seats.length) {
+            rounds.push(orderedIds.slice(i, i + seats.length));
+        }
+        if (rounds.length === 0) { return { kind: 'no-team' }; }
+
+        const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+        const now = new Date().toISOString();
+        const inserted: string[] = [];
+        for (let i = 0; i < rounds.length; i++) {
+            const roundId = crypto.randomUUID();
+            let ok = false;
+            try {
+                ok = await db.insertCodingRound({
+                    roundId,
+                    // NULL, not '' — a planning or review batch has no feature, and
+                    // `getCodingRoundsByFeature` must never match it.
+                    featureId: null,
+                    teamId,
+                    workspaceId: wsId,
+                    ordinal: maxOrdinal + i + 1,
+                    totalRegistered: maxOrdinal + rounds.length,
+                    subtaskPlanIds: rounds[i],
+                    registeredAt: now,
+                });
+            } catch (err) {
+                console.warn(`[KanbanProvider] ${role} batch: registering round ${maxOrdinal + i + 1} of '${teamId}' threw:`, err);
+            }
+            if (!ok) {
+                console.warn(`[KanbanProvider] ${role} batch: registering round ${maxOrdinal + i + 1} of '${teamId}' failed — rolling back ${inserted.length} registered round(s); the batch is not held as rounds`);
+                for (const id of inserted) {
+                    try { await db.deleteCodingRound?.(id); } catch { /* best effort */ }
+                }
+                return { kind: 'unregistered' };
+            }
+            inserted.push(roundId);
+        }
+        console.log(`[KanbanProvider] ${role} batch: registered ${rounds.length} round(s) for team '${teamId}' (ordinals ${maxOrdinal + 1}-${maxOrdinal + rounds.length}) covering ${orderedIds.length} plan(s)`);
+        return { kind: 'rounds', rounds, teamId };
     }
 
     /** Get the next column ID in the pipeline, or null for the last column. */
@@ -13277,11 +13468,21 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                     }
                                 }
                             }
-                            if (role === 'planner' && this._boardMoveCliTriggersEnabled) {
+                            // A batch into a seat-role column is a FAN-OUT: the
+                            // Planning team's planners and the Review team's
+                            // reviewers both take one plan per seat per round
+                            // (Mission 05). The planner instruction is the
+                            // planner's own workflow; a reviewer gets its role's
+                            // configured workflow (undefined), never 'improve-plan'
+                            // — that would ask it to write the plan it must read.
+                            if ((role === 'planner' || role === 'reviewer') && this._boardMoveCliTriggersEnabled) {
                                 const selectedCards = this._lastCards.filter(card =>
                                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                                 );
-                                await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol);
+                                await this._distributeRoleRound(
+                                    workspaceRoot, selectedCards, nextCol, role,
+                                    role === 'planner' ? 'improve-plan' : undefined
+                                );
                             } else {
                                 // 'Advance to next stage': the operation re-derives
                                 // the target from sourceColumn through the same
@@ -13444,12 +13645,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                     }
                                 }
                             }
-                            if (role === 'planner' && this._boardMoveCliTriggersEnabled) {
-                                await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
-                                // _distributePlannerDispatch persists + posts its own targeted
+                            // Same fan-out as the 'move selected' arm above: a batch
+                            // into a planner/reviewer column becomes
+                            // ceil(n / live seats) rounds, one plan per seat per
+                            // round, every plan registered (Mission 05).
+                            if ((role === 'planner' || role === 'reviewer') && this._boardMoveCliTriggersEnabled) {
+                                await this._distributeRoleRound(
+                                    workspaceRoot, sourceCards, nextCol, role,
+                                    role === 'planner' ? 'improve-plan' : undefined
+                                );
+                                // _distributeRoleRound persists + posts its own targeted
                                 // moveCards echo (and moveCardsFailed for any failed write) BEFORE
                                 // the slow /clear+send chain, and posts its own accurate status
-                                // message (including limit-held count). No trailing full refresh —
+                                // message (round count and what holds). No trailing full refresh —
                                 // that is what reverted the move to NEW until dispatch finished.
                                 return { success: true, column, targetColumn: nextCol };
                             } else {

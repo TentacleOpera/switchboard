@@ -15,6 +15,8 @@
  *    coder-headed Coding team and a reviewer-headed Review team are heads — while
  *    a role heading no team still answers false.
  * 9. No team-head call site passes a literal 'lead', in either composition root.
+ * 10. A batch to a planner/reviewer team is ceil(n / live seats) REGISTERED rounds
+ *     and every plan is in one (Mission 05) — the remainder is not dropped.
  */
 
 const assert = require('assert');
@@ -724,6 +726,232 @@ async function testPlannerFanOutRegression() {
     console.log('  PASS: planner fan-out regression');
 }
 
+// ── Mission 05: a batch is ROUNDS, and nothing is dropped ─────────────────────
+
+const PLANNER_TEAM_GROUPS = [
+    {
+        id: 'team_Planning',
+        head: 'Planning',
+        name: 'Planning',
+        members: ['Planning', 'Planner-1', 'Planner-2', 'Planner-3'],
+        order: ['Planning', 'Planner-1', 'Planner-2', 'Planner-3'],
+    },
+];
+
+/**
+ * A db that can hold rounds. `groups: []` models a planner pool that belongs to
+ * no registered team (no head resolves), which is a different fact from a board
+ * with no round store (makeProvider's own fake db).
+ */
+function makeRoundDb({ groups = PLANNER_TEAM_GROUPS, rounds = [] } = {}) {
+    const inserted = [];
+    const deleted = [];
+    const store = { [TERMINALS_GROUPS_KEY]: groups, 'terminals.groups': [] };
+    const db = {
+        ensureReady: async () => true,
+        getConfig: async key => store[key] ?? null,
+        getConfigJson: async (key, fallback) => (key in store ? structuredClone(store[key]) : fallback),
+        getWorkspaceId: async () => 'ws-1',
+        getDominantWorkspaceId: async () => 'ws-1',
+        getCodingRoundsByTeam: async () => rounds.slice(),
+        insertCodingRound: async params => { inserted.push(params); return true; },
+        deleteCodingRound: async id => { deleted.push(id); return true; },
+    };
+    return { db, inserted, deleted };
+}
+
+function makeFanOutProvider({ db, terminals = ['Planner-1', 'Planner-2', 'Planner-3'] } = {}) {
+    const provider = makeProvider();
+    provider._getKanbanDb = () => db;
+    const dispatches = [];
+    const statuses = [];
+    provider._taskViewerProvider = {
+        getRoleTerminalSet: async () => ({ terminals, locationKey: '/ws' }),
+        getPlannerRotationCursor: () => 0,
+        advancePlannerRotationCursor: async () => {},
+    };
+    provider._cardId = c => c.sessionId || c.planId;
+    provider._advanceCards = async (ws, ids) => ({ moved: ids.map(id => ({ id })) });
+    provider.postMessage = msg => { statuses.push(msg); };
+    provider._seams = () => ({
+        commands: {
+            executeCommand: async (cmd, role, ids, instruction, ws, term) => {
+                dispatches.push({ cmd, role, ids, instruction, term });
+                return true;
+            }
+        },
+        ui: { showInformationMessage: () => {}, showErrorMessage: () => {} },
+    });
+    return { provider, dispatches, statuses };
+}
+
+const makeCreatedPlans = count => makeLoosePlans(count).map(p => ({ ...p, column: 'CREATED', working: false }));
+
+async function testPlanningBatchRegistersRounds() {
+    console.log('Testing ten plans over three seats become four registered rounds...');
+    const { db, inserted } = makeRoundDb();
+    const { provider, dispatches, statuses } = makeFanOutProvider({ db });
+    const plans = makeCreatedPlans(10);
+
+    await provider._distributePlannerDispatch('/ws', plans, 'PLAN REVIEWED');
+
+    // ceil(10 / 3) === 4 rounds, and the UNION of their plan-id lists IS the batch.
+    assert.strictEqual(inserted.length, 4, 'Ten plans over three seats register four rounds');
+    assert.deepStrictEqual(inserted.map(r => r.ordinal), [1, 2, 3, 4], 'Rounds are ordinal 1..4');
+    assert.deepStrictEqual(inserted.map(r => r.subtaskPlanIds.length), [3, 3, 3, 1], 'Rounds partition the batch by seat count');
+    const registered = new Set(inserted.flatMap(r => r.subtaskPlanIds));
+    assert.strictEqual(registered.size, 10, 'Every plan of the batch is registered — the union is exactly the batch');
+    for (const p of plans) {
+        assert.ok(registered.has(p.planId), `plan ${p.planId} must be in a registered round`);
+    }
+    assert.strictEqual(inserted.every(r => r.featureId === null), true, 'A planning round carries no feature — NULL, not a sentinel');
+    assert.strictEqual(inserted.every(r => r.teamId === 'team_Planning'), true, 'The rounds belong to the team the seats resolved to');
+    // The round's list is read by the advance, which compares against the planId
+    // an accept posts — never the dispatch handle (`_cardId` prefers sessionId).
+    assert.strictEqual(
+        inserted.flatMap(r => r.subtaskPlanIds).some(id => id === 'sess1'), false,
+        'a round carries PLAN ids, not the sessionId the dispatch uses'
+    );
+
+    // Round 1 is dispatched exactly as the fan-out always was: one plan per seat.
+    assert.strictEqual(dispatches.length, 3, 'Round 1 fans out one bucket per seat');
+    assert.deepStrictEqual(dispatches.map(d => d.ids.length), [1, 1, 1], 'One plan per seat in round 1');
+    assert.deepStrictEqual(dispatches.map(d => d.term), ['Planner-1', 'Planner-2', 'Planner-3'], 'Buckets start at the rotation cursor');
+    assert.strictEqual(dispatches.every(d => d.role === 'planner' && d.instruction === 'improve-plan'), true, 'Planning seats get the planner workflow');
+
+    // The status must state the round count AND the batch total, and must not
+    // claim the whole batch went out.
+    const msg = statuses[statuses.length - 1].message;
+    assert.ok(/4 round\(s\) registered for 10 plan\(s\)/.test(msg), `the status must report the round count and the total: ${msg}`);
+    assert.ok(/3 of 10 plan\(s\)/.test(msg), `the status must not claim the whole batch was dispatched: ${msg}`);
+
+    console.log('  PASS: planning batch registers rounds');
+}
+
+async function testOneRoundBatchMatchesHead() {
+    console.log('Testing a batch that fits in one round...');
+    const { db, inserted } = makeRoundDb();
+    const { provider, dispatches, statuses } = makeFanOutProvider({ db });
+    const plans = makeCreatedPlans(3);
+
+    await provider._distributePlannerDispatch('/ws', plans, 'PLAN REVIEWED');
+
+    assert.strictEqual(inserted.length, 1, 'A batch that fits in one round registers exactly one round');
+    assert.deepStrictEqual(inserted[0].subtaskPlanIds.length, 3, 'The single round carries the whole batch');
+    assert.strictEqual(dispatches.length, 3, 'One bucket per seat');
+    assert.deepStrictEqual(dispatches.map(d => d.ids.length), [1, 1, 1], 'One plan per seat');
+    // The pre-change wording, exactly: the one-round case is the regression gate.
+    assert.strictEqual(
+        statuses[statuses.length - 1].message,
+        'Distributed 3 plan(s) across 3 planner terminal(s).',
+        'A one-round batch keeps the pre-change status message byte-for-byte'
+    );
+
+    console.log('  PASS: one-round batch matches HEAD');
+}
+
+async function testNoTeamHeadDeliversWholeBatch() {
+    console.log('Testing a planner pool that belongs to no team...');
+    const { db, inserted } = makeRoundDb({ groups: [] });
+    const { provider, dispatches, statuses } = makeFanOutProvider({ db });
+    const plans = makeCreatedPlans(10);
+
+    await provider._distributePlannerDispatch('/ws', plans, 'PLAN REVIEWED');
+
+    assert.strictEqual(inserted.length, 0, 'No team head — no round is registered under a fabricated team id');
+    assert.strictEqual(dispatches.length, 1, 'The batch goes out in ONE prompt, not the first round slice');
+    assert.strictEqual(dispatches[0].ids.length, 10, 'Every plan is delivered — nothing is held with nothing to release it');
+    assert.strictEqual(dispatches[0].term, undefined, 'The single prompt resolves its own target');
+    const msg = statuses[statuses.length - 1].message;
+    assert.ok(/no team head resolved/.test(msg), `the status must say why it is not a team round: ${msg}`);
+    assert.ok(/all 10 plan\(s\)/.test(msg), `the status must account for every plan: ${msg}`);
+
+    console.log('  PASS: no-team batch delivered whole');
+}
+
+async function testReviewBatchTakesTheSameRounds() {
+    console.log('Testing the Review fan-out takes the same rounds...');
+    const { db, inserted } = makeRoundDb({
+        groups: [{
+            id: 'team_Review',
+            head: 'Review',
+            name: 'Review',
+            members: ['Review', 'Reviewer-1', 'Reviewer-2'],
+            order: ['Review', 'Reviewer-1', 'Reviewer-2'],
+        }],
+    });
+    const { provider, dispatches } = makeFanOutProvider({ db, terminals: ['Reviewer-1', 'Reviewer-2'] });
+    const plans = makeCreatedPlans(5);
+
+    await provider._distributeRoleRound('/ws', plans, 'CODE REVIEWED', 'reviewer', undefined);
+
+    assert.strictEqual(inserted.length, 3, 'Five plans over two reviewer seats register three rounds');
+    assert.deepStrictEqual(inserted.map(r => r.subtaskPlanIds.length), [2, 2, 1], 'Rounds partition the batch by seat count');
+    assert.strictEqual(inserted.every(r => r.teamId === 'team_Review'), true, 'The rounds belong to the Review team');
+    assert.strictEqual(inserted.every(r => r.featureId === null), true, 'A review round carries no feature');
+    const registered = new Set(inserted.flatMap(r => r.subtaskPlanIds));
+    assert.strictEqual(registered.size, 5, 'Every plan of the review batch is registered');
+
+    assert.strictEqual(dispatches.length, 2, 'Round 1 fans out one bucket per reviewer seat');
+    assert.strictEqual(dispatches.every(d => d.role === 'reviewer'), true, 'The seats are reviewers');
+    assert.strictEqual(
+        dispatches.every(d => d.instruction === undefined), true,
+        "Reviewers get their role's own workflow — never the planner's 'improve-plan', which would ask them to write the plan they must read"
+    );
+
+    console.log('  PASS: review batch takes the same rounds');
+}
+
+function testCodingRoundsIsOneTeamScopedTable() {
+    console.log('Testing coding_rounds is one team-scoped table...');
+    const fs = require('fs');
+    const dbSrc = fs.readFileSync(path.join(__dirname, '../services/KanbanDatabase.ts'), 'utf8');
+
+    // feature_id is NULLABLE in BOTH DDL copies — a NOT NULL column cannot key a
+    // planning round at all.
+    assert.strictEqual(
+        (dbSrc.match(/feature_id\s+TEXT NOT NULL/g) || []).length, 0,
+        'coding_rounds.feature_id must be nullable — a planning round has no feature'
+    );
+    assert.ok(
+        (dbSrc.match(/feature_id\s+TEXT DEFAULT NULL/g) || []).length >= 2,
+        'both DDL copies (fresh schema + the V73 migration) declare it nullable'
+    );
+    assert.ok(/UNIQUE\(team_id, feature_id, ordinal\)/.test(dbSrc), 'the row key admits a featureless round');
+
+    // ONE round concept. The only other rounds table is the transient rebuild
+    // table, and the migration renames it INTO coding_rounds.
+    const created = [...dbSrc.matchAll(/CREATE TABLE IF NOT EXISTS (\w*rounds\w*)/g)].map(m => m[1]);
+    assert.deepStrictEqual(
+        [...new Set(created)].sort(), ['coding_rounds', 'coding_rounds_new'],
+        'exactly one durable rounds table (plus the transient rebuild table the V84 rename consumes)'
+    );
+    assert.ok(/ALTER TABLE coding_rounds_new RENAME TO coding_rounds/.test(dbSrc), 'the rebuild table is renamed into coding_rounds — not a second concept');
+    assert.ok(dbSrc.includes('MIGRATION_V84_SQL'), 'a pre-existing table is rebuilt, not left NOT NULL');
+    assert.ok(/if \(v84 < 84\)/.test(dbSrc), 'the rebuild is version-gated');
+
+    console.log('  PASS: coding_rounds is one team-scoped table');
+}
+
+function testRoundAdvanceHandlesFeaturelessRounds() {
+    console.log('Testing the round advance handles a featureless round...');
+    const fs = require('fs');
+    const api = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');
+
+    // The advance must find a team round by PLAN, because a planning seat asserts
+    // its own card and the team id derived from a seat is not the team's.
+    assert.ok(/r => !r\.featureId/.test(api), 'the advance finds a team round by plan, not by the poster-derived team id');
+    // A featureless last round has no feature to complete.
+    assert.ok(api.includes('isLast && !currentRound.featureId'), 'a featureless last round must not delegate to the feature-complete core');
+    // The next round's cards move, and its seat pool is the seats that finished —
+    // not `roster minus the poster`, which would hand the next plan to the
+    // Planning team's researcher.
+    assert.ok(api.includes('seatsOverride'), 'a team round passes its own seat pool');
+    assert.ok(api.includes('targetColumn: nextTargetColumn'), 'a team round moves its cards as they are dispatched');
+
+    console.log('  PASS: round advance handles featureless rounds');
+}
+
 function testScheduleRuleSchemaHasNoBatchSize() {
     console.log('Testing schedule rule schema admits no batch-size field...');
     // The cap is hardcoded via TEAM_BATCH_PLAN_CAP (5), not configurable per schedule.
@@ -768,6 +996,12 @@ async function runAll() {
     testPreClickCount();
     testRecommendedRoleRouting();
     await testPlannerFanOutRegression();
+    await testPlanningBatchRegistersRounds();
+    await testOneRoundBatchMatchesHead();
+    await testNoTeamHeadDeliversWholeBatch();
+    await testReviewBatchTakesTheSameRounds();
+    testCodingRoundsIsOneTeamScopedTable();
+    testRoundAdvanceHandlesFeaturelessRounds();
     testScheduleRuleSchemaHasNoBatchSize();
     console.log('\nAll batch move team prompt contract tests PASSED!');
 }
