@@ -1416,11 +1416,28 @@
                 setTeamNotice((data && data.error) || 'Could not seat this team');
             } else {
                 setTeamNotice('');
-                await fetchTeamsState();
-                renderTeamsView();
             }
+            // REFRESH ON BOTH OUTCOMES, and the FAILURE path is the one that
+            // matters. The host refuses a start with "Team X is already running
+            // as Y. Stop it first." — which only happens when this view's
+            // picture is already stale: the host knows the team is up and the
+            // client is still drawing it DORMANT with a START button.
+            //
+            // Refreshing only on success made that self-reinforcing. A stale
+            // card offered START, the host correctly refused, nothing refetched,
+            // so the card stayed stale and the next press refused again. Every
+            // server-side check looked healthy throughout, because it was — the
+            // client simply never asked again.
+            //
+            // `fetchTeamsState` swallows its own errors, so this cannot turn a
+            // refusal into a thrown render.
+            await fetchTeamsState();
+            renderTeamsView();
         } catch (err) {
             setTeamNotice('Outcome unknown (connection dropped)');
+            // Same reasoning: an unknown outcome is the other case where the
+            // view must not keep asserting what it last drew.
+            try { await fetchTeamsState(); renderTeamsView(); } catch { /* offline — keep the notice */ }
         } finally {
             if (btn) { btn.disabled = false; }
         }
