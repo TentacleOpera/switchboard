@@ -358,6 +358,40 @@ func (e *ambiguousPrefix) Error() string {
 
 // ── done ──────────────────────────────────────────────────────────────────
 
+// resolveSeatIdentity mirrors the Node CLI's rule exactly (src/standalone/cli.ts):
+// an explicit --from wins, otherwise the seat comes from SWITCHBOARD_TERMINAL,
+// which the host injects into every seat's own environment when it creates the
+// pty (cmd/switchboard-pty-host/main.go and src/standalone/ptyFleetService.ts
+// both set it). Making an agent type its own name back is a field it can get
+// wrong about itself.
+//
+// This existed on the Node side from 2026-09-13 (1073bb1a, 2f59b793, 2dd2e884)
+// and never crossed to this client, because nothing compared the two. `done`
+// kept working for anyone passing --from, so the gap stayed invisible until a
+// seat followed the current prompts, which say to omit it.
+//
+// Returns the seat and the source it came from. The source is REPORTED, not
+// merely used: "resolved from the environment" and "the operator typed it" must
+// not be indistinguishable after the fact.
+func resolveSeatIdentity(from string) (string, string) {
+	if strings.TrimSpace(from) != "" {
+		return strings.TrimSpace(from), "--from"
+	}
+	if env := strings.TrimSpace(os.Getenv("SWITCHBOARD_TERMINAL")); env != "" {
+		return env, "SWITCHBOARD_TERMINAL"
+	}
+	return "", ""
+}
+
+// seatIdentityError is the Node CLI's message, verbatim in shape: it names the
+// variable, and it distinguishes "you are not in a seat" from "you typed the
+// command wrong". No placeholder seat is ever forwarded -- a completion
+// attributed to the wrong seat clears the wrong terminal.
+func seatIdentityError(verb string) string {
+	return "SWITCHBOARD_TERMINAL is not set -- `" + verb + "` with no arguments is run from inside a seat, " +
+		"which is where the host injects it. If you are driving the CLI by hand, pass --from <seat>."
+}
+
 func (c *Client) CmdDone(args []string) {
 	var from, planID, outcome string
 	for i := 0; i < len(args); i++ {
@@ -378,8 +412,9 @@ func (c *Client) CmdDone(args []string) {
 			outcome = a[len("--outcome="):]
 		}
 	}
+	from, fromSource := resolveSeatIdentity(from)
 	if from == "" {
-		c.badInput("Usage: npx switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]")
+		c.badInput("[switchboard] " + seatIdentityError("done"))
 	}
 
 	out := "finished"
@@ -407,7 +442,7 @@ func (c *Client) CmdDone(args []string) {
 	}
 	if code == 0 {
 		m, _ := data.(map[string]any)
-		emitHuman("[switchboard] Done signal recorded for seat '%s'.", from)
+		emitHuman("[switchboard] Done signal recorded for seat '%s' (%s).", from, fromSource)
 		if d, ok := m["dispatched"].(map[string]any); ok {
 			label := asString(d["title"])
 			if label == "" {
@@ -440,8 +475,9 @@ func (c *Client) CmdNext(args []string) {
 			from = a[len("--from="):]
 		}
 	}
+	from, fromSource := resolveSeatIdentity(from)
 	if from == "" {
-		c.badInput("Usage: npx switchboard next --from <seat> [--json]")
+		c.badInput("[switchboard] " + seatIdentityError("next"))
 	}
 
 	body := map[string]any{"from": from}
@@ -467,9 +503,9 @@ func (c *Client) CmdNext(args []string) {
 			if label == "" {
 				label = asString(d["planId"])
 			}
-			emitHuman("[switchboard] Next card for '%s': %s", from, label)
+			emitHuman("[switchboard] Next card for '%s' (%s): %s", from, fromSource, label)
 		} else {
-			emitHuman("[switchboard] Queue empty for seat '%s' — the run is over.", from)
+			emitHuman("[switchboard] Queue empty for seat '%s' (%s) — the run is over.", from, fromSource)
 		}
 	} else {
 		emitErr("[switchboard] %s", errMsg(data, res.Body))
