@@ -702,12 +702,12 @@ CREATE TABLE IF NOT EXISTS control_plane (
 -- previously lived only in the lead's context: which feature/team the round belongs
 -- to, its ordinal among the registered rounds, the ordered subtask entries, the
 -- round state, and the registered/dispatched/closed timestamps.
--- subtask_seats holds [{ planId, seat }]: `seat` is the seat the lead pinned at
+-- subtask_seats holds [{ planId, seat }]: seat is the seat the lead pinned at
 -- registration — an INPUT, the lead's choice, which nothing else records. The
 -- delivery OUTCOME (which seat actually got the work, and when) stays on the
 -- subtask card's owner_seat and in plan_events — a second copy stored here would
 -- be free to disagree with them. V81 collapsed subtask_seats to a bare plan-id
--- list, which was right about the outcome fields and wrong about `seat`: it
+-- list, which was right about the outcome fields and wrong about seat: it
 -- deleted the only place the lead's intent could live. The intent is reinstated;
 -- the outcome fields are not.
 --
