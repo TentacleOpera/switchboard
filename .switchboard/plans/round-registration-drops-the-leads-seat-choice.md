@@ -470,3 +470,9 @@ pseudocode bug (`subtaskSeats ?? []` dispatching nothing on thin records) was co
 entries-derivation fallback, stale line references were refreshed, and the required audit sections
 (Complexity Audit, Edge-Case & Dependency Audit, Adversarial Synthesis) were added. Compilation and
 tests were not run this pass per dispatch directive; the Verification Plan stands as written.
+
+---
+
+## Completion Summary (2026-09-20, intern implementation pass)
+
+All four changes landed on main as 4cedadad. Change A: `round/register` normalises each entry to `{planId, seat}` — bare strings get `seat: null`, objects validate `seat` as a non-empty string (400 otherwise), then roster-membership and not-the-lead checks 400 by name. Change B: `subtask_seats` stores `[{planId, seat}]`; `CodingRoundRecord` gains `subtaskSeats` with `subtaskPlanIds` derived from it; `_parseSubtaskSeatEntries` tolerates the new array, the V81 bare-string array, and the pre-V81 object (salvaging `seat`); all four readers populate both fields; no DDL. Change C: `_dispatchRoundCore` resolves each entry to a tagged `{value, source}` — `lead-registered` when the pin is still in the pool, `positional-fallback` otherwise with a demotion warning; the cursor advances only on the fallback arm; an all-positional round logs one warning; results carry `source`. Change D: all three prompt surfaces teach the pin syntax and the false "rotation" claim is gone. One deviation found and handled: `insertCodingRound` had a second caller the plan missed (`KanbanProvider._registerBatchRounds`, Mission 05 batch rounds) — it now passes `subtasks` with `seat: null`, and the batch-move contract test was updated to the new param shape. Compilation and tests were not run per dispatch directive.
