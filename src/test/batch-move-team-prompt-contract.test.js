@@ -798,8 +798,8 @@ async function testPlanningBatchRegistersRounds() {
     // ceil(10 / 3) === 4 rounds, and the UNION of their plan-id lists IS the batch.
     assert.strictEqual(inserted.length, 4, 'Ten plans over three seats register four rounds');
     assert.deepStrictEqual(inserted.map(r => r.ordinal), [1, 2, 3, 4], 'Rounds are ordinal 1..4');
-    assert.deepStrictEqual(inserted.map(r => r.subtaskPlanIds.length), [3, 3, 3, 1], 'Rounds partition the batch by seat count');
-    const registered = new Set(inserted.flatMap(r => r.subtaskPlanIds));
+    assert.deepStrictEqual(inserted.map(r => r.subtasks.length), [3, 3, 3, 1], 'Rounds partition the batch by seat count');
+    const registered = new Set(inserted.flatMap(r => r.subtasks.map(e => e.planId)));
     assert.strictEqual(registered.size, 10, 'Every plan of the batch is registered — the union is exactly the batch');
     for (const p of plans) {
         assert.ok(registered.has(p.planId), `plan ${p.planId} must be in a registered round`);
@@ -809,7 +809,7 @@ async function testPlanningBatchRegistersRounds() {
     // The round's list is read by the advance, which compares against the planId
     // an accept posts — never the dispatch handle (`_cardId` prefers sessionId).
     assert.strictEqual(
-        inserted.flatMap(r => r.subtaskPlanIds).some(id => id === 'sess1'), false,
+        inserted.flatMap(r => r.subtasks.map(e => e.planId)).some(id => id === 'sess1'), false,
         'a round carries PLAN ids, not the sessionId the dispatch uses'
     );
 
@@ -837,7 +837,7 @@ async function testOneRoundBatchMatchesHead() {
     await provider._distributePlannerDispatch('/ws', plans, 'PLAN REVIEWED');
 
     assert.strictEqual(inserted.length, 1, 'A batch that fits in one round registers exactly one round');
-    assert.deepStrictEqual(inserted[0].subtaskPlanIds.length, 3, 'The single round carries the whole batch');
+    assert.deepStrictEqual(inserted[0].subtasks.length, 3, 'The single round carries the whole batch');
     assert.strictEqual(dispatches.length, 3, 'One bucket per seat');
     assert.deepStrictEqual(dispatches.map(d => d.ids.length), [1, 1, 1], 'One plan per seat');
     // The pre-change wording, exactly: the one-round case is the regression gate.
@@ -886,10 +886,10 @@ async function testReviewBatchTakesTheSameRounds() {
     await provider._distributeRoleRound('/ws', plans, 'CODE REVIEWED', 'reviewer', undefined);
 
     assert.strictEqual(inserted.length, 3, 'Five plans over two reviewer seats register three rounds');
-    assert.deepStrictEqual(inserted.map(r => r.subtaskPlanIds.length), [2, 2, 1], 'Rounds partition the batch by seat count');
+    assert.deepStrictEqual(inserted.map(r => r.subtasks.length), [2, 2, 1], 'Rounds partition the batch by seat count');
     assert.strictEqual(inserted.every(r => r.teamId === 'team_Review'), true, 'The rounds belong to the Review team');
     assert.strictEqual(inserted.every(r => r.featureId === null), true, 'A review round carries no feature');
-    const registered = new Set(inserted.flatMap(r => r.subtaskPlanIds));
+    const registered = new Set(inserted.flatMap(r => r.subtasks.map(e => e.planId)));
     assert.strictEqual(registered.size, 5, 'Every plan of the review batch is registered');
 
     assert.strictEqual(dispatches.length, 2, 'Round 1 fans out one bucket per reviewer seat');

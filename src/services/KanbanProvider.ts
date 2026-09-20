@@ -6805,8 +6805,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
             'REGISTER YOUR ROUNDS (one call, before any work starts):',
-            `node "<cliPath>" api POST /kanban/round/register '{"from":"${originVal}","featureId":"<the FEATURE's planId>","rounds":[["<subtask planId>","<subtask planId>"],["<subtask planId>"]]}'`,
-            'Each entry in `rounds` is ONE round — an array of that round\'s subtask planIds, in dispatch order. Subtasks inside a round run in parallel; rounds run in sequence. Registering STARTS round 1: the system dispatches its subtasks to your seats immediately, and dispatches each later round when the one before it closes.',
+            `node "<cliPath>" api POST /kanban/round/register '{"from":"${originVal}","featureId":"<the FEATURE's planId>","rounds":[[{"planId":"<subtask planId>","seat":"<seat name>"},"<subtask planId>"],["<subtask planId>"]]}'`,
+            'Each entry in `rounds` is ONE round — an array of that round\'s subtask entries, in dispatch order. An entry is a bare planId, or {"planId":"<subtask planId>","seat":"<seat name>"} to pin the subtask to a seat by its roster name (YOUR TEAM above lists names and roles); unpinned entries are seated by the system. A named seat must be on your roster and must not be you. Subtasks inside a round run in parallel; rounds run in sequence. Registering STARTS round 1: the system dispatches its subtasks to your seats immediately, and dispatches each later round when the one before it closes.',
             'You do NOT dispatch subtasks to seats. There is no per-subtask staging call — registering the rounds IS the dispatch. Re-registering replaces pending (not-yet-dispatched) rounds and leaves dispatched or closed ones alone.',
             '',
             'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
@@ -8859,7 +8859,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     workspaceId: wsId,
                     ordinal: maxOrdinal + i + 1,
                     totalRegistered: maxOrdinal + rounds.length,
-                    subtaskPlanIds: rounds[i],
+                    // A batch round is the SYSTEM's partition, not a lead's
+                    // choice — no seat is pinned; each entry is seat: null and
+                    // the dispatch seats it positionally against the pool of
+                    // seats that finished the previous round.
+                    subtasks: rounds[i].map(planId => ({ planId, seat: null })),
                     registeredAt: now,
                 });
             } catch (err) {

@@ -1220,6 +1220,13 @@ type CodingRoundRow = {
     ordinal: number;
     totalRegistered: number;
     state: string;
+    /**
+     * The registered `{ planId, seat }` entries — the lead's seat INTENT
+     * (null = unpinned). Optional: test fakes and hand-built records carry
+     * only `subtaskPlanIds`, and `_dispatchRoundCore` degrades them to
+     * positional seating rather than dispatching nothing.
+     */
+    subtaskSeats?: Array<{ planId: string; seat: string | null }>;
     subtaskPlanIds: string[];
     registeredAt: string;
     dispatchedAt: string | null;
@@ -6140,7 +6147,12 @@ export class LocalApiServer {
                 return;
             }
 
-            // Validate rounds shape: each entry must be a non-empty array of strings.
+            // Validate rounds shape: each entry must be a non-empty array of
+            // subtask entries. An entry is a bare planId string, or an object
+            // `{ planId, seat }` that pins the subtask to a roster seat —
+            // the lead's choice, recorded at registration and honoured at
+            // dispatch. Mixed entries within a round are allowed.
+            const normalisedRounds: Array<Array<{ planId: string; seat: string | null }>> = [];
             for (let i = 0; i < roundsRaw.length; i++) {
                 const r = roundsRaw[i];
                 if (!Array.isArray(r) || r.length === 0) {
@@ -6148,13 +6160,38 @@ export class LocalApiServer {
                     res.end(JSON.stringify({ success: false, error: `Round ${i + 1} is empty or not an array — every round must name at least one subtask` }));
                     return;
                 }
-                for (const pid of r) {
-                    if (typeof pid !== 'string' || pid.trim() === '') {
-                        res.writeHead(400, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains a non-string or empty planId` }));
-                        return;
+                const entries: Array<{ planId: string; seat: string | null }> = [];
+                for (const rawEntry of r) {
+                    if (typeof rawEntry === 'string') {
+                        if (rawEntry.trim() === '') {
+                            res.writeHead(400, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains a non-string or empty planId` }));
+                            return;
+                        }
+                        entries.push({ planId: rawEntry.trim(), seat: null });
+                        continue;
                     }
+                    if (rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry)) {
+                        const planId = typeof rawEntry.planId === 'string' ? rawEntry.planId.trim() : '';
+                        if (!planId) {
+                            res.writeHead(400, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains an entry with a missing or empty planId` }));
+                            return;
+                        }
+                        const seat = rawEntry.seat;
+                        if (seat !== undefined && seat !== null && (typeof seat !== 'string' || seat.trim() === '')) {
+                            res.writeHead(400, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} entry '${planId}' carries a seat that is not a non-empty string` }));
+                            return;
+                        }
+                        entries.push({ planId, seat: seat === undefined || seat === null ? null : seat.trim() });
+                        continue;
+                    }
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains a non-string or empty planId` }));
+                    return;
                 }
+                normalisedRounds.push(entries);
             }
 
             const db = await this._options.getKanbanDatabase?.(workspaceRoot);
@@ -6202,14 +6239,17 @@ export class LocalApiServer {
             const subtasks: Array<{ planId: string }> = await db.getSubtasksByFeatureId(featureId);
             const validSubtaskIds = new Set(subtasks.map(s => s.planId));
 
+            // Derive team_id from the poster (same derivation as resolveTeamMembersForHead).
+            const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
+
             // Validate every planId in the rounds is a subtask of this feature.
             // Also check within-round and cross-round duplicates.
             const allPlanIds = new Set<string>();
-            for (let i = 0; i < roundsRaw.length; i++) {
-                const round = roundsRaw[i] as string[];
+            for (let i = 0; i < normalisedRounds.length; i++) {
+                const round = normalisedRounds[i];
                 const seenInThisRound = new Set<string>();
-                for (const rawPid of round) {
-                    const pid = String(rawPid).trim();
+                for (const entry of round) {
+                    const pid = entry.planId;
                     // Within-round duplicate.
                     if (seenInThisRound.has(pid)) {
                         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -6233,8 +6273,26 @@ export class LocalApiServer {
                 }
             }
 
-            // Derive team_id from the poster (same derivation as resolveTeamMembersForHead).
-            const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
+            // Seat pins are identity-checked, never judged: a named seat must be
+            // on the poster's own roster and must not be the lead. Whether an
+            // intern SHOULD hold a complexity-5 subtask is the lead's call —
+            // a bad call is a review problem, not a 400.
+            for (let i = 0; i < normalisedRounds.length; i++) {
+                for (const entry of normalisedRounds[i]) {
+                    if (entry.seat === null) { continue; }
+                    if (entry.seat === from) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: `The lead '${from}' cannot be assigned its own subtask (round ${i + 1}, subtask '${entry.planId}')` }));
+                        return;
+                    }
+                    if (!roster.includes(entry.seat)) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: `Seat '${entry.seat}' is not on team '${teamId}'s roster` }));
+                        return;
+                    }
+                }
+            }
+
             const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || feature.workspaceId || '';
             const now = new Date().toISOString();
 
@@ -6254,10 +6312,10 @@ export class LocalApiServer {
                 ? Math.max(...keptRounds.map(r => r.ordinal))
                 : 0;
 
-            const insertedRounds: Array<{ roundId: string; ordinal: number; subtasks: string[] }> = [];
-            const totalRegistered = keptRounds.length + roundsRaw.length;
-            for (let i = 0; i < roundsRaw.length; i++) {
-                const round = (roundsRaw[i] as string[]).map(p => String(p).trim());
+            const insertedRounds: Array<{ roundId: string; ordinal: number; subtasks: Array<{ planId: string; seat: string | null }> }> = [];
+            const totalRegistered = keptRounds.length + normalisedRounds.length;
+            for (let i = 0; i < normalisedRounds.length; i++) {
+                const round = normalisedRounds[i];
                 const ordinal = maxKeptOrdinal + i + 1;
                 const roundId = crypto.randomUUID();
                 const ok = await db.insertCodingRound({
@@ -6267,7 +6325,7 @@ export class LocalApiServer {
                     workspaceId: wsId,
                     ordinal,
                     totalRegistered,
-                    subtaskPlanIds: round,
+                    subtasks: round,
                     registeredAt: now,
                 });
                 if (!ok) {
@@ -6281,8 +6339,8 @@ export class LocalApiServer {
             // Compute unrouted subtasks (subtasks of the feature not in any round).
             const routedPlanIds = new Set<string>();
             for (const r of insertedRounds) {
-                for (const pid of r.subtasks) {
-                    routedPlanIds.add(pid);
+                for (const entry of r.subtasks) {
+                    routedPlanIds.add(entry.planId);
                 }
             }
             // Include subtasks already routed in kept (dispatched/closed) rounds.
@@ -6381,16 +6439,18 @@ export class LocalApiServer {
      * system:
      *
      *  1. Resolves the round and its named subtask planIds.
-     *  2. Assigns each subtask to a seat (round-robin from the roster, excluding
-     *     the lead).
+     *  2. Assigns each subtask to a seat — the lead's registered pin when one
+     *     is recorded and still on the roster, else the positional pick from
+     *     the roster excluding the lead.
      *  3. Clears only the seats receiving this round's subtasks (via the
      *     destination clearBeforePrompt, NOT the roster barrier — skipClear is
      *     true so the roster barrier is skipped).
      *  4. Delivers each prompt through the existing dispatch machinery
      *     (performKanbanDispatch).
      *  5. Stamps the round state 'dispatched'. `coding_rounds.subtask_seats`
-     *     holds only the ordered plan-ID list — seat assignment is display
-     *     guidance read from each card's `owner_seat`, never round state.
+     *     holds the ordered `{ planId, seat }` entries — the seat INTENT the
+     *     lead registered. Seat DELIVERY is display guidance read from each
+     *     card's `owner_seat`, never round state.
      *
      * Body: `{ from, roundId, workspaceRoot? }`.
      * `from` is the lead's terminal name (used to resolve the team roster and
@@ -6491,13 +6551,15 @@ export class LocalApiServer {
 
     /**
      * Shared core for dispatching a registered round (Coding Rounds feature,
-     * subtask 03). Assigns each subtask to a seat round-robin (excluding the
-     * lead), delivers each prompt through `performKanbanDispatch` with
-     * `skipClear: true` (the roster barrier is skipped; the destination seat
-     * is cleared via clearBeforePrompt), and stamps the round state
-     * `dispatched`. The round row carries only the ordered plan-ID list —
-     * per-subtask seat/delivery is reported in the response and on each
-     * card's advisory `owner_seat`, never persisted on the round.
+     * subtask 03). Assigns each subtask to a seat — the seat the lead pinned
+     * at registration when one is registered and still dispatchable, the
+     * positional pick (roster order, excluding the lead) otherwise — delivers
+     * each prompt through `performKanbanDispatch` with `skipClear: true`
+     * (the roster barrier is skipped; the destination seat is cleared via
+     * clearBeforePrompt), and stamps the round state `dispatched`. The round
+     * row records the seat INTENT (`subtask_seats` carries `{ planId, seat }`);
+     * the delivery OUTCOME is reported in the response and on each card's
+     * advisory `owner_seat`, never persisted on the round.
      * Re-dispatch is allowed: the board never refuses a dispatch.
      *
      * Called by `_handleKanbanRoundDispatch` (the `POST /kanban/round/dispatch`
@@ -6538,7 +6600,7 @@ export class LocalApiServer {
         featureId: string;
         state: string;
         dispatchedAt: string | null;
-        subtasks: Array<{ planId: string; seat: string | null; delivered: boolean; deliveredAt: string | null; error?: string }>;
+        subtasks: Array<{ planId: string; seat: string | null; source: 'lead-registered' | 'positional-fallback' | null; delivered: boolean; deliveredAt: string | null; error?: string }>;
         error?: string;
     }> {
         const { db, workspaceRoot, from, round, roster, targetColumn, seatsOverride } = args;
@@ -6549,7 +6611,16 @@ export class LocalApiServer {
         const seats = (seatsOverride && seatsOverride.length > 0)
             ? seatsOverride
             : roster.filter(s => s !== from);
-        const subtaskPlanIds: string[] = round.subtaskPlanIds || [];
+
+        // The ordered entries the round registered — `{ planId, seat }` where
+        // `seat` is the lead's pin (null = unpinned). Records that carry only
+        // the plan-id list (test fakes, hand-built rows, pre-change records
+        // read through a thin reader) degrade to today's positional
+        // behaviour — never to a zero-dispatch.
+        const entries: Array<{ planId: string; seat: string | null }> =
+            (round.subtaskSeats && round.subtaskSeats.length)
+                ? round.subtaskSeats
+                : (round.subtaskPlanIds || []).map((planId: string) => ({ planId, seat: null as string | null }));
 
         // An empty seat pool (a roster that is the lead alone) is a real state on
         // the auto-advance path: round/complete validates the ROSTER, not the
@@ -6559,9 +6630,10 @@ export class LocalApiServer {
         // the default resolution picks. Report the honest result instead: every
         // subtask `seat: null, delivered: false`, and the round row is untouched.
         if (seats.length === 0) {
-            const noSeatResults = subtaskPlanIds.map(planId => ({
-                planId,
+            const noSeatResults = entries.map(e => ({
+                planId: e.planId,
                 seat: null,
+                source: null,
                 delivered: false,
                 deliveredAt: null,
                 error: `No seat available — the team roster is the lead '${from}' alone`,
@@ -6577,18 +6649,34 @@ export class LocalApiServer {
             };
         }
 
-        // Assign seats round-robin. A re-dispatch re-sends every subtask —
+        // Seat each subtask. A re-dispatch re-sends every subtask —
         // the board never refuses a dispatch and the round row keeps no
         // per-subtask delivery ledger.
         const now = new Date().toISOString();
-        const results: Array<{ planId: string; seat: string | null; delivered: boolean; deliveredAt: string | null; error?: string }> = [];
+        const results: Array<{ planId: string; seat: string | null; source: 'lead-registered' | 'positional-fallback' | null; delivered: boolean; deliveredAt: string | null; error?: string }> = [];
         let seatCursor = 0;
+        let allPositional = true;
         let firstDispatchedAt = round.dispatchedAt || null;
 
-        for (const planId of subtaskPlanIds) {
-            // Assign the next seat (round-robin).
-            const seat = seats[seatCursor % seats.length];
-            seatCursor++;
+        for (const entry of entries) {
+            const planId = entry.planId;
+            // Seat selection is a routing read, so the resolved seat is tagged
+            // with where it came from: 'lead-registered' when the lead pinned
+            // this seat at registration and it is still in the pool,
+            // 'positional-fallback' when no seat was registered (or the
+            // registered seat has left the pool) and the legacy positional
+            // pick was used. A guessed seat must never read like a chosen one.
+            // The cursor advances ONLY on the fallback path, so a pinned
+            // entry does not shift the unpinned subtasks behind it.
+            const chosen = entry.seat && seats.includes(entry.seat)
+                ? { value: entry.seat, source: 'lead-registered' as const }
+                : { value: seats[seatCursor++ % seats.length], source: 'positional-fallback' as const };
+            if (entry.seat && chosen.source === 'positional-fallback') {
+                console.warn(`[LocalApiServer] round ${roundId}: registered seat '${entry.seat}' for subtask '${planId}' is off the roster — demoted to positional '${chosen.value}'`);
+            }
+            if (chosen.source === 'lead-registered') { allPositional = false; }
+            const seat = chosen.value;
+            console.log(`[LocalApiServer] round ${roundId}: subtask '${planId}' → seat '${seat}' (source: ${chosen.source})`);
 
             // Dispatch through the existing machinery. skipClear: true
             // skips the roster barrier (which would clear the ENTIRE
@@ -6596,7 +6684,8 @@ export class LocalApiServer {
             // default (the seat IS cleared before the prompt — it is
             // receiving new work).
             // NO COMPLEXITY ROUTING IN A TEAM ROUND. The seat is already chosen —
-            // the roster picked it, round-robin, one subtask per cleared seat. Passing
+            // pinned by the lead at registration, or positional within this
+            // round. Passing
             // `undefined` here let the endpoint auto-route by the subtask's complexity
             // and pick a column that contradicts the seat it was being handed to: a
             // cx-2 subtask resolved INTERN CODED while the card sat at LEAD CODED
@@ -6633,10 +6722,18 @@ export class LocalApiServer {
             results.push({
                 planId,
                 seat: delivered ? seat : (seat || null),
+                source: chosen.source,
                 delivered,
                 deliveredAt,
                 ...(delivered ? {} : { error: dispatchRes.payload?.error || 'Dispatch failed' }),
             });
+        }
+
+        // A round dispatched entirely on positional picks is the signature of
+        // a lead that registered without pinning any seat. Legal — but worth
+        // one visible line, so "the lead chose nothing" is never silent.
+        if (allPositional && results.length > 0) {
+            console.warn(`[LocalApiServer] round ${roundId} (feature '${round.featureId}', ordinal ${round.ordinal}): every subtask was seated positionally — no lead-registered seat was honoured`);
         }
 
         // Stamp the round dispatched. dispatched_at is stamped on the first
@@ -6669,11 +6766,12 @@ export class LocalApiServer {
      *  - skipClear: true (skip the roster barrier — do not clear the roster)
      *  - clearBeforePrompt: false (do not clear the destination seat)
      *
-     * V81: the round row keeps only the ordered plan-ID list. The subtask's
-     * seat is read from the CARD's advisory `owner_seat` — written by the
-     * dispatch itself — so redelivery targets wherever the card currently
-     * points. If the card carries no owner, the redeliver fails: the subtask
-     * must be dispatched first via round/dispatch.
+     * V81: the round row keeps the ordered `{ planId, seat }` entry list —
+     * the seat the lead registered is INTENT, not the delivered seat. The
+     * subtask's actual seat is read from the CARD's advisory `owner_seat` —
+     * written by the dispatch itself — so redelivery targets wherever the
+     * card currently points. If the card carries no owner, the redeliver
+     * fails: the subtask must be dispatched first via round/dispatch.
      *
      * Re-delivery is a normal dispatch under the hood: the board never
      * refuses, so there is no delivered flag to consult — the call re-sends

@@ -292,9 +292,10 @@ export interface DatabaseStorageStats {
 /**
  * A coding round row, as read back from the `coding_rounds` table (Coding
  * Rounds feature, subtask 01). The `subtask_seats` JSON column is parsed into
- * the ordered list of subtask plan IDs — the caller-defined set/order, nothing
- * more. This is RECORD-KEEPING state — the operational activity stamp lives
- * on the plans row as `owner_since` (see the schema comment in
+ * the ordered list of `{ planId, seat }` entries — the caller-defined
+ * set/order plus the seat the lead pinned at registration (an INPUT), nothing
+ * more. The delivery OUTCOME is not round state: the operational activity
+ * stamp lives on the plans row as `owner_since` (see the schema comment in
  * SCHEMA_TABLES_SQL).
  */
 /**
@@ -367,12 +368,24 @@ export interface CodingRoundRecord {
     totalRegistered: number;
     state: 'registered' | 'dispatched' | 'closed' | string;
     /**
-     * V81: the set of subtask plan ids in this round — an unordered set with
-     * display order, nothing more. Seat assignment is advisory display metadata
-     * read off the subtask cards' `ownerSeat`; it is not stored here, because a
-     * stored copy is a second record of the same fact that can disagree with
-     * the card. Older databases stored `{ planId: { seat, delivered, ... } }`
-     * objects; the V81 migration rewrites them to this list.
+     * The ordered subtask entries of this round, `{ planId, seat }` per entry.
+     * `seat` is the seat the LEAD pinned at registration — an INPUT, the
+     * lead's choice, recorded here because nothing else records it. `null`
+     * means unpinned: the dispatcher seats it positionally. The delivery
+     * OUTCOME is a different fact and stays where it already lives — the
+     * subtask card's `ownerSeat` and `plan_events`; it is not stored here,
+     * because a stored copy is a second record of the same fact that can
+     * disagree with the card. Older databases stored
+     * `{ planId: { seat, delivered, ... } }` objects; readers salvage each
+     * entry's `seat` from that shape and drop the outcome fields.
+     */
+    subtaskSeats: Array<{ planId: string; seat: string | null }>;
+    /**
+     * The plan ids of `subtaskSeats`, in the same order — kept derived
+     * (`subtaskSeats.map(e => e.planId)`) so the two can never disagree, and
+     * kept populated because every pre-existing reader (the accept-advance
+     * membership test, the re-registration diff, round/redeliver) reads only
+     * this list.
      */
     subtaskPlanIds: string[];
     registeredAt: string;
@@ -687,12 +700,16 @@ CREATE TABLE IF NOT EXISTS control_plane (
 -- coding_rounds: one row per round (Coding Rounds feature, subtask 01; generalised
 -- to a team-scoped round by Mission 05). Records the durable round state that
 -- previously lived only in the lead's context: which feature/team the round belongs
--- to, its ordinal among the registered rounds, the SET of plan ids, the round state,
--- and the registered/dispatched/closed timestamps. This is RECORD-KEEPING state only.
--- V81 reduced subtask_seats from a per-subtask { seat, delivered, delivered_at }
--- object to a bare plan-id list: seat assignment is advisory and read off the cards'
--- owner_seat, and delivery history lives in plan_events — a stored copy is a second
--- record of the same fact that can disagree with the card.
+-- to, its ordinal among the registered rounds, the ordered subtask entries, the
+-- round state, and the registered/dispatched/closed timestamps.
+-- subtask_seats holds [{ planId, seat }]: `seat` is the seat the lead pinned at
+-- registration — an INPUT, the lead's choice, which nothing else records. The
+-- delivery OUTCOME (which seat actually got the work, and when) stays on the
+-- subtask card's owner_seat and in plan_events — a second copy stored here would
+-- be free to disagree with them. V81 collapsed subtask_seats to a bare plan-id
+-- list, which was right about the outcome fields and wrong about `seat`: it
+-- deleted the only place the lead's intent could live. The intent is reinstated;
+-- the outcome fields are not.
 --
 -- ONE round concept, one table. feature_id is NULLABLE: a planning or review
 -- batch has no feature, and a NOT NULL column could not key its rounds at all
@@ -1175,12 +1192,12 @@ const MIGRATION_V72_SQL = [
 // have never shipped, so this is a clean break — no back-compat, no backfill.
 //
 // RECORD-KEEPING vs OPERATIONAL: the round row's subtask_seats JSON records
-// per-subtask dispatch timestamps for audit/recovery; plans.dispatched_at remains
-// the operational field isStaleCompletedAt reads (LocalApiServer.ts). They are
-// written together in the same dispatch operation (subtask 03) so they agree at
-// write time, but they serve different readers and MUST NOT be unified — the
-// plans row is read by completion logic that predates this feature. See the
-// matching comment in SCHEMA_TABLES_SQL.
+// per-subtask seat INTENT — the seat the lead pinned at registration (an
+// input). The delivery OUTCOME stays operational on the plans row
+// (owner_seat/owner_since, read by completion logic in LocalApiServer.ts) and
+// in plan_events — the round row records what was asked, the plans row what
+// happened, and the two MUST NOT be unified. See the matching comment in
+// SCHEMA_TABLES_SQL.
 //
 // The column set is identical to the CREATE TABLE in SCHEMA_TABLES_SQL so a fresh
 // DB (which gets the table at creation) and an upgraded DB (which gets it here)
@@ -8534,11 +8551,12 @@ export class KanbanDatabase {
      * Insert a single coding_rounds row. Called by the round/register handler
      * (subtask 02) for each round in the lead's posted plan, and by
      * `KanbanProvider._registerBatchRounds` for the rounds of a planning or
-     * review batch (Mission 05). subtask_seats stores the ordered list of plan
-     * IDs — the caller-defined set and order, nothing else. Seat assignment is
-     * derived by reading each subtask card's ownerSeat; delivery state is not
-     * stored (the board never refuses a dispatch, so a re-sent prompt is just a
-     * dispatch event, not a round mutation). This is RECORD-KEEPING state.
+     * review batch (Mission 05). subtask_seats stores the ordered list of
+     * `{ planId, seat }` entries — the caller-defined set and order, plus the
+     * seat the lead pinned at registration (`null` when unpinned). The seat is
+     * the lead's INPUT; the delivery OUTCOME is not stored (the board never
+     * refuses a dispatch, so a re-sent prompt is just a dispatch event, not a
+     * round mutation — and the card's ownerSeat already records what landed).
      *
      * `featureId` is NULL for a team-scoped round with no feature (a planning or
      * review batch). It is a real NULL, not an empty string or a sentinel: a
@@ -8552,7 +8570,7 @@ export class KanbanDatabase {
         workspaceId: string;
         ordinal: number;
         totalRegistered: number;
-        subtaskPlanIds: string[];
+        subtasks: Array<{ planId: string; seat: string | null }>;
         registeredAt: string;
     }): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
@@ -8568,7 +8586,7 @@ export class KanbanDatabase {
                     params.workspaceId,
                     params.ordinal,
                     params.totalRegistered,
-                    JSON.stringify(params.subtaskPlanIds),
+                    JSON.stringify(params.subtasks),
                     params.registeredAt,
                 ]
             );
@@ -8580,20 +8598,45 @@ export class KanbanDatabase {
     }
 
     /**
-     * Parse the subtask_seats JSON column into the ordered plan-ID list. The
-     * current shape is a JSON array of plan IDs; pre-V81 rows stored an object
-     * keyed by planId ({ seat, delivered, delivered_at }), whose keys ARE the
-     * plan IDs in registration order — take the keys as a tolerance read.
+     * Parse the subtask_seats JSON column into the ordered entry list,
+     * `{ planId, seat }` per subtask. Three shapes are tolerated:
+     *  - the current `[{ planId, seat }]` array (a non-string seat normalises
+     *    to null);
+     *  - the post-V81 array of bare plan-id strings (every seat reads null —
+     *    no seat was ever recorded, so none is invented);
+     *  - the pre-V81 object keyed by planId ({ seat, delivered, delivered_at }),
+     *    whose keys ARE the plan ids in registration order; each value's
+     *    `seat` is salvaged when a non-empty string — that seat is genuine
+     *    lead intent, preserved for free wherever a pre-V81 row survives. The
+     *    outcome fields (delivered, delivered_at) are dropped, as V81 decided.
      * Corrupt JSON yields an empty list.
      */
-    private _parseSubtaskPlanIds(json: unknown): string[] {
+    private _parseSubtaskSeatEntries(json: unknown): Array<{ planId: string; seat: string | null }> {
+        const seatOf = (v: unknown): string | null =>
+            (typeof v === 'string' && v.trim().length > 0) ? v : null;
         try {
             const parsed = JSON.parse(String(json ?? '[]'));
             if (Array.isArray(parsed)) {
-                return parsed.filter((p): p is string => typeof p === 'string' && p.length > 0);
+                const entries: Array<{ planId: string; seat: string | null }> = [];
+                for (const p of parsed) {
+                    if (typeof p === 'string' && p.length > 0) {
+                        entries.push({ planId: p, seat: null });
+                    } else if (p && typeof p === 'object'
+                        && typeof (p as { planId?: unknown }).planId === 'string'
+                        && ((p as { planId: string }).planId).length > 0) {
+                        entries.push({
+                            planId: (p as { planId: string }).planId,
+                            seat: seatOf((p as { seat?: unknown }).seat),
+                        });
+                    }
+                }
+                return entries;
             }
             if (parsed && typeof parsed === 'object') {
-                return Object.keys(parsed);
+                return Object.keys(parsed).map(planId => ({
+                    planId,
+                    seat: seatOf((parsed as Record<string, { seat?: unknown }>)[planId]?.seat),
+                }));
             }
         } catch { /* corrupt JSON — treat as empty */ }
         return [];
@@ -8601,9 +8644,10 @@ export class KanbanDatabase {
 
     /**
      * Read all coding_rounds rows for a feature, ordered by ordinal ASC.
-     * Returns the subtask_seats JSON parsed back into the ordered plan-ID
-     * list. Used by the round/register handler to compute the re-registration
-     * diff and by subtasks 03/04 to read round state.
+     * Returns the subtask_seats JSON parsed back into the ordered
+     * `{ planId, seat }` entry list (`subtaskSeats`), with `subtaskPlanIds`
+     * derived from it. Used by the round/register handler to compute the
+     * re-registration diff and by subtasks 03/04 to read round state.
      */
     public async getCodingRoundsByFeature(featureId: string): Promise<CodingRoundRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -8616,6 +8660,7 @@ export class KanbanDatabase {
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
+                const subtaskSeats = this._parseSubtaskSeatEntries(r.subtask_seats);
                 rows.push({
                     roundId: String(r.round_id ?? ''),
                     featureId: String(r.feature_id ?? ''),
@@ -8624,7 +8669,8 @@ export class KanbanDatabase {
                     ordinal: Number(r.ordinal ?? 0),
                     totalRegistered: Number(r.total_registered ?? 0),
                     state: String(r.state ?? 'registered'),
-                    subtaskPlanIds: this._parseSubtaskPlanIds(r.subtask_seats),
+                    subtaskSeats,
+                    subtaskPlanIds: subtaskSeats.map(e => e.planId),
                     registeredAt: String(r.registered_at ?? ''),
                     dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
                     closedAt: r.closed_at ? String(r.closed_at) : null,
@@ -8662,7 +8708,8 @@ export class KanbanDatabase {
 
     /**
      * Read a single coding_rounds row by round_id. Returns null when the row
-     * does not exist. The subtask_seats JSON is parsed back into an object.
+     * does not exist. The subtask_seats JSON is parsed back into the ordered
+     * `{ planId, seat }` entry list.
      * Used by the round/dispatch handler (subtask 03) to read the registered
      * round before dispatching, and by the round/redeliver handler to read the
      * recorded seat for a subtask before re-sending its prompt.
@@ -8677,6 +8724,7 @@ export class KanbanDatabase {
         try {
             if (stmt.step()) {
                 const r = stmt.getAsObject();
+                const subtaskSeats = this._parseSubtaskSeatEntries(r.subtask_seats);
                 return {
                     roundId: String(r.round_id ?? ''),
                     featureId: String(r.feature_id ?? ''),
@@ -8685,7 +8733,8 @@ export class KanbanDatabase {
                     ordinal: Number(r.ordinal ?? 0),
                     totalRegistered: Number(r.total_registered ?? 0),
                     state: String(r.state ?? 'registered'),
-                    subtaskPlanIds: this._parseSubtaskPlanIds(r.subtask_seats),
+                    subtaskSeats,
+                    subtaskPlanIds: subtaskSeats.map(e => e.planId),
                     registeredAt: String(r.registered_at ?? ''),
                     dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
                     closedAt: r.closed_at ? String(r.closed_at) : null,
@@ -8738,7 +8787,7 @@ export class KanbanDatabase {
      * rounds — to find the in-flight (dispatched/partial) round to close, to
      * decide whether the closed round was the last, and to identify the next
      * registered round to auto-dispatch. The subtask_seats JSON is parsed back
-     * into the ordered plan-ID list (same shape as getCodingRoundsByFeature).
+     * into the ordered entry list (same shape as getCodingRoundsByFeature).
      */
     public async getCodingRoundsByTeam(teamId: string): Promise<CodingRoundRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -8751,6 +8800,7 @@ export class KanbanDatabase {
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
+                const subtaskSeats = this._parseSubtaskSeatEntries(r.subtask_seats);
                 rows.push({
                     roundId: String(r.round_id ?? ''),
                     featureId: String(r.feature_id ?? ''),
@@ -8759,7 +8809,8 @@ export class KanbanDatabase {
                     ordinal: Number(r.ordinal ?? 0),
                     totalRegistered: Number(r.total_registered ?? 0),
                     state: String(r.state ?? 'registered'),
-                    subtaskPlanIds: this._parseSubtaskPlanIds(r.subtask_seats),
+                    subtaskSeats,
+                    subtaskPlanIds: subtaskSeats.map(e => e.planId),
                     registeredAt: String(r.registered_at ?? ''),
                     dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
                     closedAt: r.closed_at ? String(r.closed_at) : null,
@@ -8835,7 +8886,7 @@ export class KanbanDatabase {
      * registered rounds must NOT show "round 1 of 1" — that is a fabrication).
      * A workspace with zero rows yields an empty array, and the board renders
      * no round indicator for any feature. The subtask_seats JSON is parsed
-     * back into the ordered plan-ID list (same shape as getCodingRoundsByTeam).
+     * back into the ordered entry list (same shape as getCodingRoundsByTeam).
      */
     public async getCodingRoundsByWorkspace(workspaceId: string): Promise<CodingRoundRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -8848,6 +8899,7 @@ export class KanbanDatabase {
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
+                const subtaskSeats = this._parseSubtaskSeatEntries(r.subtask_seats);
                 rows.push({
                     roundId: String(r.round_id ?? ''),
                     featureId: String(r.feature_id ?? ''),
@@ -8856,7 +8908,8 @@ export class KanbanDatabase {
                     ordinal: Number(r.ordinal ?? 0),
                     totalRegistered: Number(r.total_registered ?? 0),
                     state: String(r.state ?? 'registered'),
-                    subtaskPlanIds: this._parseSubtaskPlanIds(r.subtask_seats),
+                    subtaskSeats,
+                    subtaskPlanIds: subtaskSeats.map(e => e.planId),
                     registeredAt: String(r.registered_at ?? ''),
                     dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
                     closedAt: r.closed_at ? String(r.closed_at) : null,
