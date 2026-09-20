@@ -7627,6 +7627,9 @@ export class LocalApiServer {
                             // A 'seat'-authority team has NO ONE to report to. Its seats
                             // assert completion to the system and accept their own work;
                             // the head terminal is a peer doing the same job, not a lead.
+                            // Relaying anyway put "[queue/done] Planning-planner-1 reports
+                            // its dispatched task complete" plus an acceptance instruction
+                            // into the Planning seat, which has no authority to act on it.
                             const authority = group ? readTeamCompletionAuthority(group) : null;
                             if (authority && authority.value === 'seat') {
                                 console.log(
@@ -7787,18 +7790,7 @@ export class LocalApiServer {
                         // mismatch guard above already proved they agree when
                         // the caller supplies one.
                         const relayPlanId = held.planId || planId;
-                        // Same rule as the queue/done relay: a 'seat'-authority team has no
-                    // lead to receive a report. Suppresses the REPORT only — the
-                    // clear-and-dispatch steps below still run, so the round still closes.
-                    const roundAuthority = readTeamCompletionAuthority(group);
-                    const relayToHead = roundAuthority.value !== 'seat';
-                    if (!relayToHead) {
-                        console.log(
-                            `[LocalApiServer] round-complete: no relay to '${headName}' — `
-                            + `team completionAuthority is 'seat' (source: ${roundAuthority.source}).`
-                        );
-                    }
-                    const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
+                        const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                             + (relayPlanId ? ` (plan ${relayPlanId})` : '')
                             + `${composeCompletionEvidence(held, Date.now())}.`
                             // A standalone plan (no featureId) has no next subtask,
@@ -10473,6 +10465,18 @@ export class LocalApiServer {
                         fail(400, { success: false, error: `Team '${groupId}' has no head terminal` });
                         resolve();
                         return;
+                    }
+                    // Same rule as the queue/done relay: a 'seat'-authority team has no
+                    // lead to receive a completion report. Resolved BEFORE the relay so
+                    // the clear-and-dispatch steps below still run — the report is
+                    // suppressed, the round is not.
+                    const roundAuthority = readTeamCompletionAuthority(group);
+                    const relayToHead = roundAuthority.value !== 'seat';
+                    if (!relayToHead) {
+                        console.log(
+                            `[LocalApiServer] round-complete: no relay to '${headName}' — `
+                            + `team completionAuthority is 'seat' (source: ${roundAuthority.source}).`
+                        );
                     }
 
                     // ── Relay the completion report to the lead ────────────

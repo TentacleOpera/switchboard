@@ -107,6 +107,9 @@ function makeServer(board, opts = {}) {
                 if (row) { row.dispatchedAt = null; }
                 return true;
             },
+            // The release write _runQueueDone requires before it will relay,
+            // clear, or pop — a falsy return reads as a duplicate report.
+            clearOwnerStamp: async () => true,
             ...(opts.db || {}),
         }),
         resolveTeamMembers: opts.resolveTeamMembers,
@@ -147,19 +150,19 @@ function turnEnd(calls) {
 /**
  * A held card + the next queued card, wired to the given seat.
  *
- * `completedAt` is set because the shipped seat orders post
- * `/kanban/task/complete` alongside `queue/done`; without it the pop that
- * follows the relay refuses with 409 ("completion is asserted, never
- * inferred") and the case under test never reaches the queue.
+ * The seat reports `done` while it still HOLDS the card: `ownerSeat` names the
+ * seat and `completedAt` is unset — completion is asserted by the lead's later
+ * /kanban/task/complete, not by the seat's report. The held-card lookup
+ * (`ownerSeat === from && !completedAt`) finds nothing without that shape.
  */
 function boardHeldBy(seat, extra = {}) {
     return [
         card('held', 'CODER CODED', {
             dispatchedAt: '2026-08-24T00:00:00Z',
             dispatchedTerminal: seat,
+            ownerSeat: seat,
             planFile: '/tmp/held.md',
             workspaceId: 'ws1',
-            completedAt: '2026-08-24T01:00:00Z',
             ...extra,
         }),
         card('next', 'STAGING', { queuePosition: 1 }),
