@@ -15,6 +15,7 @@ import {
     CustomKanbanColumnConfig,
     KanbanColumnDefinition,
     DEFAULT_KANBAN_COLUMNS,
+    DEFAULT_VISIBLE_AGENTS,
     parseCustomAgents,
     parseCustomKanbanColumns,
     parseDefaultPromptOverrides,
@@ -9087,18 +9088,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (this._taskViewerProvider) {
             return this._taskViewerProvider.getVisibleAgents(workspaceRoot);
         }
-        const defaults: Record<string, boolean> = {
-            lead: true,
-            coder: true,
-            intern: true,
-            reviewer: true,
-            tester: false,
-            planner: true,
-            analyst: true,
-            jules: false,
-            ticket_updater: false,
-            researcher: false
-        };        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        // The canonical constant, NOT a second inline copy. This literal used to be
+        // declared here and had already drifted: it omitted `claude_designer`,
+        // `phone_a_friend` and `project_manager`, so those roles read as
+        // `undefined` — and `undefined !== false` means VISIBLE, the opposite of
+        // what the shipped defaults say. Two compiled-in copies of a membership
+        // default is the fallback rule's failure mode with no store involved.
+        const defaults: Record<string, boolean> = { ...DEFAULT_VISIBLE_AGENTS };
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (fs.existsSync(statePath)) {
                 const content = await fs.promises.readFile(statePath, 'utf8');
