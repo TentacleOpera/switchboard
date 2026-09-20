@@ -358,35 +358,10 @@
         </div>
     </div>
 
-    <!-- Composer modal. Mirrors #link-modal's static-HTML pattern (sidebar-
-         level, position: fixed; inset: 0; z-index: 200, toggled with the
-         `hidden` attribute) rather than the paste dialog's pane-level dynamic
-         overlay. The composer is opened from a sidebar button, so the modal
-         belongs at the panel level. NOT dismissed by a backdrop click — it
-         holds typed text and there is no discard gate (per CLAUDE.md there
-         never will be one). -->
-    <div id="composer-modal" class="composer-modal" hidden>
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Composer</h3>
-                <button type="button" class="modal-close-btn" id="composer-modal-close" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <label class="link-field-label" for="composer-terminal-select">Target terminal</label>
-                <select id="composer-terminal-select" class="composer-select"></select>
-
-                <label class="link-field-label" for="composer-input">Prompt</label>
-                <textarea id="composer-input" class="composer-input"
-                          placeholder="Type a prompt or command. Multi-line input is delivered as a bracketed-paste block; a single line starting with / is sent as a control string."></textarea>
-
-                <div id="composer-status" class="composer-status"></div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" id="composer-cancel" class="secondary-btn">CANCEL</button>
-                <button type="button" id="composer-send" class="secondary-btn is-teal" disabled>SEND</button>
-            </div>
-        </div>
-    </div>
+    <!-- The composer is a standing tab in the agent dock now (dock.html /
+         dockComposer.js), not a modal in this document — see plan
+         the-composer-is-a-modal-you-have-to-summon-make-it-a-dock-tab.
+         The COMPOSER sidebar button posts openDockTab to the shell. -->
 
     <!-- Team Standing Orders modal -->
     <div id="team-orders-modal" class="team-orders-modal" hidden>

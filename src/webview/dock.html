@@ -424,6 +424,75 @@
         .dock-fleet-feed-entry {
             white-space: nowrap;
         }
+        /* ── Composer pane ─────────────────────────────────────────────────
+           A standing prompt surface, not a modal: target select, multi-line
+           input, status line, SEND. Modelled on the .agent-control-* styles so
+           the dock's two control surfaces read as the same product. Visibility
+           follows the #dock-fleet idiom: display:none + `hidden` at rest,
+           .is-visible shows it as a flex column. */
+        #dock-composer-pane {
+            display: none;
+            flex: 1 1 auto;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px;
+            background: var(--bg-color);
+            overflow: hidden;
+        }
+        #dock-composer-pane.is-visible { display: flex; }
+        #dock-composer-pane label {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        #dock-composer-target {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: var(--font-code);
+            font-size: 11px;
+            padding: 4px 6px;
+            outline: none;
+            box-sizing: border-box;
+        }
+        #dock-composer-target:focus { border-color: var(--accent-primary); }
+        #dock-composer-input {
+            flex: 1 1 auto;
+            min-height: 80px;
+            resize: none;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: var(--font-code);
+            font-size: 12px;
+            line-height: 1.5;
+            padding: 6px 8px;
+            outline: none;
+            box-sizing: border-box;
+        }
+        #dock-composer-input:focus { border-color: var(--accent-primary); }
+        #dock-composer-status {
+            font-size: 10px;
+            color: var(--text-dim);
+            min-height: 12px;
+        }
+        #dock-composer-status.is-error { color: #f85149; }
+        #dock-composer-send {
+            align-self: flex-end;
+            background: var(--accent-dim);
+            border: 1px solid var(--accent-dim);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 11px;
+            padding: 4px 14px;
+            cursor: pointer;
+        }
+        #dock-composer-send:hover { background: var(--accent-primary); color: var(--bg-color); }
+        #dock-composer-send[disabled] { opacity: 0.5; cursor: not-allowed; }
         #dock-empty {
             display: none;
             flex: 1 1 auto;
@@ -462,6 +531,7 @@
             <button id="dock-tab-agent" type="button" class="dock-tab-btn is-active" role="tab" aria-selected="true">Agent</button>
             <button id="dock-tab-cli" type="button" class="dock-tab-btn" role="tab" aria-selected="false">CLI</button>
             <button id="dock-tab-fleet" type="button" class="dock-tab-btn" role="tab" aria-selected="false">Fleet</button>
+            <button id="dock-tab-composer" type="button" class="dock-tab-btn" role="tab" aria-selected="false">Composer</button>
         </div>
         <span id="dock-title"></span>
         <div id="dock-cli-wrap" class="dock-cli-wrap collapsed"></div>
@@ -577,10 +647,19 @@
             </div>
         </div>
     </div>
+    <div id="dock-composer-pane" hidden>
+        <label for="dock-composer-target">Target terminal</label>
+        <select id="dock-composer-target"></select>
+        <label for="dock-composer-input">Prompt</label>
+        <textarea id="dock-composer-input" placeholder="Type a prompt or command. Multi-line input is delivered as a bracketed-paste block; a single line starting with / is sent as a control string."></textarea>
+        <div id="dock-composer-status"></div>
+        <button id="dock-composer-send" type="button">SEND</button>
+    </div>
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{STATUS_CARDS_URI}}"></script>
     <script nonce="{{NONCE}}" src="/static/webview/controllerConsole.js"></script>
+    <script nonce="{{NONCE}}" src="/static/webview/dockComposer.js"></script>
     <script nonce="{{NONCE}}" src="{{TERMINAL_VIEWPORT_JS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{DOCK_JS_URI}}"></script>
 </body>

@@ -197,19 +197,54 @@ test('DOCK_MIN is >= 648 in shell.js', () => {
         `DOCK_MIN must be >= 648 (got ${m[1]})`);
 });
 
-// ── shell.js: narrow-window gate (edge case 7) ──────────────────────
+// ── shell.js: narrow-window gate (edge case 7) + overlay mode ───────
 
-test('DOCK_VIABLE_MIN is declared and the dock toggle consults it', () => {
+test('dock viability resolves split/overlay/off through one tagged resolver', () => {
+    // Two floors now: DOCK_VIABLE_MIN (rail+splitter+dock+board floor — split
+    // mode) and DOCK_OVERLAY_MIN (rail+dock floor — overlay mode, which
+    // reserves no board width). Below both, the dock is refused outright.
     assert.ok(/const\s+DOCK_VIABLE_MIN\s*=/.test(shellJs),
         'DOCK_VIABLE_MIN must be declared in shell.js');
-    assert.ok(/DOCK_VIABLE_MIN/.test(shellJs),
-        'DOCK_VIABLE_MIN must be referenced in shell.js');
-    const fn = shellJs.match(/function\s+updateDockViableGating\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
-    assert.ok(fn, 'updateDockViableGating function must exist');
-    assert.ok(/DOCK_VIABLE_MIN/.test(fn[1]),
-        'updateDockViableGating must consult DOCK_VIABLE_MIN');
+    assert.ok(/const\s+DOCK_OVERLAY_MIN\s*=/.test(shellJs),
+        'DOCK_OVERLAY_MIN must be declared in shell.js');
+    const overlayFloor = shellJs.match(/const\s+DOCK_OVERLAY_MIN\s*=\s*([^;]+);/);
+    assert.ok(overlayFloor && !/DOCK_MIN_CONTENT/.test(overlayFloor[1]),
+        'the overlay floor must NOT reserve the board floor — an overlaying dock takes no board width');
+    const fn = shellJs.match(/function\s+resolveDockPresentation\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
+    assert.ok(fn, 'resolveDockPresentation must exist');
     assert.ok(/window\.innerWidth/.test(fn[1]),
-        'updateDockViableGating must check window.innerWidth');
+        'resolveDockPresentation must measure window.innerWidth');
+    assert.ok(/DOCK_VIABLE_MIN/.test(fn[1]),
+        'resolveDockPresentation must consult the split floor');
+    assert.ok(/DOCK_OVERLAY_MIN/.test(fn[1]),
+        'resolveDockPresentation must consult the overlay floor');
+    assert.ok(/mode:\s*'split'/.test(fn[1]) && /mode:\s*'overlay'/.test(fn[1]) && /mode:\s*'off'/.test(fn[1]),
+        'resolveDockPresentation must return one of split / overlay / off');
+    assert.ok(/source:/.test(fn[1]),
+        'resolveDockPresentation must tag { mode, source } — a defaulted mode must be distinguishable');
+    const gate = shellJs.match(/function\s+updateDockViableGating\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
+    assert.ok(gate, 'updateDockViableGating function must exist');
+    assert.ok(/resolveDockPresentation\(\)/.test(gate[1]),
+        'updateDockViableGating must consult resolveDockPresentation');
+});
+
+test('a live mode switch is presentation-only — the /dock iframe keeps its src', () => {
+    // applyDockPresentation is the live-switch path (resize across a floor).
+    // It must restyle, never reload — a reload would lose the active tab and
+    // any composer draft (edge case: iPad rotation with the dock open).
+    const fn = shellJs.match(/function\s+applyDockPresentation\([\s\S]*?\n\s{4}\}/);
+    assert.ok(fn, 'applyDockPresentation must exist');
+    assert.ok(/is-overlay/.test(fn[0]),
+        'applyDockPresentation must toggle the is-overlay presentation class');
+    assert.ok(!/dockFrame\.(src|getAttribute|setAttribute)/.test(fn[0]),
+        'applyDockPresentation must never touch the dock iframe src — no reload on mode switch');
+});
+
+test('shell.html carries the overlay presentation rules', () => {
+    assert.ok(/#agent-dock\.is-overlay\s*\{[^}]*position:\s*fixed/.test(shellHtml),
+        '#agent-dock.is-overlay must position:fixed over the content area');
+    assert.ok(/#dock-splitter\.is-overlay\s*\{[^}]*display:\s*none/.test(shellHtml),
+        '#dock-splitter.is-overlay must be display:none — inert AND invisible, not a dead affordance');
 });
 
 // ── shell.js: toggle gated on frames.has('terminals') (edge case 3) ──
@@ -272,11 +307,12 @@ test('shell.js does not contain dock tab/seat/fleet management functions', () =>
 
 // ── dock.html: the dock document ─────────────────────────────────────
 
-test('dock.html exists and contains the tab strip with Agent/CLI/Fleet', () => {
+test('dock.html exists and contains the tab strip with Agent/CLI/Fleet/Composer', () => {
     assert.ok(dockHtml.includes('id="dock-tabs"'), '#dock-tabs must exist in dock.html');
     assert.ok(dockHtml.includes('id="dock-tab-agent"'), '#dock-tab-agent must exist in dock.html');
     assert.ok(dockHtml.includes('id="dock-tab-cli"'), '#dock-tab-cli must exist in dock.html');
     assert.ok(dockHtml.includes('id="dock-tab-fleet"'), '#dock-tab-fleet must exist in dock.html');
+    assert.ok(dockHtml.includes('id="dock-tab-composer"'), '#dock-tab-composer must exist in dock.html — the composer is a standing dock tab');
     assert.ok(!dockHtml.includes('id="dock-tab-kanban"'), '#dock-tab-kanban must not exist in dock.html');
 });
 
@@ -291,9 +327,15 @@ test('dock.html contains empty state, CLI input, start/restart, fleet table', ()
     assert.ok(dockHtml.includes('id="dock-fleet-tbody"'), '#dock-fleet-tbody must exist in dock.html');
 });
 
-test('dock.html has three panes: agent (control surface), cli, fleet (not iframes)', () => {
+test('dock.html has four panes: agent (control surface), cli, fleet, composer (not iframes)', () => {
     assert.ok(dockHtml.includes('id="dock-agent-pane"'), '#dock-agent-pane must exist in dock.html');
     assert.ok(dockHtml.includes('id="dock-cli-pane"'), '#dock-cli-pane must exist in dock.html');
+    // The Composer tab is a form, not a pty: target select, prompt textarea,
+    // status line, SEND — the controls the retired modals carried.
+    assert.ok(dockHtml.includes('id="dock-composer-pane"'), '#dock-composer-pane must exist in dock.html');
+    assert.ok(dockHtml.includes('id="dock-composer-target"'), '#dock-composer-target select must exist in dock.html');
+    assert.ok(dockHtml.includes('id="dock-composer-input"'), '#dock-composer-input textarea must exist in dock.html');
+    assert.ok(dockHtml.includes('id="dock-composer-send"'), '#dock-composer-send button must exist in dock.html');
     // The Agent tab is a control surface driven by ACTION BUTTONS — a log,
     // quick actions, card/column pickers and a status line, NOT a terminal
     // emulator and NOT a free-text intent box. The input + Send button were
@@ -397,8 +439,8 @@ test('dock.js creates a viewport for CLI only (Agent tab is a control surface)',
 
 test('dock.js owns the tab strip switching logic', () => {
     assert.ok(/function\s+setDockActiveTab/.test(dockJs), 'dock.js must have setDockActiveTab');
-    assert.ok(/DOCK_TABS\s*=\s*\['agent',\s*'cli',\s*'fleet'\]/.test(dockJs),
-        'dock.js must declare DOCK_TABS with agent, cli, fleet');
+    assert.ok(/DOCK_TABS\s*=\s*\[[^\]]*'agent'[^\]]*'cli'[^\]]*'fleet'[^\]]*'composer'[^\]]*\]/.test(dockJs),
+        'dock.js must declare DOCK_TABS with agent, cli, fleet, composer');
 });
 
 test('dock.js Agent tab is a control surface — actions fire endpoints, never a text box', () => {

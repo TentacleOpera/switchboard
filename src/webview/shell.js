@@ -43,11 +43,133 @@
     // 1280px laptop only 424px of board. See edge case 13.
     const DOCK_MIN = 648, DOCK_DEFAULT = 648, DOCK_MAX = 1100;
     const DOCK_MIN_CONTENT = 280;
-    // Smallest viewport that fits rail + splitter + dock floor + board floor.
-    // Below it the dock is disabled rather than shrunk — edge case 7.
+    // Split-mode viability: rail + splitter + dock floor + a reserved floor
+    // for the board beside it. At/above this the dock takes real width.
     const DOCK_VIABLE_MIN = 48 + 4 + DOCK_MIN + DOCK_MIN_CONTENT; // 980
+    // Overlay-mode viability drops the board's floor AND the splitter: an
+    // overlaying dock takes no board width, so only rail + dock floor must
+    // fit (edge case: the dock opens on a tablet as an overlay rather than
+    // being refused — plan the-dock-refuses-to-open-on-an-ipad-because-
+    // one-tab-wants-a-pty).
+    const DOCK_OVERLAY_MIN = 48 + DOCK_MIN; // 696
 
     let dockOpen = false;
+    let dockMode = 'split';
+    // A tab the shell was asked to activate (openDockTab) before the /dock
+    // document was ready. Flushed by the frame's load listener or a short
+    // retry; see openDockOnTab/flushPendingDockTab.
+    let pendingDockTab = null;
+    let pendingDockTabDeadline = 0;
+
+    /**
+     * Resolve the dock's presentation mode for the current viewport. Returns
+     * a tagged { mode, source } — which rule chose it and from what width —
+     * so a defaulted mode is distinguishable from a measured one and "why is
+     * the dock overlaying?" is answerable after the fact.
+     *   'split'   — dock takes real width beside the board.
+     *   'overlay' — dock floats over the content area; no board width taken.
+     *   'off'     — viewport cannot hold even rail + dock floor.
+     */
+    function resolveDockPresentation() {
+        const w = window.innerWidth;
+        let resolved;
+        if (w >= DOCK_VIABLE_MIN) {
+            resolved = { mode: 'split', source: 'width ' + w + ' >= split floor ' + DOCK_VIABLE_MIN + ' (rail+splitter+dock+board)' };
+        } else if (w >= DOCK_OVERLAY_MIN) {
+            resolved = { mode: 'overlay', source: 'width ' + w + ' >= overlay floor ' + DOCK_OVERLAY_MIN + ' (rail+dock); board floor not reserved' };
+        } else {
+            resolved = { mode: 'off', source: 'width ' + w + ' < overlay floor ' + DOCK_OVERLAY_MIN + ' (rail+dock)' };
+        }
+        if (resolved.mode !== dockMode) {
+            console.info('[dock] presentation ' + dockMode + ' -> ' + resolved.mode + ' — ' + resolved.source);
+        }
+        dockMode = resolved.mode;
+        return resolved;
+    }
+
+    /** Overlay width: the dock's floor or the viewport right of the rail,
+     *  whichever is smaller. No splitter drag in this mode. */
+    function overlayDockWidth() {
+        return Math.min(DOCK_MIN, Math.max(0, window.innerWidth - 48));
+    }
+
+    /** Apply the resolved mode to an OPEN dock — presentation only. Never
+     *  touches the iframe's src, so a mode switch keeps the dock document's
+     *  tab and state exactly as the open/close cycle does. Split mode clamps
+     *  the dock's CURRENT width (a resize must not snap it back to the
+     *  persisted one); pass widthPx to override, as open does with the saved
+     *  width. */
+    function applyDockPresentation(resolved, widthPx) {
+        const overlay = resolved.mode === 'overlay';
+        dockEl.classList.toggle('is-overlay', overlay);
+        splitterEl.classList.toggle('is-open', !overlay);
+        splitterEl.classList.toggle('is-overlay', overlay);
+        splitterEl.hidden = overlay;
+        const w = overlay ? overlayDockWidth()
+            : clampDockWidth(typeof widthPx === 'number' ? widthPx : dockEl.getBoundingClientRect().width);
+        dockEl.style.width = w + 'px';
+        postDockPresentationMode();
+    }
+
+    /** Tell the dock document which presentation it is under, so its own
+     *  dismissal rules (Escape in overlay, never from a text field) can
+     *  differ from split mode's. Deduped — resize fires the gate per pixel.
+     *  Pass force after a frame (re)load: the new document has no memory of
+     *  the last mode it was told. */
+    let dockModePosted = null;
+    function postDockPresentationMode(force) {
+        if (!force && dockModePosted === dockMode) { return; }
+        try {
+            dockFrame?.contentWindow?.postMessage(
+                { type: 'dockPresentationMode', mode: dockMode }, location.origin);
+            dockModePosted = dockMode;
+        } catch { /* dock frame not mounted yet — a later call retries */ }
+    }
+
+    /** Open the dock with a given tab active. The dock document owns
+     *  activeTab — the shell only requests the switch via postMessage. If the
+     *  /dock document is not loaded yet, the request stays pending and is
+     *  flushed by the frame's load listener or a bounded retry. */
+    function openDockOnTab(tab) {
+        pendingDockTab = tab;
+        pendingDockTabDeadline = Date.now() + 3000;
+        if (!dockOpen) {
+            const resolved = resolveDockPresentation();
+            if (resolved.mode === 'off') {
+                // A programmatic open must respect the same floor the toggle
+                // does — below rail+dock the dock cannot exist at all. Loud,
+                // not silent: the refusal names why.
+                console.info('[dock] openDockTab(' + tab + ') refused — ' + resolved.source);
+                pendingDockTab = null;
+                return;
+            }
+            setDockOpen(true);
+        }
+        flushPendingDockTab();
+    }
+
+    function flushPendingDockTab() {
+        if (!pendingDockTab) { return; }
+        if (Date.now() > pendingDockTabDeadline) {
+            console.info('[dock] openDockTab(' + pendingDockTab + ') dropped — /dock document never became ready');
+            pendingDockTab = null;
+            return;
+        }
+        try {
+            const win = dockFrame && dockFrame.contentWindow;
+            // The contentWindow of a not-yet-navigated frame exists but is
+            // about:blank — posting into it would drop the request silently.
+            // readyState 'complete' guarantees dock.js (a synchronous
+            // end-of-body script) has bound its message listener.
+            if (win && win.location && win.location.pathname === '/dock'
+                    && win.document && win.document.readyState === 'complete') {
+                win.postMessage({ type: 'dockActivateTab', tab: pendingDockTab }, location.origin);
+                pendingDockTab = null;
+                return;
+            }
+        } catch { /* frame mid-navigation — fall through to retry */ }
+        setTimeout(flushPendingDockTab, 100);
+    }
 
     function readDockState() {
         try {
@@ -426,10 +548,14 @@
 
     function setDockOpen(open) {
         dockOpen = !!open;
+        const resolved = resolveDockPresentation();
+        const overlay = resolved.mode === 'overlay';
         dockEl.classList.toggle('is-open', dockOpen);
-        splitterEl.classList.toggle('is-open', dockOpen);
+        dockEl.classList.toggle('is-overlay', dockOpen && overlay);
+        splitterEl.classList.toggle('is-open', dockOpen && !overlay);
+        splitterEl.classList.toggle('is-overlay', overlay);
         dockEl.hidden = !dockOpen;
-        splitterEl.hidden = !dockOpen;
+        splitterEl.hidden = !dockOpen || overlay;
         const toggle = document.querySelector('.dock-toggle-btn');
         if (toggle) {
             toggle.classList.toggle('is-active', dockOpen);
@@ -437,16 +563,19 @@
         }
         writeDockState({ open: dockOpen });
         if (dockOpen) {
-            // Apply the persisted width BEFORE the frame gets a box, so the
-            // pty is sized once. Without this the dock always reopens at the
-            // CSS default and the saved width is write-only.
-            const w = clampDockWidth(readDockState().width);
+            // Apply the width BEFORE the frame gets a box, so the pty is
+            // sized once. Split mode uses the persisted clamped width;
+            // overlay mode uses floor-or-viewport (no board floor subtracted
+            // — the clamp would under-size it; edge case 5 of the overlay
+            // plan).
+            const w = overlay ? overlayDockWidth() : clampDockWidth(readDockState().width);
             dockEl.style.width = w + 'px';
             // Mount the single /dock iframe. The dock document handles the
             // rest — tab strip, seats, fleet, theme.
             if (dockFrame.getAttribute('src') !== '/dock') { dockFrame.src = '/dock'; }
             dockFrame.hidden = false;
             dockFrame.classList.add('is-visible');
+            postDockPresentationMode();
         } else {
             // Hide the frame; the dock document keeps its state across
             // open/close cycles (same origin, same iframe — no reload).
@@ -455,21 +584,28 @@
         }
     }
 
-    // Narrow-window gate (edge case 7). Below DOCK_VIABLE_MIN the dock is not
-    // offered at all — the rail toggle renders disabled with a tooltip, and an
-    // open dock auto-closes. The board keeps the full content area and is
-    // never squeezed to 200px. The dock does NOT reopen by itself (closing was
-    // a forced action, not a user preference — leave open:false written).
+    // Narrow-window gate (edge case 7). Below the overlay floor the dock is
+    // not offered at all — the rail toggle renders disabled with a tooltip
+    // naming the term that failed — and an open dock auto-closes. Between the
+    // overlay and split floors the dock opens in overlay mode instead of
+    // being refused: the board keeps its full width behind it and is never
+    // squeezed. The dock does NOT reopen by itself (closing was a forced
+    // action, not a user preference — leave open:false written).
     function updateDockViableGating() {
         const toggle = document.querySelector('.dock-toggle-btn');
         if (!toggle) { return; }
-        const viable = window.innerWidth >= DOCK_VIABLE_MIN;
+        const resolved = resolveDockPresentation();
+        const viable = resolved.mode !== 'off';
         toggle.disabled = !viable;
         toggle.dataset.tooltip = viable
             ? 'Agent Dock'
-            : 'Window too narrow for the agent dock (needs 980px)';
+            : 'Window too narrow for the agent dock (needs ' + DOCK_OVERLAY_MIN + 'px: rail + dock floor)';
         if (!viable && dockOpen) {
             setDockOpen(false);
+        } else if (dockOpen) {
+            // Live mode switch on crossing a floor — presentation only, the
+            // /dock iframe keeps its src, tab and state.
+            applyDockPresentation(resolved);
         }
     }
 
@@ -500,21 +636,31 @@
         });
     }
 
-    // Re-clamp on resize so a narrowed window does not strand the board at
-    // 0px with no way back. #content is safe from min-content pressure: every
-    // .panel-frame is position:absolute, so absolutely-positioned children
-    // contribute nothing to #content's min-content size and it can shrink
-    // freely (edge case 7).
+    // Re-clamp / re-present on resize so a narrowed window does not strand
+    // the board at 0px with no way back, and so crossing a floor switches
+    // the open dock between split and overlay live — presentation only, the
+    // /dock iframe is never reloaded (edge case: rotation with the dock
+    // open). All of it funnels through the gate: force-close below the
+    // overlay floor, applyDockPresentation otherwise. #content is safe from
+    // min-content pressure: every .panel-frame is position:absolute, so
+    // absolutely-positioned children contribute nothing to #content's
+    // min-content size and it can shrink freely (edge case 7).
     window.addEventListener('resize', () => {
         updateDockViableGating();
-        if (!dockOpen) { return; }
-        const w = clampDockWidth(dockEl.getBoundingClientRect().width);
-        dockEl.style.width = w + 'px';
     });
 
     // Dock controls (close button, tab buttons, start/restart, CLI input,
     // fleet hops) all live in the dock document now — see dock.js. The shell
     // only listens for dockCloseRequested from the dock iframe.
+
+    // The /dock document announces nothing on load — flush any pending
+    // openDockTab request and the current presentation mode into it here.
+    if (dockFrame) {
+        dockFrame.addEventListener('load', () => {
+            postDockPresentationMode(true);
+            flushPendingDockTab();
+        });
+    }
 
 
     /**
@@ -853,7 +999,10 @@
         // itself makes. Also apply the narrow-window viability gate on first paint.
         if (frames.has('terminals')) {
             updateDockViableGating();
-            if (readDockState().open && window.innerWidth >= DOCK_VIABLE_MIN) {
+            // Boot restore resolves the mode FIRST: a dock saved open at
+            // split width reopens as an overlay on a tablet viewport rather
+            // than being dropped (edge case: boot restore).
+            if (readDockState().open && resolveDockPresentation().mode !== 'off') {
                 setDockOpen(true);
             }
         }
@@ -938,6 +1087,14 @@
             // dock — the shell owns open/closed.
             if (event.origin !== location.origin) { return; }
             setDockOpen(false);
+        } else if (data.type === 'openDockTab' && typeof data.tab === 'string') {
+            // A panel (the terminals panel's COMPOSER button, the command
+            // surface's) asks for the dock on a specific tab. The dock
+            // document owns activeTab — the shell opens the dock and relays
+            // the request; if the document is not loaded yet it flushes on
+            // the frame's load event.
+            if (event.origin !== location.origin) { return; }
+            openDockOnTab(data.tab);
         } else if (data.type === 'terminalFleetState' && Array.isArray(data.terminals)) {
             if (event.origin !== location.origin) { return; }
             renderTerminalSection(data.terminals, Array.isArray(data.teams) ? data.teams : []);
@@ -978,7 +1135,15 @@
     });
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && openModalId) { closeModal(); }
+        if (e.key === 'Escape' && openModalId) { closeModal(); return; }
+        // Overlay-mode dismissal. This fires only with focus in the SHELL
+        // document — an iframe swallows its own keys, so Escape inside the
+        // dock is handled by dock.js (which skips text fields) and Escape
+        // inside a panel never reaches here. Split mode keeps its dismissal
+        // on the rail toggle alone.
+        if (e.key === 'Escape' && dockOpen && dockMode === 'overlay') {
+            setDockOpen(false);
+        }
     });
 
     // Hash deep-link changes (bookmarkable panels).

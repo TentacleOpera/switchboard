@@ -5,10 +5,17 @@
  * deliver it to any active terminal via the host-routed sendToTerminal verb,
  * without switching the active pane (which forces an xterm.js rerender).
  *
- * Mirrors the terminal-pane-paste-contract.test.js pattern (static source
- * assertions + a JSDOM runtime check). Covers BOTH composition roots:
- *   - terminals panel (terminals.html / terminals.js)
- *   - command view panel (command.html / command.js)
+ * The composer is a STANDING TAB in the agent dock now (dock.html +
+ * dockComposer.js), not a modal in the terminals panel or the command view
+ * (plan: the-composer-is-a-modal-you-have-to-summon-make-it-a-dock-tab). The
+ * two modal copies collapsed into one surface; both documents keep only a
+ * COMPOSER button that posts openDockTab to the shell.
+ *
+ * Covers all four surfaces of the new shape:
+ *   - the dock document (dock.html / dock.js / dockComposer.js)
+ *   - the shell (shell.js / shell.html): openDockTab relay + overlay mode
+ *   - the terminals panel (composer modal REMOVED, button rewired)
+ *   - the command view (composer modal REMOVED, button rewired)
  *
  * Run with:
  *   node src/test/composer-contract.test.js
@@ -20,13 +27,14 @@ const path = require('path');
 
 const TERMINALS_JS = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
 const TERMINALS_HTML = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
-// The panel's bulk CSS was extracted out of terminals.html into a linked, cacheable
-// terminals.css (the-terminals-panel-costs-a-megabyte-and-a-half plan, item 2). Style
-// assertions must read the stylesheet, not the document, or they go red on an unrelated
-// payload change while the composer itself is untouched.
 const TERMINALS_CSS = fs.readFileSync(path.join(__dirname, '../webview/terminals.css'), 'utf8');
 const COMMAND_JS = fs.readFileSync(path.join(__dirname, '../webview/command.js'), 'utf8');
 const COMMAND_HTML = fs.readFileSync(path.join(__dirname, '../webview/command.html'), 'utf8');
+const DOCK_HTML = fs.readFileSync(path.join(__dirname, '../webview/dock.html'), 'utf8');
+const DOCK_JS = fs.readFileSync(path.join(__dirname, '../webview/dock.js'), 'utf8');
+const DOCK_COMPOSER_JS = fs.readFileSync(path.join(__dirname, '../webview/dockComposer.js'), 'utf8');
+const SHELL_JS = fs.readFileSync(path.join(__dirname, '../webview/shell.js'), 'utf8');
+const SHELL_HTML = fs.readFileSync(path.join(__dirname, '../webview/shell.html'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -62,108 +70,207 @@ function extractFunctionBody(src, name) {
     return src.slice(start, i);
 }
 
-// ── terminals.html structural assertions ────────────────────────────
+/** Slice of a source file between two markers, for scoping an assertion to one region. */
+function block(code, startMarker, endMarker) {
+    const start = code.indexOf(startMarker);
+    assert.ok(start !== -1, `marker not found: ${startMarker}`);
+    const end = code.indexOf(endMarker, start);
+    assert.ok(end !== -1, `end marker not found AFTER "${startMarker}": ${endMarker}`);
+    return code.substring(start, end);
+}
+
+// ── dock.html: the composer is a tab, not a modal ───────────────────
+
+test('dock.html: the Composer tab sits in the dock tab strip', () => {
+    const tabsIdx = DOCK_HTML.indexOf('id="dock-tabs"');
+    assert.ok(tabsIdx !== -1, '#dock-tabs strip not found in dock.html');
+    const composerIdx = DOCK_HTML.indexOf('id="dock-tab-composer"', tabsIdx);
+    assert.ok(composerIdx !== -1, '#dock-tab-composer must exist inside #dock-tabs');
+});
+
+test('dock.html: the composer pane holds the four controls the modals carried', () => {
+    assert.ok(DOCK_HTML.includes('id="dock-composer-pane"'), '#dock-composer-pane must exist');
+    assert.ok(DOCK_HTML.includes('id="dock-composer-target"'), '#dock-composer-target select must exist');
+    assert.ok(DOCK_HTML.includes('id="dock-composer-input"'), '#dock-composer-input textarea must exist');
+    assert.ok(DOCK_HTML.includes('id="dock-composer-status"'), '#dock-composer-status line must exist');
+    assert.ok(DOCK_HTML.includes('id="dock-composer-send"'), '#dock-composer-send button must exist');
+});
+
+test('dock.html: dockComposer.js is loaded (with nonce), before dock.js', () => {
+    const composerIdx = DOCK_HTML.indexOf('src="/static/webview/dockComposer.js"');
+    assert.ok(composerIdx !== -1, 'dockComposer.js script tag must be present');
+    const tag = DOCK_HTML.substring(DOCK_HTML.lastIndexOf('<script', composerIdx), composerIdx + 60);
+    assert.ok(tag.includes('nonce="{{NONCE}}"'), 'dockComposer.js tag must carry nonce="{{NONCE}}"');
+    assert.ok(DOCK_HTML.indexOf('{{DOCK_JS_URI}}') > composerIdx,
+        'dockComposer.js must load before dock.js — dock.js calls SwitchboardDockComposer on tab activation');
+});
+
+// ── dock.js: tab wiring + the shell's deep-link arm ─────────────────
+
+test('dock.js: composer is a registered tab and reachable via dockActivateTab', () => {
+    assert.ok(/DOCK_TABS\s*=\s*\[[^\]]*'composer'[^\]]*\]/.test(DOCK_JS),
+        'DOCK_TABS must include composer');
+    assert.ok(/dock-tab-composer/.test(DOCK_JS),
+        'dock.js must bind the composer tab button');
+    assert.ok(DOCK_JS.includes('dockActivateTab'),
+        'dock.js must handle the dockActivateTab message — the shell posts it for openDockTab');
+});
+
+// ── dockComposer.js: delivery path (invariants from the plan) ───────
+
+test('dockComposer.js: delivery posts to /terminals/verb/sendToTerminal via fetch', () => {
+    const body = extractFunctionBody(DOCK_COMPOSER_JS, 'deliverComposerPrompt');
+    assert.ok(body.includes("fetch('/terminals/verb/sendToTerminal'"),
+        'deliverComposerPrompt must POST to /terminals/verb/sendToTerminal');
+});
+
+test('dockComposer.js: delivery payload keeps standingOrders: false', () => {
+    // standingOrders:false is LOAD-BEARING — the standalone handler applies
+    // standing orders by default, and a user-typed prompt is not a system
+    // dispatch. This is the single easiest regression to ship silently.
+    const body = extractFunctionBody(DOCK_COMPOSER_JS, 'deliverComposerPrompt');
+    assert.ok(body.includes('standingOrders: false'),
+        'composer delivery must pass standingOrders: false');
+    assert.ok(body.includes('paced: true'),
+        'composer delivery must keep paced: true');
+});
+
+test('dockComposer.js: delivery never uses postMessage, term.paste or ws.send', () => {
+    const body = extractFunctionBody(DOCK_COMPOSER_JS, 'deliverComposerPrompt');
+    assert.ok(!body.includes('postMessage'),
+        'composer delivery must use fetch, never postMessage');
+    assert.ok(!body.includes('term.paste'),
+        'composer delivery must use the host-routed verb, not the local term.paste');
+    assert.ok(!body.includes('ws.send'),
+        'composer delivery must use fetch, never raw ws.send');
+});
+
+test('dockComposer.js: the composer never reads fleet state from the parent document', () => {
+    // Goal invariant: the dock is a different document — the composer sources
+    // the terminal list over the same verb the dock's other tabs use, never
+    // by reaching into the parent.
+    assert.ok(!DOCK_COMPOSER_JS.includes('window.parent'),
+        'dockComposer.js must never touch window.parent — fleet comes from ptyListTerminals');
+    const body = extractFunctionBody(DOCK_COMPOSER_JS, 'refreshTargets');
+    assert.ok(body.includes('/terminals/verb/ptyListTerminals'),
+        'refreshTargets must fetch /terminals/verb/ptyListTerminals');
+});
+
+test('dockComposer.js: refresh preserves the operator selection across a fleet refresh', () => {
+    // The standing surface has no open moment — a refresh must not fight the
+    // current selection (plan edge case 3).
+    const body = extractFunctionBody(DOCK_COMPOSER_JS, 'refreshTargets');
+    assert.ok(/selectEl\.value|targetEl\.value|\.value\b/.test(body),
+        'refreshTargets must read the current selection');
+    assert.ok(/current|previous|prev|selected/.test(body),
+        'refreshTargets must keep the prior selection when it is still live');
+});
+
+test('dockComposer.js: the draft persists in localStorage and clears only on a successful send', () => {
+    // The draft surviving tab switches, dock close/reopen and reload is the
+    // point of the standing surface. Per-surface convenience state — it must
+    // be localStorage, never the kanban database and never synced.
+    assert.ok(DOCK_COMPOSER_JS.includes('localStorage'),
+        'the draft must persist in localStorage');
+    assert.ok(DOCK_COMPOSER_JS.includes('sb.composerDraft'),
+        'the draft key must be sb.composerDraft');
+    const body = extractFunctionBody(DOCK_COMPOSER_JS, 'deliverComposerPrompt');
+    assert.ok(/data\.success|success/.test(body),
+        'deliverComposerPrompt must branch on the send result');
+    assert.ok(/clearDraft|clearComposerDraft|removeItem/.test(body),
+        'a successful send must clear the stored draft');
+});
+
+test('dockComposer.js: no Escape binding — Escape must not close the dock', () => {
+    // In a modal, Escape dismissed. In a dock tab, Escape must not close the
+    // dock out from under a half-written prompt (plan edge case 4).
+    assert.ok(!/key\s*===?\s*'Escape'/.test(DOCK_COMPOSER_JS),
+        'dockComposer.js must not bind Escape — a stray Escape must not destroy a draft');
+});
+
+test('dockComposer.js: no confirmation gates, no clipboard reads', () => {
+    assert.ok(!/\bconfirm\s*\(/.test(DOCK_COMPOSER_JS), 'no confirm() allowed (CLAUDE.md)');
+    assert.ok(!DOCK_COMPOSER_JS.includes('window.confirm'), 'no window.confirm allowed');
+    assert.ok(!DOCK_COMPOSER_JS.includes('showWarningMessage'), 'no showWarningMessage allowed');
+    assert.ok(!DOCK_COMPOSER_JS.includes('navigator.clipboard'), 'composer must never touch the clipboard');
+    assert.ok(!DOCK_COMPOSER_JS.includes('readText'), 'composer must never call readText');
+});
+
+// ── shell.js: openDockTab relay + overlay mode ──────────────────────
+
+test('shell.js: openDockTab opens the dock and relays dockActivateTab to it', () => {
+    assert.ok(SHELL_JS.includes("data.type === 'openDockTab'"),
+        'shell.js must handle openDockTab from panel documents');
+    const listener = block(SHELL_JS, "window.addEventListener('message', (event) => {", "document.addEventListener('keydown'");
+    const at = listener.indexOf("data.type === 'openDockTab'");
+    assert.ok(at !== -1, 'the openDockTab arm must exist in the message listener');
+    const next = listener.indexOf('} else if (data.type', at);
+    const armBody = listener.substring(at, next === -1 ? listener.length : next);
+    assert.ok(armBody.includes('if (event.origin !== location.origin) { return; }'),
+        'the openDockTab arm must check event.origin');
+    assert.ok(SHELL_JS.includes('dockActivateTab'),
+        'the shell must relay the requested tab to the dock as dockActivateTab');
+});
+
+test('shell.js: overlay mode keeps the dock reachable below the split floor', () => {
+    // The composer card depends on the dock opening at tablet widths — an
+    // overlaying dock reserves no board width, so the floor is rail+dock.
+    assert.ok(/const\s+DOCK_OVERLAY_MIN\s*=\s*48\s*\+\s*DOCK_MIN/.test(SHELL_JS),
+        'DOCK_OVERLAY_MIN must be rail + dock floor (no board floor, no splitter)');
+    assert.ok(/#agent-dock\.is-overlay/.test(SHELL_HTML),
+        'shell.html must carry the #agent-dock.is-overlay presentation rule');
+});
+
+// ── terminals panel: the modal is gone, the button rewired ──────────
 
 test('terminals.html: #btn-composer exists inside .sidebar-ops', () => {
     const sidebarOpsStart = TERMINALS_HTML.indexOf('class="sidebar-ops"');
     assert.ok(sidebarOpsStart !== -1, '.sidebar-ops container not found');
-    // Find the end of the sidebar-ops block (its closing </div>). The button
-    // must appear after btn-link-up within that block.
     const btnLinkUpIdx = TERMINALS_HTML.indexOf('id="btn-link-up"', sidebarOpsStart);
     assert.ok(btnLinkUpIdx !== -1, '#btn-link-up not found in sidebar-ops');
     const btnComposerIdx = TERMINALS_HTML.indexOf('id="btn-composer"', btnLinkUpIdx);
     assert.ok(btnComposerIdx !== -1, '#btn-composer must appear after #btn-link-up in sidebar-ops');
 });
 
-test('terminals.html: #composer-modal exists with a terminal selector and a textarea', () => {
-    assert.ok(TERMINALS_HTML.includes('id="composer-modal"'),
-        '#composer-modal element must exist');
-    assert.ok(TERMINALS_HTML.includes('id="composer-terminal-select"'),
-        '#composer-terminal-select must exist inside the composer modal');
-    assert.ok(TERMINALS_HTML.includes('id="composer-input"'),
-        '#composer-input textarea must exist inside the composer modal');
+test('terminals.html: NO #composer-modal remains', () => {
+    assert.ok(!TERMINALS_HTML.includes('id="composer-modal"'),
+        '#composer-modal must be removed from terminals.html — one composer, not three');
+    assert.ok(!TERMINALS_HTML.includes('id="composer-terminal-select"'),
+        '#composer-terminal-select must leave with the modal');
+    assert.ok(!TERMINALS_HTML.includes('id="composer-input"'),
+        '#composer-input must leave with the modal');
 });
 
-test('terminals.css: .composer-modal CSS uses position: fixed', () => {
-    const cssMatch = TERMINALS_CSS.match(/\.composer-modal\s*\{([^}]*)\}/);
-    assert.ok(cssMatch, '.composer-modal CSS rule must exist');
-    assert.ok(cssMatch[1].includes('position: fixed'),
-        '.composer-modal must use position: fixed (sidebar-level modal)');
-    assert.ok(TERMINALS_CSS.includes('.composer-modal[hidden] { display: none; }'),
-        '.composer-modal[hidden] override is mandatory (display:flex beats UA hidden)');
+test('terminals.css: .composer-modal rules are gone', () => {
+    assert.ok(!/\.composer-modal\s*\{/.test(TERMINALS_CSS),
+        '.composer-modal CSS must be removed from terminals.css');
 });
 
-test('terminals.html: terminals.css is the linked stylesheet carrying the composer rules', () => {
-    // The style assertions above read terminals.css; this pins that the document
-    // actually LINKS it, so a stylesheet that stopped being served could not leave
-    // those assertions passing against a file no browser loads.
-    assert.ok(/<link[^>]+href="\/static\/webview\/terminals\.css"/.test(TERMINALS_HTML),
-        'terminals.html must link /static/webview/terminals.css');
-});
-
-test('terminals.css: #btn-composer is in the team-scoped and controller-scoped hide rules', () => {
+test('terminals.css: #btn-composer stays in the scoped hide rules', () => {
     assert.ok(TERMINALS_CSS.includes('body.is-team-scoped #btn-composer'),
         '#btn-composer must be hidden in team-scoped mode (alongside #btn-link-up)');
     assert.ok(TERMINALS_CSS.includes('body.is-controller-scoped #btn-composer'),
         '#btn-composer must be hidden in controller-scoped mode (alongside #btn-link-up)');
 });
 
-// ── terminals.js delivery assertions ─────────────────────────────────
-
-test('terminals.js: openComposerModal is a function', () => {
-    assert.ok(/function openComposerModal\s*\(/.test(TERMINALS_JS),
-        'openComposerModal must be a function in terminals.js');
+test('terminals.js: #btn-composer posts openDockTab to the shell', () => {
+    assert.ok(TERMINALS_JS.includes("type: 'openDockTab'") && TERMINALS_JS.includes("tab: 'composer'"),
+        'the COMPOSER button must post openDockTab with tab:composer');
+    assert.ok(TERMINALS_JS.includes('window.parent.postMessage'),
+        'the button must reach the shell via window.parent.postMessage');
 });
 
-test('terminals.js: delivery posts to /terminals/verb/sendToTerminal via fetch', () => {
-    const body = extractFunctionBody(TERMINALS_JS, 'deliverComposerPrompt');
-    assert.ok(body.includes("fetch('/terminals/verb/sendToTerminal'"),
-        'deliverComposerPrompt must POST to /terminals/verb/sendToTerminal');
-});
-
-test('terminals.js: delivery payload includes standingOrders: false', () => {
-    const body = extractFunctionBody(TERMINALS_JS, 'deliverComposerPrompt');
-    assert.ok(body.includes('standingOrders: false'),
-        'composer delivery must pass standingOrders: false (sendToTerminal hardcodes kind:dispatch)');
-});
-
-test('terminals.js: composer delivery does NOT use postMessage', () => {
-    const body = extractFunctionBody(TERMINALS_JS, 'deliverComposerPrompt');
-    assert.ok(!body.includes('postMessage'),
-        'composer delivery must use fetch, never postMessage (terminals.js has no acquireVsCodeApi)');
-});
-
-test('terminals.js: composer delivery does NOT use term.paste or ws.send', () => {
-    const body = extractFunctionBody(TERMINALS_JS, 'deliverComposerPrompt');
-    assert.ok(!body.includes('term.paste'),
-        'composer delivery must use the host-routed sendToTerminal verb, not the local term.paste');
-    assert.ok(!body.includes('ws.send'),
-        'composer delivery must use fetch, never raw ws.send');
-});
-
-test('terminals.js: composer code path never touches navigator.clipboard', () => {
-    for (const name of ['openComposerModal', 'deliverComposerPrompt', 'updateComposerSendButton']) {
-        const body = extractFunctionBody(TERMINALS_JS, name);
-        assert.ok(!body.includes('navigator.clipboard'),
-            `${name} must never reference navigator.clipboard`);
-        assert.ok(!body.includes('readText'),
-            `${name} must never call readText`);
+test('terminals.js: the modal composer code is gone', () => {
+    for (const name of ['openComposerModal', 'closeComposerModal', 'deliverComposerPrompt',
+                        'updateComposerSendButton', 'setComposerStatus']) {
+        assert.ok(!new RegExp('function\\s+' + name + '\\s*\\(').test(TERMINALS_JS),
+            `${name} must be removed from terminals.js — the composer lives in dockComposer.js`);
     }
+    assert.ok(!TERMINALS_JS.includes("getElementById('composer-modal')"),
+        'terminals.js must not reference the removed modal element');
 });
 
-test('terminals.js: composer code path has no confirmation gates', () => {
-    for (const name of ['openComposerModal', 'deliverComposerPrompt', 'closeComposerModal']) {
-        const body = extractFunctionBody(TERMINALS_JS, name);
-        assert.ok(!/\bconfirm\s*\(/.test(body),
-            `${name}: no confirm() call is allowed (forbidden per CLAUDE.md)`);
-        assert.ok(!body.includes('window.confirm'),
-            `${name}: no window.confirm is allowed`);
-        assert.ok(!body.includes('showWarningMessage'),
-            `${name}: no showWarningMessage is allowed`);
-    }
-});
-
-// ── command.html structural assertions ──────────────────────────────
+// ── command view: the modal is gone, the button rewired ─────────────
 
 test('command.html: composer button exists in the dispatch view', () => {
     assert.ok(COMMAND_HTML.includes('id="btn-composer"'),
@@ -175,59 +282,28 @@ test('command.html: composer button exists in the dispatch view', () => {
         '#btn-composer must appear within the dispatch view section');
 });
 
-test('command.html: #composer-modal exists with a terminal selector and a textarea', () => {
-    assert.ok(COMMAND_HTML.includes('id="composer-modal"'),
-        '#composer-modal element must exist in command.html');
-    assert.ok(COMMAND_HTML.includes('id="composer-terminal-select"'),
-        '#composer-terminal-select must exist inside the command composer modal');
-    assert.ok(COMMAND_HTML.includes('id="composer-input"'),
-        '#composer-input textarea must exist inside the command composer modal');
+test('command.html: NO #composer-modal remains', () => {
+    assert.ok(!COMMAND_HTML.includes('id="composer-modal"'),
+        '#composer-modal must be removed from command.html — one composer, not three');
+    assert.ok(!COMMAND_HTML.includes('id="composer-terminal-select"'),
+        '#composer-terminal-select must leave with the modal');
+    assert.ok(!/\.composer-modal\s*\{/.test(COMMAND_HTML),
+        '.composer-modal CSS must be removed from command.html');
 });
 
-test('command.html: .composer-modal CSS uses position: fixed', () => {
-    const cssMatch = COMMAND_HTML.match(/\.composer-modal\s*\{([^}]*)\}/);
-    assert.ok(cssMatch, '.composer-modal CSS rule must exist in command.html');
-    assert.ok(cssMatch[1].includes('position: fixed'),
-        '.composer-modal must use position: fixed in command.html');
-    assert.ok(COMMAND_HTML.includes('.composer-modal[hidden] { display: none; }'),
-        '.composer-modal[hidden] override is mandatory in command.html');
+test('command.js: #btn-composer posts openDockTab to the shell', () => {
+    assert.ok(COMMAND_JS.includes("type: 'openDockTab'") && COMMAND_JS.includes("tab: 'composer'"),
+        'the command COMPOSER button must post openDockTab with tab:composer');
 });
 
-// ── command.js delivery assertions ───────────────────────────────────
-
-test('command.js: openComposerDialog is a function', () => {
-    assert.ok(/function openComposerDialog\s*\(/.test(COMMAND_JS),
-        'openComposerDialog must be a function in command.js');
-});
-
-test('command.js: delivery posts to /terminals/verb/sendToTerminal via fetch', () => {
-    const body = extractFunctionBody(COMMAND_JS, 'deliverComposerPrompt');
-    assert.ok(body.includes("fetch('/terminals/verb/sendToTerminal'"),
-        'deliverComposerPrompt must POST to /terminals/verb/sendToTerminal in command.js');
-});
-
-test('command.js: delivery payload includes standingOrders: false', () => {
-    const body = extractFunctionBody(COMMAND_JS, 'deliverComposerPrompt');
-    assert.ok(body.includes('standingOrders: false'),
-        'command.js composer delivery must pass standingOrders: false');
-});
-
-test('command.js: composer code path has no confirmation gates', () => {
-    for (const name of ['openComposerDialog', 'deliverComposerPrompt', 'closeComposerDialog']) {
-        const body = extractFunctionBody(COMMAND_JS, name);
-        assert.ok(!/\bconfirm\s*\(/.test(body),
-            `${name}: no confirm() call is allowed (forbidden per CLAUDE.md)`);
-        assert.ok(!body.includes('window.confirm'),
-            `${name}: no window.confirm is allowed`);
+test('command.js: the modal composer code is gone', () => {
+    for (const name of ['openComposerDialog', 'closeComposerDialog', 'deliverComposerPrompt',
+                        'updateComposerSendButton', 'setComposerStatus']) {
+        assert.ok(!new RegExp('function\\s+' + name + '\\s*\\(').test(COMMAND_JS),
+            `${name} must be removed from command.js — the composer lives in dockComposer.js`);
     }
-});
-
-test('command.js: composer code path never touches navigator.clipboard', () => {
-    for (const name of ['openComposerDialog', 'deliverComposerPrompt']) {
-        const body = extractFunctionBody(COMMAND_JS, name);
-        assert.ok(!body.includes('navigator.clipboard'),
-            `${name} must never reference navigator.clipboard`);
-    }
+    assert.ok(!COMMAND_JS.includes("getElementById('composer-modal')"),
+        'command.js must not reference the removed modal element');
 });
 
 // ── Summary ──────────────────────────────────────────────────────────

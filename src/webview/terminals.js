@@ -1387,7 +1387,17 @@
         if (btnLinkUp) { btnLinkUp.addEventListener('click', openLinkModal); }
 
         const btnComposer = document.getElementById('btn-composer');
-        if (btnComposer) { btnComposer.addEventListener('click', openComposerModal); }
+        // The composer is a standing dock tab now, not a modal — ask the
+        // shell to open the dock on the Composer tab. In a standalone
+        // /terminals document (no shell parent) the post lands on this same
+        // window and is ignored — a no-op, not an error.
+        if (btnComposer) {
+            btnComposer.addEventListener('click', () => {
+                try {
+                    window.parent.postMessage({ type: 'openDockTab', tab: 'composer' }, location.origin);
+                } catch { /* no shell parent — nothing to open */ }
+            });
+        }
 
         const btnKanbanToolbar = document.getElementById('btn-kanban-toolbar');
         if (btnKanbanToolbar) {
@@ -12844,204 +12854,12 @@
         }, true);
     })();
 
-    // Composer: compose a prompt locally and deliver it to ANY active terminal
-    // via the host-routed sendToTerminal verb, without switching the active pane
-    // (which forces an xterm.js rerender). Mirrors the link-modal pattern
-    // (static HTML, `hidden` toggle, sidebar-level) — NOT the paste dialog's
-    // pane-level dynamic overlay. Delivery goes through fetch on
-    // /terminals/verb/sendToTerminal, the same route every other verb call in
-    // this file uses (no postMessage, no acquireVsCodeApi — terminals.js has
-    // neither).
-    //
-    // standingOrders:false is REQUIRED: sendToTerminal hardcodes kind:'dispatch'
-    // in the extension handler (TaskViewerProvider.ts) and applies standing
-    // orders by default in the standalone handler (bootstrap.ts). The composer
-    // is a user-typed prompt, not a system dispatch — appending standing orders
-    // would silently corrupt the user's intent.
-    function setComposerStatus(msg, isError) {
-        const statusEl = document.getElementById('composer-status');
-        if (!statusEl) { return; }
-        statusEl.textContent = msg || '';
-        statusEl.classList.toggle('is-error', !!isError);
-    }
-
-    function updateComposerSendButton() {
-        const selectEl = document.getElementById('composer-terminal-select');
-        const inputEl = document.getElementById('composer-input');
-        const sendBtn = document.getElementById('composer-send');
-        if (!sendBtn) { return; }
-        const hasTarget = !!(selectEl && selectEl.value && !selectEl.disabled);
-        const hasText = !!(inputEl && inputEl.value.length > 0);
-        sendBtn.disabled = !(hasTarget && hasText);
-    }
-
-    function closeComposerModal() {
-        const modal = document.getElementById('composer-modal');
-        if (modal) { modal.hidden = true; }
-    }
-
-    async function openComposerModal() {
-        const modal = document.getElementById('composer-modal');
-        const selectEl = document.getElementById('composer-terminal-select');
-        const inputEl = document.getElementById('composer-input');
-        if (!modal || !selectEl || !inputEl) { return; }
-
-        // Fetch a fresh fleet so the dropdown is current at open time. The
-        // modal is shown synchronously first (below) so a slow fetch never
-        // looks like a dead button; the dropdown is repopulated when the
-        // fetch resolves. fleetList may also be polled by fetchTerminalList
-        // in the background, but a fresh read here is the source of truth for
-        // the dropdown.
-        const live = fleetList.filter(t => t.status === 'active');
-        selectEl.innerHTML = '';
-        if (live.length === 0) {
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = 'No active terminals';
-            placeholder.disabled = true;
-            placeholder.selected = true;
-            selectEl.appendChild(placeholder);
-            selectEl.disabled = true;
-            setComposerStatus('No active terminals available.', false);
-        } else {
-            selectEl.disabled = false;
-            for (const t of live) {
-                const opt = document.createElement('option');
-                opt.value = t.friendlyName;
-                opt.textContent = t.friendlyName;
-                selectEl.appendChild(opt);
-            }
-            setComposerStatus('', false);
-        }
-
-        inputEl.value = '';
-        updateComposerSendButton();
-
-        modal.hidden = false;
-        // Focus the textarea so the user can type immediately. The select is
-        // pre-populated with the first active terminal.
-        setTimeout(() => { try { inputEl.focus(); } catch { /* ignore */ } }, 50);
-
-        // Refresh the dropdown from a live fetch in the background; the modal
-        // is already visible with the cached fleet, so this only corrects
-        // staleness from a long-idle panel.
-        try {
-            const res = await fetch('/terminals/verb/ptyListTerminals', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({})
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data && Array.isArray(data.terminals)) {
-                    // A LOCAL list, never the module-level `fleetList`. fetchTerminalList
-                    // sets fleetList together with parentsList/heldUnposted/hasFetchedList
-                    // from the SAME response; writing fleetList from here would leave the
-                    // sidebar rendering a fleet newer than the parents it groups by.
-                    const fresh = data.terminals.filter(t => t && t.status === 'active');
-                    const current = selectEl.value;
-                    selectEl.innerHTML = '';
-                    if (fresh.length === 0) {
-                        const placeholder = document.createElement('option');
-                        placeholder.value = '';
-                        placeholder.textContent = 'No active terminals';
-                        placeholder.disabled = true;
-                        placeholder.selected = true;
-                        selectEl.appendChild(placeholder);
-                        selectEl.disabled = true;
-                        setComposerStatus('No active terminals available.', false);
-                    } else {
-                        selectEl.disabled = false;
-                        for (const t of fresh) {
-                            const opt = document.createElement('option');
-                            opt.value = t.friendlyName;
-                            opt.textContent = t.friendlyName;
-                            selectEl.appendChild(opt);
-                        }
-                        // Preserve the prior selection if still live.
-                        if (current && fresh.some(t => t.friendlyName === current)) {
-                            selectEl.value = current;
-                        }
-                        setComposerStatus('', false);
-                    }
-                    updateComposerSendButton();
-                }
-            }
-        } catch { /* stale fleet is acceptable; the cached list stands */ }
-    }
-
-    async function deliverComposerPrompt() {
-        const selectEl = document.getElementById('composer-terminal-select');
-        const inputEl = document.getElementById('composer-input');
-        const sendBtn = document.getElementById('composer-send');
-        if (!selectEl || !inputEl) { return; }
-        const name = selectEl.value;
-        const input = inputEl.value;
-        if (!name) { setComposerStatus('No terminal selected.', true); return; }
-        if (!input) { setComposerStatus('Nothing to send.', true); return; }
-
-        setComposerStatus('Sending…', false);
-        if (sendBtn) { sendBtn.disabled = true; }
-        try {
-            const res = await fetch('/terminals/verb/sendToTerminal', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name,
-                    input,
-                    paced: true,
-                    standingOrders: false
-                })
-            });
-            const data = await res.json().catch(() => null);
-            if (data && data.success) {
-                // Close first, THEN toast: the modal out-stacks .toast-container
-                // (z 200 vs 100), so a toast raised while it is open would be
-                // painted behind it.
-                closeComposerModal();
-                showPaneToast('Sent to ' + name);
-            } else {
-                setComposerStatus('Send failed: ' + ((data && data.error) || 'unknown'), true);
-                updateComposerSendButton();
-            }
-        } catch (err) {
-            setComposerStatus('Send failed: ' + (err.message || String(err)), true);
-            updateComposerSendButton();
-        }
-    }
-
-    // Wire composer modal controls. Bound once at init; the elements are
-    // static in the HTML. Escape is bound at document level in the CAPTURE
-    // phase for the same reason as wireLinkModal (an element-scoped Escape
-    // dies once focus leaves the modal subtree).
-    (function wireComposerModal() {
-        const closeBtn = document.getElementById('composer-modal-close');
-        const cancelBtn = document.getElementById('composer-cancel');
-        const sendBtn = document.getElementById('composer-send');
-        const selectEl = document.getElementById('composer-terminal-select');
-        const inputEl = document.getElementById('composer-input');
-        if (closeBtn) { closeBtn.addEventListener('click', closeComposerModal); }
-        if (cancelBtn) { cancelBtn.addEventListener('click', closeComposerModal); }
-        if (sendBtn) { sendBtn.addEventListener('click', () => void deliverComposerPrompt()); }
-        if (selectEl) { selectEl.addEventListener('change', updateComposerSendButton); }
-        if (inputEl) {
-            inputEl.addEventListener('input', updateComposerSendButton);
-            // Stop keydown propagation so xterm does not claim keys while the
-            // textarea is focused (same reason as the link modal).
-            inputEl.addEventListener('keydown', (e) => {
-                e.stopPropagation();
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    void deliverComposerPrompt();
-                }
-            });
-        }
-        document.addEventListener('keydown', (e) => {
-            const modal = document.getElementById('composer-modal');
-            if (!modal || modal.hidden) { return; }
-            if (e.key === 'Escape') { e.stopPropagation(); closeComposerModal(); }
-        }, true);
-    })();
+    // The composer moved to a standing tab in the agent dock (dock.html /
+    // dockComposer.js) — see plan the-composer-is-a-modal-you-have-to-summon-
+    // make-it-a-dock-tab. The sidebar COMPOSER button posts openDockTab to
+    // the shell (wired near the other sidebar buttons above). No composer
+    // code lives in this document anymore: two modal copies of the same
+    // dialog (here and command.js) collapsed into one dock surface.
 
     let currentTeamOrdersTeamId = null;
     let currentTeamOrderRow = null;

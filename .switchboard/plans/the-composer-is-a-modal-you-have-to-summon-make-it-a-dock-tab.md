@@ -182,3 +182,7 @@ the same change, and verify against placement only.
   successful send.
 - Assert no `composer-modal` element remains in `terminals.html` or `command.html`.
 - Assert the composer does not read fleet state from the parent document.
+
+### Implementation Summary (2026-09-20)
+
+The Composer is now a standing fourth tab in the agent dock: `dock.html` carries the pane and tab button, `dock.js` switches it via `DOCK_TABS`, and the new `dockComposer.js` owns the target select, textarea, status line and SEND. Delivery keeps the existing `/terminals/verb/sendToTerminal` route with `paced: true, standingOrders: false`, and the target list is fetched via `ptyListTerminals` — never `window.parent`. The draft and target persist in `localStorage` under `sb.composerDraft` across tab switches, dock close/reopen and reload, and only a successful send clears the text. Both modal implementations were removed from `terminals.html`/`terminals.js`/`terminals.css` and `command.html`/`command.js`; their COMPOSER buttons now post `openDockTab` to the shell, which opens the dock and relays `dockActivateTab` once the /dock document is ready. Because the plan's verification requires the tab at 768px, the dependency card's overlay mode was also landed: `resolveDockPresentation()` returns a tagged `{mode, source}` — split above 980px, overlay above 696px, off below — with the splitter hidden in overlay and no iframe reload on mode switches.

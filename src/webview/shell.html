@@ -399,6 +399,27 @@
         body.dock-dragging .panel-frame,
         body.dock-dragging #dock-frame { pointer-events: none; }
 
+        /* Overlay presentation (plan: the-dock-refuses-to-open-on-an-ipad-
+           because-one-tab-wants-a-pty). Below the split floor but above the
+           overlay floor (rail + dock), the dock floats over the content area
+           instead of taking width from it — the board keeps its full width
+           behind and is never squeezed. Width is floor-or-viewport, applied
+           inline by shell.js. The splitter is inert and absent in this mode,
+           not a draggable dead affordance. z 30 sits above the bare content
+           area but under the top-right cluster (40) and under a modal
+           panel's content boost (50). */
+        #agent-dock.is-overlay {
+            position: fixed;
+            top: calc(env(safe-area-inset-top, 0px) + var(--cluster-band));
+            right: env(safe-area-inset-right, 0px);
+            bottom: env(safe-area-inset-bottom, 0px);
+            margin-top: 0;
+            min-width: 0;
+            z-index: 30;
+            box-shadow: -12px 0 32px rgba(0, 0, 0, 0.55);
+        }
+        #dock-splitter.is-overlay { display: none; }
+
         /* Browser-only shell: dark native palette + a 6px strip scrollbar to
            match the panels it frames. #strip is the document's only scroller
            (html, body are overflow:hidden). No --vscode-* fallback — the shell

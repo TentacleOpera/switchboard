@@ -13,7 +13,7 @@
 
     // ── Persisted state (shared with shell.js via localStorage) ──────────
     const DOCK_STATE_KEY = 'sb.agentDock';
-    const DOCK_TABS = ['agent', 'cli', 'fleet'];
+    const DOCK_TABS = ['agent', 'cli', 'fleet', 'composer'];
     const DOCK_DEFAULT_WIDTH = 648;
 
     function readDockState() {
@@ -24,7 +24,7 @@
                 open: s.open === true,
                 width: Number(s.width) || DOCK_DEFAULT_WIDTH,
                 seat: typeof s.seat === 'string' ? s.seat : null,
-                activeTab: (s.activeTab === 'fleet' || s.activeTab === 'cli') ? s.activeTab : 'agent',
+                activeTab: (s.activeTab === 'fleet' || s.activeTab === 'cli' || s.activeTab === 'composer') ? s.activeTab : 'agent',
             };
         } catch { return { open: false, width: DOCK_DEFAULT_WIDTH, seat: null, activeTab: 'agent' }; }
     }
@@ -46,7 +46,14 @@
     const dockTabAgentBtn = document.getElementById('dock-tab-agent');
     const dockTabCliBtn = document.getElementById('dock-tab-cli');
     const dockTabFleetBtn = document.getElementById('dock-tab-fleet');
-    const DOCK_TAB_BTNS = { agent: dockTabAgentBtn, cli: dockTabCliBtn, fleet: dockTabFleetBtn };
+    const dockTabComposerBtn = document.getElementById('dock-tab-composer');
+    const DOCK_TAB_BTNS = { agent: dockTabAgentBtn, cli: dockTabCliBtn, fleet: dockTabFleetBtn, composer: dockTabComposerBtn };
+    // The shell's presentation mode ('split' | 'overlay'), posted on dockFrame
+    // load and on mode switches. 'split' until told otherwise: the Escape
+    // dismissal this enables is overlay-only, so a missed postMessage errs on
+    // never-dismiss rather than eating an Escape in a dock that isn't
+    // overlaying anything.
+    let dockPresentationMode = 'split';
     const dockTitleEl = document.getElementById('dock-title');
     const dockRestartBtn = document.getElementById('dock-restart');
     const dockCloseBtn = document.getElementById('dock-close');
@@ -69,6 +76,7 @@
     const dockHopReviewReason = document.getElementById('dock-hop-review-reason');
     const dockHopsBtn = document.getElementById('dock-hops-btn');
     const dockFleetFeedEl = document.getElementById('dock-fleet-feed');
+    const composerPane = document.getElementById('dock-composer-pane');
 
     // ── PTY host origin (body data-attribute) ────────────────────────────
     // The terminal token is read by the viewport module from body.dataset.terminalToken
@@ -183,6 +191,10 @@
             dockFleetEl.classList.remove('is-visible');
             dockFleetEl.hidden = true;
         }
+        if (composerPane) {
+            composerPane.classList.remove('is-visible');
+            composerPane.hidden = true;
+        }
 
         if (activeTab === 'fleet') {
             if (dockFleetEl) {
@@ -191,6 +203,14 @@
             }
             updateDockTitle();
             startFleetPoll();
+        } else if (activeTab === 'composer') {
+            if (composerPane) {
+                composerPane.classList.add('is-visible');
+                composerPane.hidden = false;
+            }
+            stopFleetPoll();
+            updateDockTitle();
+            if (window.SwitchboardDockComposer) { window.SwitchboardDockComposer.activate(); }
         } else if (activeTab === 'cli') {
             stopFleetPoll();
             syncCliSeat();
@@ -207,6 +227,10 @@
         const tab = normaliseDockTab(readDockState().activeTab);
         if (tab === 'fleet') {
             dockTitleEl.textContent = 'Fleet';
+            return;
+        }
+        if (tab === 'composer') {
+            dockTitleEl.textContent = 'Composer';
             return;
         }
         if (tab === 'cli') {
@@ -834,6 +858,17 @@
         if (!data || typeof data.type !== 'string') { return; }
         if (data.type === 'switchboardThemeChanged') {
             applyTheme(data.theme);
+        } else if (data.type === 'dockPresentationMode' && typeof data.mode === 'string'
+                   && event.origin === location.origin) {
+            // The shell tells the dock which presentation it is drawing, so
+            // overlay-only behaviour (Escape dismissal) stays local to the
+            // right mode — Escape in a split dock never closes anything.
+            dockPresentationMode = data.mode;
+        } else if (data.type === 'dockActivateTab' && typeof data.tab === 'string'
+                   && event.origin === location.origin) {
+            // Deep-link a dock tab — the shell posts this to land the operator
+            // on e.g. the Composer tab when #btn-composer is clicked.
+            setDockActiveTab(data.tab);
         } else if (data.type === 'missionControlArmed' && typeof data.armed === 'boolean') {
             lastAutobanArmed = data.armed;
             // The Agent tab is a control surface — no seat name to update.
@@ -859,6 +894,7 @@
     if (dockTabAgentBtn) { dockTabAgentBtn.addEventListener('click', () => setDockActiveTab('agent')); }
     if (dockTabCliBtn) { dockTabCliBtn.addEventListener('click', () => setDockActiveTab('cli')); }
     if (dockTabFleetBtn) { dockTabFleetBtn.addEventListener('click', () => setDockActiveTab('fleet')); }
+    if (dockTabComposerBtn) { dockTabComposerBtn.addEventListener('click', () => setDockActiveTab('composer')); }
 
     if (dockCloseBtn) {
         dockCloseBtn.addEventListener('click', () => {
@@ -866,6 +902,18 @@
             try { window.parent.postMessage({ type: 'dockCloseRequested' }, location.origin); } catch { /* ignore */ }
         });
     }
+
+    // In overlay mode Escape dismisses the dock — but only when focus is not
+    // inside a field, so a stray Escape never destroys a half-written prompt
+    // or rebinds a key mid-select. In split mode Escape does nothing here:
+    // the dock is not an overlay and there is nothing to dismiss.
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || dockPresentationMode !== 'overlay') { return; }
+        const el = document.activeElement;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
+                   el.tagName === 'SELECT' || el.isContentEditable)) { return; }
+        try { window.parent.postMessage({ type: 'dockCloseRequested' }, location.origin); } catch { /* ignore */ }
+    });
 
     // Start button — CLI tab only (the Agent tab is a control surface).
     if (startBtn) {

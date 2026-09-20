@@ -836,79 +836,8 @@
             flex: 1;
         }
 
-        /* Composer modal. Sidebar-level static-HTML modal mirroring the
-           terminals panel's #composer-modal (terminals.html). Toggled with
-           the `hidden` attribute; the [hidden] override is MANDATORY because
-           `display: flex` otherwise beats the UA default. Delivery goes
-           through fetch on /terminals/verb/sendToTerminal — the command view
-           panel's first sendToTerminal caller; the route already exists on
-           both hosts. */
-        .composer-modal {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.6);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 200;
-        }
-        .composer-modal[hidden] { display: none; }
-        .composer-modal .modal-content {
-            background: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            max-width: 480px; width: 90%; max-height: 80vh;
-            display: flex; flex-direction: column;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-        }
-        .composer-modal .modal-header {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 14px 18px;
-            border-bottom: 1px solid var(--border-color);
-        }
-        .composer-modal .modal-header h3 {
-            margin: 0; font-size: 13px; font-weight: 600;
-            color: var(--text-primary);
-            text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .composer-modal .modal-close-btn {
-            background: transparent; border: none; color: var(--text-secondary);
-            font-size: 22px; cursor: pointer;
-            width: 28px; height: 28px; border-radius: 4px;
-            display: flex; align-items: center; justify-content: center;
-        }
-        .composer-modal .modal-close-btn:hover { color: var(--text-primary); }
-        .composer-modal .modal-body { padding: 18px; overflow-y: auto; flex: 1; }
-        .composer-modal .modal-footer {
-            display: flex; gap: 8px; justify-content: flex-end;
-            padding: 12px 18px;
-            border-top: 1px solid var(--border-color);
-        }
-        .composer-field-label {
-            display: block;
-            font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
-            color: var(--text-secondary);
-            margin: 12px 0 4px;
-        }
-        .composer-field-label:first-child { margin-top: 0; }
-        .composer-select, .composer-input {
-            width: 100%;
-            background: var(--panel-bg2);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            font-family: inherit; font-size: 11px;
-            padding: 6px; border-radius: 3px;
-        }
-        .composer-input { min-height: 96px; resize: vertical; }
-        .composer-status {
-            margin-top: 10px; padding: 6px 8px; border-radius: 3px;
-            font-size: 11px;
-            color: var(--text-secondary);
-        }
-        .composer-status.is-error {
-            color: #e06c75;
-            background: rgba(224, 108, 117, 0.12);
-        }
+        /* The composer moved to the agent dock (dock.html / dockComposer.js);
+           its modal styles left with the markup. */
 
         .view-overlay-body {
             flex: 1;
@@ -1217,33 +1146,10 @@
                     </div>
                 </div>
 
-                <!-- Composer modal. Mirrors the terminals panel's #composer-modal
-                     (static HTML, `hidden` toggle, sidebar-level). Delivery goes
-                     through fetch on /terminals/verb/sendToTerminal. NOT
-                     dismissed by a backdrop click — it holds typed text and
-                     there is no discard gate (per CLAUDE.md there never will be). -->
-                <div id="composer-modal" class="composer-modal" hidden>
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3>Composer</h3>
-                            <button type="button" class="modal-close-btn" id="composer-modal-close" aria-label="Close">&times;</button>
-                        </div>
-                        <div class="modal-body">
-                            <label class="composer-field-label" for="composer-terminal-select">Target terminal</label>
-                            <select id="composer-terminal-select" class="composer-select"></select>
-
-                            <label class="composer-field-label" for="composer-input">Prompt</label>
-                            <textarea id="composer-input" class="composer-input"
-                                      placeholder="Type a prompt or command. Multi-line input is delivered as a bracketed-paste block; a single line starting with / is sent as a control string."></textarea>
-
-                            <div id="composer-status" class="composer-status"></div>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" id="composer-cancel" class="secondary-action-btn">CANCEL</button>
-                            <button type="button" id="composer-send" class="primary-action-btn" disabled>SEND</button>
-                        </div>
-                    </div>
-                </div>
+                <!-- The composer is a standing tab in the agent dock now
+                     (dock.html / dockComposer.js), not a modal in this
+                     document — the COMPOSER button posts openDockTab to the
+                     shell. -->
             </main>
         </div>
 

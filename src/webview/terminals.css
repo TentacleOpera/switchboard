@@ -2257,75 +2257,8 @@
         }
         .link-standing-item .delete-btn:hover { color: var(--state-readonly, #e06c75); }
 
-        /* Composer modal. Mirrors .link-modal (same z-index: 200, same
-           position: fixed; inset: 0 overlay, same [hidden] override) so the
-           composer dialog lands on the same palette and stacking as the
-           panel's first modal. Scoped as .composer-modal so nothing leaks
-           into the pane grid. Send failures render inline in
-           #composer-status (same reason as .link-error: a toast raised from
-           here would be painted behind this overlay). */
-        .composer-modal {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.6);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 200;
-        }
-        /* MANDATORY. The UA `[hidden] { display: none }` rule is a plain
-           author-level default and loses to the `display: flex` above;
-           without this the modal is permanently visible. */
-        .composer-modal[hidden] { display: none; }
-        .composer-modal .modal-content {
-            background: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            max-width: 480px; width: 90%; max-height: 80vh;
-            display: flex; flex-direction: column;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-        }
-        .composer-modal .modal-header {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 14px 18px;
-            border-bottom: 1px solid var(--border-color);
-        }
-        .composer-modal .modal-header h3 {
-            margin: 0; font-size: 13px; font-weight: 600;
-            color: var(--text-primary);
-            text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .composer-modal .modal-close-btn {
-            background: transparent; border: none; color: var(--text-secondary);
-            font-size: 22px; cursor: pointer;
-            width: 28px; height: 28px; border-radius: 4px;
-            display: flex; align-items: center; justify-content: center;
-        }
-        .composer-modal .modal-close-btn:hover { color: var(--text-primary); }
-        .composer-modal .modal-body { padding: 18px; overflow-y: auto; flex: 1; }
-        .composer-modal .modal-footer {
-            display: flex; gap: 8px; justify-content: flex-end;
-            padding: 12px 18px;
-            border-top: 1px solid var(--border-color);
-        }
-        .composer-select, .composer-input {
-            width: 100%;
-            background: var(--panel-bg2);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            font-family: inherit; font-size: 11px;
-            padding: 6px; border-radius: 3px;
-        }
-        .composer-input { min-height: 96px; resize: vertical; }
-        .composer-status {
-            margin-top: 10px; padding: 6px 8px; border-radius: 3px;
-            font-size: 11px;
-            color: var(--text-secondary);
-        }
-        .composer-status.is-error {
-            color: var(--state-readonly, #e06c75);
-            background: color-mix(in srgb, var(--state-readonly, #e06c75) 12%, transparent);
-        }
+        /* The composer moved to the agent dock (dock.html / dockComposer.js);
+           its modal styles left with the markup. */
 
         /* Team Standing Orders Modal */
         .team-orders-modal {
