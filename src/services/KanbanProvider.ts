@@ -40,6 +40,7 @@ import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveW
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { resolveCommandlessRoles } from './agentGroupInstantiation';
+import { PIPELINE_POSITION, isParallelCodedLane, heldMembers, resolveMissionStageFromTeam, type PipelineStage } from './missionStage';
 import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders, isPairDispatchingHeadRole, resolveTeamHeadRoles, resolveHeadForTerminal, refreshShippedTeamDefaults, resolveAutomatedDispatchExclusions, readTeamAutomatedDispatch } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { readBuildConfig, setBuildTarget, recordBuildResult, resolveBuildResult, lastResultPerTarget, probeBuildTargets, isBuildTargetId, type BuildResult } from './buildTarget';
@@ -1725,7 +1726,9 @@ export class KanbanProvider implements vscode.Disposable {
             // spread in conditionally and a post-pass would ship them untagged, i.e.
             // to every panel. An untagged entry is delivered to everyone by design;
             // this whole array is board state, so nothing here is `common`.
-            const boardMissions = typeof db.getMissions === 'function' ? await db.getMissions(wsId) : [];
+            const boardMissions = typeof db.getMissions === 'function'
+                ? await this._attachMissionHeld(root, await db.getMissions(wsId), cards)
+                : [];
             const orderByMode = typeof db.getOrderByMode === 'function' ? await db.getOrderByMode(wsId) : 'manual';
             // Coding Rounds (subtask 05): the board READS the coding_rounds table
             // directly so the round indicator is never inferred from dispatched-card
@@ -2843,7 +2846,9 @@ export class KanbanProvider implements vscode.Disposable {
                 && snapshotHash === this._lastBoardSnapshotHash;
             this._lastBoardSnapshotKey = snapshotKey;
             this._lastBoardSnapshotHash = snapshotHash;
-            const boardMissions = (typeof db.getMissions === 'function' && workspaceId) ? await db.getMissions(workspaceId) : [];
+            const boardMissions = (typeof db.getMissions === 'function' && workspaceId)
+                ? await this._attachMissionHeld(resolvedWorkspaceRoot, await db.getMissions(workspaceId), cards)
+                : [];
             if (!snapshotUnchanged) {
                 this.postMessage((scope: string | null | undefined) => ({
                     type: 'updateBoard',
@@ -4533,7 +4538,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const missionByMember2 = new Map<string, { id: string; name: string }>();
                 try {
                     if (typeof db.getMissions === 'function') {
-                        boardMissions = await db.getMissions(workspaceId);
+                        // The held list needs each member's COLUMN, and the rows are
+                        // already in hand here — both the active ones and the
+                        // completed hot window, so a finished member is never
+                        // mistaken for a missing card.
+                        boardMissions = await this._attachMissionHeld(
+                            resolvedWorkspaceRoot,
+                            await db.getMissions(workspaceId),
+                            this._missionCardIndexFromRows([...activeRows, ...completedRecords])
+                        );
                         for (const mission of boardMissions) {
                             for (const memberId of [...(mission.plans || []), ...(mission.features || [])]) {
                                 missionByMember2.set(String(memberId), { id: mission.id, name: mission.name });
@@ -9226,10 +9239,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
         };
     }
 
+    /**
+     * LEAD / CODER / INTERN CODED are parallel seats of ONE stage. The predicate
+     * lives in `missionStage.ts` (derived from the column table's `kind: 'coded'`)
+     * because the mission stage derivation collapses the lane with it — one
+     * implementation, so the board's next-column walk and the release gate cannot
+     * disagree about where the coding stage starts and ends.
+     */
     private _isParallelCodedLane(columnId: string): boolean {
-        return columnId === 'LEAD CODED'
-            || columnId === 'CODER CODED'
-            || columnId === 'INTERN CODED';
+        return isParallelCodedLane(columnId);
     }
 
     public async cleanupKanbanColumnState(
@@ -10176,12 +10194,25 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // above) remains the intra-mission order: cards joining later take higher
         // positions, so a mission's sequence is the order it was assembled in, and
         // item 12 holds — the board's star does not reach inside.
+        //
+        // The membership write is `claimIntoMission`, NOT `addMissionMember`
+        // (Mission 08): a card can be a member of exactly one mission
+        // (`UNIQUE(member_id)`), and the bare INSERT OR IGNORE silently dropped a
+        // second claim — so a card staged into a new mission stayed in the old one
+        // and the board said nothing. The claim TRANSFERS it and records the
+        // removal on the mission that lost it.
         let missionId: string | null = targetMission?.id || null;
         try {
             if (targetMission) {
                 for (const pid of planIds) {
                     const plan = await db.getPlanByPlanId(pid);
-                    await db.addMissionMember(targetMission.id, pid, plan?.isFeature ? 'feature' : 'plan');
+                    const claim = await db.claimIntoMission(
+                        targetMission.id, pid, plan?.isFeature ? 'feature' : 'plan',
+                        { workspaceId, by: 'stageForQueue' }
+                    );
+                    if (!claim.claimed) {
+                        console.warn(`[KanbanProvider] stageForQueue: '${pid}' was staged but did not join mission '${targetMission.id}': ${claim.error || 'unknown reason'}`);
+                    }
                 }
             }
         } catch (missionErr) {
@@ -10897,37 +10928,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     /**
-     * Pipeline position per column ID, derived from DEFAULT_KANBAN_COLUMNS'
-     * `order` — the same ranking `_getNextColumnId` advances through — rather
-     * than a second, hand-kept list.
-     *
-     * The hand-kept list disagreed with the real order in two places: it ranked
-     * RESEARCHER before PLAN REVIEWED (their orders are 110 and 100) and
-     * TICKET UPDATER after COMPLETED (9000 and 9999). That was invisible while
-     * only the CODED_AUTO branch classified direction — its targets are always
-     * LEAD/CODER/INTERN CODED and its sources PLAN REVIEWED / STAGING, all of
-     * which the two lists agree on. Both branches classify now, so every column
-     * is reachable and the disagreement becomes wrong run-sheet directions and,
-     * for COMPLETED → TICKET UPDATER, a backward move read as forward — which
-     * dispatches.
-     */
-    private static readonly _PIPELINE_POSITION: Record<string, number> = (() => {
-        const positions: Record<string, number> = {};
-        for (const col of DEFAULT_KANBAN_COLUMNS) { positions[col.id] = col.order; }
-        // Not peer columns, so absent from DEFAULT_KANBAN_COLUMNS: BACKLOG is a
-        // display mode of CREATED and shares its slot (a CREATED↔BACKLOG toggle
-        // is not a pipeline move), and CODED is the legacy alias of LEAD CODED.
-        positions['BACKLOG'] = positions['CREATED'] ?? 0;
-        positions['CODED'] = positions['LEAD CODED'] ?? 0;
-        return positions;
-    })();
-
-    /**
      * Check if `colA` comes before `colB` in the pipeline order.
      * Used by _advanceCards to classify forward vs backward moves.
+     *
+     * The ranking itself is `PIPELINE_POSITION` in `missionStage.ts` — the SAME
+     * table the mission stage derivation and the release gate rank by. It used to
+     * be a private static here; a second copy is exactly the drift this
+     * extraction removes (the hand-kept list it replaced ranked RESEARCHER before
+     * PLAN REVIEWED and TICKET UPDATER after COMPLETED, with a backward move read
+     * as forward — which dispatches).
      */
     private _isColumnBefore(colA: string, colB: string): boolean {
-        const positions = KanbanProvider._PIPELINE_POSITION;
+        const positions = PIPELINE_POSITION;
         const posA = positions[colA];
         const posB = positions[colB];
         if (posA === undefined || posB === undefined) {
@@ -12130,9 +12142,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         error: 'No member to add — a member picker is not implemented. Add members with `switchboard api POST /kanban/mission/member/add` and a memberId (the CLI sets the X-Switchboard-Client marker the CSRF guard requires; a raw POST is refused).'
                     };
                 }
-                const added = await ctx.db.addMissionMember(msg.missionId, memberId, msg.kind === 'feature' ? 'feature' : 'plan');
+                // A claim, not a bare insert (Mission 08): a card another mission
+                // owns is TRANSFERRED here and the removal is recorded on the
+                // mission that lost it. `addMissionMember`'s INSERT OR IGNORE would
+                // report success for a card that stayed where it was.
+                const claim = await ctx.db.claimIntoMission(
+                    msg.missionId, memberId, msg.kind === 'feature' ? 'feature' : 'plan',
+                    { workspaceId: ctx.wsId, by: 'mission-panel' }
+                );
                 await this._postMissions(ctx);
-                return added ? { success: true } : { success: false, error: 'Failed to add mission member.' };
+                return claim.claimed
+                    ? { success: true, ...(claim.transferredFrom ? { transferredFrom: claim.transferredFrom } : {}) }
+                    : { success: false, error: claim.error || 'Failed to add mission member.' };
             }
             case 'mcRemoveMissionMember': {
                 const ctx = await this._resolveMissionDb(msg.workspaceRoot);
@@ -16907,6 +16928,116 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
+     * The stage a mission works at, and the stage it releases from — Mission 08's
+     * ONE derivation, from facts that already exist:
+     *
+     *   `missions.team` → the team definition's `headRole` → the column that role
+     *   owns (the column table's own `role` field) → a stage (the coded lane
+     *   collapsed by `isParallelCodedLane`, ranked by `PIPELINE_POSITION`).
+     *
+     * Mission 06 consumes this for the release column. Nothing may re-derive it: a
+     * second, hand-kept team→column map is the exact defect `_PIPELINE_POSITION`'s
+     * comment records.
+     *
+     * An unresolvable stage returns `stage: null` with a `reason` — the caller
+     * refuses to release rather than defaulting to "no gate", which would deliver
+     * every member of a mission nobody can place.
+     */
+    public async resolveMissionStage(
+        workspaceRoot: string,
+        mission: any
+    ): Promise<{ stage: PipelineStage | null; releaseFrom: PipelineStage | null; reason?: string }> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { stage: null, releaseFrom: null, reason: 'the kanban database is unavailable, so the mission\'s stage cannot be derived' };
+        }
+        return this._resolveMissionStageWithDb(db, mission);
+    }
+
+    private async _resolveMissionStageWithDb(
+        db: any,
+        mission: any
+    ): Promise<{ stage: PipelineStage | null; releaseFrom: PipelineStage | null; reason?: string }> {
+        return resolveMissionStageFromTeam(mission?.team, async (teamId: string) => {
+            const def = await resolveTeamByIdIncludingDisabled(db, teamId);
+            if (def && typeof def.headRole === 'string') { return def.headRole; }
+            // A shipped default is a real answer even on a config that never
+            // wrote the row (the TEAMS tab seeds on first open): the mission's
+            // team is one of the five, and its head role is a fact about the
+            // product. An id in NEITHER store stays unresolved, which the
+            // caller reports rather than guessing at.
+            const shipped = DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === teamId);
+            return shipped && typeof shipped.headRole === 'string' ? shipped.headRole : null;
+        });
+    }
+
+    /**
+     * The board's own rows as the index `_attachMissionHeld` reads: a member's
+     * COLUMN and whether it has asserted completion. Rows carry the raw stored
+     * column, so the legacy aliases are normalised here rather than in the gate.
+     */
+    private _missionCardIndexFromRows(rows: any[]): Array<{ planId?: string; sessionId?: string; column?: string; completedAt?: string | null }> {
+        return (rows || []).filter(Boolean).map(row => ({
+            planId: row.planId,
+            sessionId: row.sessionId,
+            column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || '',
+            completedAt: row.completedAt ?? null,
+        }));
+    }
+
+    /**
+     * Attach `held` to each mission in a board/panel payload. One helper for every
+     * mission push, so the mission card's held line cannot be fed by one site and
+     * not another.
+     */
+    private async _attachMissionHeld(
+        workspaceRoot: string,
+        missions: any[],
+        cards: Array<{ planId?: string; sessionId?: string; column?: string; completedAt?: string | null }>
+    ): Promise<any[]> {
+        if (!Array.isArray(missions) || missions.length === 0) { return missions; }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) { return missions; }
+        const cardsById = new Map<string, any>();
+        for (const card of cards || []) {
+            if (!card) { continue; }
+            if (card.planId) { cardsById.set(String(card.planId), card); }
+            if (card.sessionId) { cardsById.set(String(card.sessionId), card); }
+        }
+        const out: any[] = [];
+        for (const mission of missions) {
+            // A mission with NO team (the pre-batch STAGING-assembled one) has no
+            // stage to gate on: it carries no `held` list at all, and no `stage`
+            // fields either — "never configured" must not render like a team that
+            // could not be resolved.
+            const hasTeam = String(mission?.team || '').trim().length > 0;
+            const resolution = hasTeam
+                ? await this._resolveMissionStageWithDb(db, mission)
+                : { stage: null as PipelineStage | null, releaseFrom: null as PipelineStage | null };
+            out.push({
+                ...mission,
+                ...(hasTeam ? {
+                    stage: resolution.stage ? resolution.stage.key : null,
+                    stageColumn: resolution.stage ? resolution.stage.column : null,
+                    ...(resolution.reason ? { stageReason: resolution.reason } : {}),
+                } : {}),
+                // The ONE enumeration of "which members are held, and why" — the
+                // same function the pop refuses to dispatch by, so the card and the
+                // pop can never disagree about a member.
+                held: hasTeam
+                    ? heldMembers(
+                        resolution.stage,
+                        [...(mission?.plans || []), ...(mission?.features || [])],
+                        (id: string) => cardsById.get(id),
+                        resolution.reason
+                    )
+                    : [],
+            });
+        }
+        return out;
+    }
+
+    /**
      * The shared mission interception for both batch arms of
      * {@link _advanceCards}. Returns null when this batch is NOT a mission —
      * the target column's role heads no live team, the team it heads is a
@@ -17078,14 +17209,18 @@ ${FOCUS_DIRECTIVE}`;
      *
      * Nothing is silently dropped. A card that cannot be claimed is named in
      * `refused` with its reason, and if NOTHING could be claimed no mission is
-     * created at all (`created: false`) — the caller then takes today's path,
-     * which is the honest answer for a batch of cards that already belong to a
-     * mission (a STAGING batch) or that are already dispatched.
+     * created at all (`created: false`) — the caller then takes today's path.
+     * That case is now a card that is a subtask, already dispatched out of a
+     * stageable column, or whose claim failed: a card another mission owns is
+     * TRANSFERRED rather than refused (Mission 08), so a batch moved out of
+     * STAGING becomes this team's mission and the staging mission records the
+     * loss.
      *
      * `mission_members` carries `UNIQUE(member_id)` (V65), so a card belongs to
-     * one mission. Mission 08 owns the claim's TRANSFER semantics; until it
-     * lands, a card already owned by another mission is refused visibly here
-     * rather than silently absorbed by `INSERT OR IGNORE`.
+     * one mission. A card another mission already owns is TRANSFERRED by
+     * `claimIntoMission` (Mission 08) — removed from the prior mission and the
+     * removal recorded on both — because the claim the operator just made is the
+     * one that counts.
      *
      * The `team` argument is the SHAPE `resolveBatchTeam` returned, and a shape
      * that is not `'mission'` refuses outright. The check is repeated here
@@ -17141,26 +17276,13 @@ ${FOCUS_DIRECTIVE}`;
             return { created: false, claimed, refused, launched: false };
         }
 
-        // One card, one mission: a card already owned by another mission cannot
-        // be claimed here. Named, never absorbed — `addMissionMember` is
-        // `INSERT OR IGNORE`, which would silently leave the card in the OLD
-        // mission while it sat in this one's STAGING queue.
-        const claimable: string[] = [];
-        for (const pid of planIds) {
-            let owned: string[] = [];
-            try {
-                owned = typeof db.getMissionsForMember === 'function' ? await db.getMissionsForMember(pid) : [];
-            } catch (err) {
-                console.warn(`[KanbanProvider] claimBatchAsMission: membership read failed for '${pid}':`, err);
-                refused.push({ id: pid, reason: 'mission membership could not be read' });
-                continue;
-            }
-            if (owned.length > 0) {
-                refused.push({ id: pid, reason: `already a member of mission '${owned[0]}' — one card, one mission` });
-                continue;
-            }
-            claimable.push(pid);
-        }
+        // A card already owned by another mission is TRANSFERRED, not refused
+        // (Mission 08): one card belongs to one mission, and the operator's latest
+        // claim wins. `claimIntoMission` removes it from the prior mission, adds it
+        // here and records the removal on BOTH, in one transaction. What is still
+        // refused is a claim that FAILED — "we could not move this card" must never
+        // read as "moved".
+        const claimable: string[] = [...planIds];
         if (claimable.length === 0) {
             return { created: false, claimed, refused, launched: false };
         }
@@ -17193,17 +17315,23 @@ ${FOCUS_DIRECTIVE}`;
             };
         }
 
+        const claimErrors = new Map<string, string>();
         for (const pid of claimable) {
+            let isFeature = false;
             try {
                 const plan = await db.getPlanByPlanId(pid);
-                await db.addMissionMember(mission.id, pid, plan && plan.isFeature ? 'feature' : 'plan');
-            } catch (err) {
-                console.warn(`[KanbanProvider] claimBatchAsMission: membership write failed for '${pid}':`, err);
-            }
+                isFeature = !!(plan && plan.isFeature);
+            } catch { /* the member kind falls back to 'plan' */ }
+            const claim = await db.claimIntoMission(
+                mission.id, pid, isFeature ? 'feature' : 'plan',
+                { workspaceId, by: 'claimBatchAsMission' }
+            );
+            if (!claim.claimed) { claimErrors.set(pid, claim.error || 'the claim did not land'); }
         }
-        // Read the membership back rather than trusting the write: `INSERT OR
-        // IGNORE` reports nothing, so a card that did not join would otherwise
-        // be counted as a member of a mission that does not contain it.
+        // Read the membership back rather than trusting the write. The claim now
+        // reports its own verdict, but the row is the fact: a card counted as a
+        // member of a mission that does not contain it is the one error this
+        // operation cannot afford.
         let members: Array<{ memberId: string }> = [];
         try {
             members = await db.getMissionMembers(mission.id);
@@ -17212,7 +17340,8 @@ ${FOCUS_DIRECTIVE}`;
         }
         const memberSet = new Set(members.map(m => String(m.memberId)));
         for (const pid of claimable) {
-            if (memberSet.has(pid)) { claimed.push(pid); }
+            if (claimErrors.has(pid)) { refused.push({ id: pid, reason: claimErrors.get(pid)! }); }
+            else if (memberSet.has(pid)) { claimed.push(pid); }
             else { refused.push({ id: pid, reason: `the card did not join mission '${mission.id}' (membership row not written)` }); }
         }
         if (claimed.length === 0) {
@@ -17657,8 +17786,15 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /** Broadcast the mission list to the Mission Control panel. */
-    private async _postMissions(ctx: { db: KanbanDatabase; wsId: string }): Promise<void> {
-        this.postMessage({ type: 'mcMissions', missions: await ctx.db.getMissions(ctx.wsId) });
+    private async _postMissions(ctx: { db: KanbanDatabase; wsId: string; workspaceRoot?: string }): Promise<void> {
+        const missions = await ctx.db.getMissions(ctx.wsId);
+        // Same held derivation as the board push: the panel's mission card is the
+        // same card, so it must not be the one place a held member renders as
+        // nothing. `_lastCards` is this host's own card set.
+        const withHeld = ctx.workspaceRoot
+            ? await this._attachMissionHeld(ctx.workspaceRoot, missions, this._lastCards || [])
+            : missions;
+        this.postMessage({ type: 'mcMissions', missions: withHeld });
     }
 
     /** Map ScheduledJob records to the shape expected by Mission Control Schedules tab. */

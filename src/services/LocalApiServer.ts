@@ -35,7 +35,8 @@ import {
     makeStandingOrder,
     makeStandingOrderDefinition,
 } from './standingOrders';
-import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders } from './teamWiring';
+import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders, resolveTeamByIdIncludingDisabled, DEFAULT_TEAM_DEFINITIONS } from './teamWiring';
+import { resolveMissionStageFromTeam, releaseVerdict, heldMembers, type PipelineStage } from './missionStage';
 import { computeRosterClearTargets } from './workContextResolver';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
 import { parseComplexityScore, getFallbackRole } from './complexityScale';
@@ -4054,6 +4055,18 @@ export class LocalApiServer {
             // would re-open the exact cross-mission leak this scope exists to
             // close, on a board whose cards look perfectly normal.
             let missionMemberIds: Set<string> | null = null;
+            // Mission 08's release gate: the stage the mission works at, and the
+            // members it must HOLD. Null `missionStage` means the stage could not
+            // be derived, which HOLDS every member rather than delivering them —
+            // the gate exists to refuse, so its failure mode must be refusal.
+            let missionStage: PipelineStage | null = null;
+            let missionStageReason: string | undefined;
+            // Whether the stage gate is ON for this mission. OFF for a mission
+            // with no team (the pre-batch STAGING-assembled one): its release is
+            // the workspace-wide STAGING queue, exactly as it always was, and
+            // widening its candidate source would re-dispatch delivered cards.
+            let missionGateActive = false;
+            const missionHeld = new Map<string, string>();
             if (missionId) {
                 if (typeof db.getMissionById !== 'function' || typeof db.getMissionMembers !== 'function') {
                     return fail(503, `A mission-scoped pop needs db.getMissionById and db.getMissionMembers; this host's kanban database does not provide them.`);
@@ -4068,7 +4081,72 @@ export class LocalApiServer {
                 }
                 const members = await db.getMissionMembers(missionId);
                 missionMemberIds = new Set(members.map((m: any) => String(m.memberId)));
+
+                // The stage comes from the mission's TEAM, through the one
+                // derivation (missionStage.ts) — never a second ranking.
+                //
+                // A mission with NO team is the pre-batch, STAGING-assembled one:
+                // it has no stage to gate on and releases from STAGING exactly as
+                // it always has, so the gate stays OFF for it (an absent team is
+                // "never configured", which must not read like a team that could
+                // not be resolved). A NON-EMPTY team that cannot be resolved — a
+                // hand-added team, or one deleted after the mission was created —
+                // turns the gate ON and holds every member, saying why: the
+                // failure mode of a gate is refusal, never "deliver everything".
+                const missionTeamId = String(mission.team || '').trim();
+                if (missionTeamId) {
+                    missionGateActive = true;
+                    const stageResolution = await resolveMissionStageFromTeam(missionTeamId, async (teamId: string) => {
+                        try {
+                            const def = await resolveTeamByIdIncludingDisabled(db, teamId);
+                            if (def && typeof def.headRole === 'string') { return def.headRole; }
+                        } catch (defErr) {
+                            console.warn(`[LocalApiServer] mission '${missionId}': team '${teamId}' definition read failed:`, defErr);
+                            return null;
+                        }
+                        const shipped = DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === teamId);
+                        return shipped && typeof shipped.headRole === 'string' ? shipped.headRole : null;
+                    });
+                    missionStage = stageResolution.stage;
+                    missionStageReason = stageResolution.reason;
+                    if (!missionStage) {
+                        console.warn(`[LocalApiServer] mission '${missionId}': ${missionStageReason} — no member will be released`);
+                    }
+                    // Which members are HELD — the ONE enumeration, shared with the
+                    // mission card's payload. Reported below, never dispatched.
+                    for (const entry of heldMembers(
+                        missionStage,
+                        missionMemberIds,
+                        (id: string) => {
+                            const p = board.find((row: any) => row && String(row.planId) === id);
+                            return p ? { column: p.kanbanColumn, completedAt: p.completedAt } : undefined;
+                        },
+                        missionStageReason
+                    )) {
+                        missionHeld.set(entry.planId, entry.reason);
+                    }
+                }
             }
+
+            // THE POP'S SCOPE, in one predicate, because three places must agree on
+            // it: the dependency gate, the dependency-blocked diagnosis, and the
+            // candidate list itself. The source differs by scope and only by scope:
+            //  - unscoped (and a mission with no team): STAGING is THE queue,
+            //    exactly as it has always been;
+            //  - a mission with a team: the mission's own members the gate says are
+            //    RELEASABLE. A review mission releases a card from the coded lane,
+            //    which is not STAGING — reading STAGING alone would make its whole
+            //    member set unreachable — while a member already at (or past) the
+            //    mission's own stage is DELIVERED and must not be dispatched again,
+            //    and a held member must never be. Gate ON with no stage (an
+            //    unplaceable team) releases nothing at all.
+            const inPopScope = (p: any): boolean => {
+                if (!p) { return false; }
+                if (!missionGateActive) { return p.kanbanColumn === 'STAGING'; }
+                if (!missionMemberIds!.has(String(p.planId))) { return false; }
+                if (!missionStage) { return false; }
+                return releaseVerdict(missionStage, p.kanbanColumn).verdict === 'releasable';
+            };
 
             // Resolve the requesting head's team roster through the same path
             // resolveTeamRoleTerminal uses. When the callback is present but
@@ -4173,7 +4251,7 @@ export class LocalApiServer {
                 try {
                     const base = this._dependencyReadinessSource(db, board);
                     for (const p of board) {
-                        if (!p || p.kanbanColumn !== 'STAGING') continue;
+                        if (!inPopScope(p)) continue;
                         // Per-card, so one card's lookup fault cannot delete the
                         // gate for every other card. A fault BLOCKS the card it
                         // happened on: the gate exists to refuse, so its failure
@@ -4218,6 +4296,10 @@ export class LocalApiServer {
             // considers only the launching mission's members. `missionMemberIds`
             // is null on the unscoped path, so that path's candidate set is
             // byte-for-byte what it was.
+            //
+            // The stage gate is NOT here: it lives in `inPopScope`, one predicate
+            // shared with the dependency gate, so "which cards may this pop
+            // dispatch" has exactly one answer.
             const isQueueable = (p: any): boolean =>
                 !!p
                 && (!p.completedAt)
@@ -4236,8 +4318,11 @@ export class LocalApiServer {
             const byPrecedence = (a: any, b: any): number =>
                 compareByPrecedence(a, b, 'STAGING', orderByMode);
 
+            // The candidate SOURCE is `inPopScope` — see above; it is the same
+            // predicate the dependency gate uses, so a card can never be dispatched
+            // without having been checked.
             const candidates = board
-                .filter((p: any) => p && p.kanbanColumn === 'STAGING' && isQueueable(p))
+                .filter((p: any) => p && isQueueable(p) && inPopScope(p))
                 .sort(byPrecedence);
 
             if (candidates.length === 0) {
@@ -4252,9 +4337,7 @@ export class LocalApiServer {
                 // would be a diagnosis of the wrong queue.
                 if (dependencyBlockers.size > 0) {
                     const blocked = board
-                        .filter((p: any) => p && p.kanbanColumn === 'STAGING'
-                            && dependencyBlockers.has(String(p.planId))
-                            && (!missionMemberIds || missionMemberIds.has(String(p.planId))))
+                        .filter((p: any) => p && inPopScope(p) && dependencyBlockers.has(String(p.planId)))
                         .sort(byPrecedence);
                     if (blocked.length > 0) {
                         const planId = String(blocked[0].planId);
@@ -4270,6 +4353,21 @@ export class LocalApiServer {
                         } };
                     }
                 }
+                // A member the stage gate HOLDS is the loudest thing this pop can
+                // say (Mission 08): it is not "the mission is drained" and it is
+                // not "the board is drained" — a card is sitting where this mission
+                // cannot legitimately release it, and nothing else in the reply
+                // would ever say so. The held member is named, with its reason.
+                if (missionId && missionHeld.size > 0) {
+                    const held = [...missionHeld.entries()].map(([planId, reason]) => ({ planId, reason }));
+                    return { status: 200, payload: {
+                        success: true, dispatched: null,
+                        reason: `held: ${held.length} member(s) of mission ${missionId} cannot be released — ${held[0].reason}`,
+                        missionId,
+                        heldMembers: held,
+                        ...(missionStageReason ? { stageReason: missionStageReason } : {}),
+                    } };
+                }
                 // A mission-scoped pop that finds no eligible member of its OWN
                 // mission is NOT the workspace queue being drained, and the two
                 // must never render the same string: the bare `queue empty`
@@ -4279,7 +4377,8 @@ export class LocalApiServer {
                 return { status: 200, payload: {
                     success: true, dispatched: null,
                     reason: missionId ? `queue empty for mission ${missionId}` : 'queue empty',
-                    ...(missionId ? { missionId } : {})
+                    ...(missionId ? { missionId } : {}),
+                    ...(missionId && missionStageReason ? { stageReason: missionStageReason } : {}),
                 } };
             }
             // Precedence decides the order; it never decides eligibility. Anything
@@ -4383,7 +4482,22 @@ export class LocalApiServer {
             // NOT stored in routingMapConfig or the card's complexity — those
             // are the operator's global setting and a plan property (plan step 5).
             const overrideRole = _dispatchRoleOverride.get(next.planId);
-            const rawColumn = overrideRole ? roleToCodingColumn(overrideRole) : undefined;
+            // ── The release column ─────────────────────────────────────
+            // A MISSION-scoped pop releases the member into the column its TEAM
+            // works at, passed explicitly so `performKanbanDispatch` bypasses
+            // complexity auto-routing. A team decides who works what; complexity
+            // routing is the NON-team path (LocalApiServer's own note: "Keep the
+            // card where it is"), and routing a mission's member by complexity
+            // would scatter one mission across three columns and hand it to a
+            // seat its team never chose. The column comes from the same stage
+            // derivation the gate uses — Mission 06's seam, consumed here because
+            // a gate that releases a card into the wrong column is not a gate.
+            //
+            // The escalation override still wins: it names a stronger SEAT, and
+            // that seat's column is the point of it.
+            const rawColumn = overrideRole
+                ? roleToCodingColumn(overrideRole)
+                : (missionStage ? missionStage.column : undefined);
 
             // Non-team dispatch: install the global queue/done standing order
             // so the standalone agent knows to POST queue/done when it
@@ -4423,7 +4537,17 @@ export class LocalApiServer {
             }
             return {
                 status: 200,
-                payload: { success: true, dispatched: outcome.payload, from }
+                payload: {
+                    success: true, dispatched: outcome.payload, from,
+                    // A release that dispatched something can still have HELD
+                    // members (Mission 08). Carrying them here means the seat and
+                    // the panel see the hold on the same reply as the dispatch,
+                    // rather than only when the mission happens to drain.
+                    ...(missionHeld.size > 0
+                        ? { heldMembers: [...missionHeld.entries()].map(([planId, reason]) => ({ planId, reason })) }
+                        : {}),
+                    ...(missionStageReason ? { stageReason: missionStageReason } : {}),
+                }
             };
         } catch (err) {
             console.error('[LocalApiServer] _runQueuePop error:', err);
@@ -6850,9 +6974,18 @@ export class LocalApiServer {
                 const missionId = String(body?.missionId || '').trim();
                 const memberId = String(body?.memberId || '').trim();
                 const kind = (body?.kind === 'feature' ? 'feature' : 'plan') as 'plan' | 'feature';
-                const ok = await db.addMissionMember(missionId, memberId, kind);
-                res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: ok, missionId, memberId }));
+                // A CLAIM, not a bare insert (Mission 08): a card another mission
+                // owns is transferred here, and the removal is recorded on the
+                // mission that lost it. `addMissionMember` is INSERT OR IGNORE, so
+                // it reported success for a card that never moved.
+                const claim = await db.claimIntoMission(missionId, memberId, kind, { by: 'mission/member/add' });
+                res.writeHead(claim.claimed ? 200 : 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: claim.claimed,
+                    missionId, memberId,
+                    ...(claim.transferredFrom ? { transferredFrom: claim.transferredFrom } : {}),
+                    ...(claim.error ? { error: claim.error } : {}),
+                }));
                 return;
             }
 
@@ -7573,6 +7706,10 @@ export class LocalApiServer {
                         // for mission <id>'` is readable without parsing the id
                         // back out of the string.
                         ...(popPayload.missionId ? { missionId: popPayload.missionId } : {}),
+                        // Members the release gate held (Mission 08), so the seat's
+                        // own output can name them instead of reporting a stop
+                        // with no stated reason.
+                        ...(Array.isArray(popPayload.heldMembers) ? { heldMembers: popPayload.heldMembers } : {}),
                         ...(clearError ? { clearError } : {}),
                         ...(clearSkipped ? { clearSkipped } : {}),
                         ...(parkReason ? { parkReason } : {}),

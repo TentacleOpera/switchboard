@@ -482,8 +482,10 @@ async function run() {
         assert.ok(/No member to add/.test(add),
             'mcAddMissionMember must refuse when there is no member id — it used to return success '
             + 'having written nothing');
-        assert.ok(/added \? \{ success: true \}/.test(add),
-            'mcAddMissionMember must report the db result, not assume it');
+        assert.ok(/claim\.claimed\s*\?\s*\{ success: true/.test(add),
+            'mcAddMissionMember must report the claim\'s actual verdict, not assume it — the arm now '
+            + 'claims through claimIntoMission (Mission 08), which TRANSFERS a card another mission '
+            + 'holds and reports success only when the membership row really moved');
         assert.ok(/member picker is not implemented/.test(add),
             'the refusal must say WHY — a picker does not exist, and the programmatic route does');
 
@@ -590,8 +592,10 @@ async function run() {
             'stageForQueue must resolve or create a mission — item 10, "a drag into STAGING always '
             + 'succeeds; the only question is which mission receives it". Without it STAGING holds '
             + 'loose cards belonging to no mission and the missions table stays empty.');
-        assert.ok(/addMissionMember/.test(body),
-            'each staged card must be added as a member');
+        assert.ok(/claimIntoMission/.test(body),
+            'each staged card must be added as a member — through claimIntoMission (Mission 08), '
+            + 'because the bare addMissionMember is INSERT OR IGNORE and DROPS a card another '
+            + 'mission already holds, silently leaving it where it was');
         assert.ok(/appendQueuePositions/.test(body),
             'queue_position must still be written — it is the intra-mission order');
     });

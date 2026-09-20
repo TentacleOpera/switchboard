@@ -16851,6 +16851,92 @@ FROM plans
     }
 
     /**
+     * Claim a card into a mission — ONE mission per card, ALWAYS (Mission 08).
+     *
+     * `mission_members` carries `UNIQUE(member_id)` (V65), so a card can be a
+     * member of exactly one mission. `addMissionMember` is `INSERT OR IGNORE`,
+     * which means a second claim used to be **silently dropped**: the operator
+     * moved a card into a second mission, the board said nothing, and the card
+     * stayed in the first. That is a silent no-op where the operator just acted.
+     *
+     * This replaces it with a TRANSFER: the prior membership is removed and the
+     * card joins the new mission, both in ONE transaction (two statements in a
+     * sequence would let a concurrent claim leave the card in neither), and the
+     * transfer is recorded on BOTH missions as a `plan_events` row — so "why did
+     * mission A lose this card?" is answerable after the fact instead of the
+     * silent-ignore bug being traded for a silent-steal bug.
+     *
+     * A claim into the mission the card is ALREADY in is a no-op (no event, no
+     * write). A claim into a mission in another workspace is refused, the same
+     * boundary `stageForQueue` enforces.
+     */
+    public async claimIntoMission(
+        missionId: string,
+        memberId: string,
+        kind: 'plan' | 'feature' = 'plan',
+        opts?: { workspaceId?: string; by?: string }
+    ): Promise<{ claimed: boolean; planId?: string; transferredFrom?: string; error?: string }> {
+        if (!missionId || !memberId) { return { claimed: false, error: 'missionId and memberId are required' }; }
+        if (!(await this.ensureReady()) || !this._db) { return { claimed: false, error: 'kanban database not ready' }; }
+        const mission = await this.getMissionById(missionId);
+        if (!mission) { return { claimed: false, error: `mission '${missionId}' does not exist` }; }
+        const plan = await this.getPlanByPlanId(memberId) || await this.getPlanBySessionId(memberId);
+        if (!plan) { return { claimed: false, error: `no plan resolved for '${memberId}'` }; }
+        const wsId = opts?.workspaceId || plan.workspaceId || '';
+        if (mission.workspaceId && wsId && String(mission.workspaceId) !== String(wsId)) {
+            return {
+                claimed: false,
+                error: `mission '${missionId}' belongs to workspace '${mission.workspaceId}', not '${wsId}'`,
+            };
+        }
+
+        const current = await this.getMissionsForMember(plan.planId);
+        const prior = current.find(id => String(id) !== String(missionId));
+        if (current.some(id => String(id) === String(missionId)) && !prior) {
+            // Already this mission's member: nothing to move, nothing to record.
+            return { claimed: true, planId: plan.planId };
+        }
+
+        const timestamp = new Date().toISOString();
+        const deviceId = getMachineId();
+        const { value: userId } = resolveUserId();
+        const eventSql = `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, user_id, payload, workspace_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        try {
+            this._db.run('BEGIN');
+            if (prior) {
+                this._db.run('DELETE FROM mission_members WHERE mission_id = ? AND member_id = ?', [prior, plan.planId]);
+                this._db.run(eventSql, [
+                    plan.planId, 'mission_member_removed', 'mission', 'removed', timestamp, deviceId, userId,
+                    JSON.stringify({ missionId: prior, memberId: plan.planId, transferredTo: missionId, by: opts?.by || '' }),
+                    wsId || null,
+                ]);
+            }
+            this._db.run(
+                'INSERT OR REPLACE INTO mission_members (mission_id, member_id, member_kind) VALUES (?, ?, ?)',
+                [missionId, plan.planId, kind]
+            );
+            this._db.run(eventSql, [
+                plan.planId, 'mission_member_claimed', 'mission', 'claimed', timestamp, deviceId, userId,
+                JSON.stringify({
+                    missionId, memberId: plan.planId,
+                    ...(prior ? { transferredFrom: prior } : {}),
+                    by: opts?.by || '',
+                }),
+                wsId || null,
+            ]);
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { /* best effort */ }
+            console.error('[KanbanDatabase] claimIntoMission failed:', error);
+            return { claimed: false, error: error instanceof Error ? error.message : 'claim failed' };
+        }
+        const persisted = await this._persist();
+        if (!persisted) { return { claimed: false, error: 'the claim could not be persisted' }; }
+        return { claimed: true, planId: plan.planId, ...(prior ? { transferredFrom: prior } : {}) };
+    }
+
+    /**
      * The mission a staged card joins, creating one if none is open.
      *
      * "Open" means not launched — derived, never stored, from member state (see

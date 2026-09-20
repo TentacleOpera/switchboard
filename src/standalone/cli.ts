@@ -2738,6 +2738,16 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
             // not print the run-over line, and it must not print nothing. The
             // server's reason already names the mission.
             console.log(`  ${data.reason} — no member of this mission is staged.`);
+        } else if (typeof data?.reason === 'string' && data.reason.startsWith('held:')) {
+            // Mission 08's release gate: a member sits where this mission cannot
+            // legitimately release it (it would skip a stage). That is not "the
+            // run is over" and not "nothing happened" — say what is held and why,
+            // or the operator sees a seat that stopped for no stated reason.
+            console.log(`  ${data.reason}`);
+            const held = Array.isArray(data?.heldMembers) ? data.heldMembers : [];
+            for (const member of held.slice(0, 5)) {
+                console.log(`    held: ${member.planId} — ${member.reason}`);
+            }
         }
     } else {
         const errMsg = String(data?.error || res.body || 'done failed');

@@ -385,7 +385,7 @@ async function run() {
             'a batch is one declared thing: joining an open mission would put two batches on one card');
     });
 
-    await test('a card already owned by another mission is refused, not silently absorbed', async () => {
+    await test('a card another mission owns is TRANSFERRED into the batch (Mission 08)', async () => {
         await setLiveTeams([FEATURE]);
         const owned = await seedPlan('bm-c1');
         const other = await db.createMission({ workspaceId: wsId, name: 'Earlier mission', ready: true });
@@ -393,12 +393,13 @@ async function run() {
 
         const shape = await provider.resolveBatchTeam(tmpRoot, 'LEAD CODED', 2);
         const claim = await provider.claimBatchAsMission(tmpRoot, [owned], 'PLAN REVIEWED', shape);
-        assert.strictEqual(claim.created, false, 'a card that already belongs to a mission cannot be claimed again');
-        assert.strictEqual(claim.claimed.length, 0);
-        assert.strictEqual(claim.refused.length, 1, 'the refusal must be NAMED, never dropped');
-        assert.ok(/already a member of mission/.test(claim.refused[0].reason), claim.refused[0].reason);
-        const still = await db.getMissionsForMember(owned);
-        assert.deepStrictEqual(still, [other.id], 'the card stays in the mission that owns it (Mission 08 owns the transfer)');
+        assert.strictEqual(claim.created, true, claim.error || 'one card, one mission: the latest claim wins');
+        assert.deepStrictEqual(claim.claimed, [owned]);
+        const now = await db.getMissionsForMember(owned);
+        assert.deepStrictEqual(now, [claim.missionId],
+            'the card left the earlier mission — a second claim is a TRANSFER, never a silent ignore');
+        assert.ok(!(await db.getMissionMembers(other.id)).some(m => m.memberId === owned),
+            'and the mission that lost it no longer lists it');
     });
 
     await test('a card already dispatched out of a stageable column is refused', async () => {
@@ -476,7 +477,7 @@ async function run() {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
         const advance = src.slice(
             src.indexOf('private async _advanceCards('),
-            src.indexOf('\n    private static readonly _PIPELINE_POSITION')
+            src.indexOf('\n    private _isColumnBefore(')
         );
         assert.ok(/_tryBatchMission\(/.test(advance),
             '_advanceCards must route a batch through the mission interception — both composition roots run this method');

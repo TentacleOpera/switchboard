@@ -252,3 +252,48 @@ deliberately removed from its head prompt; nothing here may put it back.
 **Nothing may be silently dropped.** Every plan is delivered or visibly queued.
 
 **Teams are unreleased dev work** — clean break, no migration shims.
+
+## Completion summary (Feature-coder-1, 2026-09-20 — uncommitted, working tree)
+
+One mission per card: `KanbanDatabase.claimIntoMission(missionId, memberId, kind, {workspaceId, by})`
+replaces the bare `addMissionMember` — which is `INSERT OR IGNORE` and therefore
+DROPPED a second claim silently — with a transfer: the prior membership is
+removed, the card joins the new mission, and the removal is recorded on both as a
+`plan_events` row (`mission_member_removed` / `mission_member_claimed`, payload
+naming the mission that lost it and where it went), all in one `BEGIN`/`COMMIT` so
+a concurrent claim cannot leave the card in neither. A claim into the mission the
+card is already in is a no-op that records nothing; a claim into another
+workspace is refused. Every claim site goes through it: `stageForQueue`, M03's
+`claimBatchAsMission` (a card another mission owns is now TRANSFERRED rather than
+refused), the Mission Control panel arm, and `POST /kanban/mission/member/add`.
+
+No stage skipping: the stage ranking moved OUT of KanbanProvider into
+`src/services/missionStage.ts` — `PIPELINE_POSITION` derived from
+`DEFAULT_KANBAN_COLUMNS`' own `order`, the coded lane collapsed from the table's
+`kind: 'coded'` — so `_PIPELINE_POSITION` no longer exists and there is exactly
+one ranking (a source-text assertion pins that). `resolveMissionStage` (public on
+KanbanProvider, team → `headRole` → the column the role owns → stage) is the
+derivation Mission 06 consumes; `releaseVerdict(stage, column)` answers
+`releasable | held | delivered`, and the mission-scoped pop now filters candidates
+by it, dispatches a mission's member into the mission's OWN stage column (the
+reconciled shared surface: "a mission release passes the mission's stage column as
+an explicit column"), and reports a hold by name (`reason: 'held: …'`,
+`heldMembers: [{planId, reason}]`) instead of dispatching it — never as
+`queue empty`. A mission with NO team (the pre-batch STAGING-assembled one) keeps
+the shipped behaviour untouched: no gate, STAGING-only source, complexity routing,
+and no `held` list, because an absent team is "never configured", not a broken
+one. A NON-EMPTY team that cannot be resolved holds every member and says why. The
+mission card renders `held` as one `.mission-held` span (amber, distinct from the
+status badge) whose tooltip carries each reason — the existing card, no second
+element — and `switchboard done` prints a held release instead of nothing.
+
+Not verified by execution this run: compilation and the automated suites were
+skipped by dispatch directive, so `src/test/mission-stage-and-claim-contract.test.js`
+(`npm run test:contract:mission-stage-claim`, wired into CI) has NOT been run.
+Work left uncommitted in the working tree for the head to commit.
+
+## Fix round — the suite is green, and the five failures are answered (Feature-coder-1, uncommitted)
+
+`npm run compile-tests && npm run test:contract:mission-stage-claim` now runs **20/20, exit 0**. One was a real code bug: a member already at (or past) the mission's own stage was DELIVERED by `releaseVerdict` but the pop still had it in its candidate list, so a card being worked could be re-dispatched — candidacy is now `inPopScope`, ONE predicate (used by the dependency gate, the blocked diagnosis and the candidate list) that admits only `verdict === 'releasable'`. One was the drift the lead named: "which members are held, and why" was computed in TWO places (the pop and the board payload); it is now ONE function, `heldMembers` in `missionStage.ts`, called by both, and `_heldMembersOf` is deleted. Three were gate defects, not code defects, and the code was right in all three: the unresolvable-team case looped over `''` as well as an unplaceable id (the empty team is the pre-batch STAGING-assembled mission and MUST keep its shipped behaviour — the test now asserts the distinction the plan's own edge case draws: absent team = never configured, non-empty unresolvable = refuse); the ranking assertion could not tell a comment from a declaration (the surviving `_PIPELINE_POSITION` is a comment recording what the symbol replaced); and the CLI assertion matched my own comment saying a hold is "not the run is over". The suite now strips comments before grepping source, in a shared `code()` helper, because a gate that cannot tell the two apart is not a gate.
+
+Attribution of the other red suites, since none of them is this change: a pristine `HEAD` (`64f8bba3`, extracted read-only with `git archive` into /tmp) is red for **queue-pipeline** (2), **queue-done-relay** (5), **mission-control-tick** (3), **board-read-endpoints** (3) and **team-automated-dispatch** (2) — the same failures, from the same code, with this change absent. Green in this tree: mission-stage-claim (20), batch-mission-launch (19), mission-scoped-launch, dependency-gate (one stale assertion updated: `mcAddMissionMember` now reports `claim.claimed` rather than `added`, same contract), staging-column, drag-confirm-order, batch-move-team-prompt, coded-auto-gate, kanban-column-labels.

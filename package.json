@@ -1112,6 +1112,7 @@
     "test:contract:queue-done-relay": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-done-lead-relay-contract.test.js",
     "test:contract:mission-scoped-launch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mission-scoped-launch-contract.test.js",
     "test:contract:batch-mission-launch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/batch-mission-launch-contract.test.js",
+    "test:contract:mission-stage-claim": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mission-stage-and-claim-contract.test.js",
     "test:contract:external-headed-team": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/external-headed-team-contract.test.js",
     "test:contract:dispatch-evidence": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-evidence-append-only-contract.test.js",
     "test:contract:terminal-coder-dispatch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-coder-dispatch-contract.test.js",

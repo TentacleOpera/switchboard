@@ -2428,6 +2428,19 @@ body.theme-claudify .shared-tab-btn.active {
     color: var(--text-secondary);
     text-transform: uppercase;
 }
+/* A member the release gate HOLDS (Mission 08): it would have to skip a stage to
+   reach this mission, so it is not delivered. Deliberately NOT the badge's grey —
+   held and delivered must not look the same, and the reason rides in the tooltip
+   rather than in a second card element. */
+.kanban-card.mission-card .mission-held {
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255,176,0,.18);
+    color: #ffb000;
+    text-transform: uppercase;
+    cursor: help;
+}
 
 body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
@@ -5829,6 +5842,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const streamDepth = mission.sequencing?.length ? `${mission.sequencing.length} step(s)` : '';
             const statusLabel = runState === 'in-flight' ? 'IN FLIGHT' : (runState === 'completed' ? 'COMPLETED' : 'READY');
             const statusClass = runState === 'in-flight' ? ' is-working' : '';
+            // Members the release gate holds (Mission 08). The reason is a fact
+            // about where the card sits, so it rides in the tooltip — one span on
+            // the existing card, never a second card element.
+            const held = Array.isArray(mission.held) ? mission.held : [];
+            const heldTip = held.map(h => `${h.planId}${h.column ? ` (${h.column})` : ''}: ${h.reason}`).join(' | ');
+            const heldSpan = held.length > 0
+                ? `<span class="mission-held" data-tooltip="${escapeAttr(heldTip)}">${held.length} held</span>`
+                : '';
             return `
                 <div class="kanban-card mission-card${statusClass}" draggable="true" data-mission-id="${escapeAttr(mission.id)}" data-mission-name="${escapeAttr(mission.name)}" data-run-state="${escapeAttr(runState)}" data-workspace-root="${escapeAttr(currentWorkspaceRoot || '')}">
                     <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
@@ -5837,6 +5858,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
                     <div class="card-meta" style="font-size:10px; color:var(--text-secondary); margin-top:4px; display:flex; justify-content:space-between;">
                         <span>${memberCount} member(s)</span>
+                        ${heldSpan}
                         ${streamDepth ? `<span>${streamDepth}</span>` : ''}
                     </div>
                     <div class="card-actions" style="margin-top:6px; display:flex; gap:4px;">
