@@ -329,6 +329,17 @@
 
             extractWorkspaceProjects(allCards);
             renderActiveView();
+        } else if (msg.type === 'terminalsChanged' || msg.type === 'terminalsGroupsChanged') {
+            // A seat was created, exited, renamed, or its team roster changed.
+            // The TEAMS view is drawn from the live fleet, so it is stale the
+            // moment this arrives and nothing else re-reads it: refreshAllData
+            // runs on load and on nothing else, which is why starting a team
+            // used to need a page reload before the card stopped saying DORMANT.
+            //
+            // Refetch rather than patching from the message: the payload carries
+            // no terminal rows, and a team's live state is the fleet joined to
+            // the group roster, not a field to mutate.
+            void fetchTeamsState().then(() => { renderActiveView(); });
         } else if (msg.type === 'moveCards') {
             const idsToMove = new Set(Array.isArray(msg.sessionIds) ? msg.sessionIds : []);
             const targetCol = msg.targetColumn;

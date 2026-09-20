@@ -137,7 +137,8 @@
         // network while working perfectly on loopback.
         shell: ['terminals', 'common'],
         kanban: ['kanban', 'common'],
-        command: ['kanban', 'common'],
+        // See PANEL_SURFACES in wsHub.ts -- the TEAMS view needs terminalsChanged.
+        command: ['kanban', 'terminals', 'common'],
         terminals: ['terminals', 'common'],
         planning: ['planning', 'common'],
         design: ['design', 'common'],

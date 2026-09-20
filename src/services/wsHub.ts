@@ -84,7 +84,14 @@ export const PANEL_SURFACES: Record<string, string[]> = {
     // (src/test/ws-surface-scoping-contract.test.js pins them equal).
     shell: [SURFACES.terminals, SURFACES.common],
     kanban: [SURFACES.kanban, SURFACES.common],
-    command: [SURFACES.kanban, SURFACES.common],
+    // `terminals` is here because the TEAMS view lives on this panel. Without it
+    // the command panel never hears `terminalsChanged`, so starting a team left
+    // every card reading DORMANT until the operator reloaded the page -- the
+    // render was always correct, it was simply never re-run. Only three low-rate
+    // control messages ride that surface (terminalsChanged, terminalsGroupsChanged,
+    // focusTerminal) and terminalsChanged is already trailing-edge debounced, so
+    // this is not the "subscribe to everything" resync the note above warns about.
+    command: [SURFACES.kanban, SURFACES.terminals, SURFACES.common],
     terminals: [SURFACES.terminals, SURFACES.common],
     planning: [SURFACES.planning, SURFACES.common],
     design: [SURFACES.design, SURFACES.common],
