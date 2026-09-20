@@ -11,6 +11,10 @@
  * 5. Planner batches do not leak feature workflow path.
  * 6. Real feature dispatches retain their unit clause and feature-file references.
  * 7. Cap of 5 loose plans is enforced.
+ * 8. The team-head gate answers for EVERY derived head role (Mission 02) — a
+ *    coder-headed Coding team and a reviewer-headed Review team are heads — while
+ *    a role heading no team still answers false.
+ * 9. No team-head call site passes a literal 'lead', in either composition root.
  */
 
 const assert = require('assert');
@@ -29,7 +33,7 @@ Module._load = function (request) {
 
 const { buildKanbanBatchPrompt, TEAM_BATCH_PLAN_CAP, applyBatchCap } = require('../../out/services/agentPromptBuilder');
 const { KanbanProvider } = require('../../out/services/KanbanProvider');
-const { TERMINALS_GROUPS_KEY } = require('../../out/services/teamWiring');
+const { TERMINALS_GROUPS_KEY, teamHeadRoles, pairDispatchingHeadRoles, DEFAULT_TEAM_DEFINITIONS } = require('../../out/services/teamWiring');
 const { DEFAULT_KANBAN_COLUMNS } = require('../../out/services/agentConfig');
 const { VERB_SCHEMAS } = require('../../out/services/verbSchemas');
 
@@ -226,13 +230,143 @@ async function testTeamHeadGateResolvesOffTheTerminalName() {
     const unassigned = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'No agent assigned' } });
     assert.strictEqual(await unassigned.isCodingTeamHead('/ws', 'lead'), false, '"No agent assigned" is not a team head');
 
-    // The flag must not reach a plain seat or the planner: featureMode redirects the
-    // planner's workflow file, and driveMode tells a coder to dispatch to seats it has none of.
-    for (const role of ['coder', 'intern', 'planner', 'reviewer']) {
-        assert.strictEqual(await provider.isCodingTeamHead('/ws', role, 'Coding-lead'), false, `${role} must never gate as a team head`);
+    // The flag must not reach a role that heads no team. NOTE the inversion: this
+    // loop used to assert `coder`/`reviewer`/`planner` were never team heads, which
+    // is the assumption Mission 02 removes — a coder-headed Coding team and a
+    // reviewer-headed Review team ARE heads, and their batches were never entering
+    // batch mode. What still must not pass is a role that heads no team at all.
+    for (const role of ['intern', 'tester', 'researcher']) {
+        assert.strictEqual(await provider.isCodingTeamHead('/ws', role, 'Coding-lead'), false, `${role} heads no team and must never gate as a team head`);
     }
 
     console.log('  PASS: team-head gate resolves off the target terminal name');
+}
+
+async function testEveryHeadRoleGates() {
+    console.log('Testing every derived head role gates true...');
+
+    // The set is DERIVED from the shipped definitions, so this test cannot drift
+    // from a roster change — a fifth team with a new head role joins by construction.
+    const headRoles = [...new Set(DEFAULT_TEAM_DEFINITIONS.map(d => d && d.headRole).filter(Boolean))];
+    assert.deepStrictEqual(
+        [...headRoles].sort(),
+        ['coder', 'lead', 'planner', 'reviewer'],
+        'the shipped definitions head four distinct roles'
+    );
+
+    // One live team per head role, plus the role's configured agent name so the
+    // target-less preview path resolves too.
+    const groups = [];
+    const agentNames = {};
+    for (const role of headRoles) {
+        const head = `${role}-head`;
+        const id = 'team_' + head.replace(/[^a-zA-Z0-9_]/g, '_');
+        groups.push({ id, head, members: [head, `${role}-seat`], order: [head, `${role}-seat`] });
+        agentNames[role] = head;
+    }
+    const provider = makeProvider({ groups, agentNames });
+
+    for (const role of headRoles) {
+        assert.strictEqual(
+            await provider.isCodingTeamHead('/ws', role, `${role}-head`), true,
+            `a ${role}-headed team must gate as a team head`
+        );
+        assert.strictEqual(
+            await provider.isCodingTeamHead('/ws', role), true,
+            `the preview path must resolve the ${role} head`
+        );
+    }
+
+    // The identity half still decides: a head role whose terminal heads no team is
+    // NOT a team head, so widening the pre-filter never turns an unknown terminal
+    // into one.
+    for (const role of headRoles) {
+        assert.strictEqual(
+            await provider.isCodingTeamHead('/ws', role, `solo-${role}`), false,
+            `a ${role} heading no team must gate false`
+        );
+    }
+    // A role in NO derived set never even reaches the roster check, even against a
+    // terminal that really does head a team.
+    assert.strictEqual(await provider.isCodingTeamHead('/ws', 'tester', 'lead-head'), false, 'tester heads no team');
+
+    console.log('  PASS: every derived head role gates true');
+}
+
+function testDerivedSetsAreNotConflated() {
+    console.log('Testing the head-role set is derived and wider than pair dispatch...');
+    const heads = teamHeadRoles();
+    for (const role of ['lead', 'coder', 'planner', 'reviewer']) {
+        assert.ok(heads.has(role), `teamHeadRoles must include ${role}`);
+    }
+    assert.ok(!heads.has('intern'), 'a member role is not a head role');
+
+    // The two teams this plan unblocks have no cheaper coding seat, so pair dispatch
+    // excludes them BY DESIGN — this plan must not widen it as a side effect.
+    assert.deepStrictEqual(
+        [...pairDispatchingHeadRoles()].sort(),
+        ['coder', 'lead'],
+        'pair dispatch is still exactly {lead, coder}'
+    );
+
+    // Neither set is hand-listed: both read `headRole` off the definitions.
+    const source = require('fs').readFileSync(path.join(__dirname, '../services/teamWiring.ts'), 'utf8');
+    assert.ok(!/roles\.add\('lead'\)/.test(source), 'the derived set must never be hand-listed');
+    assert.ok(source.includes('roles.add(def.headRole)'), 'the derived set reads headRole off every row');
+
+    console.log('  PASS: the head-role set is derived and wider than pair dispatch');
+}
+
+function testNoCallSitePassesALiteralLead() {
+    console.log('Testing no team-head call site passes a literal lead...');
+    const fs = require('fs');
+    const read = rel => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+
+    const kanban = read('services/KanbanProvider.ts');
+    // The gate itself.
+    assert.ok(
+        !/if \(role !== 'lead'\)/.test(kanban),
+        "isCodingTeamHead must not open with a 'lead' guard — that refuses to look up a coder- or reviewer-headed team"
+    );
+    assert.ok(
+        kanban.includes('resolveTeamHeadRoles({ db })'),
+        'the gate must pre-filter on the derived head-role set'
+    );
+    // No call site passes the literal.
+    assert.ok(
+        !/isCodingTeamHead\([^)\n]*'lead'/.test(kanban),
+        "no isCodingTeamHead call site may pass a literal 'lead'"
+    );
+    // The batch branch keys on the derived set, not on the Feature team's shape.
+    assert.ok(
+        !/plans\.length > 1 && role === 'lead'/.test(kanban),
+        'the batch branch must not gate on role === lead'
+    );
+
+    // Both composition roots cap through the same gate. Each arm used to carry its
+    // own `role === 'lead'` pre-filter, so a coder/reviewer-headed batch was capped
+    // in neither host.
+    const taskViewer = read('services/TaskViewerProvider.ts');
+    assert.ok(
+        !/role === 'lead'\s*&& rawGroup\.plans\.length > TEAM_BATCH_PLAN_CAP/.test(taskViewer),
+        'the extension cap arm must not gate on role === lead'
+    );
+    assert.ok(
+        taskViewer.includes('isCodingTeamHead(resolvedWorkspaceRoot, role, rawGroup.targetAgent)'),
+        'the extension cap arm must call the derived gate'
+    );
+
+    const bootstrap = read('standalone/bootstrap.ts');
+    assert.ok(
+        !/targetRole === 'lead'\s*&& records\.length > TEAM_BATCH_PLAN_CAP/.test(bootstrap),
+        'the standalone cap arm must not gate on targetRole === lead'
+    );
+    assert.ok(
+        bootstrap.includes('isCodingTeamHead(root, targetRole, terminal.friendlyName)'),
+        'the standalone cap arm must call the derived gate'
+    );
+
+    console.log('  PASS: no team-head call site passes a literal lead');
 }
 
 function makeOrderablePlans(count, extra = () => ({})) {
@@ -581,6 +715,9 @@ async function runAll() {
     testCoderBatchKeepsPlanList();
     testStaggeredDirectiveSuppressedInBatch();
     await testTeamHeadGateResolvesOffTheTerminalName();
+    await testEveryHeadRoleGates();
+    testDerivedSetsAreNotConflated();
+    testNoCallSitePassesALiteralLead();
     testCapAndRemainder();
     await testGenerateUnifiedPromptBatchTeamHead();
     await testGenerateUnifiedPromptBatchNonTeamLead();

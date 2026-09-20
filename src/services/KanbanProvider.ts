@@ -40,7 +40,7 @@ import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveW
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { resolveCommandlessRoles } from './agentGroupInstantiation';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders, isPairDispatchingHeadRole, refreshShippedTeamDefaults } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, DEFAULT_TEAM_IDS, isDefaultTeamId, isTeamEnabled, readTeamEnabled, readTeamAcceptedKinds, recommendedAgentRoles, teamDisabledMessage, type TeamWorkKind, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, resolveTeamPairBandForTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, resolveTeamByIdIncludingDisabled, resolveDefinitionForGroup, inspectStandingOrders, isPairDispatchingHeadRole, resolveTeamHeadRoles, refreshShippedTeamDefaults } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { readBuildConfig, setBuildTarget, recordBuildResult, resolveBuildResult, lastResultPerTarget, probeBuildTargets, isBuildTargetId, type BuildResult } from './buildTarget';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
@@ -6923,11 +6923,21 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * the target it is actually dispatching to (`originTerminal`); the role's
      * configured/live agent name is the fallback for callers that dispatch nothing —
      * the prompt previews, which must show what a real dispatch would send.
+     *
+     * The role is a PRE-FILTER, and the roster is the identity half. The filter is
+     * the derived head-role set (`teamWiring.resolveTeamHeadRoles`), never a literal
+     * `'lead'`: `lead` is the Feature team's shape, and gating on it made a
+     * `coder`-headed Coding team and a `reviewer`-headed Review team not team heads
+     * at all — their batches never entered batch mode. A role that heads no team
+     * still returns false, because a role in the set whose terminal resolves no
+     * roster is not a head — widening the filter must not turn "unknown role" into
+     * "team head".
      */
     public async isCodingTeamHead(workspaceRoot: string, role: string, targetTerminal?: string): Promise<boolean> {
-        if (role !== 'lead') { return false; }
         const db = this._getKanbanDb(workspaceRoot);
         if (!db) { return false; }
+        const headRoles = await resolveTeamHeadRoles({ db });
+        if (!headRoles.has(role)) { return false; }
         let originName = String(targetTerminal || '').trim();
         if (!originName) {
             const agentNames = await this._getAgentNames(workspaceRoot);
@@ -6977,8 +6987,34 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
+     * Does ANY role that heads a team actually head one in this workspace? The
+     * board-wide question the Move-All cap label asks. `isCodingTeamHead` needs a
+     * role, and a column set has none — the source columns dispatch to whichever
+     * head their next column names. So it walks the derived head-role set and asks
+     * the gate, per role, about that role's configured terminal, rather than
+     * answering off a second, hand-kept notion of "team head" that could drift from
+     * the gate's.
+     *
+     * A `coder`-headed Coding team answers true here, which is what puts the cap
+     * label on its columns — the Feature team's shape is no longer the only one
+     * that qualifies.
+     */
+    private async _hasAnyTeamHead(workspaceRoot: string): Promise<boolean> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db) { return false; }
+        const headRoles = await resolveTeamHeadRoles({ db });
+        const agentNames = await this._getAgentNames(workspaceRoot);
+        for (const role of headRoles) {
+            const target = String(agentNames[role] || '').trim();
+            if (!target || target === 'No agent assigned') { continue; }
+            if (await this.isCodingTeamHead(workspaceRoot, role, target)) { return true; }
+        }
+        return false;
+    }
+
+    /**
      * Resolve the columns whose Move All / Move Selected can dispatch a batch to a
-     * team-headed lead — the SOURCE columns, never the lead column itself.
+     * team head — the SOURCE columns, never the head's own column.
      *
      * The cap keys off the DISPATCH TARGET, not the column the cards sit in.
      * `LEAD CODED` is the only `role: 'lead'` column, and advancing FROM it lands on
@@ -6986,21 +7022,24 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * the one button the cap can never reach while leaving the buttons that do reach
      * it unlabelled. Two shapes qualify:
      *   - the complexity-routed sources (`PLAN REVIEWED`, `STAGING`): their advance
-     *     fans out across lead/coder/intern, and the lead group is capped. With
+     *     fans out across lead/coder/intern, and the head group is capped. With
      *     dynamic routing off, `_resolveComplexityRoutedRole` sends the whole column
-     *     to the lead, so they qualify either way.
+     *     to the lead, so they qualify either way. These two are what put the label
+     *     on a `coder`-headed Coding team's columns.
      *   - any column whose next column is the lead column: the whole set advances
      *     there in one batch.
      *
-     * `isCodingTeamHead` resolves once, not once per column — it takes no column
-     * argument, so the per-column call it replaced returned the same answer N times.
-     * A team-less lead (the common case) short-circuits before any column work.
+     * The head question resolves ONCE, not once per column — a per-column call
+     * returned the same answer N times. A team-less board (the common case)
+     * short-circuits before any column work. The workspace-wide question has no
+     * single role to pass to `isCodingTeamHead`, so it walks the derived head-role
+     * set — see `_hasAnyTeamHead`.
      * Next-column resolution mirrors the webview's `getNextColumn` (skip role-less
      * non-terminal columns) rather than calling `_getNextColumnId`, which rebuilds
      * the whole column set per call and would run once per column per board refresh.
      */
     public async resolveTeamHeadColumns(workspaceRoot: string, columns: KanbanColumnDefinition[]): Promise<string[]> {
-        if (!(await this.isCodingTeamHead(workspaceRoot, 'lead'))) { return []; }
+        if (!(await this._hasAnyTeamHead(workspaceRoot))) { return []; }
         const ordered = [...columns].sort((a, b) => a.order - b.order);
         const nextAfter = (idx: number): KanbanColumnDefinition | undefined => {
             for (let i = idx + 1; i < ordered.length; i++) {
@@ -7575,16 +7614,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (['lead', 'coder', 'intern'].includes(role) && await resolveDrive()) {
                 batchOptions.driveMode = true;
             }
-        } else if (plans.length > 1 && role === 'lead') {
-            // BATCH TO A TEAM HEAD — the lead ALLOCATES rather than executes.
+        } else if (plans.length > 1 && (await resolveTeamHeadRoles({ db })).has(role)) {
+            // BATCH TO A TEAM HEAD — the head ALLOCATES rather than executes.
             //
             // The gate is the whole safety property here, and it is narrow on purpose:
-            // `role === 'lead'` AND that lead heads a registered team. Not "the target
-            // belongs to a team", and never a bare driveMode override — buildKanban
-            // BatchPrompt's own comment records why (an unpaired flag "would tell a
-            // plain single-plan coder to dispatch subtasks to seats it has none of"),
-            // and featureMode additionally redirects the planner's workflow file via
-            // isFeatureTarget.
+            // the role must be one that heads a team (the DERIVED head-role set — never
+            // a literal `'lead'`, which is only the Feature team's shape) AND the
+            // terminal it dispatches to must actually head a registered team. Not "the
+            // target belongs to a team", and never a bare driveMode override —
+            // buildKanbanBatchPrompt's own comment records why (an unpaired flag "would
+            // tell a plain single-plan coder to dispatch subtasks to seats it has none
+            // of"), and featureMode additionally redirects the planner's workflow file
+            // via isFeatureTarget.
             const isTeamHead = overrides?.isTeamHead ?? await this.isCodingTeamHead(workspaceRoot, role, overrides?.originTerminal);
             if (isTeamHead) {
                 // Defence in depth. The dispatch caller caps its own set BEFORE moving

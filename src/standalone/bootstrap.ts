@@ -3618,9 +3618,14 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // BATCH TO A TEAM HEAD — cap what MOVES, not only what the prompt names (Change 6c).
                     // Loose plans only: a group carrying a feature takes the feature branch in
                     // generateUnifiedPrompt, which is not batch mode and is not capped.
+                    //
+                    // No `targetRole === 'lead'` pre-filter here: the role test lives INSIDE
+                    // `isCodingTeamHead`, which answers off the derived head-role set. A
+                    // `coder`-headed Coding team and a `reviewer`-headed Review team head teams
+                    // too, and a literal `'lead'` here left their batches uncapped — the same
+                    // divergence the extension arm would have had.
                     let cappedOut: any[] = [];
-                    if (targetRole === 'lead'
-                        && records.length > TEAM_BATCH_PLAN_CAP
+                    if (records.length > TEAM_BATCH_PLAN_CAP
                         && partitionPlansByFeature(records).featureGroups.length === 0
                         && kanbanProvider
                         && await kanbanProvider.isCodingTeamHead(root, targetRole, terminal.friendlyName)) {

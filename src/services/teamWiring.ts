@@ -1266,6 +1266,104 @@ export function isPairDispatchingHeadRole(role: unknown): boolean {
 }
 
 /**
+ * The head roles that head a team — DERIVED from the team definitions and the
+ * live team rows, never hand-listed. The sibling of `pairDispatchingHeadRoles`,
+ * and deliberately the wider set: that one answers "should this dispatch also
+ * send the Routine half to a cheaper seat", this one answers "does this role
+ * head a team at all".
+ *
+ * WHY THIS EXISTS: `isCodingTeamHead` opened with `role !== 'lead'`, so a
+ * `coder`-headed Coding team and a `reviewer`-headed Review team were not team
+ * heads — the batch branch never fired for them and their columns never got the
+ * Move-All cap label. `lead` is the Feature team's shape, not the shape of a
+ * team head. Deriving the set here means a new team shape cannot reintroduce
+ * the gap.
+ *
+ * A definition or live group row with no `headRole` is skipped — the same guard
+ * shape `pairDispatchingHeadRoles` uses. DISABLED definitions ARE included
+ * (`multi-agent-planning` ships `enabled: false`): this answers "would this head
+ * a team", and whether a team may receive automated work is
+ * `resolveAutomatedDispatchExclusions`' decision, not this one's.
+ */
+export function teamHeadRoles(
+    definitions: any[] = DEFAULT_TEAM_DEFINITIONS,
+    liveGroups: any[] = []
+): Set<string> {
+    const roles = new Set<string>();
+    for (const row of [...(definitions || []), ...(liveGroups || [])]) {
+        if (!row || typeof row.headRole !== 'string' || row.headRole.length === 0) { continue; }
+        roles.add(row.headRole);
+    }
+    return roles;
+}
+
+/**
+ * Read the live `terminals.groups` rows, merged with the legacy bare
+ * `terminals.groups` key — the same read `resolveTeamMembersForHead`,
+ * `resolveLiveGroupHeads` and `terminalsShareTeam` each inline. Never throws:
+ * an absent or unreadable key yields an empty array.
+ */
+async function readLiveTeamGroups(db: any): Promise<any[]> {
+    let groups: any[] = [];
+    try {
+        const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+        groups = Array.isArray(raw) ? [...raw] : [];
+    } catch { /* key absent */ }
+    try {
+        const bare = await db.getConfigJson('terminals.groups', []) as any[];
+        if (Array.isArray(bare) && bare.length > 0) {
+            const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+            for (const g of bare) {
+                if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                    groups.push(g);
+                    existingIds.add(g.id);
+                }
+            }
+        }
+    } catch { /* best effort */ }
+    return groups;
+}
+
+/**
+ * `teamHeadRoles` over everything a workspace actually has: the shipped
+ * defaults, the CONFIGURED team definitions (`terminals.agentGroups` — where a
+ * hand-added team lives), and the LIVE team rows (`terminals.groups`, merged
+ * with the legacy bare key). One function, so a hand-added team and a shipped
+ * one reach the gate by the same derivation.
+ *
+ * Reads never throw. A store that cannot be read falls back to the shipped
+ * defaults and SAYS SO — the fallback is the narrow, safe direction (a missing
+ * head role makes the gate answer false, never a wrong true), but "the shipped
+ * five" and "the configured set could not be read" must not be the same read.
+ */
+export async function resolveTeamHeadRoles(opts: { db?: any } = {}): Promise<Set<string>> {
+    const { db } = opts;
+    if (!db) { return teamHeadRoles(); }
+    let definitions: any[] = DEFAULT_TEAM_DEFINITIONS;
+    try {
+        const raw = await db.getConfigJson(AGENT_GROUPS_CONFIG_KEY, null) as any[] | null;
+        if (Array.isArray(raw) && raw.length > 0) {
+            definitions = [...DEFAULT_TEAM_DEFINITIONS, ...(migrateAgentGroups(raw) ?? raw)];
+        }
+    } catch (err) {
+        console.warn(
+            '[teamWiring] team-head roles: configured definitions unreadable — falling back to the shipped defaults:',
+            err
+        );
+    }
+    let liveGroups: any[] = [];
+    try {
+        liveGroups = await readLiveTeamGroups(db);
+    } catch (err) {
+        console.warn(
+            '[teamWiring] team-head roles: live team rows unreadable — a hand-added team may be missed:',
+            err
+        );
+    }
+    return teamHeadRoles(definitions, liveGroups);
+}
+
+/**
  * Who asserts a card complete for this team — and which source said so.
  *
  * `'head'`: a lead reviews the member's work and posts /kanban/task/complete.

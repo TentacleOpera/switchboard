@@ -8823,10 +8823,14 @@ Each plan file must include:
             //
             // Loose plans only: a group carrying a feature takes the feature branch in
             // generateUnifiedPrompt, which is not batch mode and is not capped.
+            //
+            // The role pre-filter lives INSIDE `isCodingTeamHead`, which answers off the
+            // derived head-role set — a `coder`-headed Coding team and a `reviewer`-headed
+            // Review team are heads too, and gating on a literal `'lead'` here left their
+            // batches uncapped. The gate's roster half is the identity check.
             let group = rawGroup;
             let cappedOut: BatchPromptPlan[] = [];
-            if (role === 'lead'
-                && rawGroup.plans.length > TEAM_BATCH_PLAN_CAP
+            if (rawGroup.plans.length > TEAM_BATCH_PLAN_CAP
                 && partitionPlansByFeature(rawGroup.plans).featureGroups.length === 0
                 && this._kanbanProvider
                 && await this._kanbanProvider.isCodingTeamHead(resolvedWorkspaceRoot, role, rawGroup.targetAgent)) {
