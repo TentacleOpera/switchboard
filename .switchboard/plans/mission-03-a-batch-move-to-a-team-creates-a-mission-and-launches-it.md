@@ -313,3 +313,62 @@ deliberately removed from its head prompt; nothing here may put it back.
 **Nothing may be silently dropped.** Every plan is delivered or visibly queued.
 
 **Teams are unreleased dev work** — clean break, no migration shims.
+
+## Completion summary (Feature-coder-1, 2026-09-20)
+
+Landed on `main` as `d030456d`. `resolveBatchTeam` is the one resolver every
+batch arm calls: eligibility comes from `resolveAutomatedDispatchExclusions` plus
+the live `terminals.groups` rows (the dispatch pool's own source, so a pooled
+Planning team resolves a `PLAN REVIEWED` batch to `fanout` and only a sole live
+Multi-agent planning team resolves it to `mission`), and the mission/fanout split
+is derived from each team's own definition — a cheaper `coder`/`intern` seat, or
+`head-only-when-sole` — never a hand-kept role list. `claimBatchAsMission` creates
+a NEW mission (`createMission` with `team` and `ready`), claims the cards through
+`appendQueuePositions` plus one membership row each, reads the membership back
+rather than trusting `INSERT OR IGNORE`, refuses a card another mission already
+owns (by name — one card, one mission) or one already dispatched, rolls back a
+mission it could not fill, and launches. Both `_advanceCards` branches (the
+specific-target path and the per-group CODED_AUTO path) and both move arms'
+planner/reviewer branch consult the resolver before dispatching, so the extension
+and the standalone host classify a batch identically — those arms are shared code
+and only the prompt-delivery half is per-root.
+
+`launchMission` resolves its head from `missions.team`, so a Coding mission
+reaches the Coding coder instead of `leads[0]`; a team that is defined but not
+seated fails loudly naming the team, and a mission with no team keeps the old
+candidate logic. New suite `src/test/batch-mission-launch-contract.test.js`
+(`npm run test:contract:batch-mission-launch`, wired into CI) drives the real
+KanbanDatabase: the resolver's five team cases, create/claim/launch with the
+mission's `team`, member count, cards in STAGING, the mission reading
+`in-flight` (the HELD precondition) and the scoped pop, fresh-mission-per-batch,
+the named refusals, staging-not-dispatching, and the head/refusal/unchanged-team
+launch cases.
+
+Not verified by execution this run: compilation and the automated suites were
+skipped by dispatch directive, so the new suite has not been run. The live board
+answers at :7777 with zero missions, so no batch→mission path could be exercised
+against it, and the running host predates this change. Note for the lead:
+`src/services/KanbanProvider.ts` was shared with a concurrent Mission 05 seat
+whose `_distributeRoleRound`/`_registerBatchRounds` work is still uncommitted in
+the tree — this commit was staged hunk-by-hunk so it carries only Mission 03, and
+the working tree still holds their work.
+
+## Fix round — the contract suite now runs (Feature-coder-1, 2026-09-20, uncommitted)
+
+The suite shipped in `d030456d` aborted during setup: the TaskViewerProvider stub
+carried only `getFleetLiveness`, and `setTaskViewerProvider` immediately runs
+`_loadOverrideFlags`, which calls `_resolveWorkspaceRoot()` — a missing method on
+a stub is a TypeError at the call site, so not one case executed. The stub now
+supplies `_resolveWorkspaceRoot` (plus the other seam methods this suite's paths
+reach) and says why in place, and two acceptance criteria that were only implied
+are now asserted: the mission renders on the EXISTING `.kanban-card.mission-card`
+with its members hidden inside it (the containment predicate's two halves — a
+mission id on the card and STAGING as its column — are asserted per member,
+against the real board read), and the roster's HELD state is pinned to the two
+facts the launch writes (`isMissionInFlight()` and the held id matching the team
+row). `npm run compile-tests && npm run test:contract:batch-mission-launch` now
+runs all 19 cases green, exit 0. Vacuity checked by mutation: a scratch copy of
+the suite with two expectations inverted fails exactly those two cases and exits
+1, so the assertions are load-bearing and the harness reports failures. The fix
+is in the working tree, uncommitted, as instructed — `d030456d` still carries the
+aborting harness.

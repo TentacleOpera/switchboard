@@ -149,7 +149,23 @@ async function run() {
     provider._hostSeams = undefined;
     provider._broadcaster = new BroadcastHub({ webview: null, apiServer: null });
     provider._currentWorkspaceRoot = tmpRoot;
-    provider.setTaskViewerProvider({ getFleetLiveness: () => live });
+    // The TaskViewerProvider seam. The provider calls these on it in the paths
+    // this suite drives — `setTaskViewerProvider` immediately runs
+    // `_loadOverrideFlags`, which calls `_resolveWorkspaceRoot()`, and
+    // `_getScopedSetting` does the same on every scoped read. A MISSING method
+    // here is a TypeError at the call site, not a silent pass, which is how this
+    // harness first failed. Everything else the provider may ask a real
+    // TaskViewerProvider for is deliberately absent: nothing this suite drives
+    // reaches it, and a stub that answers everything is a stub that hides a
+    // mis-wire.
+    provider.setTaskViewerProvider({
+        _resolveWorkspaceRoot: () => tmpRoot,
+        getFleetLiveness: () => live,
+        getAliveCodingTerminalNames: () => live.filter(t => t && t.status !== 'exited').map(t => t.friendlyName),
+        getCustomAgents: async () => ({}),
+        getVisibleAgents: async () => ({ lead: true, coder: true, intern: true, planner: true, reviewer: true }),
+        recordRunSheetForColumnMove: async () => undefined,
+    });
 
     /** Every pop the launch made, in order. */
     const pops = [];
@@ -307,6 +323,53 @@ async function run() {
             'a dispatched member with no asserted completion makes the mission in-flight — that is what the roster reads as HELD');
         assert.strictEqual(after.team, 'feature-implementation',
             "the held team's id, as the roster compares it");
+    });
+
+    await test('the mission renders on the EXISTING card, with its members hidden inside it', async () => {
+        await setLiveTeams([FEATURE]);
+        const ids = [await seedPlan('bm-render1'), await seedPlan('bm-render2')];
+        const shape = await provider.resolveBatchTeam(tmpRoot, 'LEAD CODED', ids.length);
+        const claim = await provider.claimBatchAsMission(tmpRoot, ids, 'PLAN REVIEWED', shape);
+        assert.strictEqual(claim.created, true, claim.error || '');
+
+        // The mission card is drawn from the board's mission list…
+        const listed = (await db.getMissions(wsId)).find(m => m.id === claim.missionId);
+        assert.ok(listed, 'the mission must be in the list the mission card is drawn from');
+        assert.strictEqual(listed.team, 'feature-implementation');
+        assert.strictEqual((listed.plans || []).length, 2, 'the card counts its members');
+
+        // …and its members are HIDDEN inside it rather than drawn as loose
+        // cards. The two halves of that predicate are: the card carries a
+        // missionId, and it sits in STAGING. Both are asserted here, per member.
+        const board = await db.getBoard(wsId);
+        for (const id of ids) {
+            const row = board.find(r => r && r.planId === id);
+            assert.ok(row, `member '${id}' must be on the board`);
+            assert.strictEqual(row.kanbanColumn, 'STAGING', "a member's home is its mission's STAGING");
+            const owner = await db.getMissionsForMember(id);
+            assert.deepStrictEqual(owner, [claim.missionId],
+                'so the board build stamps THIS mission id on the card — the containment predicate reads both fields');
+        }
+
+        // The card is the EXISTING mission card, not a new element: this plan
+        // draws nothing new, and a second card would be a second render site.
+        const html = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
+        assert.ok(/class="kanban-card mission-card/.test(html), 'the existing mission card element must still be the one drawn');
+        assert.ok(/mission-badge/.test(html), 'its badge must still be there');
+        assert.ok(/!card\.featureId && !\(card\.missionId && card\.column === 'STAGING'\)/.test(html),
+            'the containment predicate is what hides a member inside its mission card — a mission member is not a loose column card');
+    });
+
+    await test('the roster reads HELD off exactly the two facts the launch writes', () => {
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'command.js'), 'utf8');
+        const i = src.indexOf("stateLabel = 'HELD';");
+        assert.notStrictEqual(i, -1, 'the command view must have a HELD state');
+        const window = src.slice(Math.max(0, i - 1000), i);
+        assert.ok(/activeMission\?\.team/.test(window), "HELD reads the active mission's team");
+        assert.ok(/isMissionInFlight\(\)/.test(window),
+            'and it requires an in-flight mission — the runState a dispatched, unasserted member derives');
+        assert.ok(/heldTeam === team\.id \|\| heldTeam === team\.name/.test(window),
+            'and the held id must match the team row the roster draws — the definition id this op writes to missions.team');
     });
 
     await test('a second batch creates a FRESH mission — it never joins the open one', async () => {
