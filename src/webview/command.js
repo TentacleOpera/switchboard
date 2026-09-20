@@ -2063,6 +2063,17 @@
             setMissionChip('No agent terminal is live — open a lead or coder seat before launching.', 'unknown');
             return;
         }
+        // Scope the pop to the mission being launched. Without it the pop is
+        // workspace-wide and can start another mission's card — launching A
+        // would dispatch B. The server validates the id against this workspace.
+        //
+        // No id means no scoped launch: say so rather than posting an unscoped
+        // pop, which would look like a launch and behave like the leak.
+        const missionId = activeMission.id || activeMission.missionId;
+        if (!missionId) {
+            setMissionChip('This mission has no id — cannot launch it without scoping the pop to it.', 'unknown');
+            return;
+        }
         if (btnLaunchMission) { btnLaunchMission.disabled = true; }
         try {
             const res = await fetch('/kanban/queue/next', {
@@ -2070,7 +2081,8 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     workspaceRoot: currentWorkspaceRoot,
-                    from
+                    from,
+                    missionId
                 })
             });
 
@@ -2085,7 +2097,8 @@
                     setMissionChip(`Dispatched: ${topic} → ${seat}`, 'success');
                 } else if (body?.dispatched === null) {
                     // Nothing staged / nothing ready — the server's reason
-                    // verbatim (e.g. "queue empty")
+                    // verbatim ("queue empty", or "queue empty for mission
+                    // <id>" for this scoped launch)
                     const reason = body?.reason || 'Nothing ready';
                     setMissionChip(reason, 'unknown');
                 } else {

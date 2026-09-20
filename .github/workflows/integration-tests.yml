@@ -1811,6 +1811,21 @@ jobs:
       - name: queue/done team-lead relay contract
         run: npm run test:contract:queue-done-relay
 
+      # Mission-scoped launch (Mission 01 of "Every Batch Move Becomes One
+      # Declared Thing"). Every failure mode is silent and cross-mission: the
+      # pop's candidate list is workspace-wide by default, so launching mission
+      # A dispatches mission B's card whenever B's member sorts first, and the
+      # mission's own member list is used only to COUNT streams. The leak needs
+      # two concurrent missions to show at all — exactly the shape this feature
+      # makes normal — so every case here puts the foreign card FIRST in queue
+      # order. Also pins the two call sites that must SEND the id: launchMission
+      # and the webview LAUNCH MISSION body, and that a drained mission names
+      # itself rather than reusing the bare "queue empty" string.
+      # Drives the real compiled services from out/, so this step must stay AFTER
+      # "Compile test outputs".
+      - name: Mission-scoped launch contract
+        run: npm run test:contract:mission-scoped-launch
+
       # External-headed team mode: the lead is a non-terminal agent, so every
       # failure mode is a silent mis-route. The head must stay out of the group
       # roster (a head name in `members` seats a pane that can never exist), the

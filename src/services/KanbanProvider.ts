@@ -16737,6 +16737,16 @@ ${FOCUS_DIRECTIVE}`;
      * dispatch path, so the pop-time dependency gate applies here too: a member
      * whose predecessor has not asserted completion is skipped, not dispatched.
      *
+     * Mission 01 — the launch is SCOPED to the mission it is launching. Every
+     * pop carries `missionId: mission.id`, so the members this launch counts
+     * streams over are the only cards it can start. A workspace-wide pop here
+     * (what this method did before) let launching mission A dispatch mission B's
+     * card whenever B's member happened to sort first, and the mission's own
+     * member list was used only to size the loop. The unscoped queue is still the
+     * contract for every non-mission caller — the Run queue button, the schedule
+     * timer, the handoff — which is why the scope is an explicit argument and
+     * not a change to the pop's default.
+     *
      * Item 8d — no launch-time guard. V81 deleted the refusal machinery: the
      * board never refuses a dispatch. Pressing Launch again re-dispatches the
      * head, which unconditionally resets owner/completion state — the agent
@@ -16817,7 +16827,16 @@ ${FOCUS_DIRECTIVE}`;
 
         for (let i = 0; i < toDispatch; i++) {
             const head = candidateHeads[i];
-            const pop = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: head });
+            // Mission-scoped: the pop selects only THIS mission's members. A
+            // workspace-wide pop here is the leak this launch exists without —
+            // the mission's member list would count streams while the pop
+            // reached another mission's card. `missionId` is always the mission
+            // being launched; no call site may pass any other.
+            //
+            // Each iteration re-reads the board inside the pop, so the member
+            // the previous iteration delivered has left STAGING by the time the
+            // next head asks — one launch cannot hand the same member twice.
+            const pop = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: head, missionId: mission.id });
             if (pop && pop.status === 200 && pop.payload?.dispatched) {
                 dispatchedHeads.push(head);
                 if (!firstDispatched) firstDispatched = pop.payload.dispatched;

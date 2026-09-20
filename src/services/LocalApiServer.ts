@@ -3973,6 +3973,12 @@ export class LocalApiServer {
         workspaceRoot: string;
         from: string;            // requesting head's terminal name
         pacing?: 'head' | 'seat'; // explicit override; else team field → 'head'
+        // Scope the pop to this mission's members. ABSENT means the
+        // workspace-wide queue — the Run queue button, the schedule timer and
+        // `queue/next` all keep selecting from every STAGING card, which is
+        // shipped behaviour. PRESENT means "select only this mission's
+        // members": launching mission A must not start mission B's card.
+        missionId?: string;
     }): Promise<{ status: number; payload: any }> {
         const fail = (status: number, error: string, extra?: Record<string, unknown>): { status: number; payload: any } =>
             ({ status, payload: { success: false, error, ...(extra || {}) } });
@@ -3982,6 +3988,7 @@ export class LocalApiServer {
         if (!workspaceRoot) { return fail(400, 'Missing required field: workspaceRoot'); }
         if (!from) { return fail(400, 'Missing required field: from (the requesting head\'s terminal name)'); }
         const pacingOverride = args?.pacing === 'seat' || args?.pacing === 'head' ? args.pacing : undefined;
+        const missionId = String(args?.missionId || '').trim() || undefined;
 
         // Serialize the pop. The chain wraps select → dispatch as one critical
         // section: the second caller re-reads a queue the first has already
@@ -3990,7 +3997,7 @@ export class LocalApiServer {
         // race it exists to close.
         return new Promise((resolve) => {
             _queueNextChain = _queueNextChain.then(async () => {
-                try { resolve(await this._runQueuePop(workspaceRoot, from, pacingOverride)); }
+                try { resolve(await this._runQueuePop(workspaceRoot, from, pacingOverride, missionId)); }
                 catch (err) {
                     console.error('[LocalApiServer] dispatchNextFromQueue chain error:', err);
                     resolve(fail(500, err instanceof Error ? err.message : 'dispatchNextFromQueue failed'));
@@ -4008,11 +4015,17 @@ export class LocalApiServer {
      * serialization by enqueuing on the chain. `pacingOverride` is the explicit
      * per-call override; when undefined the team's stored `pacing` field is read
      * (absent → `'head'`).
+     *
+     * `missionId` (optional) scopes candidate SELECTION to that mission's
+     * members. It is resolved inside this critical section, never by the caller:
+     * two concurrent launches of the same mission would otherwise both read the
+     * member set and both pop it. Absent → the workspace-wide queue, unchanged.
      */
     private async _runQueuePop(
         workspaceRoot: string,
         from: string,
-        pacingOverride: 'head' | 'seat' | undefined
+        pacingOverride: 'head' | 'seat' | undefined,
+        missionId?: string
     ): Promise<{ status: number; payload: any }> {
         const fail = (status: number, error: string, extra?: Record<string, unknown>): { status: number; payload: any } =>
             ({ status, payload: { success: false, error, ...(extra || {}) } });
@@ -4023,6 +4036,39 @@ export class LocalApiServer {
             }
             const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
             const board: any[] = await db.getBoard?.(wsId) || [];
+
+            // ── Mission scope ──────────────────────────────────────────
+            // When `missionId` is set, the pop selects ONLY that mission's
+            // members. The member set is read HERE, inside the serialised
+            // section, beside the dependency gate — a caller-side read would
+            // let two concurrent launches of the same mission both see the
+            // same members and both pop one.
+            //
+            // The mission is validated against THIS workspace before it scopes
+            // anything: a mission id from another workspace must not select
+            // cards here. That is the whole of the new trust boundary — the id
+            // arrives in-process (`launchMission`) or on the `queue/next` body.
+            //
+            // Both capability gaps and an unknown mission FAIL LOUDLY rather
+            // than degrading to a workspace-wide pop: a silent fallback here
+            // would re-open the exact cross-mission leak this scope exists to
+            // close, on a board whose cards look perfectly normal.
+            let missionMemberIds: Set<string> | null = null;
+            if (missionId) {
+                if (typeof db.getMissionById !== 'function' || typeof db.getMissionMembers !== 'function') {
+                    return fail(503, `A mission-scoped pop needs db.getMissionById and db.getMissionMembers; this host's kanban database does not provide them.`);
+                }
+                const mission = await db.getMissionById(missionId);
+                if (!mission) {
+                    return fail(400, `missionId '${missionId}' is not a mission in this workspace`);
+                }
+                const missionWs = String(mission.workspaceId || '').trim();
+                if (missionWs && wsId && missionWs !== String(wsId)) {
+                    return fail(400, `missionId '${missionId}' belongs to workspace '${missionWs}', not '${wsId}'`);
+                }
+                const members = await db.getMissionMembers(missionId);
+                missionMemberIds = new Set(members.map((m: any) => String(m.memberId)));
+            }
 
             // Resolve the requesting head's team roster through the same path
             // resolveTeamRoleTerminal uses. When the callback is present but
@@ -4167,11 +4213,17 @@ export class LocalApiServer {
             // are advisory display metadata and never make a card unavailable.
             // The queue reports empty only when every card in the column is
             // complete (or excluded as a subtask / dependency-blocked).
+            //
+            // Mission scope is a filter here too (never a sort): a scoped pop
+            // considers only the launching mission's members. `missionMemberIds`
+            // is null on the unscoped path, so that path's candidate set is
+            // byte-for-byte what it was.
             const isQueueable = (p: any): boolean =>
                 !!p
                 && (!p.completedAt)
                 && (!p.featureId || p.featureId === '')
-                && !dependencyBlockers.has(String(p.planId));
+                && !dependencyBlockers.has(String(p.planId))
+                && (!missionMemberIds || missionMemberIds.has(String(p.planId)));
 
             // V63: the queue pop uses the shared precedence resolver so a
             // starred card is picked before any unstarred one, then by
@@ -4194,9 +4246,15 @@ export class LocalApiServer {
                 // it just cannot start yet. Name the blocker of the
                 // highest-precedence blocked card so the lead knows what to wait
                 // on. An actually-empty STAGING still reports "queue empty".
+                //
+                // Scoped to the mission when one is named: naming a FOREIGN
+                // mission's blocked card as the reason this mission cannot pop
+                // would be a diagnosis of the wrong queue.
                 if (dependencyBlockers.size > 0) {
                     const blocked = board
-                        .filter((p: any) => p && p.kanbanColumn === 'STAGING' && dependencyBlockers.has(String(p.planId)))
+                        .filter((p: any) => p && p.kanbanColumn === 'STAGING'
+                            && dependencyBlockers.has(String(p.planId))
+                            && (!missionMemberIds || missionMemberIds.has(String(p.planId))))
                         .sort(byPrecedence);
                     if (blocked.length > 0) {
                         const planId = String(blocked[0].planId);
@@ -4207,11 +4265,22 @@ export class LocalApiServer {
                         return { status: 200, payload: {
                             success: true, dispatched: null,
                             reason: `dependency-blocked: predecessor '${blockedBy}' has not completed; card '${planId}' and no other staged card is unblocked`,
-                            dependencyBlocked: { planId, blockedBy }
+                            dependencyBlocked: { planId, blockedBy },
+                            ...(missionId ? { missionId } : {})
                         } };
                     }
                 }
-                return { status: 200, payload: { success: true, dispatched: null, reason: 'queue empty' } };
+                // A mission-scoped pop that finds no eligible member of its OWN
+                // mission is NOT the workspace queue being drained, and the two
+                // must never render the same string: the bare `queue empty`
+                // stays the unscoped answer, and the scoped one names the
+                // mission. It never falls back to the workspace-wide list —
+                // that fallback is the cross-mission leak this scope closes.
+                return { status: 200, payload: {
+                    success: true, dispatched: null,
+                    reason: missionId ? `queue empty for mission ${missionId}` : 'queue empty',
+                    ...(missionId ? { missionId } : {})
+                } };
             }
             // Precedence decides the order; it never decides eligibility. Anything
             // that makes a card ineligible — complete, a subtask, or a dependency
@@ -4364,10 +4433,19 @@ export class LocalApiServer {
 
     /**
      * POST /kanban/queue/next — thin body-parsing wrapper over
-     * `dispatchNextFromQueue`. Body `{ workspaceRoot?, from }`; `from` is the
-     * head's own terminal name. The method is the contract; this route is one
-     * of its callers (the schedule timer and the handoff call the method
-     * in-process so the serialization chain is the single critical section).
+     * `dispatchNextFromQueue`. Body `{ workspaceRoot?, from, missionId? }`;
+     * `from` is the head's own terminal name, and `missionId` (optional)
+     * scopes the pop to that mission's members — the LAUNCH MISSION button
+     * sends it so launching one mission cannot start another's card. Omitted
+     * means the workspace-wide queue, which is what the Run queue button, the
+     * schedule timer and the handoff want.
+     *
+     * The method is the contract; this route is one of its callers (the
+     * schedule timer and the handoff call the method in-process so the
+     * serialization chain is the single critical section). `missionId` is
+     * validated inside `_runQueuePop`, against the workspace the pop runs in —
+     * the same boundary `workspaceRoot` crosses, so a mission id from another
+     * workspace cannot scope a pop in this one.
      */
     private async _handleKanbanQueueNext(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -4381,7 +4459,8 @@ export class LocalApiServer {
                 workspaceRoot = this._requireKnownRoot(String(body.workspaceRoot).trim())!;
             }
             const from = String(body?.from || '').trim();
-            const outcome = await this.dispatchNextFromQueue({ workspaceRoot, from });
+            const missionId = String(body?.missionId || '').trim() || undefined;
+            const outcome = await this.dispatchNextFromQueue({ workspaceRoot, from, missionId });
             res.writeHead(outcome.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(outcome.payload));
         } catch (err: any) {
@@ -7299,7 +7378,43 @@ export class LocalApiServer {
                     // the front of DISPATCH, so this pop dispatches IT to the
                     // stronger seat (the override is consumed in _runQueuePop).
                     // Either way the queue keeps walking.
-                    const pop = await this._runQueuePop(workspaceRoot, from, undefined);
+                    //
+                    // SCOPE: the pop is scoped to the mission the completing
+                    // card belongs to. This is the one unattended release path,
+                    // so an unscoped pop here would hand this seat a card
+                    // belonging to a mission nobody launched — the exact leak
+                    // Mission 01 closes — with no human in the loop to notice.
+                    //
+                    // The completing card's OWN membership answers it. A card
+                    // on no mission (the standalone coder, a loose staged card)
+                    // leaves the pop unscoped, which is the shipped behaviour
+                    // for that case.
+                    //
+                    // A membership read that FAILS does not silently widen the
+                    // pop: the release is refused-and-reported instead, because
+                    // "we could not tell which mission" and "this card is on no
+                    // mission" must not be the same value. `UNIQUE(member_id)`
+                    // makes >1 impossible; if it is ever seen, the ambiguity is
+                    // named rather than guessed at silently.
+                    let releaseMissionId: string | undefined;
+                    let missionScopeError: string | undefined;
+                    if (typeof (db as any).getMissionsForMember === 'function') {
+                        try {
+                            const memberMissions: string[] = await (db as any).getMissionsForMember(held.planId) || [];
+                            if (memberMissions.length > 1) {
+                                console.warn(`[LocalApiServer] queue/done: card '${held.planId}' is a member of ${memberMissions.length} missions (${memberMissions.join(', ')}); scoping the release pop to '${memberMissions[0]}'.`);
+                            }
+                            releaseMissionId = memberMissions[0];
+                        } catch (missionErr) {
+                            missionScopeError = missionErr instanceof Error ? missionErr.message : String(missionErr);
+                            console.warn(`[LocalApiServer] queue/done: could not resolve the mission of card '${held.planId}'; refusing to pop unscoped:`, missionErr);
+                        }
+                    } else {
+                        console.warn('[LocalApiServer] queue/done: this kanban database has no getMissionsForMember, so the release pop cannot be mission-scoped and runs against the workspace-wide queue.');
+                    }
+                    const pop = missionScopeError
+                        ? { status: 503, payload: { success: false, error: `Could not resolve the mission of card '${held.planId}' (${missionScopeError}); the next card was not popped.` } }
+                        : await this._runQueuePop(workspaceRoot, from, undefined, releaseMissionId);
 
                     // Cache the pop's dispatched payload so a retried report
                     // gets reason: "duplicate" with dispatched reflecting the
@@ -7340,6 +7455,11 @@ export class LocalApiServer {
                         escalated,
                         dispatched: popPayload.dispatched ?? null,
                         reason: popPayload.reason ?? (popFailed ? nextReason : undefined),
+                        // Which mission's queue the pop was scoped to, when it
+                        // was scoped at all. Carried so `reason: 'queue empty
+                        // for mission <id>'` is readable without parsing the id
+                        // back out of the string.
+                        ...(popPayload.missionId ? { missionId: popPayload.missionId } : {}),
                         ...(clearError ? { clearError } : {}),
                         ...(clearSkipped ? { clearSkipped } : {}),
                         ...(parkReason ? { parkReason } : {}),

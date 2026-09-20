@@ -2731,6 +2731,13 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
             // The fragments tell the agent that "queue empty" ends the run. Say it
             // in the plain output too, or only `--json` callers can see it.
             console.log('  Queue empty — the run is over.');
+        } else if (typeof data?.reason === 'string' && data.reason.startsWith('queue empty for mission ')) {
+            // A mission-scoped pop found no eligible member of the mission the
+            // released card belonged to. That is NOT the board's queue being
+            // drained — other missions may still hold staged cards — so it must
+            // not print the run-over line, and it must not print nothing. The
+            // server's reason already names the mission.
+            console.log(`  ${data.reason} — no member of this mission is staged.`);
         }
     } else {
         const errMsg = String(data?.error || res.body || 'done failed');
