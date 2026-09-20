@@ -185,7 +185,7 @@
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
-                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agents/protocols/improve-plan/SKILL.md';
+                document.getElementById('workflowFilePath').value = config.workflowFilePath || 'improve-plan';
                 const plannerWorkflowEnabled = config.addons?.workflowFilePathEnabled !== false;
                 document.getElementById('plannerWorkflowEnabled').checked = plannerWorkflowEnabled;
                 document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
@@ -216,7 +216,7 @@
                 }
 
                 // Load feature workflow path and feature subagent settings for planner
-                document.getElementById('plannerFeatureWorkflowFilePath').value = config.addons?.featureWorkflowFilePath || '.agents/protocols/improve-feature/SKILL.md';
+                document.getElementById('plannerFeatureWorkflowFilePath').value = config.addons?.featureWorkflowFilePath || 'improve-feature';
                 const plannerFeatureWorkflowEnabled = config.addons?.featureWorkflowFilePathEnabled === true;
                 document.getElementById('plannerFeatureWorkflowEnabled').checked = plannerFeatureWorkflowEnabled;
                 document.getElementById('plannerFeatureWorkflowFilePathGroup').style.display = plannerFeatureWorkflowEnabled ? 'block' : 'none';
@@ -405,7 +405,7 @@
                     const textInput = document.createElement('input');
                     textInput.type = 'text';
                     textInput.id = `addon_${addon.id}_path`;
-                    textInput.placeholder = 'e.g. .agents/protocols/improve-plan/SKILL.md or a protocol name like accuracy';
+                    textInput.placeholder = 'e.g. a protocol name like improve-plan or a path like .agents/workflows/my-planner.md';
                     textInput.style.display = isEnabled ? 'block' : 'none';
                     textInput.style.marginTop = '4px';
                     textInput.style.width = '100%';
@@ -3925,7 +3925,13 @@
                     }
                     const statusEl = document.getElementById(targetId);
                     if (statusEl) {
-                        statusEl.textContent = msg.exists ? '✓ File exists' : '✗ File not found';
+                        // Bare names (no separator, no .md) are protocol names —
+                        // the backend resolves them via ProtocolService, so the
+                        // truthful label is "resolves", not "file exists".
+                        const bareName = typeof msg.path === 'string' && !msg.path.includes('/') && !msg.path.includes('\\') && !/\.md$/i.test(msg.path);
+                        statusEl.textContent = msg.exists
+                            ? (bareName ? '✓ Protocol resolves' : '✓ File exists')
+                            : (bareName ? '✗ Not a file or known protocol' : '✗ File not found');
                         statusEl.style.color = msg.exists ? 'var(--accent-teal)' : 'var(--accent-red)';
                     }
                     break;

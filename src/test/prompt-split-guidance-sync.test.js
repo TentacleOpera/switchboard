@@ -9,10 +9,12 @@
 //   3. .agents/workflows/switchboard-memo.md
 //   4. _buildMemoPlannerPrompt          (src/services/TaskViewerProvider.ts)
 //   5. .agents/workflows/switchboard-remote.md
-//   6. AGENTS.md                         (always-on protocol file)
-//   7. CLAUDE.md                         (always-on protocol file, managed block)
+//   6. AGENTS.md                         (always-on file — pointer contract)
+//   7. CLAUDE.md                         (always-on file — pointer contract)
 //   8. .agents/protocols/deep-planning/SKILL.md   (authoring skill — Phase 0 body)
 //   9. .agents/protocols/improve-plan/SKILL.md    (authoring skill — ## Steps body)
+//  10. .agents/plan-authoring-protocol.md         (the file the pointer names —
+//      signals + feature-assembly outcome in the same ### section)
 //
 // Also guards the memo step-4/step-5 split-timing invariant: splitting must
 // happen in step 4 (before any plan file is written), never in step 5 (which
@@ -218,45 +220,27 @@ function run() {
     );
 
     // ============================================================
-    // 6. AGENTS.md  (always-on protocol file — file-wide includes)
+    // 6. AGENTS.md  (always-on file — pointer contract)
     // ============================================================
+    // The full Plan Sizing directive was deliberately cut from the resident
+    // managed block (shrink-the-injected-agent-protocol-block.md) — re-adding
+    // it would breach the 800-char block gate. What must be resident is the
+    // POINTER that makes the authoring protocol reachable: the emitted block
+    // may not name a `.agents/` path (dead-references gate), so the pointer is
+    // the file's basename.
 
     assert.ok(
-        agentsMd.includes('Plan Sizing — split before drafting'),
-        'AGENTS.md must include the "Plan Sizing — split before drafting" directive in the Plan Authoring protocol section.'
-    );
-    assert.ok(
-        agentsMd.includes(DISTINCT_DELIVERABLES),
-        'AGENTS.md must include the "3+ distinct deliverables" splitting signal.'
-    );
-    assert.ok(
-        agentsMd.includes(SHIPPABLE_PHASES),
-        'AGENTS.md must include the "2+ independently-shippable phases" splitting signal.'
-    );
-    assert.ok(
-        agentsMd.includes('If the user explicitly asks for a single plan, respect that and write one.'),
-        'AGENTS.md must include the single-plan carve-out.'
+        agentsMd.includes('plan-authoring-protocol.md'),
+        'AGENTS.md must carry the plan-authoring-protocol.md pointer — the resident block names the file by basename.'
     );
 
     // ============================================================
-    // 7. CLAUDE.md  (always-on protocol file — managed block mirror)
+    // 7. CLAUDE.md  (always-on file — pointer contract)
     // ============================================================
 
     assert.ok(
-        claudeMd.includes('Plan Sizing — split before drafting'),
-        'CLAUDE.md managed block must include the "Plan Sizing — split before drafting" directive (mirrored from AGENTS.md).'
-    );
-    assert.ok(
-        claudeMd.includes(DISTINCT_DELIVERABLES),
-        'CLAUDE.md must include the "3+ distinct deliverables" splitting signal.'
-    );
-    assert.ok(
-        claudeMd.includes(SHIPPABLE_PHASES),
-        'CLAUDE.md must include the "2+ independently-shippable phases" splitting signal.'
-    );
-    assert.ok(
-        claudeMd.includes('If the user explicitly asks for a single plan, respect that and write one.'),
-        'CLAUDE.md must include the single-plan carve-out.'
+        claudeMd.includes('plan-authoring-protocol.md'),
+        'CLAUDE.md managed block must carry the plan-authoring-protocol.md pointer (mirrored from AGENTS.md).'
     );
 
     // ============================================================
@@ -324,7 +308,42 @@ function run() {
         'improve-plan/SKILL.md ## Steps must NOT name the retired switchboard-split workflow.'
     );
 
-    console.log('prompt split-guidance sync test passed (9 surfaces in sync)');
+    // ============================================================
+    // 10. .agents/plan-authoring-protocol.md  (the file the resident
+    //     pointer names — feature-first outcome in the same ### section)
+    // ============================================================
+    // Section-scoped to the Plan Authoring ### section so a green test cannot
+    // coexist with the rule buried where the section selector misses it.
+
+    const authoringProtocol = fs.readFileSync(
+        path.join(root, '.agents', 'plan-authoring-protocol.md'), 'utf8'
+    );
+    const authoringSectionMatch = authoringProtocol.match(
+        /### 📝 Plan Authoring & Problem Analysis Protocol([\s\S]*?)(?=\n### )/
+    );
+    assert.ok(
+        authoringSectionMatch,
+        'plan-authoring-protocol.md must have the "📝 Plan Authoring & Problem Analysis Protocol" ### section (SparkContextExporter selects by literal title).'
+    );
+    const authoringSection = authoringSectionMatch[1];
+    assert.ok(
+        authoringSection.includes(DISTINCT_DELIVERABLES),
+        'plan-authoring-protocol.md must include the "3+ distinct deliverables" splitting signal.'
+    );
+    assert.ok(
+        authoringSection.includes(SHIPPABLE_PHASES),
+        'plan-authoring-protocol.md must include the "2+ independently-shippable phases" splitting signal.'
+    );
+    assert.ok(
+        authoringSection.includes('If the user explicitly asks for a single plan, respect that and write one.'),
+        'plan-authoring-protocol.md must include the single-plan carve-out.'
+    );
+    assert.ok(
+        /manage-features/.test(authoringSection) && authoringSection.includes('POST /kanban/feature'),
+        'plan-authoring-protocol.md must name feature assembly (manage-features / POST /kanban/feature) as the expected path when a signal fires.'
+    );
+
+    console.log('prompt split-guidance sync test passed (10 surfaces in sync)');
 }
 
 try {

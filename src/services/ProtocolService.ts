@@ -89,11 +89,11 @@ export class ProtocolService {
         // on-disk check was answering a question their delivery mode says
         // should never be asked — the returned `path` was never consumed by
         // any caller (protocolPhrase uses the body for inline). The on-disk
-        // files still ship and are still the defaults of the user-editable
-        // planner workflow path fields, but those path-shaped defaults go
-        // through renderPlannerWorkflowRef's path branch (literal "Read <path>"),
-        // never through resolveProtocol. Bare-name resolution of these two
-        // now returns the inline body like every other inline protocol.
+        // files still ship, but the planner workflow fields now default to the
+        // bare names (`improve-plan` / `improve-feature`), which resolve here
+        // and inline the body; a path-shaped value (custom or legacy config)
+        // still goes through renderPlannerWorkflowRef's path branch (literal
+        // "Read <path>"), never through resolveProtocol.
 
         if (delivery === "inline") {
             return {

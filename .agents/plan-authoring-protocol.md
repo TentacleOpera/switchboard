@@ -26,14 +26,14 @@ See `.agents/workflows/switchboard-memo.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol
 
-When creating or improving any implementation plan (including via the extension-dispatched `improve-plan` protocol at `.switchboard/protocols/improve-plan/SKILL.md`):
+When creating or improving any implementation plan (including via the extension-dispatched `improve-plan` protocol at `.agents/protocols/improve-plan/SKILL.md`):
+- **Plan Sizing — plan or feature, decided before drafting.** Before writing any plan file, assess whether the work is one plan or a feature. Author it as a feature when EITHER signal is present:
+  - **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
+  - **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
+  When either signal fires: write one plan file per deliverable — each with its own Goal, Metadata, and Verification Plan, each independently codeable — then assemble them into a feature via the `manage-features` skill (Create from Plans section / `POST /kanban/feature`). Writing a feature is a normal outcome of this test, not a remedial one — do NOT write one mega-plan covering all deliverables/phases and split it afterwards. The feature is self-contained: the feature file carries the full argument (analysis, constraints, feature-wide invariants) and each subtask is self-sufficient on its own scope; where a subtask and the feature file disagree, the subtask wins and the subtask says so. If the user explicitly asks for a single plan, respect that and write one.
 - You MUST explicitly document the core problems, background context, and root cause analysis.
 - This details should be placed directly inside or immediately below the `## Goal` section to ensure the plan remains self-contained without violating workflow section requirements.
 - The `improve-plan` required section schema must never be used as a reason to drop the problem analysis.
-- **Plan Sizing — split before drafting.** Before writing any plan file, assess whether the work is one plan or multiple. Auto-split into separate plan files when EITHER signal is present:
-  - **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
-  - **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
-  When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one. If you wrote 3+ plans, group them into a feature via the `manage-features` skill (Create from Plans section) — if the user already asked for grouping or a feature, treat the original ask as confirmation and create it without a second confirm; if you are proposing grouping the user did not request, offer it and wait for confirmation.
 
 ### 📂 Workspace Detection for Plan Creation
 

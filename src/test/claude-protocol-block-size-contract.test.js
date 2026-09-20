@@ -162,7 +162,7 @@ test('card-move rule is present for the five execution seats', () => {
     const plan = [{ topic: 'p', absolutePath: '/abs/p.md' }];
     for (const role of ['planner', 'coder', 'intern', 'reviewer', 'tester']) {
         const opts = role === 'planner'
-            ? { plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md', gitProhibitionEnabled: false }
+            ? { plannerWorkflowPath: 'improve-plan', gitProhibitionEnabled: false }
             : { gitProhibitionEnabled: true, switchboardSafeguardsEnabled: true };
         const prompt = buildKanbanBatchPrompt(role, plan, opts);
         assert.ok(/KANBAN COLUMN TRANSITIONS/.test(prompt),
@@ -258,12 +258,17 @@ test('the four action-local sections left the resident block and live in their o
 
 test('planner default base instruction is intact (minimal-prompt regression guard)', () => {
     const plan = [{ topic: 'p', absolutePath: '/abs/p.md' }];
+    // The shipped default is the bare protocol name — unresolved in this
+    // harness, so the builder emits the live fetch instruction, never a
+    // dead "Read <path>" line.
     const prompt = buildKanbanBatchPrompt('planner', plan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         gitProhibitionEnabled: false
     });
-    assert.ok(prompt.includes('Read .agents/protocols/improve-plan/SKILL.md and follow it step-by-step'),
+    assert.ok(prompt.includes('Read and follow the `improve-plan` protocol (resolve via `switchboard api GET /protocol/improve-plan`) step-by-step.'),
         'planner base instruction line must be intact');
+    assert.ok(!prompt.includes('Read .agents/protocols/improve-plan/SKILL.md'),
+        'planner prompt must not contain the retired Read-path instruction');
     assert.ok(!prompt.includes('\n\n\n'),
         'planner prompt must not contain triple newlines after the card-move relocation');
 });

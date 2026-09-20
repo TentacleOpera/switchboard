@@ -3,6 +3,7 @@ import * as path from 'path';
 import type { HostSeams } from './hostSeams';
 import type { BroadcastHub } from './broadcastHub';
 import { KanbanDatabase } from './KanbanDatabase';
+import { ProtocolService } from './ProtocolService';
 import { saveTerminalGroupsGuarded, type TerminalGroupsSettingsAccessor } from './teamWiring';
 
 /**
@@ -179,6 +180,16 @@ export class KanbanService {
         if (!workspaceRoot) {
             this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: false, path: filePath });
             return { success: false, exists: false };
+        }
+        // Bare protocol names (no separator, no .md suffix) validate via
+        // ProtocolService, not the filesystem — the shipped planner workflow
+        // defaults are protocol names (e.g. `improve-plan`).
+        if (!filePath.includes('/') && !filePath.includes('\\') && !/\.md$/i.test(filePath)) {
+            const proto = await ProtocolService.resolveProtocol(filePath, workspaceRoot);
+            if (proto) {
+                this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: true, path: filePath });
+                return { success: true, exists: true };
+            }
         }
         const resolvedPath = path.resolve(workspaceRoot, filePath);
         // Containment check — a bare `startsWith(workspaceRoot)` admits sibling dirs

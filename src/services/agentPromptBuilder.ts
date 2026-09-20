@@ -410,7 +410,7 @@ export interface PromptBuilderOptions {
      */
     resolvedProtocols?: ProtocolResolution;
 
-    /** Path to the workflow file for the planner role. Defaults to .agents/protocols/improve-plan/SKILL.md */
+    /** Workflow for the planner role — a filesystem path OR a bare protocol name resolved via `resolvedProtocols`. Defaults to the `improve-plan` protocol (inlined body). */
     plannerWorkflowPath?: string;
 
     /** Path/link to the project constitution. */
@@ -521,7 +521,7 @@ export interface PromptBuilderOptions {
     featureWorkflowFilePathEnabled?: boolean;
     /** Path to the workflow file for feature dispatches. */
     featureWorkflowFilePath?: string;
-    /** Path to the workflow file for the planner role when targeting a feature. */
+    /** Workflow for the planner role when targeting a feature — path or bare protocol name. Defaults to the `improve-feature` protocol. */
     plannerFeatureWorkflowPath?: string;
     /** Resolved chat-plan write destination(s) for the chat role. One path per entry; the agent picks one. */
     chatPlanDestinations?: string[];
@@ -1798,18 +1798,22 @@ export function PROJECT_LINE_DIRECTIVE(project: string): string {
     return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project at creation, regardless of what project is active when the file is imported. Omit the line only if no project name is given above. (Authoring only — this sets a NEW plan's project; to move an existing plan to another project, use the Switchboard board or API, not this line.)`;
 }
 
-const DEFAULT_PLANNER_WORKFLOW = '.agents/protocols/improve-plan/SKILL.md';
-const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.agents/protocols/improve-feature/SKILL.md';
+// Bare protocol names, not paths: `renderPlannerWorkflowRef` resolves them
+// through `resolvedProtocols` and inlines the bundled body, so a planner prompt
+// pasted into a chat surface carries the workflow instead of a "Read <path>"
+// instruction the recipient cannot follow. The on-disk SKILL.md files still
+// ship; the name resolution returns the same content.
+const DEFAULT_PLANNER_WORKFLOW = 'improve-plan';
+const DEFAULT_FEATURE_PLANNER_WORKFLOW = 'improve-feature';
 
 /** Map of retired workflow paths (the four files the four-front-doors refactor
  *  relocated from `.agents/workflows/`, plus later `.agents/skills/` and
  *  `.switchboard/protocols/` vintages) to their current resolution target.
- *  The two committed survivors (`improve-plan`, `improve-feature`) keep their
- *  real on-disk paths — they are the defaults of two user-editable path fields
- *  with a `Validate` button and the files ship in the extension. Every other
- *  retired path maps to a bare protocol **name** that `ProtocolService` resolves
- *  (inline body / materialised path / control_plane row) — never to a deleted
- *  `.agents/protocols/<name>/SKILL.md` path, which ceased to exist in 8258ce4b.
+ *  Every retired spelling — including the still-on-disk `.agents/protocols/`
+ *  paths, which remain valid but are no longer the shipped default — maps to a
+ *  bare protocol **name** that `ProtocolService` resolves (inline body /
+ *  materialised path / control_plane row). A persisted old value therefore
+ *  resolves to the protocol body rather than a filesystem reference.
  *  Used by `normalizeRetiredWorkflowPath` — the read-time guard that ensures a
  *  persisted stale path can never hand an agent a dead file reference. */
 export const RETIRED_WORKFLOW_PATH_MAP: Record<string, string> = {
@@ -1840,9 +1844,10 @@ export const RETIRED_WORKFLOW_PATH_MAP: Record<string, string> = {
 };
 
 /** Rewrite a retired relocated workflow path to its current resolution target.
- *  Survivors map to their committed on-disk path; other retired paths map to a
- *  bare protocol name the resolver understands. Any other value (custom path,
- *  absolute path, already-correct path) is returned unchanged. Pure function,
+ *  Every mapped value is a bare protocol name the resolver understands —
+ *  including the `.agents/protocols/` survivors, which map to their protocol
+ *  name so prompts carry the inlined body. Any other value (custom path,
+ *  absolute path, bare name already) is returned unchanged. Pure function,
  *  no injection surface. */
 export function normalizeRetiredWorkflowPath(p: string): string {
     if (typeof p !== 'string') return p as any;

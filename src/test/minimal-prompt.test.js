@@ -9,13 +9,19 @@ const mockPlan = [
 
 function testDefaultPromptIsMinimal() {
     console.log('Testing default prompt is minimal...');
+    // The shipped default is the bare protocol name 'improve-plan'; dispatch
+    // resolves it via resolvedProtocols and the builder inlines the body.
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
+        resolvedProtocols: { 'improve-plan': { name: 'improve-plan', body: 'STUB IMPROVE-PLAN BODY', delivery: 'inline' } },
         aggressivePairProgramming: false,
         gitProhibitionEnabled: false
     });
 
-    assert.ok(prompt.includes('Read .agents/protocols/improve-plan/SKILL.md and follow it step-by-step'), 'Prompt should start with minimal instruction');
+    assert.ok(prompt.includes('Read and follow the workflow below step-by-step.'), 'Prompt should start with minimal instruction');
+    assert.ok(prompt.includes('--- BEGIN PROTOCOL improve-plan ---'), 'Prompt should inline the improve-plan protocol body');
+    assert.ok(prompt.includes('STUB IMPROVE-PLAN BODY'), 'Prompt should contain the resolved protocol body');
+    assert.ok(!prompt.includes('Read .agents/protocols/'), 'Prompt must not contain a dead "Read <path>" instruction for the default workflow');
     assert.ok(!prompt.includes('Complexity Audit'), 'Prompt should not include hardcoded Complexity Audit instruction');
     assert.ok(!prompt.includes('Metadata section'), 'Prompt should not include hardcoded Metadata section instruction');
     assert.ok(!prompt.includes('Scoring guide'), 'Prompt should not include hardcoded Scoring guide');
@@ -26,7 +32,7 @@ function testDefaultPromptIsMinimal() {
 function testNoAddOnsByDefault() {
     console.log('Testing no add-ons are included when no options are passed...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md'
+        plannerWorkflowPath: 'improve-plan'
     });
 
     assert.ok(!prompt.includes('GIT POLICY'), 'Prompt should not include git prohibition by default');
@@ -37,7 +43,7 @@ function testNoAddOnsByDefault() {
 function testAddOnsAreAppendedWhenEnabled() {
     console.log('Testing add-ons are appended when enabled...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         aggressivePairProgramming: true
     });
 
@@ -48,7 +54,7 @@ function testAddOnsAreAppendedWhenEnabled() {
 function testGitProhibitionIncludedWhenEnabled() {
     console.log('Testing git prohibition is included when explicitly enabled...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         gitProhibitionEnabled: true
     });
 
@@ -59,7 +65,7 @@ function testGitProhibitionIncludedWhenEnabled() {
 function testGitProhibitionExcludedWhenDisabled() {
     console.log('Testing git prohibition is excluded when disabled...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         gitProhibitionEnabled: false
     });
 
@@ -70,7 +76,7 @@ function testGitProhibitionExcludedWhenDisabled() {
 function testDispatchContextAndPlanListAreIncluded() {
     console.log('Testing dispatch context and plan list are included...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md'
+        plannerWorkflowPath: 'improve-plan'
     });
 
     assert.ok(prompt.includes('PLANS TO PROCESS'), 'Prompt should include plan list section');
@@ -83,7 +89,7 @@ function testDispatchContextAndPlanListAreIncluded() {
 function testWorkspaceTypeBlockIncludedForSingleRepo() {
     console.log('Testing workspace type block is included for single-repo...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         workspaceRoot: '/path/to/workspace'
     });
 
@@ -98,7 +104,7 @@ function testBatchExecutionRulesIncludedForMultiPlan() {
         { topic: 'plan-b', absolutePath: '/abs/path/to/b.md' }
     ];
     const prompt = buildKanbanBatchPrompt('planner', multiPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md'
+        plannerWorkflowPath: 'improve-plan'
     });
 
     assert.ok(prompt.includes('CRITICAL INSTRUCTIONS'), 'Multi-plan prompt should include batch execution rules');
@@ -109,7 +115,7 @@ function testBatchExecutionRulesIncludedForMultiPlan() {
 function testBatchExecutionRulesExcludedForSinglePlan() {
     console.log('Testing batch execution rules are excluded for single-plan dispatches...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md'
+        plannerWorkflowPath: 'improve-plan'
     });
 
     assert.ok(!prompt.includes('CRITICAL INSTRUCTIONS'), 'Single-plan prompt should not include batch execution rules');
@@ -119,7 +125,7 @@ function testBatchExecutionRulesExcludedForSinglePlan() {
 function testClearAntigravityContextEnabled() {
     console.log('Testing clear antigravity context is included when enabled...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         clearAntigravityContext: true
     });
 
@@ -131,7 +137,7 @@ function testClearAntigravityContextEnabled() {
 function testClearAntigravityContextDisabled() {
     console.log('Testing clear antigravity context is excluded when disabled...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         clearAntigravityContext: false
     });
 
@@ -150,7 +156,7 @@ function testPromptLineBreaksAreNormalized() {
 
     // 2. Verify planner prompt does not contain 3+ consecutive newlines
     const plannerPrompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         aggressivePairProgramming: true,
         gitProhibitionEnabled: true,
         workspaceRoot: '/path/to/workspace'
@@ -193,7 +199,7 @@ function testNoTripleNewlinesInAnyRole() {
             const promptOpts = { ...opts };
             // Add role-specific options
             if (role === 'planner') {
-                promptOpts.plannerWorkflowPath = '.agents/protocols/improve-plan/SKILL.md';
+                promptOpts.plannerWorkflowPath = 'improve-plan';
                 promptOpts.aggressivePairProgramming = true;
             }
             if (role === 'reviewer') {
@@ -224,7 +230,7 @@ function testNoTripleNewlinesInAnyRole() {
 function testConsistentSpacingBetweenDirectives() {
     console.log('Testing consistent spacing between directives in planner prompt...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+        plannerWorkflowPath: 'improve-plan',
         aggressivePairProgramming: true,
         gitProhibitionEnabled: true,
         switchboardSafeguardsEnabled: true,

@@ -49,6 +49,8 @@ export const CLAUDE_BLOCK_END = '<!-- switchboard:claude-protocol:end -->';
  * Plan Authoring, Workspace Detection, Project Pinning, Memo Capture — moved to
  * `.agents/plan-authoring-protocol.md`, which SparkContextExporter reads and
  * which is never scaffolded into a managed block or injected into a prompt.
+ * The resident body names it by basename only (the dead-references gate bans a
+ * `.agents/` prefix) so a repo agent knows the file exists before it writes.
  * `CLAUDE_PROTOCOL_HEADER` is NOT emitted into new blocks — it stays exported
  * only as the legacy-markerless detector key (extension.ts ensureClaudeProtocol
  * passes it as `header`); dropping it from the emitted block keeps the size gate
@@ -64,7 +66,8 @@ export const RESIDENT_PROTOCOL_BODY = `- Plans reach the board on their own: a \
 - Memo capture mode: while active, append each user message verbatim — do not
   analyse, plan, or write code. Begin every reply with \`[MEMO CAPTURE ACTIVE]\`.
 - Kanban questions: use the \`query-kanban\` skill. Displayed column labels differ
-  from the stored IDs, so hand-written SQL silently returns nothing.`;
+  from the stored IDs, so hand-written SQL silently returns nothing.
+- Writing a plan? Read plan-authoring-protocol.md.`;
 
 /**
  * Fourth resident rule — a docs pointer. GATED: do NOT include it in

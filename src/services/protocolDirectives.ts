@@ -132,7 +132,7 @@ export function renderProtocolReferences(
 export function renderPlannerWorkflowRef(workflowPath: string, resolved?: ProtocolResolution): string {
     if (!workflowPath) return '';
     // A path-looking value (contains a separator or a .md suffix) is emitted as-is.
-    if (workflowPath.includes('/') || /\.md$/i.test(workflowPath)) {
+    if (workflowPath.includes('/') || workflowPath.includes('\\') || /\.md$/i.test(workflowPath)) {
         return `Read ${workflowPath} and follow it step-by-step.`;
     }
     // Bare protocol name → resolve.

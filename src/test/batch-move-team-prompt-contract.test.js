@@ -119,14 +119,14 @@ function testPlannerBatchPromptDoesNotLeakWorkflow() {
         featureMode: true,
         driveMode: true,
         batchMode: true,
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
-        plannerFeatureWorkflowPath: '.agents/protocols/improve-feature/SKILL.md'
+        plannerWorkflowPath: 'improve-plan',
+        plannerFeatureWorkflowPath: 'improve-feature'
     };
 
     const prompt = buildKanbanBatchPrompt('planner', plans, options);
 
-    assert.ok(prompt.includes('.agents/protocols/improve-plan/SKILL.md'), 'Planner batch should use standard improve-plan workflow');
-    assert.ok(!prompt.includes('.agents/protocols/improve-feature/SKILL.md'), 'Planner batch should NOT use feature workflow');
+    assert.ok(prompt.includes('`improve-plan` protocol'), 'Planner batch should use standard improve-plan workflow');
+    assert.ok(!prompt.includes('improve-feature'), 'Planner batch should NOT use feature workflow');
 
     console.log('  PASS: planner batch prompt workflow path');
 }

@@ -38,6 +38,7 @@ import {
     TEAM_BATCH_PLAN_CAP,
     type SeatDirectiveOptions,
 } from '../services/agentPromptBuilder';
+import { ProtocolService } from '../services/ProtocolService';
 import { resolveProtocolSet } from '../services/protocolDirectives';
 import type { ProtocolResolution } from '../services/protocolDirectives';
 import { recordTurnEndEvent } from '../services/ScheduledJobsService';
@@ -2289,11 +2290,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         const fsLocal = require('fs') as typeof import('fs');
                         let skillContent = '';
                         try {
-                            skillContent = fsLocal.readFileSync(path.join(root, '.agents', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
+                            skillContent = fsLocal.readFileSync(path.join(root, '.agents', 'protocols', 'improve-plan', 'SKILL.md'), 'utf8');
                         } catch {
                             try {
-                                skillContent = fsLocal.readFileSync(path.join(root, '.claude', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
-                            } catch {
+                                const proto = await ProtocolService.resolveProtocol('improve-plan', root);
+                                skillContent = proto?.body || '';
+                            } catch { /* fall through to the embedded prompt */ }
+                            if (!skillContent) {
                                 skillContent = `Improve this plan: deepen the goal/problem analysis, verify file paths and line numbers against the real codebase, add a Complexity Audit and Edge-Case/Dependency Audit, and refine the Proposed Changes and Verification Plan. Preserve YAML frontmatter. Write the result back to the local file path provided.`;
                             }
                         }

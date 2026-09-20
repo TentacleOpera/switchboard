@@ -19,7 +19,7 @@ async function run() {
 
         // Mocked method settings
         promptsConfig: {
-            plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md',
+            plannerWorkflowPath: 'improve-plan',
             aggressivePairProgramming: true,
             advancedReviewerEnabled: true,
             leadChallengeEnabled: true,
@@ -115,7 +115,7 @@ async function run() {
 
     // TEST 1: Default configuration
     // Verify default options are passed correctly
-    KanbanProvider.promptsConfig.plannerWorkflowPath = '.agents/protocols/improve-plan/SKILL.md';
+    KanbanProvider.promptsConfig.plannerWorkflowPath = 'improve-plan';
     KanbanProvider.promptsConfig.aggressivePairProgramming = false;
     KanbanProvider.promptsConfig.advancedReviewerEnabled = false;
     KanbanProvider.promptsConfig.leadChallengeEnabled = false;
@@ -125,7 +125,7 @@ async function run() {
     let previews = await KanbanProvider._getDefaultPromptPreviews('/root');
     
     // Check planner workflow path defaults (should have the default workflow string)
-    assert.ok(previews.planner.includes('Read .agents/protocols/improve-plan/SKILL.md and follow it step-by-step'), 'Planner preview should include default workflow path instructions');
+    assert.ok(previews.planner.includes('Read and follow the `improve-plan` protocol'), 'Planner preview should include the default improve-plan protocol reference');
     assert.ok(!previews.planner.includes('PAIR PROGRAMMING OPTIMISATION'), 'Planner preview should not include aggressive pair programming when disabled');
     assert.ok(!previews.reviewer.includes('ADVANCED REGRESSION ANALYSIS'), 'Reviewer preview should not include advanced regression block when disabled');
     assert.ok(previews.reviewer.includes('NOT authoritative on codebase facts'), 'Reviewer preview should include plan-authority split when advanced regression is disabled');

@@ -182,4 +182,5 @@ it is the failure mode a passing test suite is least likely to catch.
   analyse, plan, or write code. Begin every reply with `[MEMO CAPTURE ACTIVE]`.
 - Kanban questions: use the `query-kanban` skill. Displayed column labels differ
   from the stored IDs, so hand-written SQL silently returns nothing.
+- Writing a plan? Read plan-authoring-protocol.md.
 <!-- switchboard:claude-protocol:end -->

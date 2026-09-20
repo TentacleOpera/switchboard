@@ -28,6 +28,7 @@ import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, pa
 import { substituteCliPath } from '../utils/cliPathToken';
 import type { ProtocolResolution } from './protocolDirectives';
 import { renderPlannerWorkflowRef } from './protocolDirectives';
+import { ProtocolService } from './ProtocolService';
 import { HostCapabilityService } from './hostCapability';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import { compareByPrecedence, resolveSendableBatch, type SortMode } from './kanbanOrdering';
@@ -7655,7 +7656,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // normalised to a name) so renderPlannerWorkflowRef can inline it.
         const directiveNames = new Set<string>(DIRECTIVE_PROTOCOL_NAMES);
         const collectBareName = (p: string | undefined) => {
-            if (p && !p.includes('/') && !/\.md$/i.test(p)) directiveNames.add(p);
+            if (p && !p.includes('/') && !p.includes('\\') && !/\.md$/i.test(p)) directiveNames.add(p);
         };
         collectBareName(batchOptions.plannerWorkflowPath);
         collectBareName(batchOptions.plannerFeatureWorkflowPath);
@@ -7865,7 +7866,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
-                planner: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/protocols/improve-plan/SKILL.md')),
+                planner: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', 'improve-plan')),
                 lead: leadConfig?.addons?.workflowFilePath || '',
                 coder: coderConfig?.addons?.workflowFilePath || '',
                 reviewer: reviewerConfig?.addons?.workflowFilePath || '',
@@ -7902,7 +7903,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
             designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
-            plannerWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/protocols/improve-plan/SKILL.md')),
+            plannerWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', 'improve-plan')),
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
                 lead: leadConfig?.addons?.skipCompilation ?? true,
@@ -8133,7 +8134,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             plannerFeatureWorkflowPath: normalizeRetiredWorkflowPath(
                 (plannerConfig?.addons?.featureWorkflowFilePathEnabled && plannerConfig?.addons?.featureWorkflowFilePath)
                     ? plannerConfig.addons.featureWorkflowFilePath
-                    : '.agents/protocols/improve-feature/SKILL.md'
+                    : 'improve-feature'
             ),
         };
     }
@@ -14589,15 +14590,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 const topic = typeof msg.topic === 'string' ? msg.topic : '(untitled)';
                 try {
-                    // Read user-editable skill file (.agents → embedded fallback).
+                    // Read user-editable skill file (.agents → protocol body → embedded fallback).
                     const nfs = require('fs') as typeof import('fs');
                     let skillContent = '';
                     try {
                         skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agents', 'protocols', 'improve-plan', 'SKILL.md'), 'utf8');
                     } catch {
                         try {
-                            skillContent = nfs.readFileSync(path.join(workspaceRoot, '.claude', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
-                        } catch {
+                            const proto = await ProtocolService.resolveProtocol('improve-plan', workspaceRoot);
+                            skillContent = proto?.body || '';
+                        } catch { /* fall through to the embedded prompt */ }
+                        if (!skillContent) {
                             skillContent = `Improve this plan: deepen the goal/problem analysis, verify file paths and line numbers against the real codebase, add a Complexity Audit and Edge-Case/Dependency Audit, and refine the Proposed Changes and Verification Plan. Preserve YAML frontmatter. Write the result back to the local file path provided.`;
                         }
                     }
@@ -15465,8 +15468,20 @@ ${FOCUS_DIRECTIVE}`;
                     this.postMessage({ type: 'fileExistsResult', exists: false, path: filePath });
                     return { success: false, exists: false };
                 }
+                // Bare protocol names (no separator, no .md suffix) validate via
+                // ProtocolService, not the filesystem — the shipped planner
+                // defaults are protocol names.
+                if (!filePath.includes('/') && !filePath.includes('\\') && !/\.md$/i.test(filePath)) {
+                    const proto = await ProtocolService.resolveProtocol(filePath, workspaceRoot);
+                    if (proto) {
+                        this.postMessage({ type: 'fileExistsResult', exists: true, path: filePath });
+                        return { success: true, exists: true };
+                    }
+                }
                 const resolvedPath = path.resolve(workspaceRoot, filePath);
-                if (!resolvedPath.startsWith(workspaceRoot)) {
+                // Same containment rule as kanbanService.fileExists — a bare
+                // `startsWith(workspaceRoot)` admits sibling dirs sharing a prefix.
+                if (resolvedPath !== workspaceRoot && !resolvedPath.startsWith(workspaceRoot + path.sep)) {
                     this.postMessage({ type: 'fileExistsResult', exists: false, path: filePath });
                     return { success: false, exists: false };
                 }

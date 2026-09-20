@@ -308,7 +308,7 @@ behaviouralTest('reviewer prompt includes ESCALATION ON DESTINATION CHANGE', () 
 
 behaviouralTest('planner prompt does NOT include GOAL VERDICT (reviewer-scoped)', () => {
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md'
+        plannerWorkflowPath: 'improve-plan'
     });
     assert.ok(
         !prompt.includes('GOAL VERDICT'),

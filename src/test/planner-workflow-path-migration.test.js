@@ -341,8 +341,8 @@ async function run() {
     );
     assert.match(
         providerSource,
-        /const NEW_DEFAULT = '\.agents\/skills\/improve-plan\/SKILL\.md';/,
-        'Expected the workflows→skills migration to rewrite to the new skills path.'
+        /const NEW_DEFAULT = 'improve-plan';/,
+        'Expected the workflows→skills migration to rewrite to the bare protocol name.'
     );
     assert.match(
         providerSource,
@@ -357,7 +357,7 @@ async function run() {
         assert.strictEqual(await db7.ensureReady(), true, 'Expected kanban DB to initialize for migration test 7.');
 
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-        const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
+        const NEW_DEFAULT = 'improve-plan';
 
         // Seed: one old-default (should rewrite), one custom (should be untouched).
         await db7.setConfigJson(ROLE_KEY, { workflowFilePath: OLD_DEFAULT });
@@ -377,7 +377,7 @@ async function run() {
             }
         }
 
-        assert.strictEqual(db7.getConfigJsonSync(ROLE_KEY, undefined).workflowFilePath, NEW_DEFAULT, 'Expected old-default config value to be rewritten to the skills path.');
+        assert.strictEqual(db7.getConfigJsonSync(ROLE_KEY, undefined).workflowFilePath, NEW_DEFAULT, 'Expected old-default config value to be rewritten to the protocol name.');
         const customRows7 = await db7.getProjectConfigRowsByKeySync(ROLE_KEY);
         assert.strictEqual(customRows7[0].value.workflowFilePath, '.custom/workflows/x.md', 'Expected custom project_config path to remain untouched by the workflows→skills migration.');
 
@@ -402,8 +402,8 @@ async function run() {
     );
     assert.match(
         providerSource,
-        /_migratePlannerWorkflowPathProfileTiersWorkflowsToSkills\(\): Promise<void> \{[\s\S]*?const OLD_DEFAULT = '\.agents\/workflows\/improve-plan\.md';[\s\S]*?const NEW_DEFAULT = '\.switchboard\/protocols\/improve-plan\/SKILL\.md';/,
-        'Expected the workflows→skills profile-tier migration to match the old default and rewrite to the new protocols path.'
+        /_migratePlannerWorkflowPathProfileTiersWorkflowsToSkills\(\): Promise<void> \{[\s\S]*?const OLD_DEFAULT = '\.agents\/workflows\/improve-plan\.md';[\s\S]*?const NEW_DEFAULT = 'improve-plan';/,
+        'Expected the workflows→skills profile-tier migration to match the old default and rewrite to the bare protocol name.'
     );
     assert.match(
         providerSource,
@@ -432,7 +432,7 @@ async function run() {
     assert.match(
         agentPromptBuilderSource,
         /export const RETIRED_WORKFLOW_PATH_MAP[\s\S]*?'\.agents\/workflows\/improve-plan\.md'[\s\S]*?DEFAULT_PLANNER_WORKFLOW/,
-        'Expected RETIRED_WORKFLOW_PATH_MAP to map the retired improve-plan path to DEFAULT_PLANNER_WORKFLOW (the canonical skills path constant).'
+        'Expected RETIRED_WORKFLOW_PATH_MAP to map the retired improve-plan path to DEFAULT_PLANNER_WORKFLOW (the bare protocol name constant).'
     );
     assert.match(
         agentPromptBuilderSource,
@@ -448,21 +448,30 @@ async function run() {
     // ── Test 8: normalizeRetiredWorkflowPath maps the four retired paths and passes everything else through ──
     // Prefer the real export; fall back to an inline mirror so the transform is
     // still exercised when the compiled export is unavailable.
+    // Retired spellings all normalize to the bare protocol name — the shipped
+    // default is the name (resolved to the inlined body at prompt-build time),
+    // and a persisted path from any vintage lands on the same name.
     const retiredMap = {
-        '.agents/workflows/improve-plan.md': '.agents/protocols/improve-plan/SKILL.md',
-        '.agents/workflows/improve-feature.md': '.agents/protocols/improve-feature/SKILL.md',
+        '.agents/workflows/improve-plan.md': 'improve-plan',
+        '.agents/workflows/improve-feature.md': 'improve-feature',
         '.agents/workflows/accuracy.md': 'accuracy',
         '.agents/workflows/switchboard-orchestrator.md': 'switchboard-mission-control',
-        '.agents/skills/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
-        '.agents/skills/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
+        '.agents/skills/improve-plan/SKILL.md': 'improve-plan',
+        '.agents/skills/improve-feature/SKILL.md': 'improve-feature',
         '.agents/skills/accuracy/SKILL.md': 'accuracy',
         '.agents/skills/switchboard-orchestrator/SKILL.md': 'switchboard-mission-control',
         // `.switchboard/protocols/` vintage — an unshippable destination (.vscodeignore
         // excludes .switchboard/**) that a dev build could have persisted.
-        '.switchboard/protocols/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
-        '.switchboard/protocols/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
+        '.switchboard/protocols/improve-plan/SKILL.md': 'improve-plan',
+        '.switchboard/protocols/improve-feature/SKILL.md': 'improve-feature',
         '.switchboard/protocols/accuracy/SKILL.md': 'accuracy',
         '.switchboard/protocols/switchboard-orchestrator/SKILL.md': 'switchboard-mission-control',
+        // `.agents/protocols/` spellings — the files still exist on disk but are
+        // no longer the shipped default; they normalize to the name so prompts
+        // carry the inlined body. Also covers the renamed orchestrator vintage.
+        '.agents/protocols/improve-plan/SKILL.md': 'improve-plan',
+        '.agents/protocols/improve-feature/SKILL.md': 'improve-feature',
+        '.agents/protocols/switchboard-orchestrator/SKILL.md': 'switchboard-mission-control',
     };
     const norm = normalizeRetiredWorkflowPath || ((p) => retiredMap[p] ?? p);
     for (const [oldP, newP] of Object.entries(retiredMap)) {
@@ -470,7 +479,7 @@ async function run() {
     }
     assert.strictEqual(norm('.custom/workflows/x.md'), '.custom/workflows/x.md', 'Expected a custom path to pass through unchanged.');
     assert.strictEqual(norm('/abs/path/improve-plan.md'), '/abs/path/improve-plan.md', 'Expected an absolute path to pass through unchanged.');
-    assert.strictEqual(norm('.agents/protocols/improve-plan/SKILL.md'), '.agents/protocols/improve-plan/SKILL.md', 'Expected an already-correct protocols path to pass through unchanged (idempotent).');
+    assert.strictEqual(norm('.agents/protocols/improve-plan/SKILL.md'), 'improve-plan', 'Expected the on-disk protocols path to normalize to the bare protocol name.');
     assert.strictEqual(norm(''), '', 'Expected an empty string to pass through unchanged.');
 
     console.log('planner workflow path migration test 8 (normalizeRetiredWorkflowPath transform) passed');
@@ -479,12 +488,12 @@ async function run() {
     // Mirrors the globalState branch of _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills
     // against an in-memory shape (no VS Code/globalState available in the harness).
     const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-    const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
+    const NEW_DEFAULT = 'improve-plan';
     const staleCfg = { workflowFilePath: OLD_DEFAULT, prompt: 'keep me', addons: { y: 2 } };
     if (staleCfg.workflowFilePath === OLD_DEFAULT) {
         staleCfg.workflowFilePath = NEW_DEFAULT;
     }
-    assert.strictEqual(staleCfg.workflowFilePath, NEW_DEFAULT, 'Expected the stale globalState-shaped value to be rewritten to the skills path.');
+    assert.strictEqual(staleCfg.workflowFilePath, NEW_DEFAULT, 'Expected the stale globalState-shaped value to be rewritten to the protocol name.');
     assert.strictEqual(staleCfg.prompt, 'keep me', 'Expected unrelated keys to be preserved by the profile-tier rewrite.');
     assert.strictEqual(staleCfg.addons.y, 2, 'Expected addons to be preserved by the profile-tier rewrite.');
 

@@ -3858,16 +3858,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /** 2026-07-12 four-front-doors refactor: rewrite persisted plannerWorkflowPath
      *  values that still point at the old default (`.agents/workflows/improve-plan.md`)
-     *  to the new skills path (`.agents/protocols/improve-plan/SKILL.md`). Only exact
-     *  old-default matches are rewritten — user-custom paths are preserved untouched.
+     *  to the protocol name (`improve-plan` — resolved to the inlined body at
+     *  prompt-build time; the on-disk path form also normalizes here via
+     *  `normalizeRetiredWorkflowPath`, but storing the name is the final state).
+     *  Only exact old-default matches are rewritten — user-custom paths are
+     *  preserved untouched.
      *  Gated per-DB by `switchboard.migrations.plannerWorkflowPathWorkflowsToSkills.v1`.
      *  Runs after the `.agent→.agents` normalization so the two rewrites compose
-     *  (`.agent/workflows/improve-plan.md` → `.agents/workflows/…` → skills path). */
+     *  (`.agent/workflows/improve-plan.md` → `.agents/workflows/…` → protocol name). */
     private async _migratePlannerWorkflowPathWorkflowsToSkills(): Promise<void> {
         const ROLE_KEY = 'switchboard.prompts.roleConfig_planner';
         const MARKER_KEY = 'switchboard.migrations.plannerWorkflowPathWorkflowsToSkills.v1';
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-        const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
+        const NEW_DEFAULT = 'improve-plan';
 
         // Routed through _getWorkspaceRoots() (seam-aware) and wrapped in a
         // try/catch — same fix as _migratePlannerWorkflowPathDbTiers above.
@@ -3936,7 +3939,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      *  but the profile tiers were never ported, so on a dev/UAT machine where the
      *  stale value lives in globalState (the tier the Prompts tab reads and
      *  re-saves) the dead path survived. This rewrites an exact-match
-     *  `.agents/workflows/improve-plan.md` → `.agents/protocols/improve-plan/SKILL.md`
+     *  `.agents/workflows/improve-plan.md` → `improve-plan` (the protocol name —
+     *  resolved to the inlined body at prompt-build time)
      *  in both profile tiers, preserving any other/custom value untouched. Gated
      *  by `switchboard.plannerWorkflowPathWorkflowsToSkills.profile.v1` (a distinct
      *  globalState marker — never reuse the DB or `.agent→.agents` markers). The
@@ -3947,7 +3951,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      *  skills path); see the constructor wiring. */
     private async _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills(): Promise<void> {
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-        const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
+        const NEW_DEFAULT = 'improve-plan';
         const PROFILE_MARKER = 'switchboard.plannerWorkflowPathWorkflowsToSkills.profile.v1';
 
         // Already-migrated this profile — no re-entry.

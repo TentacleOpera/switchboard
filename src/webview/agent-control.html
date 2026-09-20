@@ -3393,15 +3393,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               </div>
               <div id="plannerWorkflowFilePathGroup">
                 <div class="input-group">
-                  <label for="workflowFilePath">Workflow File Path:</label>
-                  <input type="text" id="workflowFilePath" value=".agents/protocols/improve-plan/SKILL.md" />
+                  <label for="workflowFilePath">Workflow File Path or Protocol Name:</label>
+                  <input type="text" id="workflowFilePath" value="improve-plan" />
                   <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
                 </div>
                 <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px;"></div>
                 
                 <div class="example-paths">
-                  <strong>Example paths:</strong>
-                  <code>.agents/protocols/improve-plan/SKILL.md</code> (Switchboard Native)
+                  <strong>Examples:</strong>
+                  <code>improve-plan</code> (Switchboard Native protocol)
                   <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
                   <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
                 </div>
@@ -3499,13 +3499,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                       </div>
                       <div id="plannerFeatureWorkflowFilePathGroup" style="display:none; margin-top: 4px;">
                         <div class="input-group" style="display:flex; gap:6px; align-items:center;">
-                          <label for="plannerFeatureWorkflowFilePath" style="font-size:11px;">Path:</label>
-                          <input type="text" id="plannerFeatureWorkflowFilePath" value=".agents/protocols/improve-feature/SKILL.md" style="flex:1; padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-input-border, #ccc); background:var(--vscode-input-background, #fff); color:var(--vscode-input-foreground, #000); font-size:11px;" />
+                          <label for="plannerFeatureWorkflowFilePath" style="font-size:11px;">Path or protocol:</label>
+                          <input type="text" id="plannerFeatureWorkflowFilePath" value="improve-feature" style="flex:1; padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-input-border, #ccc); background:var(--vscode-input-background, #fff); color:var(--vscode-input-foreground, #000); font-size:11px;" />
                           <button id="validateFeatureWorkflowPath" class="secondary-btn" style="padding:2px 6px; font-size:11px;">Validate</button>
                         </div>
                         <div id="prompts-tab-feature-workflow-path-status" style="font-size:10px; margin-top:4px; color: var(--vscode-descriptionForeground);"></div>
                         <div class="example-paths" style="font-size:10px; opacity:0.8; margin-top:4px;">
-                          <strong>Default:</strong> <code>.agents/protocols/improve-feature/SKILL.md</code>
+                          <strong>Default:</strong> <code>improve-feature</code> (protocol name)
                         </div>
                       </div>
                     </div>
