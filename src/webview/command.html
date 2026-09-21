@@ -1072,22 +1072,7 @@
                              (CLAUDE.md). The card picker is gone — the model is
                              no longer asked to pick a verb for a card the
                              operator already resolved. -->
-                        <div class="agent-controller" id="agent-controller">
-                            <div class="agent-controller-head">
-                                <span class="agent-controller-state" id="agent-controller-state">checking…</span>
-                                <span class="agent-controller-when" id="agent-controller-when"></span>
-                            </div>
-                            <div class="agent-controller-where" id="agent-controller-where"></div>
-                            <div class="agent-controller-actions">
-                                <button type="button" class="agent-controller-btn" id="agent-controller-arm">Start agent</button>
-                            </div>
-                            <div class="agent-controller-status" id="agent-controller-status"></div>
-                            <div class="agent-controller-rows" id="agent-controller-rows"></div>
-                            <details class="agent-controller-panel">
-                                <summary>The report</summary>
-                                <pre class="agent-controller-report" id="agent-controller-report"></pre>
-                            </details>
-                        </div>
+                        
                         <!-- The surface's own config: endpoint, model and key
                              set HERE — the phone is the surface this feature is
                              meant to reach, so it cannot depend on a CLI or an
@@ -1179,7 +1164,6 @@
          defer keeps the download parallel and execution in document order. -->
     <script defer nonce="{{NONCE}}" src="/static/webview/sharedUtils.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/statusCards.js"></script>
-    <script defer nonce="{{NONCE}}" src="/static/webview/controllerConsole.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/terminalViewport.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/terminalKeyBar.js"></script>
     <script defer nonce="{{NONCE}}" src="/static/webview/command.js"></script>

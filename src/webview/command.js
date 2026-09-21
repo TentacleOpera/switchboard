@@ -2747,7 +2747,6 @@
             }
             await refreshAgentBoardMobile();
             void renderAgentReportsMobile();
-            refreshControllerConsoleMobile();
         } catch (err) {
             setAgentStatusMobile('Failed to load config: ' + (err?.message || err), 'error');
         }
@@ -2771,18 +2770,6 @@
 
     /**
      * Mount (once) and refresh the shared controller console. ONE console, both
-     * panes — controllerConsole.js — so the dock and this surface cannot drift.
-     */
-    let controllerConsoleMobile = null;
-    function refreshControllerConsoleMobile() {
-        if (!controllerConsoleMobile && window.SwitchboardControllerConsole) {
-            controllerConsoleMobile = window.SwitchboardControllerConsole.create();
-        }
-        if (controllerConsoleMobile) { void controllerConsoleMobile.refresh(); }
-        else if (!window.SwitchboardControllerConsole) {
-            console.error('[command] window.SwitchboardControllerConsole is undefined — controllerConsole.js did not load; the controller console is not mounted.');
-        }
-    }
 
     /** POST/PUT helper for the mechanical endpoints; normalises the reply. */
     async function agentFetchMobile(url, body, method) {

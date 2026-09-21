@@ -4,7 +4,7 @@
 // the-composer-is-a-modal-you-have-to-summon-make-it-a-dock-tab).
 //
 // The pane's static markup lives in dock.html under #dock-composer-*; this
-// module wires it, following the controllerConsole.js pattern (IIFE, static
+// module wires it, following the shared-webview-module pattern (IIFE, static
 // ids, window.Switchboard* export).
 //
 // Fleet source: the ptyListTerminals verb, fetched here — NEVER read from

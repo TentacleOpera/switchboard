@@ -280,7 +280,6 @@
         updateDockTitle();
         await loadAgentControlConfig();
         void renderAgentReports();
-        refreshControllerConsole();
     }
 
     /** Render the modelError beside the config fields that fix it. */
@@ -542,21 +541,6 @@
         } catch { /* the control log still renders; the feed is not essential */ }
     }
 
-    /**
-     * Mount (once) and refresh the shared controller console. ONE console, both
-     * panes — controllerConsole.js — so the dock and the mobile command surface
-     * cannot drift. The console renders only second-hand state the board holds.
-     */
-    let controllerConsole = null;
-    function refreshControllerConsole() {
-        if (!controllerConsole && window.SwitchboardControllerConsole) {
-            controllerConsole = window.SwitchboardControllerConsole.create();
-        }
-        if (controllerConsole) { void controllerConsole.refresh(); }
-        else if (!window.SwitchboardControllerConsole) {
-            console.error('[dock] window.SwitchboardControllerConsole is undefined — controllerConsole.js did not load; the controller console is not mounted.');
-        }
-    }
 
     // ── CLI seat sync ────────────────────────────────────────────────────
     async function syncCliSeat() {

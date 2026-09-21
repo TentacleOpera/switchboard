@@ -554,22 +554,7 @@
              wake. No confirmation gates any of it (CLAUDE.md). The card picker
              is gone — the model is no longer asked to pick a verb for a card the
              operator already resolved. -->
-        <div class="agent-controller" id="agent-controller">
-            <div class="agent-controller-head">
-                <span class="agent-controller-state" id="agent-controller-state">checking…</span>
-                <span class="agent-controller-when" id="agent-controller-when"></span>
-            </div>
-            <div class="agent-controller-where" id="agent-controller-where"></div>
-            <div class="agent-controller-actions">
-                <button type="button" class="agent-controller-btn" id="agent-controller-arm">Start agent</button>
-            </div>
-            <div class="agent-controller-status" id="agent-controller-status"></div>
-            <div class="agent-controller-rows" id="agent-controller-rows"></div>
-            <details class="agent-controller-panel">
-                <summary>The report</summary>
-                <pre class="agent-controller-report" id="agent-controller-report"></pre>
-            </details>
-        </div>
+        
         <!-- The surface's own config: provider, model and key are set HERE,
              not via a repurposed startup command or an env var. The key field
              is write-only — it renders set/unset and never echoes the value.
@@ -651,7 +636,6 @@
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{STATUS_CARDS_URI}}"></script>
-    <script nonce="{{NONCE}}" src="/static/webview/controllerConsole.js"></script>
     <script nonce="{{NONCE}}" src="/static/webview/dockComposer.js"></script>
     <script nonce="{{NONCE}}" src="{{TERMINAL_VIEWPORT_JS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{DOCK_JS_URI}}"></script>
