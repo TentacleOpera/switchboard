@@ -14,7 +14,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
     Never silently delete a conclusion and write a new one in its place. The callout is the audit trail — without it, the change is a protocol violation.
 - **SESSION vs PRODUCT SCOPE**: Session directives (e.g. "single-repo", "skip compilation", "skip tests") constrain HOW you verify and organize the plan, not WHAT the plan covers. Do not conflate repo structure constraints with product feature requirements. If the plan targets multi-root workspaces, you must preserve and improve that scope regardless of the current session's repo configuration.
   **Never transcribe a session directive into the plan file** — not as a note, a caveat, or an explanation of what this run did or did not do. It binds you, not the reader. Written down it inverts: a later coder reads a constraint on the *planner* as an instruction to *itself*, and follows the document over the live dispatch that contradicts it.
-- **SINGLE PASS**: Complete enhancement, dependency checks, the architecture challenge (Step 4), adversarial critique, balanced synthesis, and plan update in one continuous response.
+- **SINGLE PASS**: Complete enhancement, dependency checks, the architecture challenge (Step 4), adversarial critique, balanced synthesis, the Goal-consistency pass (Step 6), and plan update in one continuous response.
 
 ## Target is a feature? Use improve-feature instead
 
@@ -129,8 +129,11 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
    - Otherwise, challenge the approach the plan commits to:
      - **Name it.** State the plan's chosen approach in one sentence — the structure/pattern/mechanism, not the goal.
      - **Alternatives.** List 2–3 genuinely different approaches that could meet the same goal; one line of trade-off each.
+       **Two candidates are mandatory in every set:** (i) *the smallest change that satisfies the `## Goal` as written*, and (ii) *keep the current spec unchanged*. Both must be stated and, if rejected, rejected with a reason. Without them the set contains only mechanisms, “best of the set” can only ratchet upward, and supersede has no downward gear — which is how a plan acquires machinery its Goal never asked for.
      - **Justify or supersede.** Argue why the plan's approach is the best of the set — OR, if an alternative is clearly better, correct the plan's approach with a **Superseded** callout and flag it in chat. Do not stay inside the plan's frame just because it is the frame.
+       **A supersede may not widen the Goal.** If the replacement is more general than what it replaces — it serves more callers, more cases, or more shapes — the callout's **Reason** line MUST quote the `## Goal` clause that requires the generality. If no Goal text requires it, you may not supersede: flag the observation in chat and leave the narrower approach in place. “The old spec only covered case A, and case B exists” is an observation, not a licence — case B may already be served by something simpler, or may not need serving at all. Preserving the Goal verbatim (see CONTENT PRESERVATION) protects it from being *narrowed*; this rule protects it from being *overruled* by a later section, which is the same defect from the other side.
      - **Goal-vs-appearance probe (the load-bearing question):** does this approach actually *achieve the stated goal*, or only *appear* to? Name any way the plan could pass its own success check while the real goal is unmet — e.g. a completeness metric that counts scaffolding as "done"; an interface that abstracts a *call* without decoupling the *logic* behind it; a surface that is *reachable* but not *usable* (e.g. returns success but no data). If such a gap exists, it is a top finding — a green metric is NEVER a substitute for this judgment.
+     - **Surplus probe (the converse, and equally load-bearing):** does this approach deliver *more* than the `## Goal` requires? Name every capability it adds that no Goal clause asks for, and for each, name what it now depends on that the Goal does not. Surplus is not free: it imports the reliability of whatever it is built on. A generalisation that needs a field to be populated, ordered or stable inherits every case where that field is empty, unordered or cleared — failure modes the Goal never created and no one signed up for. If you cannot point at the Goal text that demands the generality, it is scope, not rigour. Treat it as a top finding, exactly as an under-delivery gap.
    - **Output:** write this architecture review to the chat response (like the Grumpy critique below), so the user can see the approach was actually challenged and veto it. It is separate from, and precedes, the execution-level adversarial review.
 
 5. **Run the internal adversarial review**
@@ -138,7 +141,17 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
    - Immediately follow with a balanced synthesis that keeps valid concerns, rejects weak ones, and converges on the strongest execution strategy.
    - **Output:** Write the full Grumpy and Balanced critiques to the chat response as formatted markdown — do not only write them to the plan file. The user must be able to read the critique directly in chat without opening the plan. In the plan file's `## Adversarial Synthesis` section, include only a 2-3 sentence Risk Summary (e.g., "Key risks: X, Y, Z. Mitigations: A, B."). **Output the adversarial critique exactly once. Do not repeat it.**
 
-6. **Update the original plan file**
+6. **Consistency pass — read the plan against its own Goal before you write it back**
+
+   The last thing you do before writing: re-read `## Goal`, then read `## Proposed Changes` as if you were the coder who will build only from it. Every mechanism in Proposed Changes must trace to a Goal clause, or be explicitly marked out of Goal scope. Where the two disagree, **the Goal wins** — correct Proposed Changes, not the Goal (the Goal is factual context and is preserved verbatim; see CONTENT PRESERVATION).
+
+   State the outcome in one line in chat: "Goal and Proposed Changes are consistent", or name each divergence and what you did about it.
+
+   This step exists because the pipeline has no other check for it. Every downstream gate — review, contract suites, the goal verdict — asks whether the CODE matches the PLAN. None asks whether the plan matches itself, so a plan that specifies two incompatible things passes every gate and the contradiction is only discovered after a coder has built the wrong half. This is the cheapest place in the chain to catch it, and the only place that catches it before the work is done.
+
+   *Measured case, 2026-09-21 — plan `9bb74844` (`A Seat Says submit and a Lead Says accept 3`).* Its `## Goal` read "Two verbs, no identity arguments, no UUIDs — `accept 3`: a lead: subtask 3 is accepted." A later improve pass superseded the resolution mechanism with a generalised ordered-candidate rule covering non-feature callers, recorded in a fully protocol-compliant callout. The coder implemented the superseded section faithfully; six CRITICAL findings followed, every one a property of machinery the Goal never asked for. The Goal was preserved verbatim throughout and no rule was broken. A non-feature caller holds one card, so the pre-existing bare `accept` already served it — the surplus needed `ownerSeat`/`ownerSince` to be populated and stably ordered, which on a live board they are not.
+
+7. **Update the original plan file**
    - Write the improvement findings back into the same feature plan file.
    - Preserve all factual context (goal statements, requirements, constraints, scope) per the CONTENT PRESERVATION rule. Correct superseded conclusions and approaches using superseded callout blocks — never silently delete.
    - Mark completed checklist items when appropriate.

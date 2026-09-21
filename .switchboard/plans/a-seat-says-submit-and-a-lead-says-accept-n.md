@@ -559,7 +559,7 @@ required `ORDER BY`. Recommendation: complexity 6 — **Send to Coder**.
 
 ## Review Findings
 
-Reviewed commit ddeb9c79 and then applied the fix set the Review head apportioned; the six ordinal-resolution CRITICALs were triaged as a design reversal for the plan author and are deliberately left in the code, recorded below. Fixed this turn: the `submit` literal mismatch the commit introduced, the goal-invariant breach where three fragments still told agents to type `{"from":"<your terminal name>"}`, four stale contract assertions, the orphaned `accept-ordinal-resolution` gate (now an npm script and a CI step), and a CLI guard that let a mistyped `accept <arg>` fall through into a silent BARE ACCEPT. The identity sweep was implemented as one mechanism rather than two — fragment bodies carry `${terminalName}` and `composeStandingOrderFragments` substitutes it at composition time over the store-resolved body, so operator overrides of `HEAD_COMPLETION_FRAGMENT_BODY` are fixed too; substitution is opt-in because `teamWiring.writeMemberOrdersFile` composes the same fragments for the team-wide `member-orders.md` snapshot with `targetName: childNames[0]`, and substituting there would hand member 2 a call addressed FROM member 1. Validation: `compile-tests` and `compile` clean; `lead-accept`, `completion-directive-standing-order` and `member-completion-reminder` fully green; `accept-ordinal-resolution` ran for the first time ever and passed 19/19; `bare-completion` and `completion-asserted-never-inferred` each retain exactly one PRE-EXISTING failure proven red before ddeb9c79, and `self-completion-clear` has one failure owned by another agent's in-flight work, not by this plan. Remaining risk is unchanged and large: `accept <n>` on the non-feature path can still accept the wrong card silently, and the new gate passes only because its fixtures populate `ownerSeat`/`ownerSince` on every card — the exact preconditions the live board violates.
+Reviewed commit ddeb9c79 and then applied the fix set the Review head apportioned. The six ordinal-resolution CRITICALs were initially triaged as a design reversal for the plan author and left in the code; that provenance was wrong. They are a PLAN-INTERNAL CONTRADICTION — the Goal (line 5) and Proposed Changes §1 (line 329) specify incompatible resolution rules — and a second fix turn resolved it in favour of the Goal. See `### Plan Self-Contradiction` below; five of the six are now FIXED. Fixed this turn: the `submit` literal mismatch the commit introduced, the goal-invariant breach where three fragments still told agents to type `{"from":"<your terminal name>"}`, four stale contract assertions, the orphaned `accept-ordinal-resolution` gate (now an npm script and a CI step), and a CLI guard that let a mistyped `accept <arg>` fall through into a silent BARE ACCEPT. The identity sweep was implemented as one mechanism rather than two — fragment bodies carry `${terminalName}` and `composeStandingOrderFragments` substitutes it at composition time over the store-resolved body, so operator overrides of `HEAD_COMPLETION_FRAGMENT_BODY` are fixed too; substitution is opt-in because `teamWiring.writeMemberOrdersFile` composes the same fragments for the team-wide `member-orders.md` snapshot with `targetName: childNames[0]`, and substituting there would hand member 2 a call addressed FROM member 1. Validation: `compile-tests` and `compile` clean; `lead-accept`, `completion-directive-standing-order` and `member-completion-reminder` fully green; `accept-ordinal-resolution` ran for the first time ever and passed 19/19; `bare-completion` and `completion-asserted-never-inferred` each retain exactly one PRE-EXISTING failure proven red before ddeb9c79, and `self-completion-clear` has one failure owned by another agent's in-flight work, not by this plan. That risk — `accept <n>` on the non-feature path accepting the wrong card silently, behind a gate whose fixtures populated `ownerSeat`/`ownerSince` on every card — is closed by the second fix turn below.
 
 ## Deferred Findings
 
@@ -574,16 +574,16 @@ FIXED THIS TURN
 - FIXED (was NIT, promoted to MAJOR by the head) `src/standalone/cli.ts` — `exitFlushed` is typed `never` but returns when stdout has buffered bytes (the `--json` path), so the invalid-positional guard fell through to `parseInt` → `NaN` → dropped by `JSON.stringify` → the server read "no ordinal" and performed a BARE ACCEPT. All eight bad-input guards in `cmdSubmit`/`cmdAccept` now `return exitFlushed(5)`. Pinned by a new regression test.
 - FIXED (was NIT) `src/services/standingOrders.ts:733` — docblock no longer claims the completion directive carries `${terminalName}`.
 
-REMAINING — DESIGN REVERSAL, THE PLAN AUTHOR'S CALL (deliberately not fixed)
-- CRITICAL `src/services/LocalApiServer.ts:5466` — the feature branch shadows the non-feature branch: any open feature card in the poster's seat pool makes the non-feature candidate list unreachable, so the planning-seat self-accept (`src/services/teamWiring.ts:1207`) and the Coding head's bare accept (`src/services/teamWiring.ts:1155`) 400 instead of resolving their own held card. Reproduced against the live board.
-- CRITICAL `src/services/LocalApiServer.ts:5443` — `_resolvePosterFeatureCard` 400s on `candidates.size !== 1`, and a feature card's `ownerSeat` is never cleared, so the ambiguity is permanent and accumulates: `reviewer-1` holds 15 open feature cards, `planner-1` 12, the current `Planning` head pool 3.
-- CRITICAL `src/services/LocalApiServer.ts:8006` — `submit` calls `db.clearOwnerStamp`, which sets `owner_seat = ''` (`src/services/KanbanDatabase.ts:15327`), so the card the lead is asked to accept has already left the candidate list by the time the lead types `accept <n>`.
-- CRITICAL `src/services/LocalApiServer.ts:5566` — the sort key `String(a.ownerSince || '')` is empty on 284 of 292 owned non-feature cards on the live board, because `_columnMoveDispatchClearSql` (`src/services/KanbanDatabase.ts:5878`) nulls `owner_since` on every column move; "oldest held card first" degenerates to planId alphabetical.
-- CRITICAL `src/services/KanbanProvider.ts:6742` — the batch lead's OUTSTANDING list is numbered from the batch array, matching neither the server's order nor its membership, while `:6756` promises "the numbers never shift".
-- CRITICAL `src/services/LocalApiServer.ts:5563` — `ownerSeat` promoted from advisory display metadata (`src/services/KanbanDatabase.ts:15012`, `:15135`) to an acceptance routing gate, where empty silently means "not a candidate".
+FIXED IN THE SECOND FIX TURN — the generalised non-feature candidate list is deleted
+- FIXED (was CRITICAL) `src/services/LocalApiServer.ts:5466` — the feature branch shadowing the non-feature branch. Headship is now the gate and it is asked FIRST: a non-head never enters feature resolution at all, and a head that holds no single open feature falls THROUGH to the own-card branch instead of returning from it. The planning-seat self-accept and the head's bare accept both resolve.
+- FIXED (was CRITICAL) `src/services/LocalApiServer.ts:5443` — permanent multi-feature ambiguity. `reviewer-1`'s 15 stale feature cards are no longer reachable: only a team head reaches `_resolvePosterFeatureCard`, and a reviewer seat is not one. A HEAD holding several open features still gets the named 400 — that is today's feature branch, deliberately unchanged, and it is the loud direction.
+- FIXED (was CRITICAL) `src/services/LocalApiServer.ts:8006` — `clearOwnerStamp` shifting ordinals. There are no non-feature ordinals any more, and the feature branch indexes `getSubtasksByFeatureId`, which never consults `ownerSeat`. Proven, not asserted: a new fixture clears the stamp on two of three subtasks and `accept 3` still resolves `s3`.
+- FIXED (was CRITICAL) `src/services/LocalApiServer.ts:5566` — the `ownerSince` NULL sort. There is no ordering left to get wrong: the own-card branch is a single-card lookup, not a list. A new fixture sets `ownerSince: null` on every card and the resolve is unaffected.
+- FIXED (was CRITICAL) `src/services/LocalApiServer.ts:5563` — `ownerSeat` as a routing gate. It degrades to "which card does THIS seat hold", where an empty answer honestly means "you hold nothing" — a true statement about the poster. A card whose `ownerSeat` was cleared by `submit` now yields a named 400 rather than dropping silently out of a roster-wide pool.
+- FIXED (was CRITICAL) `src/services/KanbanProvider.ts:6742` — the batch lead's OUTSTANDING list numbered from the batch array. It no longer promises an ordinal it cannot honour: each line now carries the planId, and the close-out instruction is `accept --plan <planId>` with an explicit warning off the ordinal form. The batch head is the one caller that already HAS the UUIDs — it types them into its own STAGING call — so it needs no shortcut. `src/test/batch-move-team-prompt-contract.test.js:480` was repointed from the substring `accept <n>` (which the new warning text would have satisfied on its own) to `accept --plan <planId>`.
+- FIXED (was MAJOR) `src/test/accept-ordinal-resolution-contract.test.js:403` — the fixtures that made the gate green for the wrong reason. Added: a card whose `ownerSeat` was cleared by `submit`; cards with NULL `ownerSince`; a submit-cleared subtask inside a feature; a non-lead's dropped ordinal; a non-lead holding nothing; a seat holding two cards; a batch head holding no feature. The harness itself changed too — headship now GATES the ordinal branch, so `makeServer()` must make the poster an actual head, and `groups: []` is how the own-card branch is reached. 22/22 pass.
 
 REMAINING — OTHER
-- MAJOR `src/test/accept-ordinal-resolution-contract.test.js:403` — the suite is now CI-wired and green, but it is green because its fixtures give every card a populated `ownerSeat` and a distinct non-null `ownerSince`, and no fixture models a card whose `ownerSeat` was cleared by `submit`. Those are exactly the preconditions the live board violates, so a pass here is NOT evidence the ordinal mechanism works in production. Any fix for the six CRITICALs above should add the missing fixtures first.
 - MAJOR `src/test/bare-completion-contract.test.js:179` — PRE-EXISTING RED, proven red before ddeb9c79 (the old `cmdDone` slice also lacked `workspaceRoot,`). Not this plan's debt; left red and named.
 - MAJOR `src/test/completion-asserted-never-inferred.test.js:310` — PRE-EXISTING RED, proven red before ddeb9c79 (`_runQueuePop` is byte-identical across the commit and both sides match `/inFlight/`). Not this plan's debt; left red and named.
 - MAJOR `src/services/LocalApiServer.ts:6604` — `round/register` derives its feature-resolution seat pool from `resolveTeamMembers`, the seam `_resolveHeadedRoster`'s docblock says must not be trusted for pool width.
@@ -591,3 +591,75 @@ REMAINING — OTHER
 - NIT `src/services/KanbanDatabase.ts:9510` — `ORDER BY rowid` is not stable across a bundle merge or re-import.
 - NIT `.switchboard/features/*.md` — every feature file on disk still renders the retired `- [ ] … — ID: <uuid>` form; the renderer only runs on feature mutation, so this needs one regeneration pass.
 - NOT THIS PLAN `src/services/teamWiring.ts:2603` — `writeMemberOrdersFile` composes per-seat fragments for a team-wide snapshot with `targetName: childNames[0]`. The new seam handles this safely (the snapshot keeps a visibly unresolved placeholder rather than a wrong name), but the right long-term fix is a seat-agnostic instruction in that file. `teamWiring.ts` was outside this turn's file list.
+
+### Plan Self-Contradiction
+
+This is **not** a deviation from the plan. It is a return to the plan's Goal, recorded
+here with line numbers so the next reader can check it rather than trust it.
+
+- **Goal, line 5** specifies two verbs: `submit` for a coder, and `accept 3  # a lead:
+  subtask 3 is accepted`. The ordinal is bound to a **lead** and to a **subtask**. It is
+  a typing shortcut so a lead reading a feature file's numbered Subtasks list does not
+  paste a UUID. Nothing in the Goal makes `<n>` address a non-feature card.
+- **Proposed Changes §1, line 329** specifies the opposite: "candidates = incomplete,
+  non-feature cards whose `ownerSeat` is the poster's seat or (when the poster heads a
+  team) its roster's coding seats, ordered `owner_since ASC`, `planId` tiebreak" — a
+  generalised, roster-wide, ordinal-indexable list.
+- **§1's own revision note, lines 305–314**, records that the simple rule was the
+  original spec ("`<n>` indexes the feature's ordered subtask list; `accept` with no
+  argument and exactly one subtask awaiting acceptance resolves to that one") and was
+  deliberately replaced, on the reasoning that "the bare-accept spec only covered feature
+  subtasks, while `accept` is also the self-acceptance verb for non-feature callers".
+
+The coder implemented §1 faithfully. All six ordinal-resolution CRITICALs are properties
+of §1, not of the implementation: `owner_since ASC` is finding #4, the roster-wide pool is
+findings #1 and #2, `ownerSeat`-as-gate is #6, the submit-cleared stamp is #3, and the
+batch lead's mismatched numbering is #5.
+
+**The revision solved a real problem with the wrong mechanism.** The problem was real: a
+non-feature caller posting bare `accept` needs something to resolve against, and the Goal
+does not say what. The mechanism over-solved it. Ordering, the roster pool and the
+tiebreak exist *only so the list can be indexed by an ordinal*, and the Goal says
+non-feature cards are not ordinal-addressable. "Exactly one incomplete card this seat
+holds" answers the real problem with no ordering, no roster and no tiebreak.
+
+**What is withdrawn** is narrower than "§1's non-feature rule". Two parts of §1 are
+load-bearing and are KEPT:
+
+1. **Server-side resolution** inside `POST /kanban/task/complete` — §1's other stated
+   reason ("CLI-side resolution needs a new read endpoint and creates a read-then-write
+   window"). Unchanged.
+2. **A non-feature branch existing at all.** It survives as a single-card lookup.
+
+Withdrawn: the **ordered, indexable, roster-wide** candidate list, and with it the claim
+at §1 that a non-feature `accept <n>` names a stable slot.
+
+**One caller §1 covered that the Goal does not**, flagged before deletion rather than
+discovered after: the batch drive prefix (`KanbanProvider.ts:6742`) printed a numbered
+OUTSTANDING list and told a batch head to `accept <n>`. That head is a lead, holds no
+feature, and the cards belong to its coder seats — so under the Goal's rule it has no
+ordinal to spend. This did not justify keeping §1, because that caller was already broken:
+finding #5 says the printed numbers matched neither the server's order nor its membership,
+and with #4 the server order was planId-alphabetical, so `accept 3` there already accepted
+an arbitrary card. The change is silently-wrong → loudly-refusing. It is served instead by
+`accept --plan <planId>`: the batch head is the one caller that already holds the UUIDs,
+because it types them into its own STAGING call.
+
+---
+
+*Second fix turn (2026-09-21):* Deleted the generalised non-feature candidate list from
+`_resolveAcceptanceTarget` and replaced the branch structure with the Goal's rule: headship
+is resolved first and gates everything, a head holding one open feature reaches the
+(unchanged) feature-ordinal branch — now extracted to `_resolveHeadFeatureTarget`, which
+returns `null` rather than an error when there is no single open feature so the caller falls
+through — and every other poster resolves the one card its own seat holds, with any ordinal
+dropped by design. A dropped ordinal never fails or warns the agent, but it is logged
+server-side with the seat and the discarded value, and `resolution.ordinal` is now absent
+rather than fabricated so neither the API echo nor the CLI's success line can claim a
+shortcut was honoured. The batch drive prefix was repointed to `accept --plan <planId>`,
+printing each planId beside its plan, because a batch head holds no feature and so has no
+ordinal to spend. Five of the six CRITICALs are closed as properties of the deleted list,
+the sixth (`ownerSeat` as a routing gate) degrades to an honest single-card lookup, and the
+suite gained the seven fixtures the previous turn warned were missing — a submit-cleared
+`ownerSeat`, NULL `ownerSince`, a non-lead's dropped ordinal, a seat holding nothing, and a
+seat holding two — so the live board's preconditions are now modelled rather than assumed.

@@ -5505,24 +5505,36 @@ export class LocalApiServer {
      * request: no read-then-write window, and one place for the loud
      * ambiguity errors.
      *
-     * Candidate rule, applied to the POSTER'S evidence only — a non-lead can
-     * never resolve another team's feature or another seat's card:
+     * `<n>` is a LEAD'S TYPING SHORTCUT, not an addressing scheme. It exists
+     * so a lead reading a feature file's numbered Subtasks list types
+     * `accept 3` instead of pasting a UUID. That is the plan's Goal verbatim
+     * ("accept 3  # a lead: subtask 3 is accepted"), and it admits exactly two
+     * branches:
      *
-     *  - FEATURE CASE: the poster holds one open feature (see
-     *    `_resolvePosterFeatureCard`). Candidates = `getSubtasksByFeatureId`
-     *    in its defined (rowid) order — the same order the feature file's
-     *    numbered Subtasks list renders. `ordinal` indexes that list 1-based;
-     *    an accepted subtask stays `status='active'`, so ordinals do NOT
-     *    shift as accepts land.
-     *  - NON-FEATURE CASE: candidates = ALL non-feature cards whose ownerSeat
-     *    is the poster's seat or its headed team's roster — accepted ones
-     *    included, so an `accept <n>` ordinal names the same card an hour
-     *    later (the batch prompt's printed numbers never shift). Ordered
-     *    `ownerSince` ASC then planId. Covers the planning-seat self-accept,
-     *    the single-plan head, and the batch lead.
-     *  - BARE (`ordinal === null`): exactly one INCOMPLETE candidate resolves
-     *    it; zero or many is a 400 that names what was checked — the error IS
-     *    the menu the caller retries from.
+     *  - LEAD (heads a team, per `_resolveHeadedRoster`) HOLDING ONE OPEN
+     *    FEATURE: candidates = `getSubtasksByFeatureId` in its defined (rowid)
+     *    order — the same order the feature file's numbered Subtasks list
+     *    renders. `ordinal` indexes that list 1-based; an accepted subtask
+     *    stays in the list, so ordinals do NOT shift as accepts land. Bare
+     *    `accept` resolves only when exactly one subtask is incomplete.
+     *  - EVERYONE ELSE — not a head, or a head holding no single open feature:
+     *    the ONE card the poster's OWN seat holds (`ownerSeat === from`), NOT
+     *    its roster's. Any ordinal is DROPPED by design: a non-lead read no
+     *    numbered list, so there is nothing for `3` to index. Exactly one
+     *    incomplete card resolves; zero or many is a 400 that names what was
+     *    checked, with `--plan` as the escape hatch for the many case.
+     *
+     * Asking the narrow question ("which card does THIS seat hold") is what
+     * makes an empty answer honest: it means "you hold nothing", which is a
+     * true statement about the poster. A roster-wide pool's empty answer means
+     * "nobody on your team holds anything", which is not what was asked, and
+     * an `ownerSeat` cleared by `submit` silently removes a card from it.
+     *
+     * A dropped ordinal is never an error and never a warning to the agent —
+     * converting `accept 3` to `accept` for a non-lead IS the designed
+     * behaviour — but it is logged server-side with the seat and the dropped
+     * value, and the success echo omits `ordinal` rather than claiming one was
+     * honoured.
      */
     private async _resolveAcceptanceTarget(
         db: any,
@@ -5531,19 +5543,161 @@ export class LocalApiServer {
         board: any[],
         ordinal: number | null
     ): Promise<
-        { ok: true; planId: string; ordinal: number; title: string; featureId?: string; featureTitle?: string }
+        {
+            ok: true; planId: string; ordinal: number | null; title: string;
+            featureId?: string; featureTitle?: string; ordinalDropped?: number;
+        }
         | { ok: false; error: string }
     > {
-        // The seat pool is resolved FIRST — it scopes both the held-feature
-        // read below and the non-feature candidate list. A feature card held
-        // by a coder seat is still the lead's feature to accept on.
-        const candidateSeats = new Set<string>([from]);
-        let seatPoolDescription = `seat '${from}'`;
+        // Headship is the gate, and it is asked FIRST: only a head reaches
+        // feature resolution, and only a head can spend an ordinal. A
+        // non-head never enters the feature branch at all, so a seat holding
+        // stale feature cards is no longer a caller of it.
         const headedRoster = await this._resolveHeadedRoster(db, workspaceRoot, from);
-        if (headedRoster && headedRoster.length > 0) {
-            for (const s of headedRoster) { candidateSeats.add(s); }
-            seatPoolDescription = `seat '${from}' and its team roster (${headedRoster.join(', ')})`;
+        const isHead = !!headedRoster && headedRoster.length > 0;
+
+        if (isHead) {
+            const target = await this._resolveHeadFeatureTarget(db, from, board, headedRoster!, ordinal);
+            // `null` means this head holds no single open feature — it falls
+            // through to the own-card branch like any other seat.
+            if (target) { return target; }
         }
+
+        // A head driving a BATCH. A batch becomes a mission (KanbanProvider
+        // `_batchIntoMission`: create, claim, launch), and the claim writes one
+        // `mission_members` row per card plus `plans.column_order` via
+        // `appendQueuePositions`. So a batch HAS a durable ordered list and needs
+        // no ownerSeat/ownerSince — the two fields that made the old generalised
+        // candidate list unresolvable. `getMissionMembers` returns that order, and
+        // the batch prompt numbers the same read, so the list the lead READS and
+        // the list the server RESOLVES are one derivation.
+        if (isHead) {
+            const target = await this._resolveHeadMissionTarget(db, workspaceRoot, from, board, ordinal);
+            if (target) { return target; }
+        }
+
+        // EVERYONE ELSE, and a head with no open feature or mission: the ONE card
+        // this seat itself holds. The ordinal, if any, is dropped here.
+        const own = (Array.isArray(board) ? board : [])
+            .filter((p: any) => p && !p.isFeature
+                && !p.completedAt
+                && String(p.ownerSeat || '').trim() === from)
+            .sort((a: any, b: any) => String(a.planId || '').localeCompare(String(b.planId || '')));
+
+        if (own.length === 1) {
+            const target = own[0];
+            return {
+                ok: true,
+                planId: String(target.planId),
+                ordinal: null,
+                title: String(target.topic || target.planId),
+                ...(ordinal !== null ? { ordinalDropped: ordinal } : {}),
+            };
+        }
+        if (own.length === 0) {
+            return {
+                ok: false,
+                error: `Seat '${from}' holds no card awaiting acceptance${isHead ? ' and heads no open feature' : ''} — nothing resolves this accept.`,
+            };
+        }
+        // More than one. The ordinal cannot break the tie — it was never an
+        // index into this list — so name them and hand over `--plan`.
+        return {
+            ok: false,
+            error: `Cannot resolve which card '${from}' is accepting — the seat holds ${own.length} cards awaiting acceptance: ${own.map((c: any) => `'${c.topic || c.planId}'`).join(', ')}. Retry with --plan <planId> to name one.`,
+        };
+    }
+
+    /**
+     * The BATCH half of `accept <n>`, reachable only by a team head. Returns
+     * `null` — not an error — when this head drives no open mission, so the
+     * caller falls through to the own-card branch exactly as it does for a head
+     * holding no feature.
+     *
+     * Ordinals index `getMissionMembers` in its defined (column_order) order,
+     * 1-based, the same contract the feature case has. Accepted members keep
+     * their slot: nothing deletes a `mission_members` row on acceptance, so
+     * `accept 3` means the same card before and after `accept 1`.
+     */
+    private async _resolveHeadMissionTarget(
+        db: any,
+        workspaceRoot: string,
+        from: string,
+        board: any[],
+        ordinal: number | null
+    ): Promise<
+        { ok: true; planId: string; ordinal: number | null; title: string } | { ok: false; error: string } | null
+    > {
+        if (typeof db.getMissions !== 'function' || typeof db.getMissionMembers !== 'function') { return null; }
+        const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
+        let wsId = '';
+        try { wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || ''; } catch { wsId = ''; }
+        if (!wsId) { return null; }
+
+        let missions: any[] = [];
+        try { missions = (await db.getMissions(wsId)) || []; } catch { return null; }
+        const mine = missions.filter((m: any) => m && String(m.team || '') === teamId);
+        if (mine.length === 0) { return null; }
+        // Newest mission wins when a head has driven several — the one it is
+        // working now. Older missions' members keep their own numbering.
+        const mission = mine[mine.length - 1];
+
+        let members: Array<{ memberId: string; kind: string }> = [];
+        try { members = (await db.getMissionMembers(mission.id)) || []; } catch { return null; }
+        const cards = members
+            .map(m => (Array.isArray(board) ? board : []).find((p: any) => p && String(p.planId) === String(m.memberId)))
+            .filter(Boolean) as any[];
+        if (cards.length === 0) { return null; }
+
+        const label = (c: any) => String(c.topic || c.planId);
+        if (ordinal !== null) {
+            if (ordinal < 1 || ordinal > cards.length) {
+                return {
+                    ok: false,
+                    error: `Ordinal ${ordinal} is out of range — batch '${mission.name || mission.id}' has ${cards.length} plan(s) (valid ordinals 1-${cards.length}): ${cards.map((c, i) => `${i + 1}: '${label(c)}'`).join(', ')}.`,
+                };
+            }
+            const target = cards[ordinal - 1];
+            return { ok: true, planId: String(target.planId), ordinal, title: label(target) };
+        }
+        // Bare `accept` from a batch head: exactly one still outstanding resolves it.
+        const incomplete = cards.map((c, i) => ({ c, n: i + 1 })).filter(e => !e.c.completedAt);
+        if (incomplete.length === 1) {
+            return { ok: true, planId: String(incomplete[0].c.planId), ordinal: incomplete[0].n, title: label(incomplete[0].c) };
+        }
+        if (incomplete.length === 0) { return null; }
+        return {
+            ok: false,
+            error: `Bare 'accept' is ambiguous — ${incomplete.length} plans await acceptance in batch '${mission.name || mission.id}': ${incomplete.map(e => `${e.n}: '${label(e.c)}'`).join(', ')}. Retry with \`accept <n>\` using the number from the list you were given.`,
+        };
+    }
+
+    /**
+     * The feature half of `accept <n>`, reachable only by a team head. Returns
+     * `null` — not an error — when the head holds no single open feature, so
+     * the caller falls through to the own-card branch; every other outcome is
+     * a resolved target or a named 400.
+     *
+     * The held-feature read spans the head's roster because a feature card
+     * stamped to a coder seat is still the head's feature to accept on. That
+     * widening is safe here and only here: the head is the one poster for whom
+     * "my team's feature" is the right question.
+     */
+    private async _resolveHeadFeatureTarget(
+        db: any,
+        from: string,
+        board: any[],
+        headedRoster: string[],
+        ordinal: number | null
+    ): Promise<
+        {
+            ok: true; planId: string; ordinal: number | null; title: string;
+            featureId?: string; featureTitle?: string; ordinalDropped?: number;
+        }
+        | { ok: false; error: string }
+        | null
+    > {
+        const candidateSeats = new Set<string>([from, ...headedRoster]);
 
         const feature = await this._resolvePosterFeatureCard(db, from, board, candidateSeats);
         if (feature.ambiguous.length > 1) {
@@ -5552,8 +5706,9 @@ export class LocalApiServer {
                 error: `Cannot resolve which feature '${from}' is accepting on — ${feature.ambiguous.length} open features are associated with it: ${feature.ambiguous.map(f => `'${f.title || f.planId}'`).join(', ')}. Retry with --plan <subtaskPlanId> to name the subtask directly.`,
             };
         }
+        if (!feature.featureId) { return null; }
 
-        if (feature.featureId) {
+        {
             const subtasks: any[] = (typeof db.getSubtasksByFeatureId === 'function')
                 ? ((await db.getSubtasksByFeatureId(feature.featureId)) || [])
                 : [];
@@ -5599,46 +5754,6 @@ export class LocalApiServer {
             };
         }
 
-        // Non-feature case: every card owned by the poster's seat pool —
-        // accepted ones INCLUDED — ordered ownerSince ASC with a planId
-        // tiebreak. Accepted cards keep their slots (same stability rule as
-        // the feature case: `accept 3` an hour later still means the third
-        // card the prompt numbered, and re-accepting is the idempotent path).
-        // Bare `accept` resolves only the INCOMPLETE subset.
-        // (candidateSeats/seatPoolDescription resolved above.)
-        const candidates = (Array.isArray(board) ? board : [])
-            .filter((p: any) => p && !p.isFeature
-                && candidateSeats.has(String(p.ownerSeat || '').trim()))
-            .sort((a: any, b: any) => {
-                const ta = String(a.ownerSince || '');
-                const tb = String(b.ownerSince || '');
-                if (ta !== tb) { return ta < tb ? -1 : 1; }
-                return String(a.planId || '').localeCompare(String(b.planId || ''));
-            });
-        const incomplete = candidates.filter(c => !c.completedAt);
-
-        if (candidates.length === 0) {
-            return { ok: false, error: `No open feature held by '${from}' and no cards awaiting acceptance owned by ${seatPoolDescription} — nothing resolves this accept.` };
-        }
-        if (incomplete.length === 0) {
-            return { ok: false, error: `Nothing awaits acceptance for ${seatPoolDescription} — all ${candidates.length} held card(s) are already accepted.` };
-        }
-        if (ordinal !== null) {
-            if (ordinal > candidates.length) {
-                return { ok: false, error: `Ordinal ${ordinal} is out of range — ${candidates.length} card(s) are held by ${seatPoolDescription} (valid ordinals 1-${candidates.length}): ${candidates.map((c: any, i: number) => `${i + 1}: '${c.topic || c.planId}'${c.completedAt ? ' (accepted)' : ''}`).join(', ')}.` };
-            }
-            const target = candidates[ordinal - 1];
-            return { ok: true, planId: String(target.planId), ordinal, title: String(target.topic || target.planId) };
-        }
-        if (incomplete.length === 1) {
-            const target = incomplete[0];
-            const n = candidates.indexOf(target) + 1;
-            return { ok: true, planId: String(target.planId), ordinal: n, title: String(target.topic || target.planId) };
-        }
-        return {
-            ok: false,
-            error: `Bare 'accept' is ambiguous — ${incomplete.length} cards await acceptance for ${seatPoolDescription}: ${incomplete.map((c: any) => `${candidates.indexOf(c) + 1}: '${c.topic || c.planId}' (seat '${c.ownerSeat}')`).join(', ')}. Retry with \`accept <n>\`.`,
-        };
     }
 
     /**
@@ -5737,7 +5852,7 @@ export class LocalApiServer {
             // inside this one request — no read-then-write window — and a bare
             // or ambiguous accept NEVER writes `completed_at`: it 400s naming
             // the candidates instead.
-            let resolution: { ordinal: number; title: string; featureId?: string; featureTitle?: string } | null = null;
+            let resolution: { ordinal?: number; title: string; featureId?: string; featureTitle?: string } | null = null;
             if (!planId) {
                 const wsIdForResolve = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
                 const boardForResolve: any[] = (await db.getBoard?.(wsIdForResolve)) || [];
@@ -5751,12 +5866,24 @@ export class LocalApiServer {
                 // Provenance: which card did the ordinal mean. Logged AND
                 // returned — "which subtask did '3' resolve to" must be
                 // answerable after the fact.
+                // `ordinal` is present ONLY when one was actually honoured —
+                // the own-card branch omits the key rather than echoing a
+                // number the caller could read as "3 was applied".
                 resolution = {
-                    ordinal: resolved.ordinal,
+                    ...(resolved.ordinal !== null ? { ordinal: resolved.ordinal } : {}),
                     title: resolved.title,
                     ...(resolved.featureId ? { featureId: resolved.featureId, featureTitle: resolved.featureTitle } : {}),
                 };
-                console.log(`[LocalApiServer] task/complete: resolved ${ordinal !== null ? `ordinal ${resolved.ordinal}` : 'bare accept'} for '${from}' → '${resolved.title}' (${planId})${resolved.featureId ? ` on feature '${resolved.featureTitle || resolved.featureId}'` : ''}`);
+                if (resolved.ordinalDropped !== undefined) {
+                    // DESIGNED, not a failure: `<n>` indexes a feature file's
+                    // numbered Subtasks list, which only a team head reads. A
+                    // seat that types `accept 3` gets a plain `accept`, and is
+                    // deliberately not warned. But "why did `accept 3` take my
+                    // only card" must be answerable after the fact, so the drop
+                    // is recorded here with the seat and the discarded value.
+                    console.log(`[LocalApiServer] task/complete: '${from}' heads no team with an open feature — dropped ordinal ${resolved.ordinalDropped} and resolved the seat's own held card '${resolved.title}' (${planId})`);
+                }
+                console.log(`[LocalApiServer] task/complete: resolved ${resolved.ordinal !== null ? `ordinal ${resolved.ordinal}` : 'bare accept'} for '${from}' → '${resolved.title}' (${planId})${resolved.featureId ? ` on feature '${resolved.featureTitle || resolved.featureId}'` : ''}`);
             }
 
             // Reject a feature planId — use POST /kanban/feature/complete instead.

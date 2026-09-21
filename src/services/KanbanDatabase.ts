@@ -17140,7 +17140,24 @@ FROM plans
 
     public async getMissionMembers(missionId: string): Promise<Array<{ memberId: string; kind: 'plan' | 'feature' }>> {
         if (!(await this.ensureReady()) || !this._db || !missionId) return [];
-        const stmt = this._db.prepare('SELECT member_id, member_kind FROM mission_members WHERE mission_id = ?', [missionId]);
+        // ORDERED, because an ordinal rides on it. `appendQueuePositions` writes
+        // `plans.column_order` for every card a batch claims into STAGING, with a
+        // workspace-global monotonic floor — so it is the batch's own numbering and
+        // one mission's numbers never interleave another's. Ordering here (not at
+        // each caller) is what lets the prompt that PRINTS the numbered list and the
+        // resolver that READS `accept <n>` share one derivation; two derivations of
+        // one ordinal space is the defect this replaced. NULLs sort last, then
+        // member_id, so a member with no staged row still has a stable slot.
+        const stmt = this._db.prepare(
+            `SELECT mm.member_id, mm.member_kind
+               FROM mission_members mm
+               LEFT JOIN plans p ON p.plan_id = mm.member_id
+              WHERE mm.mission_id = ?
+              ORDER BY CASE WHEN p.column_order IS NULL THEN 1 ELSE 0 END,
+                       p.column_order ASC,
+                       mm.member_id ASC`,
+            [missionId]
+        );
         const out: Array<{ memberId: string; kind: 'plan' | 'feature' }> = [];
         try {
             while (stmt.step()) {

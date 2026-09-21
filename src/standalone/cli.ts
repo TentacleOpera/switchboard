@@ -2936,13 +2936,21 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
         emitJson({ success: code === 0, status: res.status, exitCode: code, from, fromSource, result: data });
     } else if (code === 0) {
         // Name what was accepted. The server echoes resolution provenance
-        // (title + ordinal, and the feature in the feature case) so an ordinal
-        // that shifted under the lead is visible in the transcript — "which
+        // (title, and the feature + ordinal in the feature case) so "which
         // card did '3' mean" is never a guess after the fact.
+        //
+        // `resolution.ordinal` is ABSENT whenever no ordinal was honoured — a
+        // non-lead's `accept 3` resolves its own held card and the number is
+        // dropped by design. Printing "subtask 3" there would claim a
+        // shortcut was applied that never was, so the clause is omitted
+        // entirely rather than filled with a plausible number.
+        const ord = typeof data?.resolution?.ordinal === 'number'
+            ? ` (subtask ${data.resolution.ordinal}${data.resolution.featureTitle ? ` of '${data.resolution.featureTitle}'` : ''})`
+            : '';
         const what = data?.resolution?.title
-            ? `'${data.resolution.title}' (subtask ${data.resolution.ordinal}${data.resolution.featureTitle ? ` of '${data.resolution.featureTitle}'` : ''})`
-            : (planId || `<ord ${ordinal}>`);
-        console.log(`[switchboard] Subtask ${what} accepted by lead '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
+            ? `'${data.resolution.title}'${ord}`
+            : (planId || 'the seat\'s held card');
+        console.log(`[switchboard] Subtask ${what} accepted by '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
         if (data?.roundClosed) {
             console.log(`  Round ${data.roundClosed} closed.`);
         }

@@ -477,7 +477,18 @@ async function testGenerateUnifiedPromptBatchTeamHead() {
     // of the endpoint is strictly stronger than the assertion it replaces, and
     // Mission 02's own criteria — the derived head-role set and the literal
     // `'lead'` grep gate — are untouched by it.
+    // The batch head closes out by planId, NOT by ordinal: `<n>` indexes a
+    // A batch head closes out BY NUMBER. A batch becomes a mission whose claim
+    // writes `plans.column_order` per card, so `getMissionMembers` returns that
+    // order and `accept <n>` resolves against it server-side
+    // (`_resolveHeadMissionTarget`). The OUTSTANDING list printed here and the
+    // list the server resolves are one derivation — numbering from a second,
+    // prompt-local array is what made these numbers lie before.
     assert.ok(prompt.includes('accept <n>'), 'Should carry the CLI accept instruction, not the raw endpoint');
+    assert.ok(/OUTSTANDING \(accept each by its number\)/.test(prompt),
+        'the OUTSTANDING list must tell the head the number is what closes a plan out');
+    assert.ok(!/accept --plan/.test(prompt),
+        'no agent-facing prompt may teach `accept --plan` — the planId is a human escape hatch, and reinstating it here is the UUID the plan exists to remove');
     assert.ok(!prompt.includes('/kanban/task/complete'), 'Must NOT hand out the raw completion endpoint — the CLI is the only way to assert completion');
     assert.ok(prompt.includes('BATCH RULES:'), 'Should contain BATCH RULES');
     assert.ok(prompt.includes('- The plans in this batch are independent and possibly unrelated.'), 'Should state plans are independent');

@@ -419,6 +419,36 @@ gaps, exactly the tester prompt's bound. The fragment's existing "never write
 permitting the deliberate follow-up plan. Update the Review team's `purpose`
 (`teamWiring.ts:1333`) so the TEAMS tab says what the team now does.
 
+**The goal verdict must quote the Goal — an instruction to judge intent is not
+enough.** Clause (b) above tells the head to judge against the plan's `## Goal`.
+That is necessary and not sufficient: the same instruction already exists in the
+review dispatch template (`GOAL VERDICT (mandatory — your review is incomplete
+without it)`) and it has been observed firing while still missing the answer.
+Measured, 2026-09-21, reviewing plan `9bb74844` (*A Seat Says `submit` and a Lead
+Says `accept 3`*): the review head produced a goal verdict, correctly returned
+NOT ACHIEVED, and still mis-attributed the cause — because it judged against the
+plan's `## Proposed Changes` §1 and never read the `## Goal` on line 5, which
+already specified the simpler rule the implementation had abandoned. A verdict
+was delivered; the Goal text was never opened.
+
+So `REVIEW_HEAD_WORK` must require the verdict to **quote the plan's `## Goal`
+verbatim** before stating achieved / not-achieved, and to name which Goal clause
+each verdict line is measured against. The quote is the discriminator: a head
+cannot produce it without reading the Goal, and a verdict quoting a
+`## Proposed Changes` heading instead is then visibly wrong to anyone skimming
+it. This converts a disposition ("judge intent") into an artifact that can be
+checked — the same move §2 of the delta plan makes for delivery, applied to
+performance rather than arrival.
+
+**Corollary — the Goal is the tie-breaker when a plan contradicts itself.** The
+head judges the implementation against `## Goal`, not against whichever section
+the coder built from. Where a plan's later sections contradict its Goal, that
+contradiction is itself a finding and the Goal wins. In the measured case above
+the plan's own superseded callout had replaced the Goal's rule with a generalised
+one, the coder implemented the replacement faithfully, and six CRITICAL findings
+followed from machinery the Goal never asked for. No gate anywhere caught it,
+because every gate asked whether the code matched the plan's letter.
+
 **Constitution/PRD resolution.** The `tester` branch resolves the workspace
 constitution (`KanbanProvider.ts:7608-7611`) and treats PRD refs as contextual.
 Port that resolution to the `reviewer` path so review dispatches still see the
@@ -484,6 +514,19 @@ it is the legacy host being removed; the shared files carry the change for both.
 ## Verification Plan
 
 ### Automated Tests
+
+**New — the fold's own coverage.** `REVIEW_HEAD_WORK` must be asserted to carry,
+as text: (a) the deferred-record distinction ("no deferred record" vs "no
+deferred findings"); (b) the instruction to judge intent against the plan's
+`## Goal`; (c) the requirement that the verdict QUOTE the `## Goal` verbatim
+before stating achieved / not-achieved; (d) the Goal-wins tie-breaker for a
+plan whose later sections contradict its Goal; (e) the bounded follow-up permit
+alongside the reworded finding-blob ban. Assert (c) and (d) by their own
+strings, not by (b)'s — (b) already exists in the review dispatch template and
+passing on it would be the tautology this plan is trying to close. The
+discrimination proof for (c): delete the quote requirement from the fragment and
+the named assertion must go red while (a), (b) and (e) stay green.
+
 
 Update-then-run (all currently assert the OLD role set and will fail until
 edited): `src/services/__tests__/agentPromptBuilder.test.ts` (:765-805 asserts

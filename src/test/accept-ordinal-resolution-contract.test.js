@@ -1,29 +1,34 @@
 'use strict';
 
 /**
- * Contract: `accept <n>` and bare `accept` resolve server-side against the
- * poster's own ordered candidate list — no planId, no UUID, no identity
- * argument.
+ * Contract: `accept <n>` and bare `accept` resolve server-side — no planId,
+ * no UUID, no identity argument.
  *
- * Plan: a-seat-says-submit-and-a-lead-says-accept-n.md
+ * Plan: a-seat-says-submit-and-a-lead-says-accept-n.md (Goal, line 5).
  *
- * Asserts:
- *  - `task/complete` with `{ordinal: n}` accepts the nth subtask of the
- *    feature the poster holds — asserted against a feature whose third
- *    subtask is NOT the most recently touched, so "latest wins" fails;
- *  - bare `accept` resolves the single incomplete candidate and 400s —
- *    naming every candidate with its ordinal — on zero or many;
- *  - an out-of-range ordinal 400s naming the range and writes nothing;
- *  - ordinals are STABLE across an accept (`accept 1` then `accept 3` still
- *    hits the third subtask — accepted subtasks stay in the list);
+ * `<n>` is a LEAD'S TYPING SHORTCUT for indexing a feature file's numbered
+ * Subtasks list. It is not a general addressing scheme, so headship gates it:
+ *
+ *  - LEAD (heads a team) HOLDING ONE OPEN FEATURE — the ordinal branch:
+ *    `{ordinal: n}` accepts the nth subtask of that feature, asserted against
+ *    a feature whose third subtask is NOT the most recently touched so
+ *    "latest wins" fails; ordinals are STABLE across an accept and across a
+ *    `submit` that CLEARED the subtask's ownerSeat; out-of-range 400s naming
+ *    the range and writes nothing; bare `accept` resolves only when exactly
+ *    one subtask is incomplete, and 400s naming the menu otherwise; two open
+ *    features is a named 400, never a quiet pick.
+ *  - EVERYONE ELSE — the own-card branch: the ONE card the poster's own seat
+ *    holds. Any ordinal is DROPPED (not honoured, not an error, and absent
+ *    from the success echo); zero held cards and many held cards are each a
+ *    named 400. A teammate's card is never a candidate, and a batch head
+ *    holding no feature gets the same honest "you hold nothing" as any seat.
+ *
+ * The own-card branch is asserted against the two fixtures the live board
+ * actually has and the old roster-wide list did not model: a card whose
+ * `ownerSeat` was cleared by `submit`, and cards with NULL `ownerSince`.
+ * Both must be harmless here — there is no ordering and no roster to corrupt.
+ *
  *  - `planId` + `ordinal` together is a 400, not a planId-with-hint;
- *  - a poster associated with two open features gets a named 400, never a
- *    quiet pick;
- *  - NON-FEATURE posters: a planning seat's bare accept resolves its own
- *    held card (its team's other seats are NOT candidates — it heads no
- *    team); a seat holding nothing 400s with the named reason; a headed
- *    batch lead's `accept <n>` indexes the roster's outstanding cards in
- *    ownerSince order;
  *  - `round/register` accepts ordinals (`rounds: [[1,2],[3]]`) with NO
  *    featureId — derived from the poster's held feature card — and stores
  *    planIds; a bad ordinal 400s naming the entry and the valid range.
@@ -78,6 +83,9 @@ function card(planId, extra = {}) {
  * for the real store's `ORDER BY rowid`.
  */
 function makeServer(opts = {}) {
+    const groups = opts.groups !== undefined
+        ? opts.groups
+        : [{ id: 'team_Coding', head: LEAD, members: ROSTER }];
     const plans = new Map();
     const rounds = new Map();
     const inserted = [];
@@ -153,7 +161,11 @@ function makeServer(opts = {}) {
             r.closedAt = closedAt;
             return true;
         },
-        getConfigJson: async (key, fallback) => (opts.groups && key.includes('terminals.groups')) ? opts.groups : (fallback || []),
+        // Headship gates the ordinal branch, so the default harness makes
+        // LEAD an actual head. `opts.groups: []` (explicit) still yields a
+        // poster that heads nothing — that is how the own-card branch is
+        // reached.
+        getConfigJson: async (key, fallback) => (groups && key.includes('terminals.groups')) ? groups : (fallback || []),
         ...(opts.db || {}),
     };
 
@@ -355,12 +367,12 @@ async function run() {
         assert.ok(!ctx.plans.get('s1').completedAt && !ctx.plans.get('t1').completedAt);
     });
 
-    // ── 2. Non-feature candidates ─────────────────────────────────────────────
+    // ── 2. The own-card branch — everyone who is not a lead with a feature ──
 
     await check("a planning seat's bare accept resolves its own held card — its team's other seats are not candidates", async () => {
         const ctx = makeServer({
             // The Planning group is headed by Planning-head; Planner-2 is a
-            // MEMBER. Its candidate set is its own seat only.
+            // MEMBER, so it heads nothing and lands on the own-card branch.
             groups: [{ id: 'team_Planning-head', head: 'Planning-head', members: ['Planning-head', 'Planner-2', 'Planner-3'] }],
             resolveTeamMembers: async () => ['Planning-head', 'Planner-2', 'Planner-3'],
         });
@@ -373,14 +385,35 @@ async function run() {
         assert.ok(!ctx.plans.get('plan-other').completedAt, "a teammate's card is never the candidate");
     });
 
-    await check('a bare accept from a seat holding nothing 400s with the named reason', async () => {
+    await check('a NON-LEAD posting `accept 3` accepts its own single held card — the ordinal is dropped, not honoured, not an error', async () => {
+        const ctx = makeServer({
+            groups: [{ id: 'team_Planning-head', head: 'Planning-head', members: ['Planning-head', 'Planner-2'] }],
+        });
+        ctx.plans.set('plan-mine', card('plan-mine', { ownerSeat: 'Planner-2', topic: 'my only card' }));
+
+        const r = await post(ctx.server, '/kanban/task/complete', { from: 'Planner-2', ordinal: 3, workspaceRoot: WS });
+        assert.strictEqual(r.status, 200, `accept 3 from a non-lead is NOT an error: ${JSON.stringify(r.body)}`);
+        assert.strictEqual(r.body.planId, 'plan-mine', 'it resolved the seat\u2019s own held card');
+        assert.ok(ctx.plans.get('plan-mine').completedAt, 'the card was accepted');
+        // The drop must not be dressed up as a hit: no ordinal in the echo.
+        assert.strictEqual(r.body.resolution.ordinal, undefined,
+            `the success echo must NOT claim an ordinal was honoured: ${JSON.stringify(r.body.resolution)}`);
+        assert.strictEqual(r.body.resolution.title, 'my only card', 'it still names what was accepted');
+        assert.ok(!('featureId' in r.body.resolution), 'and reports no feature — there is none');
+    });
+
+    await check('a NON-LEAD holding nothing gets a 400 naming that it holds nothing — an ordinal does not conjure a card', async () => {
         const ctx = makeServer({ groups: [] });
         ctx.plans.set('plan-other', card('plan-other', { ownerSeat: 'Somebody-else' }));
 
-        const r = await post(ctx.server, '/kanban/task/complete', { from: 'Planner-9', workspaceRoot: WS });
-        assert.strictEqual(r.status, 400);
-        assert.ok(r.body.error.includes('Planner-9'), `the error names the poster: ${r.body.error}`);
-        assert.ok(!ctx.plans.get('plan-other').completedAt, 'no card was completed');
+        for (const body of [{}, { ordinal: 1 }, { ordinal: 7 }]) {
+            const r = await post(ctx.server, '/kanban/task/complete', { from: 'Planner-9', workspaceRoot: WS, ...body });
+            assert.strictEqual(r.status, 400, `${JSON.stringify(body)} must 400`);
+            assert.ok(r.body.error.includes('Planner-9'), `the error names the poster: ${r.body.error}`);
+            assert.ok(/holds no card awaiting acceptance/i.test(r.body.error),
+                `the error says the seat holds nothing — not that a list was empty: ${r.body.error}`);
+            assert.ok(!ctx.plans.get('plan-other').completedAt, 'no card was completed');
+        }
     });
 
     await check('a non-lead cannot accept another team\u2019s card — candidates come from the poster\u2019s own seat', async () => {
@@ -392,29 +425,109 @@ async function run() {
         assert.ok(!ctx.plans.get('plan-theirs').completedAt);
     });
 
-    await check('a headed batch lead\u2019s accept <n> indexes the roster\u2019s cards by ownerSince — accepted cards keep their slot', async () => {
+    await check('a seat holding TWO incomplete cards gets a 400 listing both and naming --plan', async () => {
+        const ctx = makeServer({ groups: [] });
+        ctx.plans.set('card-a', card('card-a', { ownerSeat: 'Planner-2', topic: 'first thing' }));
+        ctx.plans.set('card-b', card('card-b', { ownerSeat: 'Planner-2', topic: 'second thing' }));
+
+        const r = await post(ctx.server, '/kanban/task/complete', { from: 'Planner-2', ordinal: 2, workspaceRoot: WS });
+        assert.strictEqual(r.status, 400, 'the ordinal cannot break the tie — it was never an index into this list');
+        assert.ok(r.body.error.includes('first thing') && r.body.error.includes('second thing'),
+            `the error names both cards: ${r.body.error}`);
+        assert.ok(/--plan/.test(r.body.error), `and hands over the escape hatch: ${r.body.error}`);
+        assert.ok(!ctx.plans.get('card-a').completedAt && !ctx.plans.get('card-b').completedAt,
+            'an ambiguous accept writes completed_at on NOTHING');
+    });
+
+    await check('a HEADED batch lead holding no feature gets the honest "you hold nothing" — never a roster seat\u2019s card', async () => {
+        // The old rule indexed the whole roster here, so `accept 2` silently
+        // accepted a card belonging to Coder-A. A batch head holds no feature,
+        // so the ordinal is dropped and only its OWN seat is asked.
         const ctx = makeServer({
             groups: [{ id: 'team_Batch-head', head: 'Batch-head', members: ['Batch-head', 'Coder-A', 'Coder-B'] }],
             resolveTeamMembers: async () => ['Batch-head', 'Coder-A', 'Coder-B'],
         });
-        // Three cards held by the roster, one already accepted. ownerSince
-        // order is the printed order: done-card=1, old-card=2, new-card=3 —
-        // the accepted card keeps its slot so ordinals do not shift mid-run.
         ctx.plans.set('new-card', card('new-card', { ownerSeat: 'Coder-B', ownerSince: '2026-09-21T11:00:00Z' }));
         ctx.plans.set('old-card', card('old-card', { ownerSeat: 'Coder-A', ownerSince: '2026-09-21T09:00:00Z' }));
-        ctx.plans.set('done-card', card('done-card', { ownerSeat: 'Coder-A', ownerSince: '2026-09-21T08:00:00Z', completedAt: '2026-09-21T08:30:00Z' }));
 
         const r = await post(ctx.server, '/kanban/task/complete', { from: 'Batch-head', ordinal: 2, workspaceRoot: WS });
-        assert.strictEqual(r.status, 200, `accept 2 succeeded: ${JSON.stringify(r.body)}`);
-        assert.strictEqual(r.body.planId, 'old-card', 'ordinal 2 is the second card in the printed list');
-        assert.ok(ctx.plans.get('old-card').completedAt);
-        assert.ok(!ctx.plans.get('new-card').completedAt, 'ordinal 3 was not consumed');
+        assert.strictEqual(r.status, 400, `the head holds no card of its own: ${JSON.stringify(r.body)}`);
+        assert.ok(!ctx.plans.get('old-card').completedAt && !ctx.plans.get('new-card').completedAt,
+            'no roster seat\u2019s card was accepted on the head\u2019s behalf');
+        assert.ok(/heads no open feature/.test(r.body.error),
+            `the error says why the ordinal did not apply: ${r.body.error}`);
+    });
 
-        // Bare accept now resolves the single remaining incomplete card.
-        const r2 = await post(ctx.server, '/kanban/task/complete', { from: 'Batch-head', workspaceRoot: WS });
-        assert.strictEqual(r2.status, 200, `bare accept succeeded: ${JSON.stringify(r2.body)}`);
-        assert.strictEqual(r2.body.planId, 'new-card', 'the one outstanding card resolved');
-        assert.strictEqual(r2.body.resolution.ordinal, 3, 'its slot in the stable list is reported');
+    await check('a HEAD accepts its own held card when it heads no open feature', async () => {
+        const ctx = makeServer({
+            groups: [{ id: 'team_Batch-head', head: 'Batch-head', members: ['Batch-head', 'Coder-A'] }],
+        });
+        ctx.plans.set('head-card', card('head-card', { ownerSeat: 'Batch-head', topic: 'the head\u2019s own plan' }));
+        ctx.plans.set('coder-card', card('coder-card', { ownerSeat: 'Coder-A' }));
+
+        const r = await post(ctx.server, '/kanban/task/complete', { from: 'Batch-head', workspaceRoot: WS });
+        assert.strictEqual(r.status, 200, `the head\u2019s self-accept resolves: ${JSON.stringify(r.body)}`);
+        assert.strictEqual(r.body.planId, 'head-card');
+        assert.ok(!ctx.plans.get('coder-card').completedAt, 'the roster is still not the candidate pool');
+    });
+
+    // ── 2b. The fixtures the live board has and the old list did not model ──
+
+    await check('NULL ownerSince on every card is harmless — the own-card branch has no ordering to corrupt', async () => {
+        // 284 of 292 owned cards on the live board carry NULL owner_since,
+        // because a column move nulls it. The old list sorted on it.
+        const ctx = makeServer({ groups: [] });
+        ctx.plans.set('mine', card('mine', { ownerSeat: 'Planner-2', ownerSince: null, topic: 'null-since card' }));
+        ctx.plans.set('theirs', card('theirs', { ownerSeat: 'Planner-3', ownerSince: null }));
+
+        const r = await post(ctx.server, '/kanban/task/complete', { from: 'Planner-2', workspaceRoot: WS });
+        assert.strictEqual(r.status, 200, `a NULL ownerSince still resolves: ${JSON.stringify(r.body)}`);
+        assert.strictEqual(r.body.planId, 'mine');
+        assert.ok(!ctx.plans.get('theirs').completedAt);
+    });
+
+    await check('a card whose ownerSeat was CLEARED by submit is not the poster\u2019s — and its absence is a named 400, not a wrong accept', async () => {
+        // `submit` calls clearOwnerStamp, which sets owner_seat = ''. An empty
+        // ownerSeat must never match a poster: it means "nobody holds this".
+        const ctx = makeServer({ groups: [] });
+        ctx.plans.set('submitted', card('submitted', { ownerSeat: '', topic: 'handed back' }));
+
+        const r = await post(ctx.server, '/kanban/task/complete', { from: 'Planner-2', workspaceRoot: WS });
+        assert.strictEqual(r.status, 400, 'a cleared stamp is not a match for an empty poster name either');
+        assert.ok(/holds no card awaiting acceptance/i.test(r.body.error), r.body.error);
+        assert.ok(!ctx.plans.get('submitted').completedAt, 'the handed-back card was not silently accepted');
+    });
+
+    await check('a submit-cleared subtask does NOT shift the feature\u2019s ordinals — accept 3 is still the third', async () => {
+        // The clearOwnerStamp finding, proven rather than asserted: the
+        // feature branch indexes getSubtasksByFeatureId, which does not
+        // consult ownerSeat at all.
+        const ctx = makeServer();
+        seedHeldFeature(ctx, 3);
+        ctx.plans.get('s1').ownerSeat = '';   // submitted, stamp cleared
+        ctx.plans.get('s2').ownerSeat = '';   // submitted, stamp cleared
+        ctx.plans.get('s3').ownerSince = null;
+
+        const r = await accept(ctx, { ordinal: 3 });
+        assert.strictEqual(r.status, 200, `accept 3 survives two cleared stamps: ${JSON.stringify(r.body)}`);
+        assert.strictEqual(r.body.planId, 's3', 'the third subtask is still the third');
+        assert.strictEqual(r.body.resolution.ordinal, 3, 'and the echo names the honoured ordinal');
+        assert.ok(!ctx.plans.get('s1').completedAt && !ctx.plans.get('s2').completedAt);
+    });
+
+    await check('a lead\u2019s accept 3 hits the third subtask even when the third is the LEAST recently submitted', async () => {
+        const ctx = makeServer();
+        seedHeldFeature(ctx, 3);
+        // s3 was submitted first and its stamp cleared longest ago; s1 is the
+        // freshest. "Most recently submitted" and "oldest held" both fail.
+        ctx.plans.get('s1').ownerSince = '2026-09-21T12:00:00Z';
+        ctx.plans.get('s2').ownerSince = '2026-09-21T11:00:00Z';
+        ctx.plans.get('s3').ownerSeat = '';
+        ctx.plans.get('s3').ownerSince = null;
+
+        const r = await accept(ctx, { ordinal: 3 });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+        assert.strictEqual(r.body.planId, 's3');
     });
 
     // ── 3. round/register takes ordinals and derives the feature ──────────────

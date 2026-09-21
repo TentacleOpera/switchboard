@@ -6739,8 +6739,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
-            'OUTSTANDING (numbered — this is the order `accept <n>` resolves against: oldest held card first):',
-            ...plans.map((plan, i) => `${i + 1}. ${plan.topic}`),
+            // NUMBERED, and the number is what closes the plan out. A batch
+            // becomes a mission and its claim writes `plans.column_order` per
+            // card, so `getMissionMembers` returns this same order server-side
+            // and `accept <n>` resolves against it (`_resolveHeadMissionTarget`).
+            // The list printed here and the list the server resolves are one
+            // derivation — numbering from a second, prompt-local array is what
+            // made these numbers lie before. planIds stay on the line as the
+            // human escape hatch, never as the instruction.
+            'OUTSTANDING (accept each by its number):',
+            ...plans.map((plan, i) => `${i + 1}. ${plan.topic}${plan.planId ? ` — planId: ${plan.planId}` : ''}`),
             '',
             'STAGING (one call per plan):',
             `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path> (relative to your repo root). This plan only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
@@ -6753,7 +6761,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same plan: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then run \`node "<cliPath>" accept <n>\` where <n> is the plan's number in the OUTSTANDING list above (accepted plans keep their slot — the numbers never shift). You are ${originVal}. Do NOT POST the endpoint behind it directly — the CSRF guard refuses a request with no \`X-Switchboard-Client\` marker, and the CLI is what sets it. Nothing downstream happens until you accept: the coder is not cleared and you cannot be handed the next plan.`,
+            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then run \`node "<cliPath>" accept <n>\` where <n> is that plan's number in the OUTSTANDING list above. Accepted plans keep their number, so the list never renumbers under you. You are ${originVal}. Do NOT POST the endpoint behind it directly — the CSRF guard refuses a request with no \`X-Switchboard-Client\` marker, and the CLI is what sets it. Nothing downstream happens until you accept: the coder is not cleared and you cannot be handed the next plan.`,
             '',
             'BATCH RULES:',
             '- The plans in this batch are independent and possibly unrelated.',
