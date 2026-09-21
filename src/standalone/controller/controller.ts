@@ -352,26 +352,11 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     //     availability from a URL being set rather than from the probe would be
     //     a fallback indistinguishable from a real reading.
     const modelCap = capabilityForKey('model', caps);
-    try {
-        const publish = await apiRequest(port, 'POST', '/controller/lease', workspaceRoot, {
-            controllerId,
-            ttlMs: ctx.leaseTtlMs,
-            judgement: { available: modelCap.enabled, reason: modelCap.reason, source: modelCap.source },
-        });
-        const publishJson = safeJson(publish);
-        if (publish && !publishJson?.granted) {
-            // The board was taken by another controller between the claim at
-            // the top of this wake and here. Recorded rather than swallowed: a
-            // board whose nudges stay suppressed on a declaration this pass
-            // could not refresh is a state somebody has to be able to see.
-            errors.push(`judgement availability not published: ${publishJson?.reason || `status ${publish.status}`}`);
-        }
-    } catch (e) {
-        // A failed publication leaves the PRIOR declaration in place, which is
-        // the safe direction only because the board treats a stale lease as
-        // "resume the sweeps" regardless of what it declares.
-        errors.push(`judgement availability publication failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    // Judgement availability is NOT published through the lease endpoint any
+    // more. That POST re-took a 15-minute lease on every wake, so each pass
+    // locked out the next one and the report filled with "board is held by
+    // <the previous pass>". There are no leases; there is one board and one
+    // controller, and nothing to arbitrate.
 
     // 5. Load the controller's durable state (ladder, restart history).
     const stateView = await tryRequest(apiRequest, port, 'GET', '/controller/state', workspaceRoot);

@@ -3000,19 +3000,29 @@
         async function refreshReport() {
             if (!reportEl) { return; }
             try {
-                const res = await fetch('/controller/poll/state');
+                const res = await fetch('/controller/report');
                 const d = await res.json();
-                const obs = Array.isArray(d && d.observations) ? d.observations : [];
-                if (obs.length === 0) {
-                    reportEl.textContent = d && d.running
-                        ? 'Waiting for the first pass…'
-                        : 'Not running. Press Start.';
-                    return;
+                const md = d && d.report && typeof d.report.content === 'string' ? d.report.content : '';
+                const wakes = md.split('## Wake ').slice(1);
+                const lines = [];
+                for (const w of wakes) {
+                    const stamp = (w.match(/^(\S+)/) || [])[1] || '';
+                    let time = stamp;
+                    try { time = new Date(stamp).toLocaleTimeString(); } catch { /* keep raw */ }
+                    for (const heading of ['### Actions', '### Errors', '### Board restart']) {
+                        const at = w.indexOf(heading);
+                        if (at < 0) { continue; }
+                        let body = w.slice(at + heading.length);
+                        const next = body.search(/\n#{2,3} /);
+                        if (next >= 0) { body = body.slice(0, next); }
+                        for (const raw of body.split('\n')) {
+                            const l = raw.trim();
+                            if (!l || l.startsWith('---') || l.startsWith('_')) { continue; }
+                            if (l.startsWith('- ') || l.startsWith('* ')) { lines.push(time + '  ' + l.slice(2).trim()); }
+                        }
+                    }
                 }
-                reportEl.textContent = obs.map(function (o) {
-                    var t = o && o.at ? new Date(o.at).toLocaleTimeString() : '';
-                    return t + '  ' + (o && o.line ? o.line : '');
-                }).join('\n');
+                reportEl.textContent = lines.length ? lines.join('\n') : 'Nothing done yet.';
                 reportEl.scrollTop = reportEl.scrollHeight;
             } catch {
                 reportEl.textContent = 'Report unavailable.';
