@@ -3065,22 +3065,31 @@
                 } else {
                     for (const entry of tail) {
                         const problem = !/^nothing wrong/i.test(entry.text);
+                        // This is a RECENT REPORT view, not a chat log: the latest
+                        // report is what the operator came to read. It keeps the
+                        // theme accent and full contrast; everything behind it is
+                        // history and recedes so the eye lands on the newest line.
+                        const latest = entry === tail[tail.length - 1];
                         const msg = document.createElement('div');
-                        msg.className = 'agent-poll-msg' + (problem ? ' is-problem' : '');
-                        msg.style.cssText = 'display:flex; flex-direction:column; align-items:flex-start; max-width:92%;';
+                        msg.className = 'agent-poll-msg' + (problem ? ' is-problem' : '')
+                            + (latest ? ' is-latest' : '');
+                        msg.style.cssText = 'display:flex; flex-direction:column; align-items:flex-start; max-width:92%;'
+                            + (latest ? '' : ' opacity:0.55;');
 
                         const meta = document.createElement('div');
                         meta.className = 'agent-poll-meta';
                         meta.style.cssText = 'font-size:9px; letter-spacing:0.04em; text-transform:uppercase; '
-                            + 'color:var(--text-dim); margin:0 0 3px 10px;';
-                        meta.textContent = 'agent · ' + entry.time;
+                            + 'margin:0 0 3px 10px; color:'
+                            + (latest ? 'var(--accent-primary)' : 'var(--text-dim)') + ';';
+                        meta.textContent = 'agent · ' + entry.time + (latest ? ' · latest' : '');
 
                         const bubble = document.createElement('div');
                         bubble.className = 'agent-poll-bubble';
                         bubble.style.cssText = 'background:var(--panel-bg2); border:1px solid '
-                            + (problem ? 'var(--accent-primary)' : 'var(--border-color)')
+                            + (latest || problem ? 'var(--accent-primary)' : 'var(--border-color)')
                             + '; border-radius:12px 12px 12px 3px; padding:7px 11px; font-size:12px; '
                             + 'line-height:1.45; word-break:break-word;'
+                            + (latest ? ' box-shadow:0 0 0 1px var(--accent-primary);' : '')
                             + (problem ? ' color:var(--accent-primary);' : '');
                         bubble.textContent = entry.text;
 
@@ -3090,8 +3099,7 @@
                         // Only the NEWEST message carries a live offer: acting on a
                         // stale one would dispatch a card the board has since moved
                         // past, which is worse than no button at all.
-                        const isNewest = entry === tail[tail.length - 1];
-                        if (isNewest && entry.offer && /dispatch it\?/i.test(entry.text)) {
+                        if (latest && entry.offer && /dispatch it\?/i.test(entry.text)) {
                             const act = document.createElement('button');
                             act.type = 'button';
                             // BOTH class names on purpose: the dock defines
@@ -3188,9 +3196,11 @@
             });
         }
 
-        // ── Project scope + dispatch highest priority ─────────────────────
+        // ── Project scope ─────────────────────────────────────
+        // There is no standing "dispatch highest priority" button: the agent's
+        // own message carries the offer, naming the card it would start. A
+        // second button that dispatched something unnamed was the redundant one.
         const projectSel = document.getElementById('agent-poll-project');
-        const dispatchBtn = document.getElementById('agent-poll-dispatch');
 
         // `ready` order IS priority order — the board already sorts it. The
         // highest priority card for a scope is the first one in that scope, so
@@ -3227,42 +3237,6 @@
             } catch { /* leave whatever is there */ }
         }
 
-        if (dispatchBtn) {
-            dispatchBtn.addEventListener('click', async () => {
-                const scope = projectSel ? projectSel.value : '__all__';
-                setState('finding highest priority…');
-                try {
-                    const rows = await readyCards();
-                    const inScope = rows.filter(function (r) {
-                        if (!r) { return false; }
-                        const col = String(r.kanbanColumn || r.column || '');
-                        if (col !== 'PLAN REVIEWED') { return false; }
-                        if (scope === '__all__') { return true; }
-                        return String(r.project || r.projectName || '') === scope;
-                    });
-                    if (inScope.length === 0) {
-                        setState('nothing ready' + (scope === '__all__' ? '' : ' in ' + scope));
-                        return;
-                    }
-                    const top = inScope[0];
-                    const planId = String(top.planId || top.plan_id || top.sessionId || '');
-                    const res = await fetch('/kanban/dispatch', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ planId: planId })
-                    });
-                    const d = await res.json().catch(() => null);
-                    if (res.ok && d && d.success !== false) {
-                        setState('dispatched ' + planId.slice(0, 8) + ' — ' + String(top.topic || '').slice(0, 40));
-                    } else {
-                        setState('dispatch failed: ' + ((d && (d.reason || d.error)) || res.status));
-                    }
-                } catch (err) {
-                    setState('dispatch failed: ' + String(err));
-                }
-                void refreshReport();
-            });
-        }
         void loadProjects();
         void refreshState();
         void refreshReport();

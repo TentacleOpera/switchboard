@@ -245,6 +245,7 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
         apiKey: keyRead.key ?? null,
         system: 'You supervise a board of coding agents. Answer in ONE short line of plain prose — '
             + 'never JSON, code fences, lists or markdown.\n'
+            + 'Look at the WHOLE board — every column and every team, not just what is queued. '
             + 'If something is wrong, name the single most important problem in under 20 words. '
             + 'If no seats are alive but there is owned, uncompleted work, say the agents are down.\n'
             + 'If nothing is wrong and nextHighestPriority is present, do NOT say "nothing wrong" — '
@@ -496,11 +497,17 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             .filter((t: any) => t && t.status !== 'exited')
             .map((t: any) => String(t.friendlyName || '').trim())
             .filter(Boolean);
-        const ownedNotDone = (plans || []).filter((p: any) => {
-            const owner = String(p?.ownerSeat ?? p?.owner_seat ?? '').trim();
+        // IN FLIGHT means owner_since, not owner_seat. owner_seat is historical
+        // attribution and is never cleared, so counting it called every card a
+        // seat ever touched "owned and not completed" — 351 of them, with zero
+        // seats alive. The model was being handed a number that could only ever
+        // grow and reading it as work in progress.
+        const inFlight = (plans || []).filter((p: any) => {
+            const since = p?.ownerSince ?? p?.owner_since ?? null;
             const done = p?.completedAt ?? p?.completed_at ?? null;
-            return owner && !done;
-        }).length;
+            return since && !done;
+        });
+        const ownedNotDone = inFlight.length;
         // The next card the board would hand out. `plans` arrives in the board's
         // own priority order, so the head of PLAN REVIEWED IS the next one — no
         // ranking is invented here.
@@ -510,9 +517,37 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             const col = String(p?.kanbanColumn ?? p?.kanban_column ?? '');
             return col === 'PLAN REVIEWED';
         });
+        // A seat's team is the prefix its head gives it: Feature, Feature-coder-1,
+        // Coding-intern-2 all belong to one team. Grouping here lets the agent say
+        // "the Coding team is down" instead of listing terminal names.
+        const teamOf = (seat: string): string => (seat.split('-')[0] || seat);
+
+        const seatsByTeam: Record<string, string[]> = {};
+        for (const name of liveSeatNames) {
+            (seatsByTeam[teamOf(name)] = seatsByTeam[teamOf(name)] || []).push(name);
+        }
+
+        // EVERY column and EVERY team, not just the one the queue pops from.
+        // Reporting only on PLAN REVIEWED meant work stalled in STAGING or sitting
+        // unreviewed in a coded column was invisible to the agent — it could only
+        // ever talk about the front of the queue.
+        const cardsByColumn: Record<string, number> = {};
+        const cardsByTeam: Record<string, number> = {};
+        for (const p of (plans || []) as any[]) {
+            const col = String(p?.kanbanColumn ?? p?.kanban_column ?? '').trim() || '(no column)';
+            cardsByColumn[col] = (cardsByColumn[col] || 0) + 1;
+        }
+        for (const p of inFlight as any[]) {
+            const owner = String(p?.ownerSeat ?? p?.owner_seat ?? '').trim();
+            if (owner) { cardsByTeam[teamOf(owner)] = (cardsByTeam[teamOf(owner)] || 0) + 1; }
+        }
+
         const boardFacts = {
             seatsAlive: liveSeatNames,
             seatsAliveCount: liveSeatNames.length,
+            seatsByTeam,
+            cardsByColumn,
+            cardsInFlightByTeam: cardsByTeam,
             subjectsFound: subjects.length,
             cardsOwnedAndNotCompleted: ownedNotDone,
             cardsTotal: (plans || []).length,
