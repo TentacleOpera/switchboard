@@ -1333,11 +1333,18 @@
             if (!host) { return; }
             let pilot = null;
             let navigator = null;
+            let navMissing = 'not configured';
             try {
                 const r = await fetch('/controller/judgement');
                 const d = await r.json();
                 const j = (d && d.judgement) || {};
-                const tier = (j.tiers || [])[0];
+                const tiers = j.tiers || [];
+                // Pilot is the classifier tier, Navigator the escalation tier.
+                // `supervisorSeat` is a SEAT NAME, not a model, so it is not what
+                // names the Navigator — reading it here would have labelled the
+                // chain's cloud model with a terminal's name.
+                const tier = tiers.filter(function (t) { return t && t.role === 'classifier'; })[0] || tiers[0];
+                const esc = tiers.filter(function (t) { return t && t.role === 'escalation'; })[0];
                 if (tier && tier.model) {
                     // Locality comes from the tier, never guessed from the URL.
                     // Omitted rather than assumed when the tier does not say.
@@ -1346,14 +1353,19 @@
                         : (loc === 'cloud' ? 'cloud' : '');
                     pilot = { name: prettyModel(tier.model), where: where, raw: tier.model };
                 }
-                const sup = j.supervisorSeat;
-                if (sup && (sup.model || sup.seat)) {
+                if (esc && esc.model) {
+                    const loc = String(esc.locality || '');
                     navigator = {
-                        name: prettyModel(sup.model) || String(sup.seat || ''),
-                        where: 'cloud',
-                        raw: sup.model || sup.seat,
+                        name: prettyModel(esc.model),
+                        where: (loc === 'internet' || loc === 'cloud') ? 'cloud'
+                            : ((loc === 'local' || loc === 'tailnet' || loc === 'loopback') ? 'local' : ''),
+                        raw: esc.model,
                     };
                 }
+                // Say WHY it is absent. "not configured" alone sent the operator
+                // looking for a missing API key when the real state is that no
+                // escalation tier is declared at all — a key would not help.
+                if (!navigator) { navMissing = 'no escalation tier declared'; }
             } catch { /* both stay null, and both say so below */ }
 
             host.textContent = '';
@@ -1373,7 +1385,7 @@
                     v.title = String(m.raw || '');
                 } else {
                     v.style.cssText = 'color:var(--text-dim);';
-                    v.textContent = 'not configured';
+                    v.textContent = (role === 'Navigator') ? navMissing : 'not configured';
                 }
                 el.appendChild(r);
                 el.appendChild(v);
@@ -1389,6 +1401,10 @@
         // team's own reports, which is where that team's seats say what they
         // finished, blocked on, or are working on.
         const TEAM_TABS = [
+            // The board report is a TAB, not a hidden state reached by pressing
+            // the active tab again. That gesture was undiscoverable, and the
+            // agent's own assessment is the main thing this panel exists to show.
+            { label: 'Board', id: null },
             { label: 'Planning', id: 'team_Planning' },
             { label: 'Coding', id: 'team_Coding' },
             { label: 'Review', id: 'team_Review' },
@@ -1409,14 +1425,12 @@
                 // The real team id in the tooltip. "Missions" is this product's
                 // word for the Feature team, and hiding that mapping entirely
                 // would make an empty tab impossible to explain.
-                b.title = t.id;
+                b.title = t.id || 'The controller\'s report on the whole board';
                 if (selectedTeam === t.id) {
                     b.style.cssText = 'border-color:var(--accent-primary); color:var(--accent-primary);';
                 }
                 b.addEventListener('click', () => {
-                    // Pressing the active tab returns to the board report, so the
-                    // agent's own assessment is always one press away.
-                    selectedTeam = (selectedTeam === t.id) ? null : t.id;
+                    selectedTeam = t.id;
                     paintTeamTabs();
                     void refreshReport();
                 });
