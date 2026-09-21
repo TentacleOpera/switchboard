@@ -1301,6 +1301,17 @@ export class LocalApiServer {
      * restart, so Start is explicit and stays explicit.
      */
     private _modelPollTimer: NodeJS.Timeout | null = null;
+    // Event-driven passes. The interval is the FLOOR — the slowest the report is
+    // ever allowed to be — not the cadence. A board change runs a pass at once,
+    // because a five-minute-old report of a board that changed 10 seconds ago is
+    // wrong, and it looked authoritative while being wrong.
+    private _modelPollRunOnce: (() => Promise<void>) | null = null;
+    private _modelPollEventTimer: NodeJS.Timeout | null = null;
+    private _modelPollInFlight = false;
+    private _modelPollPending = false;
+    // A pass takes transitions, and those transitions broadcast. Without a quiet
+    // window a pass would retrigger itself forever at the minimum gap.
+    private _modelPollQuietUntil = 0;
     private _modelPollEveryMs = 5 * 60 * 1000;
     private _modelPollStartedAt: number | null = null;
     private _modelPollLastRunAt: number | null = null;
@@ -1705,6 +1716,70 @@ export class LocalApiServer {
      */
     public broadcastWs(verb: string, payload?: any, surface?: string): void {
         this._wsHub?.broadcast(verb, payload, surface);
+        this._onBoardEvent(verb);
+    }
+
+    /**
+     * Verbs that mean the BOARD OR FLEET CHANGED, and therefore that the
+     * controller's last report no longer describes reality. Deliberately a
+     * whitelist: terminal output also fans out through broadcastWs, and
+     * triggering a model pass on every chunk of agent stdout would run the
+     * controller continuously. Presentation-only pushes (status messages, focus,
+     * tab activation) are not board changes and are not here.
+     */
+    private static readonly CONTROLLER_PASS_TRIGGERS = new Set<string>([
+        'terminalsChanged',
+        'terminalsGroupsChanged',
+        'agentCompleted',
+        'terminalDispatchFinished',
+        'moveCards',
+        'updateBoard',
+        'refreshKanbanPlans',
+    ]);
+
+    /** Coalesce a burst of events into one pass. Starting a team fires many. */
+    private static readonly PASS_DEBOUNCE_MS = 3000;
+    /** Never run event passes closer together than this. */
+    private static readonly PASS_MIN_GAP_MS = 30000;
+    /** Ignore events for this long after a pass — they are the pass's own wake. */
+    private static readonly PASS_QUIET_MS = 5000;
+
+    private _onBoardEvent(verb: string): void {
+        // Only while the operator has polling armed. Start/Stop still owns it.
+        if (!this._modelPollTimer || !this._modelPollRunOnce) { return; }
+        if (!LocalApiServer.CONTROLLER_PASS_TRIGGERS.has(verb)) { return; }
+        if (Date.now() < this._modelPollQuietUntil) { return; }
+        if (this._modelPollEventTimer) { return; }
+        const sinceLast = Date.now() - (this._modelPollLastRunAt ?? 0);
+        const wait = Math.max(
+            LocalApiServer.PASS_DEBOUNCE_MS,
+            LocalApiServer.PASS_MIN_GAP_MS - sinceLast,
+        );
+        this._modelPollEventTimer = setTimeout(() => {
+            this._modelPollEventTimer = null;
+            void this._runControllerPass(`event:${verb}`);
+        }, wait);
+        if (typeof this._modelPollEventTimer.unref === 'function') { this._modelPollEventTimer.unref(); }
+    }
+
+    private async _runControllerPass(reason: string): Promise<void> {
+        const run = this._modelPollRunOnce;
+        if (!run) { return; }
+        if (this._modelPollInFlight) { this._modelPollPending = true; return; }
+        this._modelPollInFlight = true;
+        try {
+            await run();
+        } finally {
+            this._modelPollInFlight = false;
+            this._modelPollQuietUntil = Date.now() + LocalApiServer.PASS_QUIET_MS;
+            console.log(`[LocalApiServer] controller pass (${reason})`);
+            if (this._modelPollPending) {
+                this._modelPollPending = false;
+                // Back through the scheduler so the gap and quiet window apply;
+                // recursing directly here is how a pass-triggers-pass loop starts.
+                this._onBoardEvent('terminalsChanged');
+            }
+        }
     }
 
     public getPort(): number {
@@ -15512,6 +15587,21 @@ export class LocalApiServer {
                 const teamId = url.searchParams.get('team') || undefined;
                 try {
                     const report = await store.readReport(reportRoot, teamId);
+                    // `?meta=1` answers "has it changed?" without shipping the
+                    // report body. The panel checks this every few seconds; the
+                    // report itself is ~120KB and grows, so polling the whole
+                    // thing for freshness would move megabytes a minute.
+                    if (url.searchParams.get('meta') === '1') {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            success: true,
+                            updatedAt: (report as any)?.updatedAt ?? null,
+                            source: (report as any)?.source ?? null,
+                            running: !!this._modelPollTimer,
+                            lastRunAt: this._modelPollLastRunAt,
+                        }));
+                        return;
+                    }
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: true, report }));
                 } catch (err) {
@@ -15698,17 +15788,26 @@ export class LocalApiServer {
                         this._modelPollLastError = err instanceof Error ? err.message : String(err);
                     }
                 };
-                this._modelPollTimer = setInterval(() => { void runOnce(); }, this._modelPollEveryMs);
+                // The event path runs the SAME pass. Assigning it here is what makes
+                // a board change reach the controller; leaving it unset would keep
+                // the floor working and silently lose every instant update.
+                this._modelPollRunOnce = runOnce;
+                this._modelPollTimer = setInterval(() => {
+                    void this._runControllerPass('interval');
+                }, this._modelPollEveryMs);
                 // Do not hold the process open on this timer alone.
                 if (typeof this._modelPollTimer.unref === 'function') { this._modelPollTimer.unref(); }
                 this._modelPollStartedAt = Date.now();
-                void runOnce();
+                void this._runControllerPass('start');
                 console.log(`[LocalApiServer] model polling STARTED — every ${Math.round(this._modelPollEveryMs / 60000)} min`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, running: true, intervalMs: this._modelPollEveryMs }));
             } else if (pathname === '/controller/poll/stop' && req.method === 'POST') {
                 if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
                 if (this._modelPollTimer) { clearInterval(this._modelPollTimer); this._modelPollTimer = null; }
+                if (this._modelPollEventTimer) { clearTimeout(this._modelPollEventTimer); this._modelPollEventTimer = null; }
+                this._modelPollRunOnce = null;
+                this._modelPollPending = false;
                 this._modelPollStartedAt = null;
                 console.log('[LocalApiServer] model polling STOPPED');
                 res.writeHead(200, { 'Content-Type': 'application/json' });

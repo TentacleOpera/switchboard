@@ -1301,6 +1301,29 @@
         void loadProjects();
         void refreshState();
         void refreshReport();
+
+        // The report must never sit stale on screen. A 30s blanket refresh was
+        // both too slow to look live and too heavy to speed up — the report is
+        // ~120KB and grows. So the panel polls a freshness probe every few
+        // seconds and only pulls the body when it has actually changed.
+        let lastReportAt = null;
+        async function pollFreshness() {
+            try {
+                const r = await fetch('/controller/report?meta=1');
+                const d = await r.json();
+                if (!d || d.success === false) { return; }
+                if (d.updatedAt !== lastReportAt) {
+                    const first = lastReportAt === null;
+                    lastReportAt = d.updatedAt;
+                    if (!first) { await refreshReport(); }
+                }
+            } catch { /* the next tick tries again */ }
+        }
+        void pollFreshness();
+        setInterval(() => { void pollFreshness(); }, 4000);
+        // The age in the header has to keep counting up even when no new report
+        // has landed, otherwise "2 min ago" stays on screen indefinitely and the
+        // staleness marker never trips.
         setInterval(() => { void refreshState(); void refreshReport(); }, 30000);
     })();
 
