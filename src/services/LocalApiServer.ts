@@ -12876,9 +12876,6 @@ export class LocalApiServer {
             // standing-controller, change 2 — the model is no longer asked to
             // pick a verb for a card the operator already resolved).
             const quickActions = [
-                { id: 'dispatch-starred', label: 'Dispatch starred cards', needsModel: false },
-                { id: 'refresh-board', label: 'Refresh board state', needsModel: false },
-                { id: 'list-columns', label: 'List columns', needsModel: false },
                 { id: 'advance-plan', label: 'Advance selected card', needsModel: false },
                 { id: 'move-plan', label: 'Move selected card', needsModel: false },
                 { id: 'star-plan', label: 'Star selected card', needsModel: false },
