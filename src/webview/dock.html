@@ -304,36 +304,48 @@
             color: var(--text-dim);
             margin-left: 4px;
         }
+        /* A chat transcript: one message per pass, newest at the bottom.
+           There is no composer — the operator does not talk back here. */
         .agent-poll-report {
-            margin-top: 8px;
-            max-height: 240px;
+            margin-top: 10px;
+            max-height: 300px;
             overflow-y: auto;
-        }
-        .agent-poll-entry {
             display: flex;
-            gap: 10px;
-            align-items: baseline;
-            padding: 5px 0;
-            border-bottom: 1px solid var(--border-color);
+            flex-direction: column;
+            gap: 8px;
+            padding-right: 2px;
         }
-        .agent-poll-entry:last-child { border-bottom: none; }
-        .agent-poll-time {
-            flex: 0 0 auto;
-            font-size: 10px;
+        .agent-poll-msg {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            max-width: 92%;
+        }
+        .agent-poll-meta {
+            font-size: 9px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
             color: var(--text-dim);
-            font-variant-numeric: tabular-nums;
+            margin: 0 0 3px 10px;
         }
-        .agent-poll-text {
-            flex: 1 1 auto;
+        .agent-poll-bubble {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 12px 12px 12px 3px;
+            padding: 7px 11px;
             font-size: 12px;
-            line-height: 1.4;
+            line-height: 1.45;
             color: var(--text-color);
+            word-break: break-word;
         }
-        .agent-poll-entry.is-problem .agent-poll-text { color: #f0883e; }
+        .agent-poll-msg.is-problem .agent-poll-bubble {
+            border-color: #f0883e;
+            color: #f0883e;
+        }
         .agent-poll-empty {
             font-size: 11px;
             color: var(--text-dim);
-            padding: 6px 0;
+            padding: 8px 2px;
         }
         .agent-control-config {
             padding: 8px 10px;

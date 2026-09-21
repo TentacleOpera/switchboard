@@ -3044,32 +3044,34 @@
                 if (tail.length === 0) {
                     const empty = document.createElement('div');
                     empty.className = 'agent-poll-empty';
-                    empty.style.cssText = 'font-size:11px; color:var(--text-dim); padding:6px 0;';
-                    empty.textContent = 'Nothing reported yet.';
+                    empty.style.cssText = 'font-size:11px; color:var(--text-dim); padding:8px 2px;';
+                    empty.textContent = 'No report yet — the agent speaks every 5 minutes.';
                     reportEl.appendChild(empty);
                 } else {
                     for (const entry of tail) {
-                        const row = document.createElement('div');
-                        row.className = 'agent-poll-entry';
-                        row.style.cssText = 'display:flex; gap:10px; align-items:baseline; padding:5px 0; '
-                            + 'border-bottom:1px solid var(--border-color);';
-                        const t = document.createElement('span');
-                        t.className = 'agent-poll-time';
-                        t.style.cssText = 'flex:0 0 auto; font-size:10px; color:var(--text-dim);';
-                        t.textContent = entry.time;
-                        const txt = document.createElement('span');
-                        txt.className = 'agent-poll-text';
-                        txt.style.cssText = 'flex:1 1 auto; font-size:12px; line-height:1.4;';
-                        // "nothing wrong" is the healthy answer; anything else is
-                        // the model naming a problem, and reads as one.
-                        if (!/^nothing wrong/i.test(entry.text)) {
-                            row.className += ' is-problem';
-                            txt.style.color = '#f0883e';
-                        }
-                        txt.textContent = entry.text;
-                        row.appendChild(t);
-                        row.appendChild(txt);
-                        reportEl.appendChild(row);
+                        const problem = !/^nothing wrong/i.test(entry.text);
+                        const msg = document.createElement('div');
+                        msg.className = 'agent-poll-msg' + (problem ? ' is-problem' : '');
+                        msg.style.cssText = 'display:flex; flex-direction:column; align-items:flex-start; max-width:92%;';
+
+                        const meta = document.createElement('div');
+                        meta.className = 'agent-poll-meta';
+                        meta.style.cssText = 'font-size:9px; letter-spacing:0.04em; text-transform:uppercase; '
+                            + 'color:var(--text-dim); margin:0 0 3px 10px;';
+                        meta.textContent = 'agent · ' + entry.time;
+
+                        const bubble = document.createElement('div');
+                        bubble.className = 'agent-poll-bubble';
+                        bubble.style.cssText = 'background:var(--panel-bg2); border:1px solid '
+                            + (problem ? '#f0883e' : 'var(--border-color)')
+                            + '; border-radius:12px 12px 12px 3px; padding:7px 11px; font-size:12px; '
+                            + 'line-height:1.45; word-break:break-word;'
+                            + (problem ? ' color:#f0883e;' : '');
+                        bubble.textContent = entry.text;
+
+                        msg.appendChild(meta);
+                        msg.appendChild(bubble);
+                        reportEl.appendChild(msg);
                     }
                 }
                 reportEl.scrollTop = reportEl.scrollHeight;
