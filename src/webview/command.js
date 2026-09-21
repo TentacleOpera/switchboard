@@ -2997,6 +2997,11 @@
         const reportEl = document.getElementById('agent-poll-report');
 
 
+        // ONE report, replaced in place every poll. This was a scrolling
+        // transcript, which meant a five-minute poll on a quiet board stacked the
+        // same paragraph over and over and the current state of the board had to
+        // be reconstructed by reading down the list. The panel shows the LATEST
+        // report only: columns, teams, assessment, and what is next.
         async function refreshReport() {
             if (!reportEl) { return; }
             try {
@@ -3004,168 +3009,183 @@
                 const d = await res.json();
                 const md = d && d.report && typeof d.report.content === 'string' ? d.report.content : '';
                 const wakes = md.split('## Wake ').slice(1);
-                const lines = [];
-                for (const w of wakes) {
+
+                // Walk backwards to the most recent wake that actually produced a
+                // board check. A wake that only logged capabilities is not a
+                // report, and showing "nothing observed" because the newest wake
+                // happened to be one of those would be a lie about the board.
+                let latest = null;
+                for (let i = wakes.length - 1; i >= 0 && !latest; i--) {
+                    const w = wakes[i];
+                    const at = w.indexOf('### Actions');
+                    if (at < 0) { continue; }
+                    const body = w.slice(at);
+                    let text = '';
+                    for (const raw of body.split('\n')) {
+                        const m = raw.trim().match(/^-\s*outcome:\s*\*\*([a-z-]+)\*\*\s*(?:—|--)?\s*(.*)$/i);
+                        if (m) { text = (m[2] || '').trim() || m[1]; break; }
+                    }
+                    if (!text) { continue; }
+                    let facts = null;
+                    const ev = body.match(/```\s*([\s\S]*?)```/);
+                    if (ev) { try { facts = JSON.parse(ev[1].trim()); } catch { /* not the evidence we know */ } }
+                    const errors = [];
+                    const ei = w.indexOf('### Errors');
+                    if (ei >= 0) {
+                        let eb = w.slice(ei + '### Errors'.length);
+                        const nx = eb.search(/\n#{2,3} /);
+                        if (nx >= 0) { eb = eb.slice(0, nx); }
+                        for (const raw of eb.split('\n')) {
+                            const l = raw.trim();
+                            if (l.startsWith('- ')) { errors.push(l.slice(2).trim()); }
+                        }
+                    }
                     const stamp = (w.match(/^(\S+)/) || [])[1] || '';
                     let time = stamp;
                     try { time = new Date(stamp).toLocaleTimeString(); } catch { /* keep raw */ }
+                    latest = { time: time, text: text, facts: facts, errors: errors };
+                }
 
-                    // An action renders as a `### <subject> — <cause>` block whose
-                    // verdict is the `- outcome:` line. Read those, not the block
-                    // headings: stopping at the first `###` after `### Actions`
-                    // read an EMPTY body and hid every action.
-                    const at = w.indexOf('### Actions');
-                    if (at >= 0) {
-                        const body = w.slice(at);
-                        // The evidence block carries the card the agent is offering.
-                        // Reading it here is what lets the message own its action,
-                        // instead of the offer being rhetorical and the button
-                        // living somewhere else.
-                        let offer = null;
-                        const ev = body.match(/```\s*([\s\S]*?)```/);
-                        if (ev) {
-                            try {
-                                const facts = JSON.parse(ev[1].trim());
-                                if (facts && facts.nextHighestPriority && facts.nextHighestPriority.id) {
-                                    offer = facts.nextHighestPriority;
-                                }
-                            } catch { /* not the evidence we know */ }
-                        }
-                        for (const raw of body.split('\n')) {
-                            const l = raw.trim();
-                            const m = l.match(/^-\s*outcome:\s*\*\*([a-z-]+)\*\*\s*(?:—|--)?\s*(.*)$/i);
-                            if (m) {
-                                const verdict = (m[2] || '').trim();
-                                lines.push({ time: time, text: verdict || m[1], offer: offer });
-                            }
-                        }
-                    }
-                    // Errors are plain bullets under their own heading.
-                    const ei = w.indexOf('### Errors');
-                    if (ei >= 0) {
-                        let body = w.slice(ei + '### Errors'.length);
-                        const nx = body.search(/\n#{2,3} /);
-                        if (nx >= 0) { body = body.slice(0, nx); }
-                        for (const raw of body.split('\n')) {
-                            const l = raw.trim();
-                            if (l.startsWith('- ')) { lines.push({ time: time, text: l.slice(2).trim() }); }
-                        }
-                    }
-                }
-                // A five-minute poll on a quiet board repeats the same sentence
-                // forever. Consecutive identical reports are ONE fact observed
-                // repeatedly, not news, so they collapse into a single entry
-                // carrying the latest time and a count — otherwise the moment
-                // something actually changes is buried under its own history.
-                const merged = [];
-                for (const e of lines) {
-                    const prev = merged[merged.length - 1];
-                    if (prev && prev.text === e.text) {
-                        prev.time = e.time;
-                        prev.repeat = (prev.repeat || 1) + 1;
-                        prev.offer = e.offer;
-                        continue;
-                    }
-                    merged.push({ time: e.time, text: e.text, offer: e.offer, repeat: 1 });
-                }
-                // Newest last, and only the recent tail — the report is an append
-                // only history and old entries are not what the operator is watching.
-                const tail = merged.slice(-25);
                 reportEl.textContent = '';
-                if (tail.length === 0) {
+                if (!latest) {
                     const empty = document.createElement('div');
                     empty.className = 'agent-poll-empty';
                     empty.style.cssText = 'font-size:11px; color:var(--text-dim); padding:8px 2px;';
                     empty.textContent = 'No report yet — the agent speaks every 5 minutes.';
                     reportEl.appendChild(empty);
-                } else {
-                    for (const entry of tail) {
-                        const problem = !/^nothing wrong/i.test(entry.text);
-                        // This is a RECENT REPORT view, not a chat log: the latest
-                        // report is what the operator came to read. It keeps the
-                        // theme accent and full contrast; everything behind it is
-                        // history and recedes so the eye lands on the newest line.
-                        const latest = entry === tail[tail.length - 1];
-                        const msg = document.createElement('div');
-                        msg.className = 'agent-poll-msg' + (problem ? ' is-problem' : '')
-                            + (latest ? ' is-latest' : '');
-                        msg.style.cssText = 'display:flex; flex-direction:column; align-items:flex-start; max-width:92%;'
-                            + (latest ? '' : ' opacity:0.55;');
+                    return;
+                }
 
-                        const meta = document.createElement('div');
-                        meta.className = 'agent-poll-meta';
-                        meta.style.cssText = 'font-size:9px; letter-spacing:0.04em; text-transform:uppercase; '
-                            + 'margin:0 0 3px 10px; color:'
-                            + (latest ? 'var(--accent-primary)' : 'var(--text-dim)') + ';';
-                        meta.textContent = 'agent · ' + entry.time
-                            + (entry.repeat > 1 ? ' · ×' + entry.repeat : '')
-                            + (latest ? ' · latest' : '');
+                const f = latest.facts || {};
+                const mk = function (tag, css, txt) {
+                    const el = document.createElement(tag);
+                    if (css) { el.style.cssText = css; }
+                    if (txt !== undefined) { el.textContent = txt; }
+                    return el;
+                };
+                const SECTION = 'font-size:9px; letter-spacing:0.08em; text-transform:uppercase; '
+                    + 'color:var(--accent-primary); margin:12px 0 5px; font-weight:600;';
+                const ROW = 'display:flex; justify-content:space-between; gap:10px; '
+                    + 'font-size:12px; padding:2px 0; line-height:1.4;';
 
-                        const bubble = document.createElement('div');
-                        bubble.className = 'agent-poll-bubble';
-                        bubble.style.cssText = 'background:var(--panel-bg2); border:1px solid '
-                            + (latest || problem ? 'var(--accent-primary)' : 'var(--border-color)')
-                            + '; border-radius:12px 12px 12px 3px; padding:7px 11px; font-size:12px; '
-                            + 'line-height:1.45; word-break:break-word;'
-                            + (latest ? ' box-shadow:0 0 0 1px var(--accent-primary);' : '')
-                            + (problem ? ' color:var(--accent-primary);' : '');
-                        bubble.textContent = entry.text;
+                const card = mk('div', 'border:1px solid var(--accent-primary); border-radius:4px; '
+                    + 'padding:11px 13px; background:var(--panel-bg2);');
 
-                        msg.appendChild(meta);
-                        msg.appendChild(bubble);
+                // Header — the time is the whole point of a replacing report: it is
+                // how the operator knows whether they are looking at now or at a
+                // board that stopped being reported on an hour ago.
+                const head = mk('div', 'display:flex; justify-content:space-between; align-items:baseline; '
+                    + 'gap:8px; border-bottom:1px solid var(--border-color); padding-bottom:7px;');
+                head.appendChild(mk('span', 'font-size:10px; letter-spacing:0.08em; text-transform:uppercase; '
+                    + 'color:var(--accent-primary); font-weight:600;', 'Agent report'));
+                head.appendChild(mk('span', 'font-size:10px; color:var(--text-dim);', latest.time));
+                card.appendChild(head);
 
-                        // Only the NEWEST message carries a live offer: acting on a
-                        // stale one would dispatch a card the board has since moved
-                        // past, which is worse than no button at all.
-                        // Gated on the OFFER, not on the model's wording. The offer
-                        // comes from the evidence block and is deterministic; matching
-                        // /dispatch it\?/ against the prose meant a rephrase silently
-                        // removed the only dispatch path on the panel.
-                        if (latest && entry.offer && entry.offer.id) {
-                            const act = document.createElement('button');
-                            act.type = 'button';
-                            // BOTH class names on purpose: the dock defines
-                            // .agent-poll-btn and the command view defines
-                            // .secondary-action-btn. Each surface styles the one it
-                            // owns, so the button matches wherever it is rendered
-                            // instead of being unstyled on the surface that has
-                            // never heard of the class.
-                            act.className = 'agent-poll-btn secondary-action-btn';
-                            act.style.cssText = 'margin: 6px 0 0 10px; align-self: flex-start;';
-                            // Say WHAT it dispatches. An 8-character id tells the
-                            // operator nothing about what they are about to start.
-                            act.textContent = 'Dispatch ' + (entry.offer.kind === 'feature' ? 'feature' : 'plan');
-                            act.title = (entry.offer.topic || '') + (entry.offer.id ? ' (' + entry.offer.id + ')' : '');
-                            act.addEventListener('click', async () => {
-                                act.disabled = true;
-                                act.textContent = 'dispatching…';
-                                try {
-                                    const r = await fetch('/kanban/dispatch', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ planId: entry.offer.id })
-                                    });
-                                    const rd = await r.json().catch(() => null);
-                                    if (r.ok && rd && rd.success !== false) {
-                                        act.textContent = 'dispatched';
-                                        setState('dispatched ' + entry.offer.id);
-                                    } else {
-                                        act.textContent = 'failed';
-                                        setState('dispatch failed: ' + ((rd && (rd.reason || rd.error)) || r.status));
-                                        act.disabled = false;
-                                    }
-                                } catch (err) {
-                                    act.textContent = 'failed';
-                                    setState('dispatch failed: ' + String(err));
-                                    act.disabled = false;
-                                }
-                            });
-                            msg.appendChild(act);
-                        }
-                        reportEl.appendChild(msg);
+                // Assessment. The stored report line carries a deterministic
+                // counts prefix so the .md artifact stands alone; here the counts
+                // are drawn as their own section, so the prefix is stripped rather
+                // than printed twice.
+                let verdict = latest.text;
+                const shape = String(f.boardShape || '');
+                if (shape && verdict.indexOf(shape) === 0) {
+                    verdict = verdict.slice(shape.length).replace(/^[^—-]*[—-]\s*/, '').trim() || latest.text;
+                }
+                card.appendChild(mk('div', 'font-size:12.5px; line-height:1.5; margin-top:9px; '
+                    + 'color:var(--text-color);', verdict));
+
+                const cols = f.cardsByColumn && typeof f.cardsByColumn === 'object' ? f.cardsByColumn : null;
+                if (cols) {
+                    card.appendChild(mk('div', SECTION, 'Columns'));
+                    const entries = Object.keys(cols).map(function (k) { return [k, cols[k]]; })
+                        .sort(function (a, b) { return b[1] - a[1]; });
+                    for (const pair of entries) {
+                        const row = mk('div', ROW);
+                        row.appendChild(mk('span', 'color:var(--text-color);', pair[0]));
+                        row.appendChild(mk('span', 'color:var(--accent-primary); font-variant-numeric:tabular-nums;',
+                            String(pair[1])));
+                        card.appendChild(row);
                     }
                 }
-                reportEl.scrollTop = reportEl.scrollHeight;
+
+                // Teams. "No seats up" is a finding, not an empty state, so it is
+                // said in words rather than rendered as a blank section.
+                const seats = f.seatsByTeam && typeof f.seatsByTeam === 'object' ? f.seatsByTeam : {};
+                const inflight = f.cardsInFlightByTeam && typeof f.cardsInFlightByTeam === 'object'
+                    ? f.cardsInFlightByTeam : {};
+                const teamNames = Object.keys(seats).concat(Object.keys(inflight)).filter(
+                    function (v, i, a) { return a.indexOf(v) === i; }).sort();
+                card.appendChild(mk('div', SECTION, 'Teams'));
+                if (teamNames.length === 0) {
+                    card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
+                        'No seats up.'));
+                } else {
+                    for (const t of teamNames) {
+                        const up = (seats[t] || []).length;
+                        const wip = inflight[t] || 0;
+                        const row = mk('div', ROW);
+                        row.appendChild(mk('span', 'color:var(--text-color);', t));
+                        row.appendChild(mk('span', 'color:var(--text-dim); font-variant-numeric:tabular-nums;',
+                            up + ' seat' + (up === 1 ? '' : 's') + ' · ' + wip + ' in flight'));
+                        card.appendChild(row);
+                    }
+                }
+
+                if (latest.errors.length) {
+                    card.appendChild(mk('div', SECTION, 'Errors'));
+                    for (const e of latest.errors) {
+                        card.appendChild(mk('div', 'font-size:12px; color:var(--accent-primary); '
+                            + 'padding:2px 0; line-height:1.4;', e));
+                    }
+                }
+
+                // Next up, with the action on it. The offer comes from the evidence
+                // block, never from the prose, so a rephrase cannot remove it.
+                const offer = f.nextHighestPriority || null;
+                if (offer && offer.id) {
+                    card.appendChild(mk('div', SECTION, 'Next up'));
+                    card.appendChild(mk('div', 'font-size:12px; line-height:1.45; color:var(--text-color);',
+                        String(offer.topic || offer.id)));
+                    const sub = (offer.kind === 'feature' ? 'feature' : 'plan')
+                        + (offer.project ? ' · ' + offer.project : '') + ' · ' + offer.id;
+                    card.appendChild(mk('div', 'font-size:10px; color:var(--text-dim); margin-top:2px;', sub));
+
+                    const act = document.createElement('button');
+                    act.type = 'button';
+                    // BOTH class names on purpose: the dock defines .agent-poll-btn
+                    // and the command view defines .secondary-action-btn. Each
+                    // surface styles the one it owns.
+                    act.className = 'agent-poll-btn secondary-action-btn';
+                    act.style.cssText = 'margin-top:9px;';
+                    act.textContent = 'Dispatch ' + (offer.kind === 'feature' ? 'feature' : 'plan');
+                    act.title = String(offer.topic || '') + ' (' + offer.id + ')';
+                    act.addEventListener('click', async () => {
+                        act.disabled = true;
+                        act.textContent = 'dispatching…';
+                        try {
+                            const r = await fetch('/kanban/dispatch', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ planId: offer.id })
+                            });
+                            const rd = await r.json().catch(() => null);
+                            if (r.ok && rd && rd.success !== false) {
+                                act.textContent = 'dispatched';
+                                setState('dispatched ' + offer.id);
+                            } else {
+                                act.textContent = 'failed';
+                                setState('dispatch failed: ' + ((rd && (rd.reason || rd.error)) || r.status));
+                                act.disabled = false;
+                            }
+                        } catch (err) {
+                            act.textContent = 'failed';
+                            setState('dispatch failed: ' + String(err));
+                            act.disabled = false;
+                        }
+                    });
+                    card.appendChild(act);
+                }
+
+                reportEl.appendChild(card);
             } catch {
                 reportEl.textContent = 'Report unavailable.';
             }
