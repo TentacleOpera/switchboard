@@ -12,7 +12,7 @@
 // and it holds no model endpoint call of its own — judgement belongs to the
 // controller.
 //
-// No confirmation dialog gates anything here, including disarm (CLAUDE.md).
+// No confirmation dialog gates anything here (CLAUDE.md).
 (function () {
     'use strict';
 
@@ -21,7 +21,6 @@
         when: 'agent-controller-when',
         where: 'agent-controller-where',
         arm: 'agent-controller-arm',
-        disarm: 'agent-controller-disarm',
         run: 'agent-controller-run',
         status: 'agent-controller-status',
         rows: 'agent-controller-rows',
@@ -140,157 +139,17 @@
      * on a phone is the difference between "configurable from the panel" and
      * "not configurable at all".
      */
-    let configDirty = false;
 
-    function markConfigDirty() { configDirty = true; }
 
-    function renderConfig(bodyEl, config, matrix, judgement) {
-        if (!bodyEl) { return; }
-        // Never rebuild under the operator's hands: a focused or edited field
-        // keeps what it holds until the next save (which clears the flag and
-        // re-renders from the board's answer).
-        if (bodyEl.childElementCount > 0 && (configDirty || bodyEl.contains(document.activeElement))) { return; }
-        bodyEl.textContent = '';
 
-        const intervalLabel = document.createElement('label');
-        intervalLabel.className = 'agent-controller-field';
-        intervalLabel.textContent = 'Wake interval (minutes) — applies on the next arm';
-        const interval = document.createElement('input');
-        interval.type = 'number';
-        interval.min = '1';
-        interval.id = 'agent-controller-interval';
-        interval.value = config && config.value && config.value.intervalMinutes ? String(config.value.intervalMinutes) : '';
-        interval.addEventListener('input', markConfigDirty);
-        intervalLabel.appendChild(interval);
-        const intervalSave = document.createElement('button');
-        intervalSave.type = 'button';
-        intervalSave.id = 'agent-controller-interval-save';
-        intervalSave.className = 'agent-controller-btn';
-        intervalSave.textContent = 'Save interval';
-        intervalSave.addEventListener('click', () => void saveConfig());
-        bodyEl.appendChild(intervalLabel);
-        bodyEl.appendChild(intervalSave);
-
-        const matrixLabel = document.createElement('label');
-        matrixLabel.className = 'agent-controller-field';
-        matrixLabel.textContent = matrix && matrix.kind === 'configured'
-            ? 'Solutions matrix (override) — JSON rows, saved to the board'
-            : 'Solutions matrix — shipped default in force; save rows to override';
-        const matrixArea = document.createElement('textarea');
-        matrixArea.id = 'agent-controller-matrix';
-        matrixArea.rows = 6;
-        matrixArea.value = matrix && matrix.kind === 'configured' ? JSON.stringify(matrix.rows, null, 2) : '';
-        matrixArea.addEventListener('input', markConfigDirty);
-        matrixLabel.appendChild(matrixArea);
-        bodyEl.appendChild(matrixLabel);
-        const matrixSave = document.createElement('button');
-        matrixSave.type = 'button';
-        matrixSave.id = 'agent-controller-matrix-save';
-        matrixSave.className = 'agent-controller-btn';
-        matrixSave.textContent = 'Save matrix';
-        matrixSave.addEventListener('click', () => void saveMatrix());
-        bodyEl.appendChild(matrixSave);
-
-        const judgementLabel = document.createElement('label');
-        judgementLabel.className = 'agent-controller-field';
-        judgementLabel.textContent = 'Judgement tiers, supervisor seat and ceiling';
-        const judgementArea = document.createElement('textarea');
-        judgementArea.id = 'agent-controller-judgement';
-        judgementArea.rows = 5;
-        judgementArea.value = judgement ? JSON.stringify(judgement, null, 2) : '{}';
-        judgementArea.addEventListener('input', markConfigDirty);
-        judgementLabel.appendChild(judgementArea);
-        bodyEl.appendChild(judgementLabel);
-        const judgementSave = document.createElement('button');
-        judgementSave.type = 'button';
-        judgementSave.id = 'agent-controller-judgement-save';
-        judgementSave.className = 'agent-controller-btn';
-        judgementSave.textContent = 'Save judgement config';
-        judgementSave.addEventListener('click', () => void saveJudgement());
-        bodyEl.appendChild(judgementSave);
-    }
-
-    function renderEscalations(escEl, escalations) {
-        if (!escEl) { return; }
-        escEl.textContent = '';
-        const table = escalations && escalations.value ? escalations.value : null;
-        const open = table && table.open ? Object.values(table.open) : [];
-        const answered = table && table.answered ? Object.values(table.answered).slice(-5).reverse() : [];
-        const heading = document.createElement('div');
-        heading.className = 'agent-controller-row';
-        heading.textContent = open.length
-            ? `${open.length} open escalation(s) awaiting the supervisor`
-            : 'no open escalations';
-        escEl.appendChild(heading);
-        for (const esc of open) {
-            const card = document.createElement('div');
-            card.className = 'agent-controller-escalation';
-            const subject = document.createElement('div');
-            subject.className = 'agent-controller-escalation-subject';
-            subject.textContent = `${esc.subjectKey || 'subject'} — rule ${esc.ruleId || '?'}`;
-            card.appendChild(subject);
-            if (esc.reason) {
-                const reason = document.createElement('div');
-                reason.className = 'agent-controller-escalation-reason';
-                reason.textContent = String(esc.reason);
-                card.appendChild(reason);
-            }
-            escEl.appendChild(card);
-        }
-        for (const esc of answered) {
-            const card = document.createElement('div');
-            card.className = 'agent-controller-escalation is-answered';
-            card.textContent = `${esc.subjectKey || 'subject'}: ${esc.verdict || esc.status || 'answered'}${esc.reason ? ' — ' + esc.reason : ''}`;
-            escEl.appendChild(card);
-        }
-    }
 
     function create() {
         const stateEl = el(IDS.state);
         if (!stateEl) { return null; }
         let supervisorSeat = null;
 
-        async function saveConfig() {
-            const input = el('agent-controller-interval');
-            const value = input && input.value.trim() ? Number(input.value) : null;
-            const res = await jsonFetch('/controller/config', {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ intervalMinutes: value }),
-            });
-            if (res.ok && res.data && res.data.success !== false) { configDirty = false; setStatus('Wake interval saved — it applies on the next arm.', 'ok'); }
-            else { setStatus('Interval not saved: ' + ((res.data && (res.data.reason || res.data.error)) || res.status), 'error'); }
-            await refresh();
-        }
 
-        async function saveMatrix() {
-            const area = el('agent-controller-matrix');
-            if (!area) { return; }
-            let rows;
-            try { rows = JSON.parse(area.value); }
-            catch (err) { setStatus('Matrix not saved — it is not valid JSON: ' + (err && err.message), 'error'); return; }
-            const res = await jsonFetch('/controller/matrix', {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ rows }),
-            });
-            if (res.ok && res.data && res.data.success !== false) { configDirty = false; setStatus('Matrix saved — the controller loads it on its next wake.', 'ok'); }
-            else { setStatus('Matrix not saved: ' + ((res.data && (res.data.reason || res.data.error)) || res.status), 'error'); }
-            await refresh();
-        }
 
-        async function saveJudgement() {
-            const area = el('agent-controller-judgement');
-            if (!area) { return; }
-            let judgement;
-            try { judgement = JSON.parse(area.value); }
-            catch (err) { setStatus('Judgement config not saved — it is not valid JSON: ' + (err && err.message), 'error'); return; }
-            const res = await jsonFetch('/controller/judgement', {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ judgement }),
-            });
-            if (res.ok && res.data && res.data.success !== false) { configDirty = false; setStatus('Judgement config saved.', 'ok'); }
-            else { setStatus('Judgement config not saved: ' + ((res.data && (res.data.reason || res.data.error)) || res.status), 'error'); }
-            await refresh();
-        }
 
         async function arm() {
             const res = await jsonFetch('/controller/arm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
@@ -299,12 +158,6 @@
             await refresh();
         }
 
-        async function disarm() {
-            const res = await jsonFetch('/controller/disarm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-            if (res.data && res.data.success !== false) { setStatus(res.data.reason || 'Controller disarmed.', 'ok'); }
-            else { setStatus('Disarm failed: ' + ((res.data && (res.data.reason || res.data.error)) || res.status), 'error'); }
-            await refresh();
-        }
 
         async function runNow() {
             const res = await jsonFetch('/controller/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
@@ -312,22 +165,6 @@
             else { setStatus('Run failed: ' + ((res.data && (res.data.reason || res.data.error)) || res.status), 'error'); }
         }
 
-        async function reply() {
-            const input = el('agent-controller-reply');
-            const text = input && input.value.trim();
-            if (!text) { setStatus('Type a reply for the supervisor seat first.', 'error'); return; }
-            if (!supervisorSeat) { setStatus('No supervisor seat is configured — set one in the judgement config.', 'error'); return; }
-            const res = await jsonFetch('/terminals/verb/ptySendPrompt', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: supervisorSeat, data: text, clearBeforePrompt: false }),
-            });
-            if (res.ok && res.data && res.data.success !== false) {
-                input.value = '';
-                setStatus(`Reply delivered to the supervisor seat '${supervisorSeat}'.`, 'ok');
-            } else {
-                setStatus('Reply not delivered: ' + ((res.data && (res.data.error || res.data.reason)) || res.status), 'error');
-            }
-        }
 
         async function refresh() {
             const [leaseRes, stateRes, configRes, matrixRes, judgementRes, reportRes, escRes] = await Promise.all([
@@ -371,16 +208,12 @@
 
             supervisorSeat = judgement && typeof judgement.supervisorSeat === 'string' ? judgement.supervisorSeat : null;
             renderRows(el(IDS.rows), stateView);
-            renderConfig(el(IDS.configBody), config, matrix, judgement);
             renderReport(el(IDS.report), report);
-            renderEscalations(el(IDS.escalations), escalations);
         }
 
         const armBtn = el(IDS.arm);
-        const disarmBtn = el(IDS.disarm);
         const runBtn = el(IDS.run);
         if (armBtn) { armBtn.addEventListener('click', () => void arm()); }
-        if (disarmBtn) { disarmBtn.addEventListener('click', () => void disarm()); }
         if (runBtn) { runBtn.addEventListener('click', () => void runNow()); }
 
         // Second-hand state that never goes stale is not second-hand state: a
@@ -388,25 +221,7 @@
         // action, so the console re-reads the board on its own clock.
         const pollTimer = setInterval(() => void refresh(), 15000);
 
-        // Reply wiring is created here so both panes get the same control.
-        const escEl = el(IDS.escalations);
-        if (escEl) {
-            const replyInput = document.createElement('textarea');
-            replyInput.id = 'agent-controller-reply';
-            replyInput.className = 'agent-controller-reply';
-            replyInput.rows = 2;
-            replyInput.placeholder = 'Reply to the supervisor seat';
-            const replyBtn = document.createElement('button');
-            replyBtn.type = 'button';
-            replyBtn.id = 'agent-controller-reply-send';
-            replyBtn.className = 'agent-controller-btn';
-            replyBtn.textContent = 'Send reply';
-            replyBtn.addEventListener('click', () => void reply());
-            escEl.parentNode.insertBefore(replyInput, escEl.nextSibling);
-            escEl.parentNode.insertBefore(replyBtn, replyInput.nextSibling);
-        }
-
-        return { refresh, arm, disarm, runNow, reply, pollTimer };
+        return { refresh, arm, runNow, pollTimer };
     }
 
     window.SwitchboardControllerConsole = { create, IDS };
