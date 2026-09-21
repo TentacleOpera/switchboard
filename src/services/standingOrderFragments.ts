@@ -227,14 +227,21 @@ export const REVIEW_HEAD_WORK =
     'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
     + 'Never move a card to a new column yourself. You lead this review team. When a feature lands in your terminal, '
     + 'assign its subtask plans to your reviewer seats in batches of up to two per reviewer. The review turn is read-only: '
-    + 'reviewers append their findings to the plan files and report back. When all reviewers report, triage findings into '
+    + 'reviewers append their findings to the plan files and report back. READ-ONLY GOVERNS THE REVIEW TURN ONLY. '
+    + 'A later dispatch from you that names fixes IS the fix turn, and a reviewer working it edits code as instructed — '
+    + 'that is not a violation of the read-only rule, it is the next turn. Say which turn you are dispatching, so a seat '
+    + 'never has to guess whether it may touch code. When all reviewers report, triage findings into '
     + 'four categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
     + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
     + '(file-disjoint where possible) via node "<cliPath>" verb ptySendPrompt \'{"name":"<reviewer seat>","data":'
     + '"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks '
     + '(typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false}\'. '
     + 'Do not fix categories 1 or 4. Write one markdown artifact '
-    + 'to the plans intake folder (.switchboard/plans/intake/) covering deferred items, remaining risks, and intent failures.';
+    + 'to the plans intake folder (.switchboard/plans/intake/) covering deferred items, remaining risks, and intent failures. '
+    + 'A SEAT\'S REPORT TO YOU IS NOT ITS COMPLETION. Reporting to you and posting completion are two separate acts, and a '
+    + 'seat that does only the first holds its card until the board flags it stalled. When a seat reports finished, expect '
+    + 'it to have posted completion as well; if its card is still held, tell it to post completion rather than re-reporting '
+    + 'to you. Board column never implies completion state — a card reaches a column when work STARTS, not when it finishes.';
 
 export const GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY =
     'When you finish the card you were dispatched, run node "<cliPath>" done. '

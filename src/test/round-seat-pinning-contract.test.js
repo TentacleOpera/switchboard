@@ -383,6 +383,35 @@ async function run() {
         assert.ok(d.body.subtasks.every(s => s.source === 'positional-fallback'));
     });
 
+    // ── 7b. A round dispatch never clears the destination seat ────────────────
+
+    await check('a round dispatch issues no clear, so a double-pinned seat keeps both prompts', async () => {
+        const ctx = makeServer();
+        seedFeature(ctx, 2);
+        // Both subtasks pinned to ONE seat. The plan permits this; the concern
+        // was that the second send clears the first's prompt. It cannot:
+        // _dispatchRoundCore passes no clearBeforePrompt, and both delivery
+        // layers (ptyPromptDelivery `=== true`, tmuxPromptDelivery `if (...)`)
+        // treat undefined as "do not clear". Pin the option here so a future
+        // caller cannot quietly start clearing mid-round.
+        const opts = [];
+        ctx.server.performKanbanDispatch = async (_ws, planId, _target, options) => {
+            opts.push({ planId, seat: options?.targetTerminalOverride, clearBeforePrompt: options?.clearBeforePrompt });
+            return { status: 200, payload: { success: true, planId, dispatched: true } };
+        };
+        const r = await register(ctx, [[
+            { planId: 's1', seat: 'Coding-intern' },
+            { planId: 's2', seat: 'Coding-intern' },
+        ]]);
+        assert.strictEqual(r.status, 200, `a double-pin registers: ${JSON.stringify(r.body)}`);
+        assert.deepStrictEqual(opts.map(o => o.seat), ['Coding-intern', 'Coding-intern'],
+            'both subtasks go to the pinned seat');
+        assert.deepStrictEqual(opts.map(o => o.clearBeforePrompt), [undefined, undefined],
+            'no clear is requested on either send — an explicit true here would destroy the first prompt');
+        assert.deepStrictEqual(r.body.dispatched && r.body.dispatched.dispatched, true,
+            'the round dispatches successfully');
+    });
+
     // ── 8. The parser tolerates all three stored shapes ───────────────────────
 
     await check('_parseSubtaskSeatEntries tolerates the three shapes and yields [] on corrupt JSON', async () => {

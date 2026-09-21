@@ -104,24 +104,49 @@ func (t *Transport) apiRequest(method, pathname string, payload any, query map[s
 	upper := strings.ToUpper(method)
 	isReadLike := upper == "GET" || upper == "DELETE"
 
-	fullURL := t.BaseURL + pathname
+	// A pathname may ALREADY carry a query string — every seat's standing
+	// orders name `api GET '/kanban/plan?planId=<id>'`, and the board's own
+	// docs do too. Appending "?" + enc unconditionally produced
+	// `?planId=X?workspaceRoot=Y`, which the server reads as a planId of
+	// `X?workspaceRoot=Y` and answers 404 "Plan not found" — a URL-assembly
+	// bug wearing the costume of a missing card.
+	//
+	// So the existing query is parsed out and MERGED, rather than appended.
+	// Merging (not appending) is what keeps the documented precedence true:
+	// the injected `workspaceRoot` must beat a stale one a caller embedded in
+	// the path, and the server's `searchParams.get` returns the FIRST value —
+	// so an appended root would lose to the caller's. `values.Set` below
+	// overwrites, which is the ordering the doc comment promises.
+	basePath := pathname
 	values := url.Values{}
+	if qIdx := strings.IndexByte(pathname, '?'); qIdx >= 0 {
+		basePath = pathname[:qIdx]
+		// A malformed query is dropped rather than fatal: the caller asked for
+		// a path, and losing an unparseable param is better than refusing the
+		// request outright.
+		if existing, err := url.ParseQuery(pathname[qIdx+1:]); err == nil {
+			values = existing
+		} else if t.Diag != nil {
+			// Diag is documented `nil = silent`, and a zero-valued Transport
+			// is constructible — an unguarded call panics on the error path.
+			t.Diag("[switchboard] ignoring unparseable query string in %q: %v", pathname, err)
+		}
+	}
+
+	fullURL := t.BaseURL + basePath
 	if isReadLike {
 		for k, v := range query {
 			values.Set(k, v)
 		}
 		// workspaceRoot is NOT optional on the read path.
 		values.Set("workspaceRoot", t.ServerRoot)
-		if enc := values.Encode(); enc != "" {
-			fullURL += "?" + enc
-		}
-	} else if len(query) > 0 {
+	} else {
 		for k, v := range query {
 			values.Set(k, v)
 		}
-		if enc := values.Encode(); enc != "" {
-			fullURL += "?" + enc
-		}
+	}
+	if enc := values.Encode(); enc != "" {
+		fullURL += "?" + enc
 	}
 
 	var bodyBytes []byte

@@ -6687,10 +6687,23 @@ export class LocalApiServer {
             console.log(`[LocalApiServer] round ${roundId}: subtask '${planId}' → seat '${seat}' (source: ${chosen.source})`);
 
             // Dispatch through the existing machinery. skipClear: true
-            // skips the roster barrier (which would clear the ENTIRE
-            // roster). The destination clearBeforePrompt uses the config
-            // default (the seat IS cleared before the prompt — it is
-            // receiving new work).
+            // skips the roster barrier (which would clear the ENTIRE roster).
+            //
+            // NO CLEAR IS ISSUED HERE, and the comment that used to sit on
+            // this line said the opposite ("the seat IS cleared before the
+            // prompt"). It was wrong in a way that matters: `clearBeforePrompt`
+            // is left undefined below, and BOTH delivery layers require it to
+            // be truthy — `ptyPromptDelivery.sendPromptToPty` resolves
+            // `opts?.clearBeforePrompt === true`, and `tmuxPromptDelivery`
+            // tests `if (opts?.clearBeforePrompt)`. Undefined means no clear.
+            // Seats are cleared AT REST instead (an accept, a round close, a
+            // feature completion, a queue pop).
+            //
+            // The false comment cost a review cycle: it is the sole basis on
+            // which two subtasks of one round pinned to the same seat were
+            // reported as silently losing the first prompt. They do not — both
+            // are delivered, serialised by the per-terminal lock. Leaving the
+            // comment would keep re-manufacturing that conclusion.
             // NO COMPLEXITY ROUTING IN A TEAM ROUND. The seat is already chosen —
             // pinned by the lead at registration, or positional within this
             // round. Passing

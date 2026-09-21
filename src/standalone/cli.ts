@@ -637,20 +637,31 @@ function apiRequest(
     const token = target.auth.token;
     const upperMethod = (method || 'GET').toUpperCase();
     const isReadLike = upperMethod === 'GET' || upperMethod === 'DELETE';
-    let url = `${target.baseUrl}${pathname}`;
 
+    // A pathname may already carry a query string (`/kanban/plan?planId=<id>`
+    // is what every seat's standing orders name). Parse it out and MERGE,
+    // rather than appending with `&`: the server reads a repeated key with
+    // `searchParams.get`, which returns the FIRST value, so an APPENDED
+    // `workspaceRoot` loses to one the caller embedded in the path — the exact
+    // inverse of the precedence this function documents above. Merging lets
+    // the injected target root overwrite, which is what the doc promises.
+    // Mirrored in internal/client/transport.go apiRequest; the two clients
+    // must not drift.
+    const qIdx = pathname.indexOf('?');
+    const basePath = qIdx >= 0 ? pathname.slice(0, qIdx) : pathname;
+    const params = new URLSearchParams(qIdx >= 0 ? pathname.slice(qIdx + 1) : '');
+    let url = `${target.baseUrl}${basePath}`;
+
+    for (const [k, v] of Object.entries(query || {})) { params.set(k, v); }
     if (isReadLike) {
         // `workspaceRoot` is NOT optional on the read path. `_resolveDbFromQuery`
         // falls back to the host's own selected root when the param is absent — on
         // the extension host that is a DIFFERENT board from the one the CLI's cwd
         // names.
-        const params: Record<string, string> = { ...(query || {}), workspaceRoot: target.workspaceRoot };
-        const qs = new URLSearchParams(params).toString();
-        if (qs) { url += (url.includes('?') ? '&' : '?') + qs; }
-    } else if (query) {
-        const qs = new URLSearchParams(query).toString();
-        if (qs) { url += (url.includes('?') ? '&' : '?') + qs; }
+        params.set('workspaceRoot', target.workspaceRoot);
     }
+    const qs = params.toString();
+    if (qs) { url += '?' + qs; }
 
     let finalPayload = payload;
     if (!isReadLike && typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {

@@ -397,9 +397,15 @@ test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
         'stop and report to the human instead of dispatching again', 'PLAN FILES ARE THE SOURCE OF TRUTH',
         'Never move a card backwards', 'Never move a card to a new column yourself',
         'ptyListTerminals', 'dispatch the next subtask to an idle seat',
-        'do not stack subtasks on the same coder', 'One subtask per cleared seat before rotation']) {
+        'do not stack subtasks on the same coder', 'no rotation happens on its own']) {
         assert.ok(NEW_CODING_HEAD_PROMPT.includes(lit), `missing load-bearing literal: ${lit}`);
     }
+    // No rotation has ever existed in either lead variant: the rounds lead
+    // pins seats at registration, and THIS lead hand-dispatches. The old
+    // "One subtask per cleared seat before rotation" described machinery the
+    // host does not have, which is the same claim the rounds fragments shed.
+    assert.ok(!/rotation\b/.test(NEW_CODING_HEAD_PROMPT.replace('no rotation happens on its own', '')),
+        'the prompt must not assert a seat rotation the host does not perform');
     assert.ok(!NEW_CODING_HEAD_PROMPT.includes('satisfied with it, hand it to review yourself'),
         'the new text must not contain the old fragment');
     assert.ok(!NEW_CODING_HEAD_PROMPT.includes('Only advance the feature your team worked'),
