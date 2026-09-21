@@ -3152,6 +3152,17 @@
                     loose = d.outsideMissions || null;
                 } catch { missionsReadable = false; }
 
+                // How old this report is. Deleted once already by an edit that
+                // replaced the block it sat in, which threw a ReferenceError inside
+                // the render and put "Report unavailable." on screen — the catch
+                // reported a dead endpoint for what was a typo-class bug.
+                let age = '';
+                const reportMs = Date.parse(latest.stamp);
+                if (!isNaN(reportMs)) {
+                    const am = Math.max(0, Math.round((Date.now() - reportMs) / 60000));
+                    age = am < 1 ? 'just now' : (am < 60 ? am + ' min ago' : Math.round(am / 60) + 'h ago');
+                }
+
                 const elapsed = function (iso) {
                     const t = Date.parse(iso);
                     if (isNaN(t)) { return ''; }
@@ -3547,23 +3558,32 @@
                     + 'color:var(--text-primary); min-width:70px;';
                 r.textContent = role;
 
+                // WHICH MODEL IS FLYING STAYS ON THE PANEL. Demoting it to a
+                // tooltip was a redesign decision nobody asked for, and the name
+                // is what makes this a crew station rather than a status light.
+                const name = document.createElement('span');
+                name.style.cssText = 'font-size:11px; flex:1; min-width:0; overflow:hidden; '
+                    + 'text-overflow:ellipsis; white-space:nowrap; color:'
+                    + (m ? 'var(--text-primary)' : 'var(--text-secondary)') + ';';
+                if (m) {
+                    const where = [];
+                    if (m.where) { where.push(m.where); }
+                    if (m.note) { where.push(m.note); }
+                    name.textContent = m.name + (where.length ? ' (' + where.join(', ') + ')' : '');
+                    name.title = String(m.raw || '');
+                } else {
+                    name.textContent = (role === 'NAVIGATOR') ? navMissing : 'not configured';
+                }
+
                 const v = document.createElement('span');
                 v.style.cssText = 'font-size:9px; letter-spacing:0.14em; text-transform:uppercase; '
-                    + 'color:' + (lit ? 'var(--accent-primary)' : 'var(--text-secondary)') + ';';
+                    + 'flex-shrink:0; color:'
+                    + (lit ? 'var(--accent-primary)' : 'var(--text-secondary)') + ';';
                 v.textContent = state;
-                // The infrastructure is still ONE HOVER away, never gone: it is
-                // how the cloud model running the 5-minute loop was caught.
-                if (m) {
-                    const bits = [m.name];
-                    if (m.where) { bits.push(m.where); }
-                    if (m.note) { bits.push(m.note); }
-                    v.title = bits.join(' · ') + ' — ' + String(m.raw || '');
-                } else {
-                    v.title = (role === 'NAVIGATOR') ? navMissing : 'not configured';
-                }
 
                 el.appendChild(bulb);
                 el.appendChild(r);
+                el.appendChild(name);
                 el.appendChild(v);
                 return el;
             };
