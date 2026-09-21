@@ -1062,14 +1062,11 @@
                         </div>
                         <div id="agent-status-chip" class="status-chip hidden"></div>
                         <div id="agent-quick-actions" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
-                        <!-- The controller console. Everything here is
-                             SECOND-HAND: the board renders what the controller
-                             last reported and says when. Arm starts the
-                             controller process, Disarm stops it, Run a pass now
-                             runs one wake. No confirmation gates any of it
-                             (CLAUDE.md). The card picker is gone — the model is
-                             no longer asked to pick a verb for a card the
-                             operator already resolved. -->
+                        <div class="agent-poll" id="agent-poll">
+                            <button type="button" class="agent-control-btn" id="agent-poll-start">Start</button>
+                            <button type="button" class="agent-control-btn" id="agent-poll-stop">Stop</button>
+                            <span class="agent-poll-state" id="agent-poll-state">checking…</span>
+                        </div>
                         
                         <!-- The surface's own config: endpoint, model and key
                              set HERE — the phone is the surface this feature is

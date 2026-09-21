@@ -965,4 +965,59 @@
     // ── Init: apply the persisted tab ────────────────────────────────────
     const initialTab = normaliseDockTab(readDockState().activeTab);
     setDockActiveTab(initialTab);
+
+    // ── Model polling: Start / Stop ────────────────────────────────────────
+    // Start runs one controller pass now and then every 5 minutes; Stop clears
+    // the timer. A pass is `controller --once`, which runs the rules and calls
+    // the model where a rule needs judgement.
+    //
+    // Deliberately NOT /controller/arm: that spawns a supervised process and
+    // takes a board lease, and the lease blocks on a stale holder. There is one
+    // board and one controller, so there is nothing for a lease to arbitrate.
+    (function wirePollButtons() {
+        const startBtn = document.getElementById('agent-poll-start');
+        const stopBtn = document.getElementById('agent-poll-stop');
+        const stateEl = document.getElementById('agent-poll-state');
+        if (!startBtn && !stopBtn && !stateEl) { return; }
+
+        const EVERY_MS = 5 * 60 * 1000;
+        let timer = null;
+
+        function setState(t) { if (stateEl) { stateEl.textContent = t; } }
+
+        async function runPass() {
+            try {
+                const res = await fetch('/controller/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await res.json().catch(() => null);
+                if (res.ok && data && data.success !== false) {
+                    setState('polling every 5 min — last run ' + new Date().toLocaleTimeString());
+                } else {
+                    setState('run failed: ' + ((data && (data.reason || data.error)) || res.status));
+                }
+            } catch (err) {
+                setState('run failed: ' + String(err));
+            }
+        }
+
+        if (startBtn) {
+            startBtn.addEventListener('click', () => {
+                if (timer) { return; }
+                timer = setInterval(() => void runPass(), EVERY_MS);
+                setState('starting…');
+                void runPass();
+            });
+        }
+        if (stopBtn) {
+            stopBtn.addEventListener('click', () => {
+                if (timer) { clearInterval(timer); timer = null; }
+                setState('stopped');
+            });
+        }
+        setState('stopped');
+    })();
+
 })();
