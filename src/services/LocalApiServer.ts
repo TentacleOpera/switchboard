@@ -1305,6 +1305,8 @@ export class LocalApiServer {
     private _modelPollStartedAt: number | null = null;
     private _modelPollLastRunAt: number | null = null;
     private _modelPollLastError: string | null = null;
+    /** What the model said on each pass, newest last. The report the panel shows. */
+    private _modelPollObservations: Array<{ at: number; line: string; ok: boolean }> = [];
     private _server: http.Server | null = null;
     /**
      * The tailnet listener — a second `http.Server` sharing `_handleRequest`
@@ -13020,6 +13022,103 @@ export class LocalApiServer {
     }
 
     /**
+     * One poll pass: show the board to the configured model and record what it
+     * says. If it sees nothing wrong it says so, and that IS the report.
+     *
+     * Uses the model the operator configured on the agent panel — the same one
+     * `_resolveAgentControlModel` serves — not the controller's judgement-tier
+     * config, which is a second store for the same fact and is empty.
+     */
+    private async _runModelBoardReview(workspaceRoot: string): Promise<{ line: string; ok: boolean }> {
+        const resolved = await this._resolveAgentControlModel();
+        if (!resolved) { return { line: 'no model configured on the agent panel', ok: false }; }
+        if ('error' in resolved) { return { line: 'model unusable: ' + resolved.error, ok: false }; }
+
+        const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+        const board: any[] = db ? ((await this._resolveBoard(db)) || []) : [];
+
+        // A DIGEST, not the board. The raw card list is hundreds of rows, and
+        // truncating it at a byte limit cuts mid-structure — the model then
+        // answers with a JSON fragment instead of a sentence, because it was
+        // handed a broken document. Counts plus the rows that are actually
+        // suspicious is smaller AND the thing worth asking about.
+        const byColumn: Record<string, number> = {};
+        const held: Array<{ id: string; topic: string; column: string; owner: string }> = [];
+        for (const row of board) {
+            if (!row || row.isFeature) { continue; }
+            const col = String(row.kanbanColumn || 'unknown');
+            byColumn[col] = (byColumn[col] || 0) + 1;
+            const owner = String(row.ownerSeat || '').trim();
+            if (owner && !row.completedAt && held.length < 20) {
+                held.push({
+                    id: String(row.planId || '').slice(0, 8),
+                    topic: String(row.topic || '').slice(0, 70),
+                    column: col,
+                    owner,
+                });
+            }
+        }
+        const liveSeats = (this._options.getRegisteredTerminals?.() || [])
+            .map((t: any) => String(t?.friendlyName || '')).filter(Boolean);
+
+        const messages = [
+            {
+                role: 'system',
+                content: 'You watch a board of coding agents. Answer in ONE short line of plain prose. '
+                    + 'Never use JSON, code fences, lists or markdown. '
+                    + 'If nothing looks wrong, reply exactly: nothing wrong. '
+                    + 'Otherwise name the single most important problem in under 20 words.'
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    cardsByColumn: byColumn,
+                    seatsRunning: liveSeats,
+                    cardsHeldByASeatAndNotCompleted: held,
+                }, null, 1)
+            },
+        ];
+
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (resolved.apiKey) { headers['Authorization'] = 'Bearer ' + resolved.apiKey; }
+        try {
+            const resp = await this._fetchUrl(resolved.url, {
+                method: 'POST',
+                headers,
+                // `reasoning_effort: 'none'` is load-bearing on a thinking model.
+                // Measured against gemma4:e2b-it-qat: without it the model spends
+                // the ENTIRE max_tokens budget in `reasoning` and returns an empty
+                // `content` with finish_reason 'length' — an HTTP 200 carrying no
+                // answer. max_tokens is generous because this is a LOCAL model on
+                // the operator's own hardware: a bigger budget costs a second.
+                body: JSON.stringify({
+                    model: resolved.model,
+                    messages,
+                    max_tokens: 512,
+                    temperature: 0,
+                    reasoning_effort: 'none',
+                }),
+            });
+            if (!resp.ok) { return { line: 'model HTTP ' + resp.status, ok: false }; }
+            const data = JSON.parse(resp.body);
+            const choice = data?.choices?.[0];
+            const content = String(choice?.message?.content || data?.content || '').trim();
+            if (!content) {
+                const why = choice?.finish_reason === 'length'
+                    ? 'model produced no answer within its token budget'
+                    : 'model returned nothing (finish: ' + String(choice?.finish_reason || 'unknown') + ')';
+                return { line: why, ok: false };
+            }
+            const cleaned = content.replace(/^```[a-zA-Z]*\s*/, '').replace(/```$/, '').trim();
+            const firstLine = cleaned.split('\n').map((l: string) => l.trim()).filter(Boolean)[0] || '';
+            if (!firstLine) { return { line: 'model returned only formatting', ok: false }; }
+            return { line: firstLine.slice(0, 200), ok: true };
+        } catch (err) {
+            return { line: 'model unreachable: ' + (err instanceof Error ? err.message : String(err)), ok: false };
+        }
+    }
+
+    /**
      * Call the configured HTTP model endpoint to choose the action for a card
      * the operator picked from the surface's dropdown. This is the model's
      * only job on the surface: fuzzy ACTION resolution for a card whose next
@@ -15654,13 +15753,20 @@ export class LocalApiServer {
                 // Idempotent: pressing Start twice must not stack two timers.
                 if (this._modelPollTimer) { clearInterval(this._modelPollTimer); this._modelPollTimer = null; }
                 const runOnce = async () => {
+                    this._modelPollLastRunAt = Date.now();
+                    // 1. The model looks at the board and says what it sees.
                     try {
-                        const r = await lifecycle.run({ workspaceRoot: pollRoot });
-                        this._modelPollLastRunAt = Date.now();
-                        this._modelPollLastError = r.started ? null : (r.reason || 'pass did not start');
+                        const review = await this._runModelBoardReview(pollRoot);
+                        this._modelPollObservations.push({ at: Date.now(), line: review.line, ok: review.ok });
+                        if (this._modelPollObservations.length > 50) {
+                            this._modelPollObservations = this._modelPollObservations.slice(-50);
+                        }
+                        this._modelPollLastError = review.ok ? null : review.line;
                     } catch (err) {
                         this._modelPollLastError = err instanceof Error ? err.message : String(err);
                     }
+                    // 2. The mechanical rules still run their own pass.
+                    try { await lifecycle.run({ workspaceRoot: pollRoot }); } catch { /* best-effort */ }
                 };
                 this._modelPollTimer = setInterval(() => { void runOnce(); }, this._modelPollEveryMs);
                 // Do not hold the process open on this timer alone.
@@ -15686,6 +15792,7 @@ export class LocalApiServer {
                     startedAt: this._modelPollStartedAt,
                     lastRunAt: this._modelPollLastRunAt,
                     lastError: this._modelPollLastError,
+                    observations: this._modelPollObservations,
                 }));
             } else if (pathname === '/controller/run' && req.method === 'POST') {
                 // Run a pass NOW: one wake, then exit (`controller --once`).

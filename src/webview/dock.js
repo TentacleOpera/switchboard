@@ -980,54 +980,23 @@
 
         const reportEl = document.getElementById('agent-poll-report');
 
-        // One line per thing the controller DID or OBSERVED. Nothing else.
-        //
-        // A wake writes ~3 KB, almost all of it plumbing: the lease it holds, the
-        // capabilities it probed, and the rules it could not run. That last one is
-        // a report about what the BOARD did not provide, not about the controller's
-        // work, and repeating it every five minutes buries the lines that matter.
-        //
-        // Kept: Actions (what it did), Errors (what failed), Board restart (what it
-        // did to the host). Dropped: Lease, Capabilities, Rules unavailable.
-        const REPORTED_SECTIONS = ['### Actions', '### Errors', '### Board restart'];
-
-        function summariseReport(md) {
-            const wakes = String(md || '').split('## Wake ').slice(1);
-            const lines = [];
-            for (const w of wakes) {
-                const stamp = (w.match(/^(\S+)/) || [])[1] || '';
-                let time = stamp;
-                try { time = new Date(stamp).toLocaleTimeString(); } catch { /* keep raw */ }
-
-                for (const heading of REPORTED_SECTIONS) {
-                    const at = w.indexOf(heading);
-                    if (at < 0) { continue; }
-                    let body = w.slice(at + heading.length);
-                    const nextHeading = body.search(/\n#{2,3} /);
-                    if (nextHeading >= 0) { body = body.slice(0, nextHeading); }
-                    for (const raw of body.split('\n')) {
-                        const l = raw.trim();
-                        if (!l || l.startsWith('---')) { continue; }
-                        if (l.startsWith('_')) { continue; }   // "_No rule fired this pass._"
-                        if (l.startsWith('- ') || l.startsWith('* ')) {
-                            lines.push(time + '  ' + l.slice(2).trim());
-                        }
-                    }
-                }
-            }
-            return lines.length ? lines.join('\n') : 'Nothing observed or done yet.';
-        }
 
         async function refreshReport() {
             if (!reportEl) { return; }
             try {
-                const res = await fetch('/controller/report');
+                const res = await fetch('/controller/poll/state');
                 const d = await res.json();
-                const content = d && d.report && typeof d.report.content === 'string' ? d.report.content.trim() : '';
-                if (!content) { reportEl.textContent = 'No controller report yet.'; return; }
-                // Newest wake last in the file; show the tail so the latest pass
-                // is what the operator sees without scrolling.
-                reportEl.textContent = summariseReport(content);
+                const obs = Array.isArray(d && d.observations) ? d.observations : [];
+                if (obs.length === 0) {
+                    reportEl.textContent = d && d.running
+                        ? 'Waiting for the first pass…'
+                        : 'Not running. Press Start.';
+                    return;
+                }
+                reportEl.textContent = obs.map(function (o) {
+                    var t = o && o.at ? new Date(o.at).toLocaleTimeString() : '';
+                    return t + '  ' + (o && o.line ? o.line : '');
+                }).join('\n');
                 reportEl.scrollTop = reportEl.scrollHeight;
             } catch {
                 reportEl.textContent = 'Report unavailable.';
