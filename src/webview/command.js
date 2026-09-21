@@ -3009,20 +3009,38 @@
                     const stamp = (w.match(/^(\S+)/) || [])[1] || '';
                     let time = stamp;
                     try { time = new Date(stamp).toLocaleTimeString(); } catch { /* keep raw */ }
-                    for (const heading of ['### Actions', '### Errors', '### Board restart']) {
-                        const at = w.indexOf(heading);
-                        if (at < 0) { continue; }
-                        let body = w.slice(at + heading.length);
-                        const next = body.search(/\n#{2,3} /);
-                        if (next >= 0) { body = body.slice(0, next); }
+
+                    // An action renders as a `### <subject> — <cause>` block whose
+                    // verdict is the `- outcome:` line. Read those, not the block
+                    // headings: stopping at the first `###` after `### Actions`
+                    // read an EMPTY body and hid every action.
+                    const at = w.indexOf('### Actions');
+                    if (at >= 0) {
+                        for (const raw of w.slice(at).split('\n')) {
+                            const l = raw.trim();
+                            const m = l.match(/^-\s*outcome:\s*\*\*([a-z-]+)\*\*\s*(?:—|--)?\s*(.*)$/i);
+                            if (m) {
+                                const verdict = (m[2] || '').trim();
+                                lines.push(time + '  ' + (verdict || m[1]));
+                            }
+                        }
+                    }
+                    // Errors are plain bullets under their own heading.
+                    const ei = w.indexOf('### Errors');
+                    if (ei >= 0) {
+                        let body = w.slice(ei + '### Errors'.length);
+                        const nx = body.search(/\n#{2,3} /);
+                        if (nx >= 0) { body = body.slice(0, nx); }
                         for (const raw of body.split('\n')) {
                             const l = raw.trim();
-                            if (!l || l.startsWith('---') || l.startsWith('_')) { continue; }
-                            if (l.startsWith('- ') || l.startsWith('* ')) { lines.push(time + '  ' + l.slice(2).trim()); }
+                            if (l.startsWith('- ')) { lines.push(time + '  ' + l.slice(2).trim()); }
                         }
                     }
                 }
-                reportEl.textContent = lines.length ? lines.join('\n') : 'Nothing done yet.';
+                // Newest last, and only the recent tail — the report is an append
+                // only history and old entries are not what the operator is watching.
+                const tail = lines.slice(-25);
+                reportEl.textContent = tail.length ? tail.join('\n') : 'Nothing reported yet.';
                 reportEl.scrollTop = reportEl.scrollHeight;
             } catch {
                 reportEl.textContent = 'Report unavailable.';
