@@ -245,13 +245,19 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
         apiKey: keyRead.key ?? null,
         system: 'You supervise a board of coding agents. Answer in ONE short line of plain prose — '
             + 'never JSON, code fences, lists or markdown.\n'
-            + 'Look at the WHOLE board — every column and every team, not just what is queued. '
-            + 'If something is wrong, name the single most important problem in under 20 words. '
-            + 'If no seats are alive but there is owned, uncompleted work, say the agents are down.\n'
-            + 'If nothing is wrong and nextHighestPriority is present, do NOT say "nothing wrong" — '
-            + 'instead say the board is idle and name that card by its topic, then offer to dispatch it. '
-            + 'Example: Board is idle. Next up: <topic>. Dispatch it?\n'
-            + 'If nothing is wrong and there is no next card, reply exactly: nothing wrong.',
+            + 'The facts describe the WHOLE board: cardsByColumn is every column, seatsByTeam and '
+            + 'cardsInFlightByTeam are every team. Judge all of it, not just what is queued. '
+            + 'Do not recite the counts — they are already reported; give the judgement they support.\n'
+            + 'If something is wrong, lead with the single most important problem in under 20 words, '
+            + 'naming the team or column it sits in.\n'
+            + 'If no seats are alive but cards are in flight, say the agents are down and name the '
+            + 'teams holding those cards.\n'
+            + 'If nothing is wrong and nextHighestPriority is present, do NOT say "nothing wrong": '
+            + 'name that card by its topic and offer to dispatch it. '
+            + 'Example: Idle. Next up: <topic>. Dispatch it?\n'
+            + 'Use that branch WHENEVER nextHighestPriority is present, however full or quiet the board '
+            + 'looks — a board with cards ready is never merely "quiet".\n'
+            + 'Only if nextHighestPriority is null: say the board is quiet and there is nothing ready.',
         user: JSON.stringify(facts),
         deadlineMs: ctx.cfg.judgementDeadlineMs,
         maxTokens: 256,
@@ -261,7 +267,15 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
         .replace(/^```[a-zA-Z]*\s*/, '').replace(/```$/, '')
         .split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
     if (!line) { return `board check returned nothing (finish: ${res.doneReason || 'unknown'})`; }
-    return line.slice(0, 200);
+    // The column and team counts are FACTS and belong in every report. Asking the
+    // classifier to quote them was unreliable — handed both strings it recited the
+    // team one and dropped the board one, and before that answered "6 columns" for
+    // six named columns. So the shape is stated here, deterministically, and the
+    // model supplies only the judgement that follows it.
+    const shape = String((facts as any).boardShape || '').trim();
+    const teams = String((facts as any).teamShape || '').trim();
+    const prefix = shape ? `${shape}; ${teams} — ` : '';
+    return (prefix + line.slice(0, 280)).slice(0, 400);
 }
 
 
@@ -542,7 +556,23 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             if (owner) { cardsByTeam[teamOf(owner)] = (cardsByTeam[teamOf(owner)] || 0) + 1; }
         }
 
+        // A small classifier summarises a JSON object badly — asked to describe
+        // six columns it answered "6 columns" — but it copies a prepared phrase
+        // reliably. The counts are a FACT, not a judgement, so they are formatted
+        // here and quoted by the model, rather than left for it to derive.
+        const shapeOf = (counts: Record<string, number>): string =>
+            Object.entries(counts)
+                .sort((a, b) => b[1] - a[1])
+                .map(([k, v]) => `${v} ${k.toLowerCase()}`)
+                .join(', ') || 'no cards';
+        const boardShape = shapeOf(cardsByColumn);
+        const teamShape = Object.keys(seatsByTeam).length
+            ? Object.entries(seatsByTeam).map(([t, m]) => `${t} ${m.length}`).join(', ')
+            : 'no seats up';
+
         const boardFacts = {
+            boardShape,
+            teamShape,
             seatsAlive: liveSeatNames,
             seatsAliveCount: liveSeatNames.length,
             seatsByTeam,

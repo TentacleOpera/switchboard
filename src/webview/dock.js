@@ -1036,9 +1036,25 @@
                         }
                     }
                 }
+                // A five-minute poll on a quiet board repeats the same sentence
+                // forever. Consecutive identical reports are ONE fact observed
+                // repeatedly, not news, so they collapse into a single entry
+                // carrying the latest time and a count — otherwise the moment
+                // something actually changes is buried under its own history.
+                const merged = [];
+                for (const e of lines) {
+                    const prev = merged[merged.length - 1];
+                    if (prev && prev.text === e.text) {
+                        prev.time = e.time;
+                        prev.repeat = (prev.repeat || 1) + 1;
+                        prev.offer = e.offer;
+                        continue;
+                    }
+                    merged.push({ time: e.time, text: e.text, offer: e.offer, repeat: 1 });
+                }
                 // Newest last, and only the recent tail — the report is an append
                 // only history and old entries are not what the operator is watching.
-                const tail = lines.slice(-25);
+                const tail = merged.slice(-25);
                 reportEl.textContent = '';
                 if (tail.length === 0) {
                     const empty = document.createElement('div');
@@ -1065,7 +1081,9 @@
                         meta.style.cssText = 'font-size:9px; letter-spacing:0.04em; text-transform:uppercase; '
                             + 'margin:0 0 3px 10px; color:'
                             + (latest ? 'var(--accent-primary)' : 'var(--text-dim)') + ';';
-                        meta.textContent = 'agent · ' + entry.time + (latest ? ' · latest' : '');
+                        meta.textContent = 'agent · ' + entry.time
+                            + (entry.repeat > 1 ? ' · ×' + entry.repeat : '')
+                            + (latest ? ' · latest' : '');
 
                         const bubble = document.createElement('div');
                         bubble.className = 'agent-poll-bubble';
@@ -1083,7 +1101,11 @@
                         // Only the NEWEST message carries a live offer: acting on a
                         // stale one would dispatch a card the board has since moved
                         // past, which is worse than no button at all.
-                        if (latest && entry.offer && /dispatch it\?/i.test(entry.text)) {
+                        // Gated on the OFFER, not on the model's wording. The offer
+                        // comes from the evidence block and is deterministic; matching
+                        // /dispatch it\?/ against the prose meant a rephrase silently
+                        // removed the only dispatch path on the panel.
+                        if (latest && entry.offer && entry.offer.id) {
                             const act = document.createElement('button');
                             act.type = 'button';
                             // BOTH class names on purpose: the dock defines
