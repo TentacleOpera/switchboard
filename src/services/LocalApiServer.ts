@@ -7780,6 +7780,58 @@ export class LocalApiServer {
             // and reported in `skipped` — a fully delivered mission stops and
             // releases exactly as it does today, and so does a team with no
             // mission at all.
+            // RELEASE HELD CARDS. The terminals panel has posted here since it was
+            // written; the route never existed, so the button returned 404 and looked
+            // inert. It is the operator's manual escape when a seat holds a card it is
+            // not working — today the usual cause is a pasted card that never carried a
+            // completion directive (plan 0447d025).
+            //
+            // Releases the HOLD ONLY. It does not write `completed_at`, because the
+            // operator is saying "this seat is not working this card", NOT "this work is
+            // done" — a false completion would advance nothing but would mark unfinished
+            // work finished, which is worse than the stuck hold. It does not move the
+            // card either: cards move on start, never on finish.
+            if (pathname === '/kanban/team/release' && req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const from = String(body?.from || '').trim();
+                if (!from) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Missing required field: from' }));
+                    return;
+                }
+                // Scope to the poster's own team. A release must never reach another
+                // team's seats; the roster resolver is the same one the queue uses.
+                let roster: string[] = [];
+                if (this._options.resolveTeamMembers) {
+                    try { roster = (await this._options.resolveTeamMembers(workspaceRoot, from)) || []; }
+                    catch { roster = []; }
+                }
+                const seats = new Set<string>([from, ...roster.filter(Boolean)]);
+                const board: any[] = (await db.getBoard?.(wsId)) || [];
+                const held = board.filter((p: any) =>
+                    p && !p.completedAt
+                    && typeof p.ownerSeat === 'string'
+                    && seats.has(p.ownerSeat.trim())
+                );
+                const released: string[] = [];
+                const failed: Array<{ planId: string; reason: string }> = [];
+                const releasedSeats = new Set<string>();
+                for (const card of held) {
+                    const planId = String(card.planId || '');
+                    try {
+                        const ok = await db.clearOwnerStamp?.(card.planFile, card.workspaceId || wsId);
+                        if (ok) { released.push(planId); releasedSeats.add(String(card.ownerSeat).trim()); }
+                        else { failed.push({ planId, reason: 'no hold to clear' }); }
+                    } catch (relErr) {
+                        failed.push({ planId, reason: relErr instanceof Error ? relErr.message : String(relErr) });
+                    }
+                }
+                console.log(`[LocalApiServer] team/release from '${from}': released ${released.length}, failed ${failed.length}, seats ${[...releasedSeats].join(', ') || 'none'}`);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, released, failed, releasedSeats: [...releasedSeats] }));
+                return;
+            }
+
             if (pathname === '/kanban/mission/pause-team' && req.method === 'POST') {
                 const body = await this._parseJsonBody(req);
                 const teamId = String(body?.teamId || '').trim();
