@@ -8138,22 +8138,31 @@ Each plan file must include:
         return this._handleAnalystMapForPlan(planFileAbsolute);
     }
 
-    /** Called by the Kanban board to generate context maps for multiple plan sessions in a single batch prompt. */
-    public async handleAnalystContextMapBatch(sessionIds: string[], workspaceRoot?: string): Promise<boolean> {
-        if (sessionIds.length === 0) { return false; }
+    /**
+     * Called by the Kanban board to generate context maps for multiple plan sessions in a single batch prompt.
+     *
+     * Returns a COUNT, not a boolean. Sessions with no DB row or no plan file on
+     * disk are skipped, and a bare `true` let the caller report every selected
+     * session as dispatched — the false-success shape this codebase keeps paying
+     * for. `dispatched` is how many plans actually reached the analyst prompt;
+     * `skipped` is the rest. `dispatched === 0` means nothing ran.
+     */
+    public async handleAnalystContextMapBatch(sessionIds: string[], workspaceRoot?: string): Promise<{ dispatched: number; skipped: number }> {
+        if (sessionIds.length === 0) { return { dispatched: 0, skipped: 0 }; }
 
         // Fast path: single plan uses existing handler to preserve identical prompt format
         if (sessionIds.length === 1) {
-            return this.handleAnalystContextMap(sessionIds[0], workspaceRoot);
+            const ok = await this.handleAnalystContextMap(sessionIds[0], workspaceRoot);
+            return { dispatched: ok ? 1 : 0, skipped: ok ? 0 : 1 };
         }
 
         const resolvedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : await this._resolveWorkspaceRootForSession(sessionIds[0]);
-        if (!resolvedWorkspaceRoot) { return false; }
+        if (!resolvedWorkspaceRoot) { return { dispatched: 0, skipped: sessionIds.length }; }
 
         const db = await this._getKanbanDb(resolvedWorkspaceRoot);
-        if (!db) { return false; }
+        if (!db) { return { dispatched: 0, skipped: sessionIds.length }; }
 
         // Load all plan files, skipping failures
         const planFiles: Array<{ sessionId: string; planFile: string }> = [];
@@ -8171,19 +8180,28 @@ Each plan file must include:
             planFiles.push({ sessionId, planFile: planFileAbsolute });
         }
 
+        const skipped = sessionIds.length - planFiles.length;
+
         if (planFiles.length === 0) {
             console.warn('[TaskViewerProvider] No valid plans found for batch analyst map');
-            return false;
+            return { dispatched: 0, skipped: sessionIds.length };
         }
 
         // If only one plan survived loading, use single-plan path for consistent prompt format
         if (planFiles.length === 1) {
-            return this._handleAnalystMapForPlan(planFiles[0].planFile);
+            const ok = await this._handleAnalystMapForPlan(planFiles[0].planFile);
+            return { dispatched: ok ? 1 : 0, skipped: ok ? skipped : sessionIds.length };
         }
 
         // Build batch prompt and send via existing analyst message pipeline
         const prompt = this._buildBatchAnalystMapPrompt(planFiles);
-        return this._handleSendAnalystMessage(prompt, 'analystMap');
+        const sent = await this._handleSendAnalystMessage(prompt, 'analystMap');
+        // One prompt carries every surviving plan, so the dispatch is all-or-nothing
+        // across them — but the plans that never made it into the prompt stay counted
+        // as skipped either way.
+        return sent
+            ? { dispatched: planFiles.length, skipped }
+            : { dispatched: 0, skipped: sessionIds.length };
     }
 
     /** Called by the Kanban board to silently reset a card to an earlier stage. */
@@ -8826,8 +8844,13 @@ Each plan file must include:
         return success;
     }
 
-    public async handleKanbanRestorePlan(planId: string, _workspaceRoot?: string): Promise<boolean> {
-        return await this._handleRestorePlan(planId);
+    /**
+     * @param opts.expectActive Threaded to `_handleRestorePlan` — see its docblock.
+     *   Set ONLY by `uncompleteCard`, whose own DB pre-write would otherwise read as
+     *   "this plan is not completed, there is nothing to restore".
+     */
+    public async handleKanbanRestorePlan(planId: string, _workspaceRoot?: string, opts?: { expectActive?: boolean }): Promise<boolean> {
+        return await this._handleRestorePlan(planId, opts);
     }
 
     public async handleDeletePlanFromReview(sessionId: string, workspaceRoot?: string, planFileAbsolute?: string): Promise<boolean> {
@@ -18343,7 +18366,20 @@ Each plan file must include:
         return recoverable;
     }
 
-    private async _handleRestorePlan(planId: string): Promise<boolean> {
+    /**
+     * @param opts.expectActive The CALLER already wrote `status: 'active'` for this
+     *   plan and is asking for the file-side restore that completes its own
+     *   operation. Only `uncompleteCard` sets it: that arm updates the DB first on
+     *   purpose (KanbanProvider's "prevent race conditions" comment — a restore can
+     *   trigger an intermediate refresh via `_mirrorBrainPlan` that would re-sync a
+     *   duplicate row off a stale 'completed'), which makes its own write look, here,
+     *   exactly like a plan that was never completed. Without this opt-in the
+     *   sync-gap check below rejects the caller's own pre-write and returns false,
+     *   and the arm rolls the un-complete straight back. Every other caller
+     *   (recoverSelected / recoverAll / the plan-management views) must NOT pass it —
+     *   for them an 'active' row genuinely means "nothing to restore".
+     */
+    private async _handleRestorePlan(planId: string, opts?: { expectActive?: boolean }): Promise<boolean> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return false;
         await this._activateWorkspaceContext(workspaceRoot);
@@ -18365,7 +18401,7 @@ Each plan file must include:
                         isCompletedInDb = true;
                     }
                 }
-                if (!isCompletedInDb) {
+                if (!isCompletedInDb && opts?.expectActive !== true) {
                     this._seams().ui.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
                     return false;
                 }

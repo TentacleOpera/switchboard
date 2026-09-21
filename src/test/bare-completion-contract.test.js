@@ -236,8 +236,11 @@ check("the lead's completion instruction names the subtask it is accepting", () 
     // not yet registered rounds — which was every team, always.
     assert.ok(/accept <n>/.test(frag),
         'the lead accepts by CLI verb — accept <n> is the completion instruction');
-    assert.ok(/<that SUBTASK\\'s planId>/.test(frag),
-        'the lead names WHICH subtask it is accepting — never the feature');
+    assert.ok(/feature file\\'s Subtasks list/.test(frag),
+        'the lead names WHICH subtask it is accepting — the ordinal is anchored to the feature '
+        + 'file\'s numbered Subtasks list, or `<n>` means nothing');
+    assert.ok(!/accept --plan/.test(frag),
+        'the retired UUID form must not survive in any lead-facing fragment');
     assert.ok(!/task\/complete with \{"from"/.test(frag),
         'the lead is no longer told to hand-assemble a task/complete POST');
 });

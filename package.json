@@ -1151,6 +1151,7 @@
     "test:contract:self-completion-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/self-reported-completion-clears-contract.test.js",
     "test:contract:bare-completion": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bare-completion-contract.test.js",
     "test:contract:lead-accept": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/lead-accept-advances-contract.test.js",
+    "test:contract:accept-ordinal-resolution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/accept-ordinal-resolution-contract.test.js",
     "test:contract:round-seat-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/round-seat-pinning-contract.test.js",
     "test:contract:team-pane-order": "node src/test/team-pane-order-contract.test.js",
     "test:contract:bulk-move-cost": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bulk-move-cost-contract.test.js",

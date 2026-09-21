@@ -1972,8 +1972,12 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(completePlanFromKanbanDisposable);
 
-    const restorePlanFromKanbanDisposable = registerSwitchboardCommand('switchboard.restorePlanFromKanban', async (planId: string, workspaceRoot?: string) => {
-        return taskViewerProvider.handleKanbanRestorePlan(planId, workspaceRoot);
+    // `opts` carries uncompleteCard's expectActive opt-in (see
+    // TaskViewerProvider._handleRestorePlan). Both composition roots wire this
+    // seam, so the third slot exists in both — dropping it here would make the
+    // restore reject the caller's own pre-write on the extension host only.
+    const restorePlanFromKanbanDisposable = registerSwitchboardCommand('switchboard.restorePlanFromKanban', async (planId: string, workspaceRoot?: string, opts?: { expectActive?: boolean }) => {
+        return taskViewerProvider.handleKanbanRestorePlan(planId, workspaceRoot, opts);
     });
     context.subscriptions.push(restorePlanFromKanbanDisposable);
 

@@ -149,9 +149,18 @@ function makeDb(initialOrders) {
         const live = new Set(['Coding-coder-1']);
         const rendered = applyStandingOrders('task', 'Coding-coder-1', orders, live, [], roleMap, {}, { terminalName: 'Coding-coder-1' });
         assert.ok(!rendered.includes('<your terminal name>'),
-            'applyStandingOrders output must not contain the literal "<your terminal name>" when interpolation receives a name');
-        assert.ok(rendered.includes('Coding-coder-1'),
-            'applyStandingOrders output must contain the interpolated terminal name');
+            'delivered standing orders must never ask an agent to type its own terminal name');
+        assert.ok(!rendered.includes('${terminalName}'),
+            'and no placeholder may reach the agent unresolved');
+        // The completion directive no longer carries an identity at all: the
+        // verb is bare `submit` and the CLI resolves the seat from the
+        // host-injected SWITCHBOARD_TERMINAL. Asserting the seat NAME appears
+        // would re-pin the retired `done --from "<name>"` form, so the gate is
+        // the invariant instead — the seat states nothing about itself.
+        assert.ok(!/--from/.test(rendered),
+            'the completion directive must not reintroduce --from: identity is resolved, never asserted');
+        assert.ok(/switchboard submit/.test(rendered),
+            'and it must still name the bare submit verb');
     });
 
     // 6. installCompletionDirectiveOrder(db, 'coder') is idempotent.
@@ -185,8 +194,29 @@ function makeDb(initialOrders) {
         const rendered = applyStandingOrders('task', 'MyCoder', orders, live, [], roleMap, {}, { terminalName: 'MyCoder' });
         assert.ok(!rendered.includes('${terminalName}'),
             'The ${terminalName} placeholder must be interpolated at delivery time');
-        assert.ok(rendered.includes('done --from "MyCoder"'),
-            'The interpolated terminal name must appear in the done --from command');
+
+        // COMPLETION_DIRECTIVE_ORDER_INSTRUCTION itself no longer carries a
+        // placeholder — `done --from "<name>"` is retired. But the mechanism
+        // this check guards is LIVE and moved: standing-order FRAGMENTS now
+        // carry `${terminalName}` for the two raw-HTTP calls that have no CLI
+        // verb, and composition substitutes it. That is the path that can
+        // regress into shipping a literal, so it is the path that gets the gate.
+        const { composeStandingOrderFragments, STANDING_ORDER_FRAGMENT_IDS } = require(
+            path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
+        const seatCtx = {
+            targetName: 'MyCoder', inTeam: true, isHead: false, teamId: 'test-group',
+            headName: 'MyLead', headRole: 'lead', members: ['MyLead', 'MyCoder'],
+            reviewerSeat: false, workKind: 'feature', pacing: 'head',
+            orchestratorPresent: false, attended: false, externalHead: false,
+        };
+        const delivered = composeStandingOrderFragments(
+            [STANDING_ORDER_FRAGMENT_IDS.memberCompletion], seatCtx, { interpolateSeat: true }).text;
+        assert.ok(!delivered.includes('${terminalName}'),
+            'a fragment placeholder must be interpolated at composition time, not shipped as a literal — '
+            + 'applyStandingOrders interpolates order.instruction BEFORE fragments are composed, so it '
+            + 'cannot reach them and composition is the only seam that can');
+        assert.ok(delivered.includes('{"from":"MyCoder"}'),
+            'the interpolated seat name must appear in the queue/done call the fragment tells the seat to POST');
     });
 
     // 7b. The CLI path token is the repo-wide `<cliPath>`, substituted on the

@@ -730,10 +730,13 @@ const COMPLETION_DIRECTIVE_ORDER_ID_PREFIX = 'completion-directive:role:';
  * Install (or update) the completion-directive standing order for a role.
  * Called when a terminal is created or a role is assigned, and during upgrade
  * migration. Idempotent — uses a deterministic ID so re-installation replaces,
- * not duplicates. The order text carries `${terminalName}` and `<cliPath>`
- * placeholder interpolated at delivery time, so no terminal name is needed
- * at install time. Installs once per role (not per terminal) — `parent` is
- * `''` because a role-scoped order applies to all terminals with that role.
+ * not duplicates. The order text carries the `<cliPath>` placeholder,
+ * substituted on the way out; it carries NO terminal name and no
+ * `${terminalName}` placeholder, because the completion verb is now bare
+ * `submit` and the CLI resolves the seat from the host-injected
+ * `SWITCHBOARD_TERMINAL`. Nothing about the seat is needed at install time.
+ * Installs once per role (not per terminal) — `parent` is `''` because a
+ * role-scoped order applies to all terminals with that role.
  */
 export async function installCompletionDirectiveOrder(
     db: any,
@@ -759,7 +762,11 @@ export async function installCompletionDirectiveOrder(
 /** Coding roles that receive the completion-directive standing order. */
 export const COMPLETION_DIRECTIVE_ROLES = ['coder', 'intern', 'lead', 'reviewer'];
 
-export function resolveStandingOrderInstruction(o: StandingOrder, ctx: StandingOrderCompositionContext): string {
+export function resolveStandingOrderInstruction(
+    o: StandingOrder,
+    ctx: StandingOrderCompositionContext,
+    opts?: { interpolateSeat?: boolean }
+): string {
     // A body ADDS to the fragments; it never replaces them. Compose fragments
     // first, then append the operator-authored `instruction` after them. A
     // row carrying only a body renders only that body — correct, because the
@@ -767,7 +774,7 @@ export function resolveStandingOrderInstruction(o: StandingOrder, ctx: StandingO
     // by selectOrders). A row carrying only fragments renders only fragments.
     const parts: string[] = [];
     if (Array.isArray(o.fragments) && o.fragments.length > 0) {
-        const composed = composeStandingOrderFragments(o.fragments, ctx);
+        const composed = composeStandingOrderFragments(o.fragments, ctx, opts);
         if (composed.unknown.length) {
             console.warn(`[standingOrders] Unknown fragment id(s) on order '${o.id}': ${composed.unknown.join(', ')}`);
         }
@@ -794,7 +801,13 @@ export function resolveStandingOrderInstruction(o: StandingOrder, ctx: StandingO
  * refactor exists to remove.
  */
 function renderOrder(o: StandingOrder, ctx: StandingOrderCompositionContext): string {
-    const instruction = resolveStandingOrderInstruction(o, ctx);
+    // The ONE per-seat delivery path: `ctx.targetName` here is the seat this
+    // block is being written to, so a fragment's `${terminalName}` resolves to
+    // the reader's own name. Inspection
+    // (`materializeStandingOrderForInspection`) and the team-wide
+    // `member-orders.md` snapshot deliberately do NOT opt in — their
+    // `targetName` is a representative member, not the reader.
+    const instruction = resolveStandingOrderInstruction(o, ctx, { interpolateSeat: true });
     if (!instruction) { return ''; }
     const scope = scopeOf(o);
     if (scope === 'pair') {

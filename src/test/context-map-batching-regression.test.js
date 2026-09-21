@@ -4,6 +4,30 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * Extract a `case 'x': { ... }` arm by walking from its opening brace to the
+ * matching close at depth zero. Replaces a fixed-character window, which
+ * silently expires as the arm grows and turns a documentation edit into a
+ * red test. Brace counting is sufficient here: the arm's template literals
+ * use balanced `${...}`, and object literals and blocks are balanced by
+ * construction — an unbalanced brace inside a string or comment would be the
+ * only way to fool it, and the assertion below that the block ends where the
+ * next `case` begins catches that.
+ */
+function extractCaseBlock(src, caseStart) {
+    const open = src.indexOf('{', caseStart);
+    assert.ok(open !== -1, 'case block: opening brace not found');
+    let depth = 1;
+    let i = open + 1;
+    while (i < src.length && depth > 0) {
+        if (src[i] === '{') { depth++; }
+        else if (src[i] === '}') { depth--; }
+        i++;
+    }
+    assert.strictEqual(depth, 0, 'case block: braces never balanced — extraction ran off the end');
+    return src.slice(caseStart, i);
+}
+
 function run() {
     // Check TaskViewerProvider has batch method and uses correct send pipeline
     const taskViewerPath = path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts');
@@ -87,8 +111,20 @@ function run() {
     const codeMapStart = kanbanProviderSource.indexOf("case 'codeMapSelected':");
     assert.ok(codeMapStart >= 0, 'Expected to find codeMapSelected case in KanbanProvider');
 
-    // Extract a larger context window (1000 chars) to include the full case block
-    const codeMapBlock = kanbanProviderSource.slice(codeMapStart, codeMapStart + 1000);
+    // Brace-matched, NOT a fixed-length slice. A character window is a booby
+    // trap: it was 1000 chars, the arm grew past it, and the assertions below
+    // went red with no behaviour change at all — which pressures the next
+    // person to delete comments to appease the arithmetic. Walking to the
+    // matching brace tests the whole arm however long it gets.
+    const codeMapBlock = extractCaseBlock(kanbanProviderSource, codeMapStart);
+
+    // The extraction must stop at this arm and not swallow the next one — that
+    // is what would let a later arm satisfy these assertions for it.
+    const nextCase = kanbanProviderSource.indexOf("\n            case '", codeMapStart + 1);
+    assert.ok(
+        nextCase === -1 || codeMapStart + codeMapBlock.length <= nextCase + 1,
+        'codeMapSelected block extraction overran into the following case arm'
+    );
 
     assert.ok(
         codeMapBlock.includes('analystMapFromKanbanBatch'),

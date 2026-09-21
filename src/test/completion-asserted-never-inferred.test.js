@@ -169,8 +169,12 @@ async function run() {
     await check('context-aware completion order routes to queue/done without mtime guess', async () => {
         const { buildMemberCompletionFragment } = require(path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
         const body = buildMemberCompletionFragment({ teamId: 'test-group', headName: 'lead-1' });
-        assert.ok(body.includes('node "<cliPath>" submit.'),
-            'order must instruct coder to signal completion with the bundled CLI\'s bare done command');
+        assert.ok(/node "<cliPath>" submit(?! --)/.test(body),
+            'order must instruct the coder to signal completion with the bundled CLI\'s BARE submit verb '
+            + '(the negative lookahead is load-bearing: `submit --outcome failed` appears in the same '
+            + 'fragment and must not satisfy this)');
+        assert.ok(!/node "<cliPath>" done\b/.test(body),
+            'the retired `done` verb must not survive in the member fragment');
         assert.ok(!/done --from/.test(body),
             'the seat supplies no --from: the CLI resolves it from SWITCHBOARD_TERMINAL');
         assert.ok(body.includes('/terminals/teams/test-group/queue/done'), 'order must instruct fallback queue/done');
@@ -237,8 +241,42 @@ async function run() {
         // complete from the accepts.
         assert.ok(head.includes('accept <n>'),
             'the lead\'s own order must name the accept verb');
-        assert.ok(head.includes('"from":"<your terminal name>"'),
-            'the register call must be addressed FROM the lead — first person, not a description of what somebody else does');
+        // The register call is still addressed FROM the lead — but the lead no
+        // longer TYPES its own name. The body carries the `${terminalName}`
+        // placeholder and composition substitutes the seat at delivery, so the
+        // goal invariant ("an agent never states its own identity to the
+        // system") holds without losing the first-person addressing.
+        assert.ok(head.includes('"from":"${terminalName}"'),
+            'the register call must be addressed FROM the lead via the delivery-time placeholder');
+        assert.ok(!head.includes('<your terminal name>'),
+            'no fragment may ask an agent to type its own terminal name');
+
+        const { composeStandingOrderFragments, STANDING_ORDER_FRAGMENT_IDS } = require(
+            path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
+        const leadCtx = {
+            targetName: 'Coding-lead-7', inTeam: true, isHead: true, teamId: 'test-group',
+            headName: 'Coding-lead-7', headRole: 'lead', members: ['Coding-lead-7', 'Coding-coder-1'],
+            reviewerSeat: false, workKind: 'feature', pacing: 'head',
+            orchestratorPresent: false, attended: false, externalHead: false,
+        };
+        // Per-seat delivery: the placeholder resolves to the READER's own name.
+        const delivered = composeStandingOrderFragments(
+            [STANDING_ORDER_FRAGMENT_IDS.headCompletion], leadCtx, { interpolateSeat: true }).text;
+        assert.ok(delivered.includes('"from":"Coding-lead-7"'),
+            'composition must substitute the seat name into the register call');
+        assert.ok(!delivered.includes('${terminalName}'),
+            'the placeholder must NOT ship to the agent as a literal — applyStandingOrders interpolates '
+            + 'order.instruction BEFORE fragments are composed, so composition is the only seam that can do this');
+        assert.ok(!delivered.includes('<your terminal name>'),
+            'and the old hand-typed form must be gone from the delivered text');
+        // The team-wide member-orders.md snapshot does NOT opt in: its
+        // targetName is one representative member, so substituting there would
+        // hand member 2 a call addressed FROM member 1.
+        const snapshot = composeStandingOrderFragments(
+            [STANDING_ORDER_FRAGMENT_IDS.headCompletion], leadCtx).text;
+        assert.ok(snapshot.includes('${terminalName}'),
+            'without the opt-in the placeholder must survive UNRESOLVED — a visibly unresolved token beats '
+            + 'a confident wrong seat name on an identity read');
         assert.ok(!head.includes('ptySendPrompt'),
             'the head has nobody to relay to — a self-prompt fallback must not survive in the head body');
         // queue/done is NOT in this fragment any more. A lead advances by

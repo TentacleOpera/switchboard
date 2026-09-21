@@ -111,7 +111,7 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + '     If you cannot complete it, run node "<cliPath>" submit --outcome failed with a one-line reason.\n'
         + '   - If the response shows any other column, report to your head (step 3).\n\n'
         + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
-        + '   POST /terminals/teams/' + ctx.teamId + '/queue/done with {"from":"<your terminal name>"}.\n'
+        + '   POST /terminals/teams/' + ctx.teamId + '/queue/done with {"from":"${terminalName}"}.\n'
         + '   The system will relay your report to your team lead, clear your terminal,\n'
         + '   and dispatch the next queued item.\n'
         + '   If the POST fails, report to your head directly (step 3).\n\n'
@@ -149,7 +149,7 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
 // bootstrapped: a lead is told to register rounds, full stop.
 const HEAD_COMPLETION_FRAGMENT_BODY =
     'REGISTER ROUNDS: before any round starts, decide how the feature\'s subtasks group into '
-    + 'ordered rounds and POST /kanban/round/register with {"from":"<your terminal name>",'
+    + 'ordered rounds and POST /kanban/round/register with {"from":"${terminalName}",'
     + '"rounds":[[{"ordinal":1,"seat":"<seat name>"},2],[3]]} against the API base named in your '
     + 'SWITCHBOARD STATUS line — no featureId: the server derives the feature from the card your '
     + 'team holds. Each entry in `rounds` is ONE round — an array of that round\'s subtask entries, '
@@ -182,7 +182,7 @@ export function buildHeadNextFragment(ctx: Pick<StandingOrderCompositionContext,
         + '- If you hold a card dispatched from the board, run node "<cliPath>" submit. '
         + 'Output reporting the queue is empty means the run is over — say so and stop.\n'
         + '- Otherwise POST /terminals/teams/' + ctx.teamId + '/queue/done with '
-        + '{"from":"<your terminal name>"} to take the next queued item. If there are no more '
+        + '{"from":"${terminalName}"} to take the next queued item. If there are no more '
         + 'items, the team is done with queued work. Do not infer completion from board position: '
         + 'a column advances when work STARTS, not when it finishes.';
 }
@@ -534,7 +534,51 @@ export function getStandingOrderFragment(id: string): StandingOrderFragment | un
     return FRAGMENTS_BY_ID.get(id);
 }
 
-export function composeStandingOrderFragments(ids: string[], ctx: StandingOrderCompositionContext): { text: string; unknown: string[]; applied: string[]; sources: Record<string, 'store' | 'compiled-default'> } {
+/**
+ * Substitute `${terminalName}` in a composed fragment body with the seat the
+ * block is being delivered to.
+ *
+ * This is the ONLY interpolation seam fragment bodies have.
+ * `applyStandingOrders` performs its own `${terminalName}` replace, but it runs
+ * on `order.instruction` BEFORE `renderOrder` calls
+ * `resolveStandingOrderInstruction`, which is where fragments are composed — so
+ * a placeholder written into a fragment body never reaches it and would ship to
+ * the agent as a literal. Interpolating here is what lets a STATIC,
+ * store-backed, operator-overridable body (`HEAD_COMPLETION_FRAGMENT_BODY`)
+ * address a raw-HTTP call FROM the seat without asking the agent to type its own
+ * name — the identity invariant this plan exists to enforce.
+ *
+ * An empty `targetName` does NOT substitute. `{"from":""}` is an identity read
+ * that would fail quietly and wrongly; the un-substituted placeholder is
+ * visibly broken instead, and says so in the log. Per the repo's fallback rule:
+ * choose the failure that is visible, never the one that is merely quiet.
+ *
+ * Substitution is OPT-IN (`interpolateSeat`) for the same reason, and it is the
+ * load-bearing half of this seam. Only a PER-SEAT delivery may substitute.
+ * `teamWiring.writeMemberOrdersFile` composes the same member fragments into
+ * the team-wide `member-orders.md` snapshot with
+ * `targetName: childNames[0] || ''` — the FIRST member's name, standing in for
+ * a file every member reads. Substituting there would hand member 2 a call
+ * addressed FROM member 1: a confident wrong identity, indistinguishable from a
+ * configured one, which is precisely the failure this rule exists to prevent.
+ * The snapshot therefore keeps the literal placeholder — visibly unresolved —
+ * and only `renderOrder`'s per-seat path opts in.
+ */
+function interpolateSeatName(body: string, ctx: StandingOrderCompositionContext, fragmentId: string): string {
+    if (!body.includes('${terminalName}')) { return body; }
+    const seat = (ctx.targetName || '').trim();
+    if (!seat) {
+        console.error(`[standingOrderFragments] fragment '${fragmentId}' carries \${terminalName} but the composition context has no targetName — delivering the placeholder un-substituted rather than an empty identity`);
+        return body;
+    }
+    return body.split('${terminalName}').join(seat);
+}
+
+export function composeStandingOrderFragments(
+    ids: string[],
+    ctx: StandingOrderCompositionContext,
+    opts?: { interpolateSeat?: boolean }
+): { text: string; unknown: string[]; applied: string[]; sources: Record<string, 'store' | 'compiled-default'> } {
     const unknown: string[] = [];
     const fragments: StandingOrderFragment[] = [];
     for (const id of ids) {
@@ -554,7 +598,12 @@ export function composeStandingOrderFragments(ids: string[], ctx: StandingOrderC
             const resolved = resolveStaticFragmentBody(fragment.id);
             sources[fragment.id] = resolved.source;
         }
-        const body = fragment.body(ctx).trim();
+        // `fragment.body(ctx)` has already resolved store-override vs compiled
+        // default for a static fragment, so the substitution below covers an
+        // operator's overridden body too — a fix applied only to the compiled
+        // default would leave every override shipping the placeholder forever.
+        const raw = fragment.body(ctx).trim();
+        const body = opts?.interpolateSeat ? interpolateSeatName(raw, ctx, fragment.id) : raw;
         if (body) { bodies.push(body); }
     }
     if (unknown.length) {

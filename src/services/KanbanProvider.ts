@@ -14480,6 +14480,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 const targetColumn = msg.targetColumn || 'CODE REVIEWED';
                 let successCount = 0;
+                // Sessions whose restore command resolved `undefined` — nobody
+                // answered (unbridged) or the handler threw and the seam swallowed
+                // it (hostSeams.ts VscodeHostCommands.executeCommand). That is NOT
+                // a restore failure and NOT a success; it is an absent answer, and
+                // it gets its own loud report below rather than silently picking
+                // either branch.
+                const unanswered: string[] = [];
                 for (const sessionId of msg.sessionIds) {
                     const db = this._getKanbanDb(workspaceRoot);
                     let planId: string | null = null;
@@ -14513,11 +14520,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                     _schedulePlanStateWrite(db, workspaceRoot, sessionId, targetColumn,
                         targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                    const ok = await this._seams().commands.executeCommand<boolean>('switchboard.restorePlanFromKanban', planId, workspaceRoot);
-                    // Rollback ONLY on an explicit false. `undefined` means "nobody answered"
-                    // (unbridged host) or the handler threw — never "the restore failed", and
-                    // the DB writes above already landed: reverting them on `undefined` made
-                    // this button un-complete then instantly re-complete on the standalone host.
+                    // `expectActive` tells the restore that the 'active' row it is about
+                    // to read is THIS arm's own pre-write, not evidence that the plan was
+                    // never completed. Without it the restore rejects our own write and
+                    // returns false, and the rollback below un-does a correct un-complete
+                    // — the self-revert this plan exists to close.
+                    const ok = await this._seams().commands.executeCommand<boolean>(
+                        'switchboard.restorePlanFromKanban', planId, workspaceRoot, { expectActive: true });
+                    // Three states, never two. `true` = restored; `false` = the restore
+                    // ran and refused, so the DB writes above must come back out;
+                    // `undefined` = nobody answered. An absent answer must not be read as
+                    // either outcome: it leaves the card un-completed (the operator's
+                    // intent, and the writes already landed) and is reported loudly below.
                     if (ok === false) {
                         // Rollback DB changes if restore failed (re-cascade feature subtasks to COMPLETED).
                         await db.updateStatus(sessionId, 'completed');
@@ -14533,12 +14547,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                         _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
                             'completed').catch(() => { /* fire-and-forget */ });
-                    } else {
+                    } else if (ok === true) {
                         await this._seams().commands.executeCommand('switchboard.kanbanBackwardMove', [sessionId], targetColumn, workspaceRoot);
                         successCount++;
+                    } else {
+                        unanswered.push(sessionId);
                     }
                 }
                 await this._refreshBoard(workspaceRoot);
+                if (unanswered.length > 0) {
+                    // Name the command id: this is the one failure mode a green verb
+                    // audit cannot see, and the operator must not be told a number
+                    // that counts it as either recovered or failed.
+                    const error = `switchboard.restorePlanFromKanban returned no answer for ${unanswered.length} of ${msg.sessionIds.length} plan(s) — the command is not bridged on this host, or it threw and the command seam swallowed it. Those cards were moved out of COMPLETED but their plan files were NOT restored.`;
+                    console.error(`[KanbanProvider] uncompleteCard: ${error}`, unanswered);
+                    this.postMessage({ type: 'showStatusMessage', message: error, isError: true });
+                    return { success: false, recovered: successCount, unanswered: unanswered.length, total: msg.sessionIds.length, error };
+                }
                 void this._seams().ui.showInformationMessage(`Recovered ${successCount} of ${msg.sessionIds.length} plans.`);
                 return { success: true, recovered: successCount, total: msg.sessionIds.length };
             }
@@ -15030,18 +15055,27 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
                 // One batch dispatch maps every selected plan in a single analyst
                 // prompt (handleAnalystContextMapBatch — same delegate the extension
-                // registers). Report the command's real result: `undefined` means
-                // unbridged, false means the dispatch declined (no analyst seat, no
-                // resolvable plans) — neither may read as a map that ran.
-                const mapped = await this._seams().commands.executeCommand<boolean>(
+                // registers). Report the handler's real COUNT, never the selection
+                // size: the batch skips sessions with no DB row or no plan file, so
+                // `msg.sessionIds.length` would claim plans that never reached the
+                // prompt. `undefined` means nobody answered — unbridged, or the
+                // handler threw and the command seam swallowed it.
+                const mapped = await this._seams().commands.executeCommand<{ dispatched: number; skipped: number }>(
                     'switchboard.analystMapFromKanbanBatch', msg.sessionIds, workspaceRoot);
-                if (mapped === true) {
-                    this.postMessage({ type: 'showStatusMessage', message: `Code map dispatched for ${msg.sessionIds.length} plan(s).`, isError: false });
-                    return { success: true, dispatched: msg.sessionIds.length };
+                if (!mapped || typeof mapped.dispatched !== 'number') {
+                    const error = 'Code map did not run — switchboard.analystMapFromKanbanBatch returned no answer (the command is not bridged on this host, or it threw).';
+                    console.error(`[KanbanProvider] codeMapSelected: ${error}`);
+                    this.postMessage({ type: 'showStatusMessage', message: error, isError: true });
+                    return { success: false, dispatched: 0, error };
                 }
-                const error = 'Code map did not run — no resolvable plans, no analyst dispatch, or the command is not bridged on this host.';
+                if (mapped.dispatched > 0) {
+                    const skippedSuffix = mapped.skipped > 0 ? ` ${mapped.skipped} skipped — no plan row or no plan file.` : '';
+                    this.postMessage({ type: 'showStatusMessage', message: `Code map dispatched for ${mapped.dispatched}/${msg.sessionIds.length} plan(s).${skippedSuffix}`, isError: false });
+                    return { success: true, dispatched: mapped.dispatched, skipped: mapped.skipped };
+                }
+                const error = `Code map did not run — 0 of ${msg.sessionIds.length} plan(s) dispatched (no resolvable plans, or the analyst declined the dispatch).`;
                 this.postMessage({ type: 'showStatusMessage', message: error, isError: true });
-                return { success: false, dispatched: 0, error };
+                return { success: false, dispatched: 0, skipped: mapped.skipped, error };
             }
             case 'getDbPath': {
                 const dbPath = this._seams().pathConfig.getConfigString('kanban.dbPath') || '.switchboard/kanban.db';

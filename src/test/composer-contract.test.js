@@ -70,6 +70,19 @@ function extractFunctionBody(src, name) {
     return src.slice(start, i);
 }
 
+/**
+ * Strip comments so a "this identifier must not appear" assertion tests the CODE
+ * and not the prose about it. dockComposer.js's header comment deliberately says
+ * "NEVER read from window.parent" — the documentation the plan asked to carry
+ * across — and a raw `.includes()` scan fails on that promise instead of on a
+ * violation of it. Block comments first, then line comments.
+ */
+function stripComments(src) {
+    return src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^[ \t]*\/\/.*$/gm, '');
+}
+
 /** Slice of a source file between two markers, for scoping an assertion to one region. */
 function block(code, startMarker, endMarker) {
     const start = code.indexOf(startMarker);
@@ -149,11 +162,28 @@ test('dockComposer.js: the composer never reads fleet state from the parent docu
     // Goal invariant: the dock is a different document — the composer sources
     // the terminal list over the same verb the dock's other tabs use, never
     // by reaching into the parent.
-    assert.ok(!DOCK_COMPOSER_JS.includes('window.parent'),
+    // Scanned with comments stripped: the module's header comment PROMISES not to
+    // read window.parent, and a raw scan fails on the promise. The assertion must
+    // still catch a real read — see the stripComments self-check below.
+    assert.ok(!stripComments(DOCK_COMPOSER_JS).includes('window.parent'),
         'dockComposer.js must never touch window.parent — fleet comes from ptyListTerminals');
     const body = extractFunctionBody(DOCK_COMPOSER_JS, 'refreshTargets');
     assert.ok(body.includes('/terminals/verb/ptyListTerminals'),
         'refreshTargets must fetch /terminals/verb/ptyListTerminals');
+});
+
+test('stripComments still catches a REAL window.parent read (the gate is not a tautology)', () => {
+    // Guards the assertion above from rotting into one that can never fail:
+    // comments are dropped, code is not.
+    const withComment = '// never read from window.parent\nconst x = 1;\n';
+    assert.ok(!stripComments(withComment).includes('window.parent'),
+        'stripComments must drop a line comment mentioning window.parent');
+    const withBlockComment = '/**\n * NEVER read from window.parent.\n */\nconst x = 1;\n';
+    assert.ok(!stripComments(withBlockComment).includes('window.parent'),
+        'stripComments must drop a block comment mentioning window.parent');
+    const withRealRead = '// fleet comes from ptyListTerminals\nconst t = window.parent.fleet;\n';
+    assert.ok(stripComments(withRealRead).includes('window.parent'),
+        'stripComments must KEEP a real window.parent read — otherwise the gate above can never fail');
 });
 
 test('dockComposer.js: refresh preserves the operator selection across a fleet refresh', () => {
@@ -177,8 +207,19 @@ test('dockComposer.js: the draft persists in localStorage and clears only on a s
     const body = extractFunctionBody(DOCK_COMPOSER_JS, 'deliverComposerPrompt');
     assert.ok(/data\.success|success/.test(body),
         'deliverComposerPrompt must branch on the send result');
-    assert.ok(/clearDraft|clearComposerDraft|removeItem/.test(body),
+    // The clear must live INSIDE the success branch, not merely somewhere in the
+    // function — a failed send keeping the prompt is half the requirement. The
+    // implementation clears through the named writeDraft/persistDraft seams
+    // (writeDraft('') blanks the textarea, persistDraft() writes the blank back to
+    // sb.composerDraft, keeping the target for the follow-up prompt).
+    const successBranch = block(body, 'data.success', '} else {');
+    assert.ok(/clearDraft|clearComposerDraft|removeItem|writeDraft\(\s*''\s*\)/.test(successBranch),
         'a successful send must clear the stored draft');
+    assert.ok(/persistDraft\(\)|removeItem/.test(successBranch),
+        'the cleared draft must be written back to storage, not just to the textarea');
+    const failureBranch = body.slice(body.indexOf('} else {'));
+    assert.ok(!/writeDraft\(\s*''\s*\)|clearDraft|removeItem/.test(failureBranch),
+        'a failed send must NOT clear the draft — the prompt must survive');
 });
 
 test('dockComposer.js: no Escape binding — Escape must not close the dock', () => {

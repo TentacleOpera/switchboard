@@ -757,6 +757,16 @@ jobs:
       - name: lead accept advances (`accept --plan` closes the round and the system dispatches the next)
         run: npm run test:contract:lead-accept
 
+      # `accept 3` resolves an ORDINAL to a card server-side. This is the core
+      # mechanism of the submit/accept protocol and it shipped with 502 lines of
+      # coverage that had no npm script and no CI step — defined and orphaned,
+      # the exact "green while incomplete" hole. An ordinal that indexes a
+      # differently-sorted or differently-filtered list accepts the WRONG card,
+      # silently, so this suite is the only thing standing between a typo'd
+      # protocol change and a wrongly-accepted subtask.
+      - name: accept ordinal resolution (`accept <n>` resolves to the card the lead read)
+        run: npm run test:contract:accept-ordinal-resolution
+
       # The lead pins a seat per subtask at registration: a round entry is a
       # bare planId or { planId, seat }. Positional dispatch restarted at
       # seats[0] every round, so a feature built from 1- and 2-subtask rounds

@@ -469,19 +469,48 @@ async function run() {
         assert.notStrictEqual(code, 0, 'an accept that resolved no lead must never exit zero');
     });
 
-    await check('--plan missing fails with a DIFFERENT message than the identity failure', async () => {
-        // With SWITCHBOARD_TERMINAL set, the identity gate passes; the missing
-        // --plan is the distinct named error. The two errors must be
-        // distinguishable so a lead can tell "you did not say which subtask"
-        // from "you are not in a seat".
+    await check('a BARE accept is legal — it is not a missing-argument error', async () => {
+        // `--plan` used to be mandatory and its absence was a named error. The
+        // ordinal protocol makes bare `accept` a real verb: the server resolves
+        // the poster's single outstanding candidate. So the old "you did not
+        // say which subtask" error must NOT come back — a bare accept has to
+        // reach the board, and with no board running that is the offline error,
+        // not an argument error.
         const { code, out } = runCli(['accept', '--json'], { SWITCHBOARD_TERMINAL: 'Coding' });
+        const body = JSON.parse(out);
+        assert.strictEqual(body.success, false, 'no board is running in this sandbox');
+        assert.ok(!/--plan/.test(body.error || ''),
+            'a bare accept must not be rejected for a missing --plan — the verb takes none');
+        assert.ok(!/SWITCHBOARD_TERMINAL/.test(body.error || ''),
+            'and it is not the identity error either — the identity resolved from the env');
+        assert.match(String(body.error || ''), /No running Switchboard instance/,
+            'a bare accept reaches the board; with none up, that is the failure it reports');
+        assert.strictEqual(body.from, 'Coding', 'the resolved seat is carried even on the offline path');
+        assert.notStrictEqual(code, 0);
+    });
+
+    await check('a mistyped positional is REFUSED and never degrades to a bare accept', async () => {
+        // The regression this pins: the invalid-positional guard printed its
+        // error and then fell through to `ordinal = parseInt(a, 10)` -> NaN ->
+        // dropped by JSON.stringify -> the server read "no ordinal" and
+        // performed a BARE ACCEPT. A typo silently accepted the wrong card.
+        const { code, out } = runCli(['accept', 'subA', '--json'], { SWITCHBOARD_TERMINAL: 'Coding' });
+        const body = JSON.parse(out);
+        assert.strictEqual(body.success, false);
+        assert.match(String(body.error || ''), /ORDINAL/,
+            'the error must say what the positional argument is');
+        assert.ok(!/No running Switchboard instance/.test(body.error || ''),
+            'a refused argument must NOT have reached the board — that is the bare-accept fall-through');
+        assert.strictEqual(code, 5, 'bad input exits 5, not the offline code');
+    });
+
+    await check('an empty --plan is refused and names the flag', async () => {
+        const { code, out } = runCli(['accept', '--plan=', '--json'], { SWITCHBOARD_TERMINAL: 'Coding' });
         const body = JSON.parse(out);
         assert.strictEqual(body.success, false);
         assert.match(String(body.error || ''), /--plan/,
-            'the missing-plan error must name --plan');
-        assert.ok(!/SWITCHBOARD_TERMINAL/.test(body.error || ''),
-            'the missing-plan error must NOT be the identity error');
-        assert.notStrictEqual(code, 0);
+            'an empty --plan must not quietly become a bare accept');
+        assert.strictEqual(code, 5);
     });
 
     await check('an explicit --from OVERRIDES the env default', async () => {

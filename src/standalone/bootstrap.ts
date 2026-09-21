@@ -2068,8 +2068,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     //     PANEL_SWITCH_VERBS intercepts the verb in the page and switches the
     //     shell to the setup panel, so the arm's command dispatch is never
     //     reached. Unbridged here is correct — a registration would be dead code.
-    switchboardCommandRegistry.register('switchboard.restorePlanFromKanban', async (planId: string, wsRoot?: string) =>
-        taskViewerProvider.handleKanbanRestorePlan(planId, wsRoot || workspaceRoot));
+    // `opts` carries uncompleteCard's expectActive opt-in (see
+    // TaskViewerProvider._handleRestorePlan). Both composition roots wire this
+    // seam, so the third slot exists in both — dropping it here would make the
+    // restore reject the caller's own pre-write on this host only.
+    switchboardCommandRegistry.register('switchboard.restorePlanFromKanban', async (planId: string, wsRoot?: string, opts?: { expectActive?: boolean }) =>
+        taskViewerProvider.handleKanbanRestorePlan(planId, wsRoot || workspaceRoot, opts));
     switchboardCommandRegistry.register('switchboard.kanbanBackwardMove', async (sessionIds: string[], targetColumn: string, wsRoot?: string) =>
         taskViewerProvider.handleKanbanBackwardMove(sessionIds, targetColumn, wsRoot || workspaceRoot));
     switchboardCommandRegistry.register('switchboard.kanbanForwardMove', async (sessionIds: string[], targetColumn: string, wsRoot?: string, sourceColumn?: string) =>

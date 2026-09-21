@@ -2683,7 +2683,7 @@ async function cmdSubmit(workspaceRoot: string, argv: string[]): Promise<void> {
         const msg = `Unrecognised argument '${a}' — submit takes no positional argument (flags: --outcome, --plan, --from, --json).`;
         if (jsonFlag) { emitJson({ success: false, error: msg }); }
         else { console.error(`[switchboard] ${msg}`); }
-        exitFlushed(5);
+        return exitFlushed(5);
     }
 
     // The host already injected this seat's identity into the seat's OWN
@@ -2713,7 +2713,7 @@ async function cmdSubmit(workspaceRoot: string, argv: string[]): Promise<void> {
             + 'which is where the host injects it. If you are driving the CLI by hand, pass --from <seat>.';
         if (jsonFlag) { emitJson({ success: false, error: msg }); }
         else { console.error(`[switchboard] ${msg}`); }
-        exitFlushed(5);
+        return exitFlushed(5);
     }
 
     const target = await tryResolveBoardTarget(workspaceRoot);
@@ -2836,7 +2836,7 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
             const msg = `Unrecognised flag '${a}' — accept takes [<ordinal>], --plan <subtaskPlanId>, --from <lead>, --json.`;
             if (jsonFlag) { emitJson({ success: false, error: msg }); }
             else { console.error(`[switchboard] ${msg}`); }
-            exitFlushed(5);
+            return exitFlushed(5);
         }
         if (!a.startsWith('-')) {
             // The positional argument is the subtask's ordinal — the number in
@@ -2847,13 +2847,17 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
                 const msg = '`accept` takes at most one positional argument — the subtask ordinal (e.g. `accept 3`).';
                 if (jsonFlag) { emitJson({ success: false, error: msg }); }
                 else { console.error(`[switchboard] ${msg}`); }
-                exitFlushed(5);
+                return exitFlushed(5);
             }
             if (!/^\d+$/.test(a) || parseInt(a, 10) < 1) {
                 const msg = `Invalid argument '${a}' — accept takes the subtask's ORDINAL (a positive integer, e.g. \`accept 3\`) or --plan <subtaskPlanId>.`;
                 if (jsonFlag) { emitJson({ success: false, error: msg }); }
                 else { console.error(`[switchboard] ${msg}`); }
-                exitFlushed(5);
+                // WITHOUT this return, execution continued to
+                // `ordinal = parseInt(a, 10)` -> NaN -> dropped by
+                // JSON.stringify -> the server read "no ordinal" and performed a
+                // BARE ACCEPT. A typo silently accepted the wrong card.
+                return exitFlushed(5);
             }
             ordinal = parseInt(a, 10);
             continue;
@@ -2866,7 +2870,7 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
         const msg = '--plan requires a value — `accept` takes the subtask\'s planId or an ordinal, not an empty flag.';
         if (jsonFlag) { emitJson({ success: false, error: msg }); }
         else { console.error(`[switchboard] ${msg}`); }
-        exitFlushed(5);
+        return exitFlushed(5);
     }
 
     // Ordinal and --plan are two spellings of the same field — naming both is
@@ -2876,7 +2880,7 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
         const msg = '`accept` takes an ordinal OR --plan <subtaskPlanId>, not both.';
         if (jsonFlag) { emitJson({ success: false, error: msg }); }
         else { console.error(`[switchboard] ${msg}`); }
-        exitFlushed(5);
+        return exitFlushed(5);
     }
 
     // Same identity resolution as `cmdSubmit`. The host injects
@@ -2899,7 +2903,7 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
             + 'which is where the host injects it. If you are driving the CLI by hand, pass --from <lead>.';
         if (jsonFlag) { emitJson({ success: false, error: msg }); }
         else { console.error(`[switchboard] ${msg}`); }
-        exitFlushed(5);
+        return exitFlushed(5);
     }
 
     const target = await tryResolveBoardTarget(workspaceRoot);

@@ -126,6 +126,42 @@
         } catch { /* dock frame not mounted yet — a later call retries */ }
     }
 
+    /**
+     * Tell the operator, in the shell, that a dock tab was asked for at a width
+     * the dock cannot exist at. Built here rather than in shell.html because the
+     * refusal is a shell-owned condition and the element has no other caller; it
+     * replaces itself on repeat presses and clears on its own.
+     *
+     * Deliberately not a confirm or a dialog (CLAUDE.md) — a passive notice that
+     * names the measured width and the floor that rejected it, so "why did nothing
+     * happen?" is answerable from the screen rather than the console.
+     */
+    let dockRefusalTimer = null;
+    function showDockRefusalNotice(tab, resolved) {
+        let el = document.getElementById('dock-refusal-notice');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'dock-refusal-notice';
+            el.setAttribute('role', 'status');
+            el.style.cssText = [
+                'position:fixed', 'bottom:16px', 'left:50%', 'transform:translateX(-50%)',
+                'z-index:9999', 'max-width:min(480px, calc(100vw - 32px))',
+                'padding:10px 14px', 'border-radius:8px',
+                'background:var(--vscode-inputValidation-warningBackground, #4d3800)',
+                'color:var(--vscode-foreground, #eee)',
+                'border:1px solid var(--vscode-inputValidation-warningBorder, #9a7500)',
+                'font-size:12px', 'line-height:1.4', 'box-shadow:0 4px 16px rgba(0,0,0,.35)',
+            ].join(';');
+            document.body.appendChild(el);
+        }
+        const label = tab ? tab.charAt(0).toUpperCase() + tab.slice(1) : 'that';
+        el.textContent = 'The ' + label + ' tab lives in the agent dock, and this window is too narrow for it — '
+            + resolved.source + '. Widen the window to at least ' + DOCK_OVERLAY_MIN + 'px.';
+        el.hidden = false;
+        if (dockRefusalTimer) { clearTimeout(dockRefusalTimer); }
+        dockRefusalTimer = setTimeout(() => { el.hidden = true; dockRefusalTimer = null; }, 8000);
+    }
+
     /** Open the dock with a given tab active. The dock document owns
      *  activeTab — the shell only requests the switch via postMessage. If the
      *  /dock document is not loaded yet, the request stays pending and is
@@ -139,7 +175,15 @@
                 // A programmatic open must respect the same floor the toggle
                 // does — below rail+dock the dock cannot exist at all. Loud,
                 // not silent: the refusal names why.
+                //
+                // A console line is not loud enough for a button press. The
+                // COMPOSER button in the terminals and command documents routes
+                // here, and before the composer moved into the dock it opened a
+                // modal at ANY width — so a refusal that only reaches the console
+                // leaves a control that is clickable and incapable. Tell the
+                // operator in the shell, which is the surface that owns the dock.
                 console.info('[dock] openDockTab(' + tab + ') refused — ' + resolved.source);
+                showDockRefusalNotice(tab, resolved);
                 pendingDockTab = null;
                 return;
             }
