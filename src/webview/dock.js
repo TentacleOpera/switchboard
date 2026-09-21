@@ -980,10 +980,17 @@
 
         const reportEl = document.getElementById('agent-poll-report');
 
-        // Compress a wake entry to one line per action or observation. The raw
-        // report is ~3 KB of boilerplate per pass — lease, assumptions, probed
-        // capabilities, and the same list of rules that need a model — none of
-        // which changes between passes. What an operator wants is what CHANGED.
+        // One line per thing the controller DID or OBSERVED. Nothing else.
+        //
+        // A wake writes ~3 KB, almost all of it plumbing: the lease it holds, the
+        // capabilities it probed, and the rules it could not run. That last one is
+        // a report about what the BOARD did not provide, not about the controller's
+        // work, and repeating it every five minutes buries the lines that matter.
+        //
+        // Kept: Actions (what it did), Errors (what failed), Board restart (what it
+        // did to the host). Dropped: Lease, Capabilities, Rules unavailable.
+        const REPORTED_SECTIONS = ['### Actions', '### Errors', '### Board restart'];
+
         function summariseReport(md) {
             const wakes = String(md || '').split('## Wake ').slice(1);
             const lines = [];
@@ -992,29 +999,23 @@
                 let time = stamp;
                 try { time = new Date(stamp).toLocaleTimeString(); } catch { /* keep raw */ }
 
-                // The Actions section is the only part that reports work done.
-                const actIdx = w.indexOf('### Actions');
-                const actions = [];
-                if (actIdx >= 0) {
-                    const body = w.slice(actIdx + '### Actions'.length);
+                for (const heading of REPORTED_SECTIONS) {
+                    const at = w.indexOf(heading);
+                    if (at < 0) { continue; }
+                    let body = w.slice(at + heading.length);
+                    const nextHeading = body.search(/\n#{2,3} /);
+                    if (nextHeading >= 0) { body = body.slice(0, nextHeading); }
                     for (const raw of body.split('\n')) {
                         const l = raw.trim();
-                        if (!l || l.startsWith('###') || l.startsWith('---')) { continue; }
-                        if (l.startsWith('_No rule fired')) { continue; }
-                        if (l.startsWith('- ') || l.startsWith('* ')) { actions.push(l.slice(2).trim()); }
+                        if (!l || l.startsWith('---')) { continue; }
+                        if (l.startsWith('_')) { continue; }   // "_No rule fired this pass._"
+                        if (l.startsWith('- ') || l.startsWith('* ')) {
+                            lines.push(time + '  ' + l.slice(2).trim());
+                        }
                     }
                 }
-
-                if (actions.length > 0) {
-                    for (const a of actions) { lines.push(time + '  ' + a); }
-                } else {
-                    // Nothing fired. Say so once, with the reason it could not do
-                    // more, so a quiet pass is distinguishable from a blocked one.
-                    const blocked = (w.match(/^- row \d+ /gm) || []).length;
-                    lines.push(time + '  no rule fired' + (blocked ? '  (' + blocked + ' rules need a model)' : ''));
-                }
             }
-            return lines.length ? lines.join('\n') : 'No controller report yet.';
+            return lines.length ? lines.join('\n') : 'Nothing observed or done yet.';
         }
 
         async function refreshReport() {
