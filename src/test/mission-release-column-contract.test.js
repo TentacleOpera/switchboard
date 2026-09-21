@@ -194,10 +194,28 @@ async function run() {
         ];
         const mission = { id: 'mission-coding', team: 'coding-team', workspaceId: 'ws1', plans: ['m6-cx2', 'm6-cx5', 'm6-cx8'] };
         const { server, dispatched } = makePopServer(board, mission);
+        // Coding's cadence is ONE (Mission 04): the mission releases nothing while
+        // a member it already released has not asserted completion, so the next
+        // release is earned by the previous card completing — not by asking twice.
+        // Walking the member set therefore means completing as we go, which is
+        // also the only shape that proves all THREE landed in one column rather
+        // than the first one having.
+        const pop = () => server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding Coder', missionId: mission.id });
         for (let i = 0; i < 3; i++) {
-            const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding Coder', missionId: mission.id });
+            const out = await pop();
             assert.strictEqual(out.status, 200, `release ${i + 1}: ${out.payload.error || ''}`);
             assert.ok(out.payload.dispatched, `release ${i + 1} must dispatch a member (${out.payload.reason || ''})`);
+            if (i === 0) {
+                // The cadence is real, and it is checked here rather than after the
+                // loop: once every member is delivered the pop reports an empty
+                // queue and never reaches the in-flight gate at all.
+                const holds = await pop();
+                assert.strictEqual(holds.payload.dispatched, null,
+                    'Coding releases ONE: a member still out holds the next release');
+                assert.ok(/in flight/.test(holds.payload.reason || ''), holds.payload.reason);
+            }
+            const row = board.find(p => p && p.planId === dispatched[dispatched.length - 1].planId);
+            row.completedAt = new Date().toISOString();
         }
         assert.strictEqual(dispatched.length, 3, 'every member was released');
         const columns = [...new Set(dispatched.map(d => d.targetColumn))];

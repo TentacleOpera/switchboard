@@ -372,3 +372,26 @@ the suite with two expectations inverted fails exactly those two cases and exits
 1, so the assertions are load-bearing and the harness reports failures. The fix
 is in the working tree, uncommitted, as instructed — `d030456d` still carries the
 aborting harness.
+
+## Review Findings
+
+One CRITICAL defect found and fixed. The mission interception in `_advanceCards`
+fires on "N>1 cards into a team column with the dispatch gate open", which is
+byte-for-byte the shape of Mission 04's *wave release* — so a mission draining
+itself was re-read as a fresh batch move, its members transferred out by
+`claimIntoMission` into a brand-new mission, which was then launched and waved
+again. Reproduced against the compiled provider before the fix (Feature team,
+cadence 5). Fixed by naming the release: `LocalApiServer.ts` sends
+`missionRelease: missionId` on the wave's `triggerBatchAction`, `verbSchemas.ts`
+declares it (and `targetTerminal`, previously undeclared), and both mission
+branches in `_advanceCards` skip when it is set. Everything else in this subtask
+held up — the early `return` after a mission outcome means no double-dispatch, the
+membership is read back rather than trusted, an empty mission is discarded, and
+the launch head comes from `missions.team`. `test:contract:batch-mission-launch`
+is 21/21 (19 plus two new regression checks) and is invoked by CI at
+`integration-tests.yml:1843`.
+
+## Deferred Findings
+
+None
+

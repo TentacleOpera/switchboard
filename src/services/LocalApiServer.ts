@@ -4529,6 +4529,14 @@ export class LocalApiServer {
                             // head — not to whatever terminal the role resolves to
                             // workspace-wide.
                             targetTerminal: from,
+                            // THIS IS A RELEASE, NOT A BATCH MOVE. The batch arm
+                            // intercepts an N>1 dispatch into a team column and turns
+                            // it into a mission — which is exactly this call's shape.
+                            // Unnamed, the release is re-read as a fresh batch, its
+                            // members are transferred into a NEW mission and that one
+                            // is launched, waving again. Naming the mission stops the
+                            // drain from eating itself.
+                            missionRelease: missionId,
                         }, workspaceRoot);
                         const released = waveOutcome && waveOutcome.success !== false && waveOutcome.dispatched === true;
                         if (!released) {

@@ -281,3 +281,21 @@ reports "X of Y dispatched" plus the registered round count rather than the plan
 exact pre-change wording. Mission 03's `resolveBatchTeam` is already in the tree
 (another seat's uncommitted work) and routes pool planner/reviewer teams to
 `fanout` — this change is that branch's implementation and re-derives nothing.
+
+## Review Findings
+
+No change needed. `ordered.slice(0, terminals.length)` still exists at
+`KanbanProvider.ts:8674`, which reads like Gap 2 surviving, but it is now round
+1's slice: `_registerBatchRounds` has already written `ceil(n / seats)` durable
+rounds for the whole batch, so the remainder is queued rather than dropped. The
+two failure modes are both honest rather than silent — `kind: 'no-team'` delivers
+the *whole* batch in one prompt and says why, and `kind: 'unregistered'` keeps the
+round-1 fan-out and states plainly that the remainder is held with nothing to
+release it. `test:contract:batch-move-team-prompt` passes (including "round
+advance handles featureless rounds", the loose-plan case) and is invoked by CI at
+`integration-tests.yml:322`.
+
+## Deferred Findings
+
+None
+

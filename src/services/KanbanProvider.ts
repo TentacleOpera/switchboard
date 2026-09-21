@@ -10747,6 +10747,26 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // whichever head happens to sort first. Omitted (every other caller)
             // leaves today's resolution untouched.
             dispatchTerminal?: string;
+            // THIS BATCH IS A MISSION'S RELEASE, NOT A BATCH MOVE. Set to the
+            // releasing mission's id by Mission 04's wave path, and by nothing
+            // else.
+            //
+            // Without it the drain eats itself. A wave release is a batch
+            // dispatch of N>1 members into the mission's own team column with
+            // `bypassTriggerGate: true` — which is byte-for-byte the shape the
+            // mission branch below exists to intercept. So the release re-enters
+            // `_tryBatchMission`, `resolveBatchTeam` answers 'mission' again (the
+            // team is live and the column is its own), `_resolveStageablePlanIds`
+            // accepts the cards because STAGING is stageable, and
+            // `claimIntoMission` TRANSFERS them out of the mission that just
+            // released them into a brand-new one — which is then launched, and
+            // waves again. Measured on the Feature team (cadence 5): every wave
+            // spawned and launched another mission.
+            //
+            // A mission releasing its own members has already made the decision
+            // this branch makes. Skipping it is not a special case — it is the
+            // branch's own precondition ("a batch MOVE to a team column"), stated.
+            missionRelease?: string;
         }
     ): Promise<{
         success: boolean;
@@ -10814,7 +10834,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // branch below: nothing claimable (a STAGING batch, whose cards
                 // already belong to the mission that staged them) means no
                 // mission and today's path.
-                if (mayDispatch && sids.length > 1 && (this._boardMoveCliTriggersEnabled || options.bypassTriggerGate)) {
+                if (mayDispatch && !options.missionRelease && sids.length > 1 && (this._boardMoveCliTriggersEnabled || options.bypassTriggerGate)) {
                     const missionOutcome = await this._tryBatchMission(workspaceRoot, sids, sourceColumn, targetCol);
                     if (missionOutcome) {
                         moved.push(...missionOutcome.moved);
@@ -10918,7 +10938,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // If nothing can be claimed — the cards already belong to a mission (a
         // STAGING batch) or are already dispatched — NO mission is created and
         // this falls through to today's path, unchanged.
-        if (mayDispatch && sessionIds.length > 1 && (this._boardMoveCliTriggersEnabled || options.bypassTriggerGate)) {
+        // `missionRelease` skips the interception: a mission's own wave release is
+        // not a batch move, and intercepting it transfers the members into a fresh
+        // mission and launches that (see the option's own note).
+        if (mayDispatch && !options.missionRelease && sessionIds.length > 1 && (this._boardMoveCliTriggersEnabled || options.bypassTriggerGate)) {
             const missionOutcome = await this._tryBatchMission(workspaceRoot, sessionIds, sourceColumn, target);
             if (missionOutcome) {
                 moved.push(...missionOutcome.moved);
@@ -12772,6 +12795,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // (Mission 04); every webview caller leaves this undefined.
                     dispatchTerminal: typeof msg.targetTerminal === 'string' && msg.targetTerminal.trim()
                         ? msg.targetTerminal.trim()
+                        : undefined,
+                    // Mission 04's wave release names the mission it is draining,
+                    // so the shared operation does not read its own release as a
+                    // fresh batch move and claim the members into a new mission.
+                    missionRelease: typeof msg.missionRelease === 'string' && msg.missionRelease.trim()
+                        ? msg.missionRelease.trim()
                         : undefined
                 });
                 const dispatchIds = result.moved.map(m => m.id);

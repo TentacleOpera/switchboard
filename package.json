@@ -885,7 +885,7 @@
     "watch": "node scripts/sync-webview-vendor.js && webpack --watch",
     "package": "node scripts/sync-webview-vendor.js && webpack --mode production --devtool hidden-source-map",
     "package:deb": "bash scripts/package-deb.sh",
-    "compile-tests": "tsc -p tsconfig.test.json",
+    "compile-tests": "tsc -p tsconfig.test.json && node scripts/copy-test-assets.js",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "lint": "eslint src",

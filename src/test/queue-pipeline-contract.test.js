@@ -785,7 +785,33 @@ async function run() {
         const popStart = src.indexOf('private async _runQueuePop(');
         const popBody = src.slice(popStart, src.indexOf('\n    /**', popStart + 10));
         assert.ok(!/CODING_COLUMNS/.test(popBody), 'the pop must not decide eligibility from a column');
-        assert.ok(!/\binFlight\b/.test(popBody), 'the pop must carry no in-flight concept');
+
+        // V81 deleted the TEAM-WIDE in-flight refusal, and it stays deleted. What
+        // Mission 04 added is a different animal and the two must not be confused:
+        // a mission's declared CADENCE ("Coding one, Feature five") holds the next
+        // release while that mission's own members are still out. It is scoped to
+        // one mission, derived from those members' asserted completion on the
+        // board — never from a stored ledger — and it opens the moment the card
+        // completes, which is precisely why it cannot wedge the way the ledger gate
+        // did (round 1 stamped 'dispatched', never closable, every later round
+        // skipped).
+        //
+        // So the ratchet is on the SHAPE, not the word: every in-flight refusal the
+        // pop returns names its mission, and none is read from a ledger. A
+        // workspace-wide refusal cannot grow back under this wording without
+        // failing here.
+        const inFlightRefusals = popBody.match(/reason: `[^`]*in flight[^`]*`/g) || [];
+        assert.ok(inFlightRefusals.length > 0,
+            'the mission cadence refusal must exist — Mission 04 is what makes "Coding one" one');
+        for (const refusal of inFlightRefusals) {
+            assert.ok(/\$\{missionId\}/.test(refusal),
+                `every in-flight refusal must name its mission, or it is the workspace-wide gate again: ${refusal}`);
+        }
+        assert.ok(!/in_flight/.test(popBody),
+            'in-flight must be derived from the board, never read from a stored ledger');
+        // And it must be unreachable without a mission: an unscoped pop refuses nothing.
+        assert.ok(/if \(missionId && missionStage && inFlightMembers\.length > 0\)/.test(popBody),
+            'the cadence refusal must be gated on a mission — an unscoped pop carries no in-flight concept');
     });
 
     await check('the rounds path refuses no dispatch either', () => {

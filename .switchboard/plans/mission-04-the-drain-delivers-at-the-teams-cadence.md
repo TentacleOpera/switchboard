@@ -322,3 +322,25 @@ eight Mission 04 cases pass. The two remaining failures — "the pop takes the
 lowest column_order, NULLs first" and "the in-flight refusal is deleted from
 LocalApiServer" — are red at pristine HEAD (64f8bba3) and are not this subtask's;
 they were left alone.
+
+## Review Findings
+
+One CRITICAL and two MAJOR defects found, all fixed. CRITICAL: the wave release's
+own `triggerBatchAction` re-entered the batch-mission arm and spawned + launched
+another mission per wave (reproduced; fixed by `missionRelease`, recorded in full
+on Mission 03). MAJOR: this subtask broke `queue-pipeline`'s V81 ratchet, which
+banned the token `inFlight` anywhere in the pop — the feature's delivery report
+claims that failure is pre-existing, and it is not (the assertion passes at
+`51539d17` and fails at HEAD). The ratchet was narrowed to the *shape* it actually
+protects rather than relaxed: every in-flight refusal must name its mission, none
+may be read from a stored ledger, and the refusal must be gated on `missionId` —
+so a workspace-wide gate still cannot grow back. MAJOR: it also broke Mission 06's
+suite, fixed there. The cadence data itself checks out: `batchSize` is in all five
+persisted definition literals (verified on the live host — Feature 5, everyone
+else 1), it is in `PRODUCT_OWNED_TEAM_FIELDS` so a cadence fix reaches an
+already-seeded board, and every fallback is source-tagged.
+
+## Deferred Findings
+
+- NIT: a wave that the head never completes is held forever by design ("no timer releases work"); the queue watch is the only nudge, so a dead Feature seat stalls a 12-plan mission silently after the first five. `src/services/LocalApiServer.ts:4497`
+

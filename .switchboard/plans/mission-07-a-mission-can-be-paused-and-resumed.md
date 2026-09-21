@@ -243,3 +243,21 @@ facts apart; `pauseMissionsForTeam` pauses only the undelivered; the team-stop p
 and the card button carry the write. Also note: `src/services/LocalApiServer.ts` and
 `src/services/KanbanProvider.ts` additionally carry a concurrent seat's in-flight
 Mission 04 hunks — the tree is shared and the two could not be staged apart.
+
+## Review Findings
+
+No change needed. Pause is genuinely stored rather than derived: `paused` is in
+the `missions` CREATE TABLE, added to existing DBs by the V85 `ALTER`, selected by
+both `getMissions` and `getMissionById`, mapped on read, and written by
+`updateMission` — which preserves it when an unrelated field is edited
+(`KanbanDatabase.ts:16902`), so no other mission edit can silently unpause a
+stopped one. `pauseMissionsForTeam` pauses only undelivered members and reports
+what it skipped, so "nothing was paused" is never silent. PAUSED, UNARMED, drained
+and held are four distinct strings on the card and in the row.
+`test:contract:mission-pause-resume` is 14/14 and invoked by CI at
+`integration-tests.yml:1894`.
+
+## Deferred Findings
+
+None
+

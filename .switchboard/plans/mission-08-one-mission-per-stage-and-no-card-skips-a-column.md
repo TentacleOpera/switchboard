@@ -297,3 +297,23 @@ Work left uncommitted in the working tree for the head to commit.
 `npm run compile-tests && npm run test:contract:mission-stage-claim` now runs **20/20, exit 0**. One was a real code bug: a member already at (or past) the mission's own stage was DELIVERED by `releaseVerdict` but the pop still had it in its candidate list, so a card being worked could be re-dispatched — candidacy is now `inPopScope`, ONE predicate (used by the dependency gate, the blocked diagnosis and the candidate list) that admits only `verdict === 'releasable'`. One was the drift the lead named: "which members are held, and why" was computed in TWO places (the pop and the board payload); it is now ONE function, `heldMembers` in `missionStage.ts`, called by both, and `_heldMembersOf` is deleted. Three were gate defects, not code defects, and the code was right in all three: the unresolvable-team case looped over `''` as well as an unplaceable id (the empty team is the pre-batch STAGING-assembled mission and MUST keep its shipped behaviour — the test now asserts the distinction the plan's own edge case draws: absent team = never configured, non-empty unresolvable = refuse); the ranking assertion could not tell a comment from a declaration (the surviving `_PIPELINE_POSITION` is a comment recording what the symbol replaced); and the CLI assertion matched my own comment saying a hold is "not the run is over". The suite now strips comments before grepping source, in a shared `code()` helper, because a gate that cannot tell the two apart is not a gate.
 
 Attribution of the other red suites, since none of them is this change: a pristine `HEAD` (`64f8bba3`, extracted read-only with `git archive` into /tmp) is red for **queue-pipeline** (2), **queue-done-relay** (5), **mission-control-tick** (3), **board-read-endpoints** (3) and **team-automated-dispatch** (2) — the same failures, from the same code, with this change absent. Green in this tree: mission-stage-claim (20), batch-mission-launch (19), mission-scoped-launch, dependency-gate (one stale assertion updated: `mcAddMissionMember` now reports `claim.claimed` rather than `added`, same contract), staging-column, drag-confirm-order, batch-move-team-prompt, coded-auto-gate, kanban-column-labels.
+
+## Review Findings
+
+No change needed. The hand-kept ranking is genuinely gone: `_PIPELINE_POSITION` no
+longer exists in `KanbanProvider.ts`, and `_isColumnBefore` / `_isParallelCodedLane`
+now delegate to `missionStage.ts`'s single table derived from
+`DEFAULT_KANBAN_COLUMNS`' own `order` and `kind`. `claimIntoMission` transfers
+rather than being swallowed by `INSERT OR IGNORE`, records the removal on both
+missions, and the unique index on `mission_members(member_id)` is untouched. The
+release gate holds a card that would skip a stage, names why, keeps "held" and
+"delivered" distinct, and fails closed on a column with no rank. Verified that the
+batch path cannot trip its own gate: `appendQueuePositions` moves a claimed card
+to STAGING, which `releaseVerdict` treats as releasable.
+`test:contract:mission-stage-claim` is 20/20 and invoked by CI at
+`integration-tests.yml:1860`.
+
+## Deferred Findings
+
+- NIT: `PIPELINE_STAGES`' coded-lane entry hard-codes `column: 'CODER CODED'` while its own docblock says "the lane's lowest-ranked column" — the lowest is LEAD CODED (order 180 vs 190). Inert today because every behavioural consumer goes through `resolveStageForHeadRole`, which overrides `column` with the role's own; but it is a hand-kept literal inside the module whose stated purpose is to have none. `src/services/missionStage.ts:79`
+

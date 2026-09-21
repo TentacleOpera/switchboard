@@ -277,6 +277,13 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             // still reaches the arm (validateVerbPayload only checks declared
             // fields) and `!!'false'` opens the dispatch gate.
             bypassTriggerGate: { type: 'boolean' },
+            // Mission 04's wave release supplies both: the head the wave is
+            // addressed to, and the mission being drained. Declared for the same
+            // reason `bypassTriggerGate` is — an undeclared field still reaches
+            // the arm unvalidated, and `missionRelease` decides whether the arm
+            // treats the call as a release or as a fresh batch move.
+            targetTerminal: { type: 'string' },
+            missionRelease: { type: 'string' },
         },
     },
     // Moves

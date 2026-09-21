@@ -335,14 +335,14 @@ second interpretation.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Mission 01 — A Launch Touches Only Its Own Members](../plans/mission-01-a-launch-touches-only-its-own-members.md) — **LEAD CODED** — ID: d45d58bb-59e3-48b0-94b2-c3496b33731c
-- [ ] [Mission 02 — One Derived Gate for "Is This a Team Head"](../plans/mission-02-one-derived-gate-for-is-this-a-team-head.md) — **LEAD CODED** — ID: 614269ec-a5d2-412d-aa68-6f93e1e1b836
-- [ ] [Mission 03 — A Batch Move to a Team Creates a Mission and Launches It](../plans/mission-03-a-batch-move-to-a-team-creates-a-mission-and-launches-it.md) — **LEAD CODED** — ID: eaba9825-3fcd-4623-8452-2232e6dd92f5
-- [ ] [Mission 04 — The Drain Delivers at the Team's Cadence](../plans/mission-04-the-drain-delivers-at-the-teams-cadence.md) — **LEAD CODED** — ID: bf7a7c18-e8ff-4e4d-935e-f73eb3df250c
-- [ ] [Mission 05 — Planning and Review Fan Out in Rounds, and Nothing Is Dropped](../plans/mission-05-planning-and-review-fan-out-in-rounds-and-nothing-is-dropped.md) — **LEAD CODED** — ID: f6d3e138-828f-442c-8f1f-2c6de58c116d
-- [ ] [Mission 06 — A Mission Owns Its Members' Columns; a Single Plan Still Routes](../plans/mission-06-a-mission-owns-its-members-columns.md) — **LEAD CODED** — ID: 2839dbea-8395-456e-b4dc-7d595caeb0af
-- [ ] [Mission 07 — A Mission Can Be Paused and Resumed](../plans/mission-07-a-mission-can-be-paused-and-resumed.md) — **LEAD CODED** — ID: 4f6de297-19f4-43a7-aaf4-3839196956c6
-- [ ] [Mission 08 — One Mission per Stage, and No Card Skips a Column](../plans/mission-08-one-mission-per-stage-and-no-card-skips-a-column.md) — **LEAD CODED** — ID: 4a2078e4-a21b-49ce-9b6b-06320bb975b7
+- [ ] [Mission 01 — A Launch Touches Only Its Own Members](../plans/mission-01-a-launch-touches-only-its-own-members.md) — **CODE REVIEWED** — ID: d45d58bb-59e3-48b0-94b2-c3496b33731c
+- [ ] [Mission 02 — One Derived Gate for "Is This a Team Head"](../plans/mission-02-one-derived-gate-for-is-this-a-team-head.md) — **CODE REVIEWED** — ID: 614269ec-a5d2-412d-aa68-6f93e1e1b836
+- [ ] [Mission 03 — A Batch Move to a Team Creates a Mission and Launches It](../plans/mission-03-a-batch-move-to-a-team-creates-a-mission-and-launches-it.md) — **CODE REVIEWED** — ID: eaba9825-3fcd-4623-8452-2232e6dd92f5
+- [ ] [Mission 04 — The Drain Delivers at the Team's Cadence](../plans/mission-04-the-drain-delivers-at-the-teams-cadence.md) — **CODE REVIEWED** — ID: bf7a7c18-e8ff-4e4d-935e-f73eb3df250c
+- [ ] [Mission 05 — Planning and Review Fan Out in Rounds, and Nothing Is Dropped](../plans/mission-05-planning-and-review-fan-out-in-rounds-and-nothing-is-dropped.md) — **CODE REVIEWED** — ID: f6d3e138-828f-442c-8f1f-2c6de58c116d
+- [ ] [Mission 06 — A Mission Owns Its Members' Columns; a Single Plan Still Routes](../plans/mission-06-a-mission-owns-its-members-columns.md) — **CODE REVIEWED** — ID: 2839dbea-8395-456e-b4dc-7d595caeb0af
+- [ ] [Mission 07 — A Mission Can Be Paused and Resumed](../plans/mission-07-a-mission-can-be-paused-and-resumed.md) — **CODE REVIEWED** — ID: 4f6de297-19f4-43a7-aaf4-3839196956c6
+- [ ] [Mission 08 — One Mission per Stage, and No Card Skips a Column](../plans/mission-08-one-mission-per-stage-and-no-card-skips-a-column.md) — **CODE REVIEWED** — ID: 4a2078e4-a21b-49ce-9b6b-06320bb975b7
 <!-- END SUBTASKS -->
 
 ## Completion Summary
@@ -408,3 +408,46 @@ plain `.js` that `compile-tests` never copies into `out/`, so every contract sui
 dies `MODULE_NOT_FOUND` until it is copied by hand. The open prerequisite named in
 this file — `memo-missions-cannot-be-opened-scoped-or-tested` — is still open, and
 this feature has now put that mission card in front of every batch.
+
+## Review Findings
+
+Reviewed all eight subtasks against `src/` at HEAD, with every goal invariant
+re-run rather than read: one CRITICAL and three MAJOR defects were found, and all
+four are fixed in `src/services/{KanbanProvider,LocalApiServer,verbSchemas}.ts`,
+`src/test/{batch-mission-launch,mission-release-column,queue-pipeline}-contract.test.js`,
+`scripts/copy-test-assets.js` and `package.json`. The CRITICAL is the drain eating
+itself — a wave release is a batch dispatch of N>1 into a team column, so it
+re-entered the batch-mission arm, transferred its own members into a fresh mission
+and launched that, waving again (reproduced against the compiled provider on the
+Feature team's cadence of 5); it is fixed by naming the release. The MAJORs: this
+feature's new CI steps would have died `MODULE_NOT_FOUND` on a fresh checkout,
+because `compile-tests` never emitted `src/services/*.js` into `out/` (fixed at
+source, replacing the hand-copy shims several suites carry); Mission 04 broke
+`queue-pipeline`'s V81 in-flight ratchet, which the delivery report wrongly
+reports as pre-existing; and it broke Mission 06's suite, which shipped at 10/11
+rather than the claimed 11/11. Final state: `mission-scoped-launch` 12/12,
+`batch-mission-launch` 21/21, `mission-stage-claim` 20/20,
+`mission-release-column` 11/11, `mission-pause-resume` 14/14,
+`batch-move-team-prompt` pass, `dependency-gate` 28/28, `queue-pipeline` one
+remaining failure that is genuinely not this feature (NULLs-first ordering —
+neither the test nor the comparator changed anywhere in this feature's commit
+range).
+
+**Goal verdict: achieved.** A batch move now produces one declared thing on every
+team; nothing is dropped; one card belongs to one mission; a team is held once and
+paused rather than released. Nothing was relocated and no destination the plan
+named was changed. All seven automated checks the plans name are invoked by CI
+(`.github/workflows/integration-tests.yml` lines 322, 1798, 1827, 1843, 1860,
+1878, 1894), so no gate is defined-but-unwired. Two caveats bound the verdict: the
+live host on :7777 is running a bundle built before these fixes, so the recursion
+is live there until `dist/` is rebuilt; and the feature's own open prerequisite,
+`memo-missions-cannot-be-opened-scoped-or-tested`, is still open while this
+feature has now put the mission card in front of every batch.
+
+## Deferred Findings
+
+- MAJOR: `queue-pipeline`'s "the pop takes the lowest column_order, NULLs first" is red — a stale fixture contradicting V81's committed comparator. Verified NOT caused by this feature (neither the assertion nor the ordering code changed in `51539d17..HEAD`), so it is left for whoever owns the comparator. `src/test/queue-pipeline-contract.test.js:9`
+- MAJOR: `getMissions` is not implemented in standalone mode (the live host answers 502), so the mission verb surface exists only on the legacy host. The card still renders, because missions ride the shared `updateBoard` push rather than the verb — but any client reaching for the verb on the Pi gets nothing. Overlaps the named prerequisite. `src/standalone/bootstrap.ts`
+- NIT: a wave the head never completes is held indefinitely by design; the queue watch is the only nudge, so a dead Feature seat stalls a 12-plan mission after the first five. `src/services/LocalApiServer.ts:4497`
+- NIT: `PIPELINE_STAGES`' coded entry hard-codes `column: 'CODER CODED'` against its own "lowest-ranked column" docblock (LEAD CODED is lower). Inert, but a hand-kept literal in the anti-drift module. `src/services/missionStage.ts:79`
+- NIT: `launchMission`'s team-bound refusal conflates "no terminal live" with "this team's head is not seated". `src/services/KanbanProvider.ts:16760`

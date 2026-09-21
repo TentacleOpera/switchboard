@@ -495,6 +495,65 @@ async function run() {
             `both move arms (moveSelected and moveAll) must resolve the shape before the seat-role fan-out; found ${plannerArms}`);
     });
 
+    // ── 5. The drain must not eat itself ───────────────────────────────────
+    // A wave release (Mission 04) is a batch dispatch of N>1 members into the
+    // mission's own team column with `bypassTriggerGate: true` — byte-for-byte
+    // the shape this suite's interception exists to catch. Un-named, the release
+    // is re-read as a fresh batch move: the members are TRANSFERRED out of the
+    // mission that just released them into a brand-new one, which is launched,
+    // and waves again. Reproduced on the Feature team (cadence 5) before the fix.
+    await test('a mission\'s own wave release is not re-read as a new batch move', async () => {
+        const claims = [];
+        const realResolve = provider.resolveBatchTeam;
+        const realClaim = provider.claimBatchAsMission;
+        const realPost = provider.postMessage;
+        // The board echo needs a live webview/ws target this harness has none of;
+        // the claim is what is under test, not the echo.
+        provider.postMessage = () => {};
+        provider.resolveBatchTeam = async () => ({
+            kind: 'mission', teamId: 'feature-implementation', headTerminal: 'Feature Lead', reason: 'stub',
+        });
+        provider.claimBatchAsMission = async (ws, ids) => {
+            claims.push([...ids]);
+            return { created: true, missionId: 'SPAWNED', missionName: 'spawned', claimed: [...ids], refused: [], launched: true };
+        };
+        const waveShape = {
+            target: 'LEAD CODED', sourceColumn: 'STAGING', bypassTriggerGate: true,
+            dispatch: true, dispatchRole: 'lead', dispatchTerminal: 'Feature Lead',
+        };
+        try {
+            await provider._advanceCards(tmpRoot, ['w1', 'w2', 'w3', 'w4', 'w5'],
+                { ...waveShape, missionRelease: 'mission-feature' });
+            assert.strictEqual(claims.length, 0,
+                `a release named as one must claim nothing — it spawned ${JSON.stringify(claims)}`);
+            // The negative control: without the name, this IS a batch move and the
+            // interception must still fire, or the assertion above passes on a
+            // branch that is simply dead.
+            await provider._advanceCards(tmpRoot, ['w1', 'w2', 'w3', 'w4', 'w5'], waveShape);
+            assert.strictEqual(claims.length, 1,
+                'an unnamed batch move of the same shape must still become a mission');
+        } finally {
+            provider.resolveBatchTeam = realResolve;
+            provider.claimBatchAsMission = realClaim;
+            provider.postMessage = realPost;
+        }
+    });
+
+    await test('the wave release names the mission it is draining', () => {
+        const api = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        const wave = api.slice(api.indexOf("kanbanVerb('triggerBatchAction'"));
+        assert.ok(/missionRelease:\s*missionId/.test(wave.slice(0, 2000)),
+            'the wave release must name its mission, or the batch arm claims its members into a new one');
+        const provSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        const advance = provSrc.slice(
+            provSrc.indexOf('private async _advanceCards('),
+            provSrc.indexOf('\n    private _isColumnBefore(')
+        );
+        const guards = (advance.match(/!options\.missionRelease/g) || []).length;
+        assert.strictEqual(guards, 2,
+            `both mission branches in _advanceCards must skip a release; found ${guards}`);
+    });
+
     await test('both composition roots instantiate the shared provider the arms live on', () => {
         for (const [file, label] of [
             ['src/extension.ts', 'extension'],

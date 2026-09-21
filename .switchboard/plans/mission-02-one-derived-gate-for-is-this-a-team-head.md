@@ -284,3 +284,20 @@ are asserted exactly as before and pass. Left UNCOMMITTED in the working tree on
 the head's instruction — coders do not run git verbs on this team; the earlier
 commit `7bb7f435` carries the loose regex, so `main` goes green when the head
 commits this repair.
+
+## Review Findings
+
+No change needed. `isCodingTeamHead` now answers off `resolveTeamHeadRoles({ db })`
+(`KanbanProvider.ts:7008`) rather than a `role !== 'lead'` literal, and both
+composition roots reach it — `bootstrap.ts:3585` and `TaskViewerProvider.ts:8552`
+— so the standalone host and the extension classify a head identically. Verified
+at runtime that the gate is true for the Coding `coder` and Review `reviewer`
+heads. The `role === 'lead'` occurrences that remain are Feature-team *behaviour*
+(the drive prefix at `:7751`, IDE dispatch mode, pair bands), not the head gate,
+and the plan keeps those deliberately. The grep gate in
+`batch-move-team-prompt-contract` greps comment-stripped source and passes.
+
+## Deferred Findings
+
+None
+

@@ -264,3 +264,19 @@ skipped by dispatch directive, so the new suite has not been run. The live board
 answers at :7777 with an empty mission list (`{"success":true,"missions":[]}`),
 so no scoped pop could be exercised against it, and the running host is on
 pre-change bytes anyway.
+
+## Review Findings
+
+Reviewed against `src/` at HEAD plus the fixes in this pass; no change was needed
+in this subtask's own scope. `launchMission` and the webview LAUNCH MISSION body
+both send the mission id, `_runQueuePop` scopes candidates to that mission's
+members, an unknown or cross-workspace `missionId` is refused rather than
+silently widening to an unscoped pop, and a drained mission names itself instead
+of reusing the bare "queue empty" string. `test:contract:mission-scoped-launch`
+is 12/12 and is invoked by CI at `.github/workflows/integration-tests.yml:1827`.
+The one defect found downstream of this subtask — the wave release re-entering
+the batch-mission arm — is recorded on Mission 03/04, not here.
+
+## Deferred Findings
+
+- NIT: `launchMission`'s team-bound refusal reads "No coding terminal is live — seat the mission's team ('X')", which conflates "no terminal at all" with "this team's head is not seated"; it does name the team, so the operator can act. `src/services/KanbanProvider.ts:16760`

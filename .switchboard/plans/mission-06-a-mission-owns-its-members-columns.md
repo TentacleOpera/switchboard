@@ -244,3 +244,23 @@ both run clean, and the sibling suites in this feature (mission-stage-claim 20,
 batch-mission-launch 19, mission-scoped-launch, dependency-gate) stay green.
 Vacuity checked: a scratch copy with the one-column expectation inverted fails
 exactly that case and exits 1.
+
+## Review Findings
+
+One MAJOR defect found and fixed, in this subtask's own suite rather than its
+code. `mission-release-column-contract` shipped at 10/11, not the 11/11 the
+feature's delivery report claims: its Coding-mission case popped three times in a
+row with no completion between releases, which Mission 04's cadence (Coding
+releases one, and holds while a member is out) correctly refuses. The test was
+stale against a subtask that landed after it, so it now completes each member
+before asking for the next — and additionally pins the cadence itself, asserting
+that a member still in flight holds the next release. The production behaviour was
+right and is unchanged. The release column is Mission 08's `resolveStageForHeadRole`
+with no second team→column map, single-plan complexity routing is untouched, and
+an unresolvable team refuses loudly. Now 11/11; invoked by CI at
+`integration-tests.yml:1878`.
+
+## Deferred Findings
+
+None
+
