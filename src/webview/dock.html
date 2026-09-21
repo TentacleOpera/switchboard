@@ -310,7 +310,9 @@
             display: flex;
             align-items: center;
             gap: 6px;
-            margin-top: 8px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-color);
             flex-wrap: wrap;
         }
         .agent-poll-proj-label {
@@ -659,12 +661,12 @@
             <button type="button" class="agent-poll-btn" id="agent-poll-stop">Stop</button>
             <span class="agent-poll-state" id="agent-poll-state">stopped</span>
         </div>
+        <div class="agent-poll-report" id="agent-poll-report"></div>
         <div class="agent-poll-controls" id="agent-poll-controls">
             <label class="agent-poll-proj-label" for="agent-poll-project">Project</label>
             <select id="agent-poll-project" class="agent-poll-project"></select>
             <button type="button" class="agent-poll-btn" id="agent-poll-dispatch">Dispatch highest priority</button>
         </div>
-        <div class="agent-poll-report" id="agent-poll-report"></div>
         <div class="agent-control-status" id="agent-control-status">Control surface ready.</div>
     </div>
     <div id="dock-cli-pane"></div>
