@@ -1,7 +1,11 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder');
+const { ProtocolService } = require('../../out/services/ProtocolService');
 
 const mockPlan = [
     { topic: 'test-plan', absolutePath: '/abs/path/to/test.md' }
@@ -261,6 +265,38 @@ function testConsistentSpacingBetweenDirectives() {
     console.log('  PASS: Consistent spacing between directives in planner prompt');
 }
 
+/**
+ * The planner default is a bare protocol NAME, so the body a planner reads is
+ * whatever resolveProtocol returns — no longer the file the old `Read <path>`
+ * instruction named. `ClaudeCodeMirrorService` deliberately preserves an
+ * operator-edited `.agents/protocols/improve-plan/SKILL.md` (it writes
+ * `<file>.local.bak` and skips the overwrite), so resolution MUST prefer that
+ * file, and MUST say which store answered — an inlined shipped body and an
+ * inlined edited body read identically.
+ */
+async function testWorkspaceFileOutranksTheShippedBody() {
+    console.log('Testing an operator-edited protocol file outranks the shipped body...');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-protosrc-'));
+    const skillDir = path.join(tmp, '.agents', 'protocols', 'improve-plan');
+    fs.mkdirSync(skillDir, { recursive: true });
+    const SENTINEL = '# Improve Plan\n\nOPERATOR EDIT SENTINEL — this line exists only on disk.\n';
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), SENTINEL, 'utf8');
+
+    const edited = await ProtocolService.resolveProtocol('improve-plan', tmp);
+    assert.ok(edited, 'improve-plan must resolve when a workspace file exists');
+    assert.strictEqual(edited.source, 'workspace-file', 'An existing .agents/protocols file must be the answering store');
+    assert.ok(edited.body.includes('OPERATOR EDIT SENTINEL'), 'The resolved body must be the operator-edited file, not the shipped body');
+
+    fs.rmSync(path.join(skillDir, 'SKILL.md'));
+    const shipped = await ProtocolService.resolveProtocol('improve-plan', tmp);
+    assert.ok(shipped, 'improve-plan must still resolve with no workspace file');
+    assert.notStrictEqual(shipped.source, 'workspace-file', 'With no workspace file the source must name the registry/bundle, not the file');
+    assert.ok(!shipped.body.includes('OPERATOR EDIT SENTINEL'), 'The shipped body must not carry the removed workspace edit');
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+    console.log('  PASS: Workspace protocol file outranks the shipped body, and the source is recorded');
+}
+
 try {
     testDefaultPromptIsMinimal();
     testNoAddOnsByDefault();
@@ -277,8 +313,11 @@ try {
     testPromptLineBreaksAreNormalized();
     testNoTripleNewlinesInAnyRole();
     testConsistentSpacingBetweenDirectives();
-    console.log('\nAll tests passed!');
 } catch (err) {
     console.error('\nTest failed:', err.message);
     process.exit(1);
 }
+
+testWorkspaceFileOutranksTheShippedBody()
+    .then(() => { console.log('\nAll tests passed!'); })
+    .catch((err) => { console.error('\nTest failed:', err.message); process.exit(1); });

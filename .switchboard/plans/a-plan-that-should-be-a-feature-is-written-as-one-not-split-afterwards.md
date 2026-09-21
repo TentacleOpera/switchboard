@@ -489,3 +489,41 @@ all missing required sections; tags and complexity corrected to schema.*
 ---
 
 *Implementation summary (2026-09-20): Plan Sizing bullet rewritten feature-first — signals verbatim, carve-out verbatim, feature assembly via manage-features/`POST /kanban/feature` named as the expected path, and the feature/subtask self-containment rule added; stale `.switchboard/protocols/` citation corrected to `.agents/protocols/`. Planner defaults are now bare protocol names (`improve-plan`/`improve-feature`) across `DEFAULT_*_WORKFLOW`, `KanbanProvider` config reads, `sharedDefaults.js`, the Setup webview, and the persisted-config migrations; `RETIRED_WORKFLOW_PATH_MAP` normalizes every retired spelling (including the still-on-disk `.agents/protocols/` paths) to the name. `fileExists` in both `KanbanProvider` and `kanbanService` validates bare names via `ProtocolService.resolveProtocol`, with the webview reporting "Protocol resolves" vs "File exists". `RESIDENT_PROTOCOL_BODY` carries a basename-only pointer to `plan-authoring-protocol.md` (emitted block 662 chars, 790 with docs-pointer headroom — under the 800 gate), mirrored into packaged `AGENTS.md`/`CLAUDE.md`. Also fixed: standalone `improvePlan` read a never-existent `.agents/skills/` path (now fs → `resolveProtocol` → embedded fallback in both roots), `renderPlannerWorkflowRef`/`collectBareName` now treat `\` as a path separator, and the provider's `fileExists` containment check matches the service's sibling-prefix guard. Compilation and tests skipped per dispatch directives; edited files syntax-checked and reviewed by diff.*
+
+---
+
+## Review Findings
+
+Reviewed `cd4a81a0` (25 files) plus three review fixes in `src/services/ProtocolService.ts`,
+`src/services/ClaudeCodeMirrorService.ts`, `src/services/protocolDirectives.ts`,
+`src/test/minimal-prompt.test.js`, `package.json` and `.github/workflows/integration-tests.yml`.
+One CRITICAL was found and fixed: resolving `improve-plan` by name returned the 17,416-char
+*shipped* body while the retired `Read <path>` instruction had named the 19,018-char
+operator-edited `.agents/protocols/improve-plan/SKILL.md` that `ClaudeCodeMirrorService`
+deliberately preserves — so this change silently deleted 18 lines of `[user]`-question
+discipline from every planner prompt, and the plan's Edge-Case audit claim that "the bundled
+body and the shipped file are the same content" is false; resolution now prefers the
+workspace file and every `ResolvedProtocol` carries a `source` that is logged at the dispatch
+site. One MAJOR was fixed: `prompt-split-guidance-sync.test.js` — this plan's primary
+automated check — had no `package.json` script and no CI step, which is why it sat red on
+`main` unnoticed, so it is now wired as `test:contract:prompt-split-guidance`. Verified green:
+`prompt-split-guidance`, `claude-protocol-block` (17/17), `minimal-prompt` (incl. the new
+workspace-precedence guard), `batch-move-team-prompt`, `unattended-batch`,
+`standing-order-fragment-store`, `agents-seed-deletion-guard`, `standalone-parity:check`,
+`compile-tests`, `compile`, eslint (0 errors); and against the **live host on :7777** a planner
+preview for one plan carries `--- BEGIN PROTOCOL improve-plan ---` with no
+`Read .agents/protocols/improve-plan/SKILL.md`, while `fileExists` accepts `improve-plan`,
+rejects a junk name and still accepts a real path. Remaining risk: the running host predates
+the rebuilt `dist/standalone/cli.js`, so it still serves the pre-fix bundled body until it is
+restarted.
+
+## Deferred Findings
+
+- MAJOR — `src/test/planner-workflow-path-migration.test.js:58` is red (`Expected kanban DB to initialize for migration test 1`) and is invoked by neither `package.json` nor CI; verified red at `cd4a81a0^` too, so it is pre-existing and out of this plan's diff, but it is the only coverage of `normalizeRetiredWorkflowPath`'s new bare-name targets.
+- MAJOR — `src/test/kanban-default-prompt-previews.test.js:163` fails (`Accuracy Mode: Before coding, read and follow the workflow`): the mocked preview builder threads no `resolvedProtocols`, so `protocolPhrase` emits the fetch fallback. Pre-existing (reproduced against `cd4a81a0^`), but this check *is* CI-wired, so CI is red independently of this plan.
+- MAJOR — `src/test/goal-invariant-verification.test.js:204` fails (`vsix-packaging-contract.test.js has must-not-exist assertions`); pre-existing since `e26ac375`, CI-wired, unrelated to this plan.
+- MAJOR — `src/test/mission-control-tick-and-reports-contract.test.js` has 3 pre-existing failures (dispatch-directive occurrence count, `agent-control.js` seat-routing line, handoff queue predicate); unrelated to this plan.
+- NIT — `src/services/KanbanProvider.ts:7659` `collectBareName` has no automated coverage: every builder test stubs `resolvedProtocols`, so deleting the collector would leave all suites green. Verified against the live host instead.
+- NIT — `src/services/protocolScaffolder.ts:69` the resident pointer names `plan-authoring-protocol.md` by basename with no directory (the dead-references gate bans `.agents/`), so an agent must search for the file rather than open it.
+- NIT — `src/services/ProtocolService.ts:109` the new workspace-file read is a synchronous `readFileSync` per resolution for the two projected survivors; a concurrent `ClaudeCodeMirrorService` projection write could in principle be read mid-write (guarded only by a `.trim()` emptiness check).
+- NIT — prompt size, which the plan asked to be "measured and recorded", was not recorded: measured live, a planner prompt for one plan is 26,613 chars with the shipped body and ~28.2 KB with the operator-edited one.

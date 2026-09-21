@@ -57,6 +57,15 @@ export async function resolveProtocolSet(
             out[name] = null;
         }
     }));
+    // Record which store answered. An inlined body reads identically whether it
+    // came from the shipped bundle or from an operator's edited
+    // `.agents/protocols/<name>/SKILL.md`, so without this line "the planner
+    // silently stopped using my edits" is unanswerable after the fact.
+    try {
+        console.log('[protocolDirectives] resolved: ' + names
+            .map(n => `${n}=${out[n] ? out[n]!.source : 'unresolved'}`)
+            .join(' '));
+    } catch { /* logging must never break prompt assembly */ }
     return out;
 }
 

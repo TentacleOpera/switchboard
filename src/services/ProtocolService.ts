@@ -5,12 +5,33 @@ import { KanbanDatabase, ControlPlaneEntry } from "./KanbanDatabase";
 import { BUNDLED_PROTOCOLS, BundledProtocol } from "./bundledProtocols";
 import { stateFile } from "../utils/stateHome";
 
+/** Which store answered a protocol resolution. Required on every resolution:
+ *  an inlined body that came from the shipped bundle must never be
+ *  indistinguishable from one the operator edited in the workspace. */
+export type ProtocolSource =
+    | "workspace-file"          // .agents/protocols/<name>/SKILL.md — the operator's editable copy
+    | "control-plane-override"  // a workspace override row
+    | "control-plane"           // a seeded registry row
+    | "bundled";                // the body shipped in this build
+
 export interface ResolvedProtocol {
     name: string;
     body: string;
     path?: string;
     delivery: "inline" | "materialize";
+    /** Which store the body came from. See `ProtocolSource`. */
+    source: ProtocolSource;
 }
+
+/** The only protocols `ClaudeCodeMirrorService` projects into
+ *  `.agents/protocols/`, and therefore the only ones an operator can edit as a
+ *  file. The mirror deliberately PRESERVES a modified copy — it writes
+ *  `<file>.local.bak` and skips the overwrite (`filesPreserved++`) — so where
+ *  that file exists it is the operator's answer and outranks the registry row. */
+export const WORKSPACE_PROJECTED_PROTOCOLS: ReadonlySet<string> = new Set([
+    "improve-plan",
+    "improve-feature",
+]);
 
 export class ProtocolService {
     /**
@@ -77,29 +98,73 @@ export class ProtocolService {
         // bundled counterpart (a retired protocol still in the table, or an
         // override-only row) reached `bundled.body` and threw a TypeError instead of
         // returning null.
-        const body = (entry?.overrideBody ?? entry?.workspaceOverride) || entry?.body || bundled?.body;
+        // A workspace file outranks the registry for the two projected survivors.
+        // Until the planner defaults became bare names the prompt literally said
+        // `Read .agents/protocols/improve-plan/SKILL.md`, so an operator's edit to
+        // that file WAS what the planner read. Resolving the name to the shipped
+        // body instead drops that edit with no signal — a default that behaves
+        // exactly like a configured value, which this repo bans on config reads.
+        // `filesPreserved` in ClaudeCodeMirrorService exists to keep the edited
+        // file alive; this is the read side of that guarantee.
+        let workspaceBody: string | undefined;
+        if (workspaceRoot && WORKSPACE_PROJECTED_PROTOCOLS.has(name)) {
+            try {
+                const diskBody = fs.readFileSync(
+                    path.join(workspaceRoot, ".agents", "protocols", name, "SKILL.md"),
+                    "utf8"
+                );
+                if (diskBody.trim()) {
+                    workspaceBody = diskBody;
+                }
+            } catch {
+                // Not projected in this workspace — the registry answers.
+            }
+        }
+
+        const override = entry?.overrideBody ?? entry?.workspaceOverride;
+        let body: string | undefined;
+        let source: ProtocolSource;
+        if (workspaceBody !== undefined) {
+            body = workspaceBody;
+            source = "workspace-file";
+        } else if (override) {
+            body = override;
+            source = "control-plane-override";
+        } else if (entry?.body) {
+            body = entry.body;
+            source = "control-plane";
+        } else {
+            body = bundled?.body;
+            source = "bundled";
+        }
         if (!body) {
             return null;
         }
         const delivery: "inline" | "materialize" = entry?.delivery || bundled?.delivery || "materialize";
-        const contentHash = entry?.contentHash || bundled?.contentHash || crypto.createHash("sha256").update(body, "utf8").digest("hex");
+        // The hash keys the materialise cache, so it must describe the body that
+        // was actually chosen — a workspace edit cached under the registry's hash
+        // would serve the shipped text from a stale cache entry.
+        const contentHash = source === "workspace-file"
+            ? crypto.createHash("sha256").update(body, "utf8").digest("hex")
+            : (entry?.contentHash || bundled?.contentHash || crypto.createHash("sha256").update(body, "utf8").digest("hex"));
 
-        // The two-name committed-survivor special case (improve-plan /
-        // improve-feature) was deleted: both are delivery=inline, so the
-        // on-disk check was answering a question their delivery mode says
-        // should never be asked — the returned `path` was never consumed by
-        // any caller (protocolPhrase uses the body for inline). The on-disk
-        // files still ship, but the planner workflow fields now default to the
-        // bare names (`improve-plan` / `improve-feature`), which resolve here
-        // and inline the body; a path-shaped value (custom or legacy config)
-        // still goes through renderPlannerWorkflowRef's path branch (literal
-        // "Read <path>"), never through resolveProtocol.
+        // History of the two-name survivor case (improve-plan / improve-feature):
+        // it once returned an on-disk `path` no caller consumed and was deleted,
+        // then the planner workflow fields moved from path literals to the bare
+        // names, which resolve here and inline the body. What the deletion lost
+        // was the *content* precedence, not the path: an operator's edited
+        // `.agents/protocols/<name>/SKILL.md` stopped being what the planner read.
+        // The `workspaceBody` branch above restores that precedence — body, not
+        // path — and `source` records which store answered. A path-shaped config
+        // value still goes through renderPlannerWorkflowRef's path branch
+        // (literal "Read <path>"), never through resolveProtocol.
 
         if (delivery === "inline") {
             return {
                 name,
                 body,
-                delivery: "inline"
+                delivery: "inline",
+                source
             };
         }
 
@@ -130,7 +195,8 @@ export class ProtocolService {
             name,
             body,
             path: materializedPath,
-            delivery: "materialize"
+            delivery: "materialize",
+            source
         };
     }
 

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { KanbanDatabase, ControlPlaneEntry } from './KanbanDatabase';
-import { ProtocolService } from './ProtocolService';
+import { ProtocolService, WORKSPACE_PROJECTED_PROTOCOLS } from './ProtocolService';
 import { seedStandingOrderFragments } from './standingOrderFragments';
 
 /**
@@ -333,9 +333,11 @@ export async function projectControlPlane(
         if (entry.kind === 'doc') {
             targetPath = path.join(workspaceRoot, '.switchboard', entry.name);
         } else if (entry.kind === 'protocol') {
-            const isImprovePlan = entry.name === 'improve-plan' || entry.name === 'protocols/improve-plan/SKILL.md';
-            const isImproveFeature = entry.name === 'improve-feature' || entry.name === 'protocols/improve-feature/SKILL.md';
-            if (!isImprovePlan && !isImproveFeature) {
+            // One list, shared with ProtocolService's read side — a second
+            // hardcoded pair here would let "projected to disk" and "disk
+            // outranks the registry" drift apart silently.
+            const projectedName = ProtocolService.normalizeProtocolName(entry.name);
+            if (!projectedName || !WORKSPACE_PROJECTED_PROTOCOLS.has(projectedName)) {
                 // Protocols are database rows, not projected to disk except the two survivors
                 continue;
             }
