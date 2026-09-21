@@ -980,6 +980,43 @@
 
         const reportEl = document.getElementById('agent-poll-report');
 
+        // Compress a wake entry to one line per action or observation. The raw
+        // report is ~3 KB of boilerplate per pass — lease, assumptions, probed
+        // capabilities, and the same list of rules that need a model — none of
+        // which changes between passes. What an operator wants is what CHANGED.
+        function summariseReport(md) {
+            const wakes = String(md || '').split('## Wake ').slice(1);
+            const lines = [];
+            for (const w of wakes) {
+                const stamp = (w.match(/^(\S+)/) || [])[1] || '';
+                let time = stamp;
+                try { time = new Date(stamp).toLocaleTimeString(); } catch { /* keep raw */ }
+
+                // The Actions section is the only part that reports work done.
+                const actIdx = w.indexOf('### Actions');
+                const actions = [];
+                if (actIdx >= 0) {
+                    const body = w.slice(actIdx + '### Actions'.length);
+                    for (const raw of body.split('\n')) {
+                        const l = raw.trim();
+                        if (!l || l.startsWith('###') || l.startsWith('---')) { continue; }
+                        if (l.startsWith('_No rule fired')) { continue; }
+                        if (l.startsWith('- ') || l.startsWith('* ')) { actions.push(l.slice(2).trim()); }
+                    }
+                }
+
+                if (actions.length > 0) {
+                    for (const a of actions) { lines.push(time + '  ' + a); }
+                } else {
+                    // Nothing fired. Say so once, with the reason it could not do
+                    // more, so a quiet pass is distinguishable from a blocked one.
+                    const blocked = (w.match(/^- row \d+ /gm) || []).length;
+                    lines.push(time + '  no rule fired' + (blocked ? '  (' + blocked + ' rules need a model)' : ''));
+                }
+            }
+            return lines.length ? lines.join('\n') : 'No controller report yet.';
+        }
+
         async function refreshReport() {
             if (!reportEl) { return; }
             try {
@@ -989,7 +1026,7 @@
                 if (!content) { reportEl.textContent = 'No controller report yet.'; return; }
                 // Newest wake last in the file; show the tail so the latest pass
                 // is what the operator sees without scrolling.
-                reportEl.textContent = content;
+                reportEl.textContent = summariseReport(content);
                 reportEl.scrollTop = reportEl.scrollHeight;
             } catch {
                 reportEl.textContent = 'Report unavailable.';
