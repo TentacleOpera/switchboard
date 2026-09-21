@@ -3094,10 +3094,18 @@
                         if (isNewest && entry.offer && /dispatch it\?/i.test(entry.text)) {
                             const act = document.createElement('button');
                             act.type = 'button';
-                            act.className = 'agent-poll-btn';
-                            act.style.cssText = 'margin: 6px 0 0 10px;';
-                            act.textContent = 'Dispatch ' + entry.offer.id;
-                            act.title = entry.offer.topic || '';
+                            // BOTH class names on purpose: the dock defines
+                            // .agent-poll-btn and the command view defines
+                            // .secondary-action-btn. Each surface styles the one it
+                            // owns, so the button matches wherever it is rendered
+                            // instead of being unstyled on the surface that has
+                            // never heard of the class.
+                            act.className = 'agent-poll-btn secondary-action-btn';
+                            act.style.cssText = 'margin: 6px 0 0 10px; align-self: flex-start;';
+                            // Say WHAT it dispatches. An 8-character id tells the
+                            // operator nothing about what they are about to start.
+                            act.textContent = 'Dispatch ' + (entry.offer.kind === 'feature' ? 'feature' : 'plan');
+                            act.title = (entry.offer.topic || '') + (entry.offer.id ? ' (' + entry.offer.id + ')' : '');
                             act.addEventListener('click', async () => {
                                 act.disabled = true;
                                 act.textContent = 'dispatching…';

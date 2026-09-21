@@ -504,9 +504,11 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         // The next card the board would hand out. `plans` arrives in the board's
         // own priority order, so the head of PLAN REVIEWED IS the next one — no
         // ranking is invented here.
+        // Features are dispatchable too, and a feature at the head of the queue
+        // IS the next thing — excluding them silently skipped work.
         const nextUp = (plans || []).find((p: any) => {
             const col = String(p?.kanbanColumn ?? p?.kanban_column ?? '');
-            return col === 'PLAN REVIEWED' && !(p?.isFeature ?? p?.is_feature);
+            return col === 'PLAN REVIEWED';
         });
         const boardFacts = {
             seatsAlive: liveSeatNames,
@@ -519,6 +521,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
                     id: String(nextUp.planId ?? nextUp.plan_id ?? '').slice(0, 8),
                     topic: String(nextUp.topic ?? nextUp.title ?? '').slice(0, 90),
                     project: String(nextUp.project ?? '') || null,
+                    kind: (nextUp.isFeature ?? nextUp.is_feature) ? 'feature' : 'plan',
                 }
                 : null,
         };
