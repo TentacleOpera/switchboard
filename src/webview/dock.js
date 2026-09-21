@@ -1139,12 +1139,82 @@
                 // counts prefix so the .md artifact stands alone; here the counts
                 // are drawn as their own section, so the prefix is stripped rather
                 // than printed twice.
+                // ── MISSIONS FIRST ────────────────────────────────────────
+                // Running missions are the subject of this report, not an
+                // addition to it. Keeping work moving is the Pilot's job; board
+                // health is the background it happens against. Everything here is
+                // mechanical — counts and timestamps, no judgement — because the
+                // Pilot cannot yet judge a mission, and a section that implied it
+                // could would be the more expensive lie.
+                card.appendChild(mk('div', SECTION, 'Missions'));
+                try {
+                    const fr = await fetch('/kanban/features');
+                    const fd = await fr.json();
+                    const feats = (fd && Array.isArray(fd.data)) ? fd.data : [];
+                    const running = feats.filter(function (f) {
+                        if (!f) { return false; }
+                        if (f.completedAt) { return false; }
+                        return !!f.ownerSince;
+                    });
+                    if (running.length === 0) {
+                        // A claim about the board, so it is said rather than left blank.
+                        card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
+                            'No mission is running.'));
+                    } else {
+                        // Newest movement first, and capped — the operator is
+                        // looking for what moved, not an inventory.
+                        running.sort(function (a, b) {
+                            return (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0);
+                        });
+                        const shown = running.slice(0, 5);
+                        for (const f of shown) {
+                            const line = mk('div', 'padding:3px 0;');
+                            const top = mk('div', ROW);
+                            top.appendChild(mk('span', 'color:var(--text-color);',
+                                String(f.topic || f.planId || '').slice(0, 64)));
+                            top.appendChild(mk('span', 'color:var(--accent-primary); '
+                                + 'font-variant-numeric:tabular-nums; white-space:nowrap;', 'running'));
+                            line.appendChild(top);
+
+                            // Elapsed since the mission last moved. A FACT, not a
+                            // verdict: nothing here calls a mission stalled, because
+                            // the window that would justify saying so does not exist
+                            // yet and a guessed threshold is how nudge spam starts.
+                            let moved = '';
+                            const t = Date.parse(f.updatedAt);
+                            if (!isNaN(t)) {
+                                const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+                                moved = mins < 60 ? mins + 'm' : Math.round(mins / 60) + 'h';
+                            }
+                            const bits = [];
+                            if (f.dispatchedTeamGroup) { bits.push(String(f.dispatchedTeamGroup)); }
+                            if (f.kanbanColumn) { bits.push(String(f.kanbanColumn)); }
+                            if (moved) { bits.push('moved ' + moved + ' ago'); }
+                            if (f.worktreeStatus && f.worktreeStatus !== 'none') {
+                                bits.push('worktree ' + f.worktreeStatus);
+                            }
+                            line.appendChild(mk('div', 'font-size:10px; color:var(--text-dim); margin-top:1px;',
+                                bits.join(' · ')));
+                            card.appendChild(line);
+                        }
+                        if (running.length > shown.length) {
+                            card.appendChild(mk('div', 'font-size:10px; color:var(--text-dim); padding-top:3px;',
+                                '+' + (running.length - shown.length) + ' more running'));
+                        }
+                    }
+                } catch {
+                    // Unreadable is not "none running" — they are different claims.
+                    card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
+                        'Mission state unavailable.'));
+                }
+
+                card.appendChild(mk('div', SECTION, 'Seats and board'));
                 let verdict = latest.text;
                 const shape = String(f.boardShape || '');
                 if (shape && verdict.indexOf(shape) === 0) {
                     verdict = verdict.slice(shape.length).replace(/^[^—-]*[—-]\s*/, '').trim() || latest.text;
                 }
-                card.appendChild(mk('div', 'font-size:12.5px; line-height:1.5; margin-top:9px; '
+                card.appendChild(mk('div', 'font-size:12.5px; line-height:1.5; '
                     + 'color:var(--text-color);', verdict));
 
                 // TEAMS is read from the LIVE fleet, not from the report snapshot.
@@ -1389,7 +1459,7 @@
             } catch { /* both stay null, and both say so below */ }
 
             host.textContent = '';
-            const row = function (role, m) {
+            const row = function (role, m, job) {
                 const el = document.createElement('div');
                 el.className = 'agent-model-row';
                 el.style.cssText = 'display:flex; gap:8px; align-items:baseline; font-size:11px;';
@@ -1412,10 +1482,19 @@
                 }
                 el.appendChild(r);
                 el.appendChild(v);
+                if (job) {
+                    const j = document.createElement('span');
+                    j.style.cssText = 'color:var(--text-dim); font-size:10px;';
+                    j.textContent = '\u2014 ' + job;
+                    el.appendChild(j);
+                }
                 return el;
             };
-            host.appendChild(row('Pilot', pilot));
-            host.appendChild(row('Navigator', navigator));
+            // The roles say what each model is FOR. Two names alone left the
+            // panel looking like a settings screen, when the point is that one
+            // model keeps missions moving and the other sets them up.
+            host.appendChild(row('Pilot', pilot, 'keeps missions moving'));
+            host.appendChild(row('Navigator', navigator, 'sets missions up'));
         }
 
         // ── Report scope: the board, or one team ──────────────────────────
