@@ -39,6 +39,7 @@ import {
     type EscalationRecord,
 } from '../judgement/supervisor';
 import { readTierApiKey } from '../judgement/tierKeys';
+import { callModel } from '../judgement/modelClient';
 
 /**
  * The controller: wakes on a clock, runs a triage checklist over the board,
@@ -220,6 +221,45 @@ const NONZERO_EXIT = /(exit(?:ed)?(?:\s+with)?(?:\s+code)?\s*[:=]?\s*[1-9]\d*|pr
 function hashConfig(cfg: ControllerRuntimeConfig, matrixSource: string): string {
     return crypto.createHash('sha256').update(JSON.stringify({ cfg, matrixSource })).digest('hex').slice(0, 12);
 }
+
+
+/**
+ * The board-level judgement. Deliberately NOT keyed on a subject.
+ *
+ * Every matrix row is per-subject, and a subject needs both `ownerSeat` and
+ * `ownerSince`. `owner_since` is cleared on every column move, so a card that
+ * advances stops being a subject, and a seat that died leaves none at all. That
+ * means the per-subject path goes quiet in precisely the situations the model
+ * exists to catch — every team crashed, or every card silently lost its stamp.
+ *
+ * This asks the model about the board itself, on every wake, from facts that
+ * survive a total collapse.
+ */
+async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, unknown>): Promise<string | null> {
+    const tier = (tiers || [])[0] as any;
+    if (!tier || !tier.endpoint) { return null; }
+    const keyRead = tier.keySet ? await readTierApiKey(ctx.workspaceRoot, tier.providerId) : { key: null as string | null };
+    const res = await callModel({
+        endpoint: tier.endpoint,
+        model: tier.model,
+        apiKey: keyRead.key ?? null,
+        system: 'You supervise a board of coding agents. Answer in ONE short line of plain prose — '
+            + 'never JSON, code fences, lists or markdown. '
+            + 'If the board looks healthy, reply exactly: nothing wrong. '
+            + 'If no seats are alive but there is owned, uncompleted work, say the agents are down. '
+            + 'Otherwise name the single most important problem in under 20 words.',
+        user: JSON.stringify(facts),
+        deadlineMs: ctx.cfg.judgementDeadlineMs,
+        maxTokens: 256,
+    });
+    if (!res.ok) { return `board check failed: ${res.error || `status ${res.status}`}`; }
+    const line = String(res.content || '')
+        .replace(/^```[a-zA-Z]*\s*/, '').replace(/```$/, '')
+        .split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
+    if (!line) { return `board check returned nothing (finish: ${res.doneReason || 'unknown'})`; }
+    return line.slice(0, 200);
+}
+
 
 /**
  * Values the controller assumed rather than read from the board, tagged with
@@ -429,6 +469,61 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         dayKey,
         judgementCalls: state.judgementCalls,
     };
+
+    // ── BOARD-LEVEL CHECK — never gated on what the board can see ─────────
+    //
+    // Every other row is keyed on a SUBJECT, and a subject requires both
+    // `ownerSeat` and `ownerSince`. `owner_since` is nulled on every column
+    // move, so a card that advances stops being a subject — and a seat that
+    // died leaves no subject at all. The result is that the controller sees
+    // nothing in exactly the situations it exists for: every team crashed, or
+    // every card quietly lost its working stamp.
+    //
+    // So this call does not depend on subjects existing. It runs on every wake
+    // whenever a model is available, and it is handed the facts that survive a
+    // total collapse: which teams are enabled, which seats are actually alive,
+    // and how much work is sitting owned-but-uncompleted.
+    if (capabilityForKey('model', caps).enabled) {
+        const liveSeatNames = Object.keys(seatByName || {});
+        const ownedNotDone = (plans || []).filter((p: any) => {
+            const owner = String(p?.ownerSeat ?? p?.owner_seat ?? '').trim();
+            const done = p?.completedAt ?? p?.completed_at ?? null;
+            return owner && !done;
+        }).length;
+        const boardFacts = {
+            seatsAlive: liveSeatNames,
+            seatsAliveCount: liveSeatNames.length,
+            subjectsFound: subjects.length,
+            cardsOwnedAndNotCompleted: ownedNotDone,
+            cardsTotal: (plans || []).length,
+        };
+        try {
+            const verdict = await judgeBoard(ctx, judgementConfig.tiers as any[], boardFacts);
+            if (verdict) {
+                actions.push({
+                    subject: 'board',
+                    kind: 'board',
+                    seat: null,
+                    planId: null,
+                    ruleId: 'board-level-check',
+                    cause: 'Board-level check',
+                    rung: 'none',
+                    ladderIndex: null,
+                    command: null,
+                    evidence: JSON.stringify(boardFacts),
+                    evidenceWindow: 'board facts at this wake',
+                    outcome: 'observed',
+                    detail: verdict,
+                    ownerSince: null,
+                    ownerSinceReStamped: false,
+                    dispatchTimeoutRemainingMs: null,
+                    priorVerdict: null,
+                } as any);
+            }
+        } catch (e) {
+            errors.push(`board-level check failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
 
     for (const subject of subjects) {
         // A `timed out` card is a PRIOR VERDICT, not a blank and not a fresh
