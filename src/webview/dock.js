@@ -1027,7 +1027,7 @@
                     const stamp = (w.match(/^(\S+)/) || [])[1] || '';
                     let time = stamp;
                     try { time = new Date(stamp).toLocaleTimeString(); } catch { /* keep raw */ }
-                    latest = { time: time, text: text, facts: facts, errors: errors };
+                    latest = { time: time, stamp: stamp, text: text, facts: facts, errors: errors };
                 }
 
                 reportEl.textContent = '';
@@ -1062,7 +1062,20 @@
                     + 'gap:8px; border-bottom:1px solid var(--border-color); padding-bottom:7px;');
                 head.appendChild(mk('span', 'font-size:10px; letter-spacing:0.08em; text-transform:uppercase; '
                     + 'color:var(--accent-primary); font-weight:600;', 'Agent report'));
-                head.appendChild(mk('span', 'font-size:10px; color:var(--text-dim);', latest.time));
+                // The AGE, not just the clock time. The assessment is a snapshot from
+                // the last wake and can be five minutes behind the board; a bare
+                // timestamp reads as "now" and hid exactly that.
+                let age = '';
+                let stale = false;
+                const ms = Date.parse(latest.stamp);
+                if (!isNaN(ms)) {
+                    const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+                    age = mins < 1 ? 'just now' : mins + ' min ago';
+                    stale = mins >= 6;
+                }
+                head.appendChild(mk('span',
+                    'font-size:10px; color:' + (stale ? 'var(--accent-primary)' : 'var(--text-dim)') + ';',
+                    latest.time + (age ? ' \u00b7 ' + age : '')));
                 card.appendChild(head);
 
                 // Assessment. The stored report line carries a deterministic
@@ -1077,14 +1090,43 @@
                 card.appendChild(mk('div', 'font-size:12.5px; line-height:1.5; margin-top:9px; '
                     + 'color:var(--text-color);', verdict));
 
-                // Teams. "No seats up" is a finding, not an empty state, so it is
-                // said in words rather than rendered as a blank section.
-                const seats = f.seatsByTeam && typeof f.seatsByTeam === 'object' ? f.seatsByTeam : {};
+                // TEAMS is read from the LIVE fleet, not from the report snapshot.
+                // The snapshot is up to five minutes old: a wake that landed 13
+                // seconds after the Feature lead started recorded Feature alone,
+                // and the panel then showed one team while four were running.
+                // Which teams exist is a fact about now, so it is read now.
                 const inflight = f.cardsInFlightByTeam && typeof f.cardsInFlightByTeam === 'object'
                     ? f.cardsInFlightByTeam : {};
+                let seats = f.seatsByTeam && typeof f.seatsByTeam === 'object' ? f.seatsByTeam : {};
+                let seatsSource = 'report';
+                try {
+                    const fr = await fetch('/terminals/verb/ptyListTerminals', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: '{}'
+                    });
+                    const fd = await fr.json();
+                    if (fd && Array.isArray(fd.terminals)) {
+                        const live = {};
+                        for (const t of fd.terminals) {
+                            if (!t || t.status === 'exited') { continue; }
+                            const n = String(t.friendlyName || '').trim();
+                            if (!n) { continue; }
+                            const team = n.split('-')[0] || n;
+                            (live[team] = live[team] || []).push(n);
+                        }
+                        seats = live;
+                        seatsSource = 'live';
+                    }
+                } catch { /* fall back to the snapshot, and say so below */ }
+
                 const teamNames = Object.keys(seats).concat(Object.keys(inflight)).filter(
                     function (v, i, a) { return a.indexOf(v) === i; }).sort();
-                card.appendChild(mk('div', SECTION, 'Teams'));
+                // The heading carries its own source. "No seats up" from a live
+                // read and "no seats up as of five minutes ago" are different
+                // claims and must not render as the same string.
+                card.appendChild(mk('div', SECTION,
+                    seatsSource === 'live' ? 'Teams' : 'Teams (from last report)'));
                 if (teamNames.length === 0) {
                     card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
                         'No seats up.'));
@@ -1095,7 +1137,7 @@
                         const row = mk('div', ROW);
                         row.appendChild(mk('span', 'color:var(--text-color);', t));
                         row.appendChild(mk('span', 'color:var(--text-dim); font-variant-numeric:tabular-nums;',
-                            up + ' seat' + (up === 1 ? '' : 's') + ' · ' + wip + ' in flight'));
+                            up + ' seat' + (up === 1 ? '' : 's') + (wip ? ' \u00b7 ' + wip + ' in flight' : '')));
                         card.appendChild(row);
                     }
                 }
