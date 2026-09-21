@@ -243,21 +243,25 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
         endpoint: tier.endpoint,
         model: tier.model,
         apiKey: keyRead.key ?? null,
-        system: 'You supervise a board of coding agents. Answer in ONE short line of plain prose — '
+        // The model is asked ONE question: is anything wrong. It is not asked to
+        // choose between an idle branch and a problem branch — handed that choice
+        // it drifted, and reported "the board is quiet and there is nothing ready"
+        // directly above the card the panel was offering to dispatch. Whether a
+        // card is ready is a fact the panel already states; only the judgement is
+        // the model's to make.
+        system: 'You supervise a board of coding agents. Answer in ONE short line of plain prose \u2014 '
             + 'never JSON, code fences, lists or markdown.\n'
             + 'The facts describe the WHOLE board: cardsByColumn is every column, seatsByTeam and '
-            + 'cardsInFlightByTeam are every team. Judge all of it, not just what is queued. '
-            + 'Do not recite the counts — they are already reported; give the judgement they support.\n'
-            + 'If something is wrong, lead with the single most important problem in under 20 words, '
-            + 'naming the team or column it sits in.\n'
-            + 'If no seats are alive but cards are in flight, say the agents are down and name the '
-            + 'teams holding those cards.\n'
-            + 'If nothing is wrong and nextHighestPriority is present, do NOT say "nothing wrong": '
-            + 'name that card by its topic and offer to dispatch it. '
-            + 'Example: Idle. Next up: <topic>. Dispatch it?\n'
-            + 'Use that branch WHENEVER nextHighestPriority is present, however full or quiet the board '
-            + 'looks — a board with cards ready is never merely "quiet".\n'
-            + 'Only if nextHighestPriority is null: say the board is quiet and there is nothing ready.',
+            + 'cardsInFlightByTeam are every team. Judge all of it, not just what is queued.\n'
+            + 'If something is wrong, name the single most important problem in under 20 words, '
+            + 'naming the team or column it sits in. A problem is work that is stalled, starved or '
+            + 'unattended \u2014 seats holding cards with no seats alive, a column filling with nothing '
+            + 'drawing from it, a team with seats but no work.\n'
+            + 'Never recite counts back: a column total is not a finding, it is an input.\n'
+            + 'Do not comment on what is ready to dispatch \u2014 that is reported separately.\n'
+            + 'Seats being down is ONLY a problem when cards are in flight for those seats to be '
+            + 'working on. A board with no seats up and nothing in flight is idle, not faulty.\n'
+            + 'If nothing is wrong, reply exactly: nothing wrong',
         user: JSON.stringify(facts),
         deadlineMs: ctx.cfg.judgementDeadlineMs,
         maxTokens: 256,
@@ -267,15 +271,14 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
         .replace(/^```[a-zA-Z]*\s*/, '').replace(/```$/, '')
         .split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
     if (!line) { return `board check returned nothing (finish: ${res.doneReason || 'unknown'})`; }
-    // The column and team counts are FACTS and belong in every report. Asking the
-    // classifier to quote them was unreliable — handed both strings it recited the
-    // team one and dropped the board one, and before that answered "6 columns" for
-    // six named columns. So the shape is stated here, deterministically, and the
-    // model supplies only the judgement that follows it.
-    const shape = String((facts as any).boardShape || '').trim();
-    const teams = String((facts as any).teamShape || '').trim();
-    const prefix = shape ? `${shape}; ${teams} — ` : '';
-    return (prefix + line.slice(0, 280)).slice(0, 400);
+    // No counts prefix. Per-column totals are noise in a report — "374 plan
+    // reviewed" tells the operator nothing they can act on. cardsByColumn and
+    // cardsInFlightByTeam stay in the facts so the model still JUDGES the whole
+    // board; they are simply not recited back.
+    // "nothing wrong" is the model's clean verdict; say it in words the operator
+    // reads as a finding rather than echoing the sentinel.
+    if (/^nothing wrong/i.test(line)) { return 'No problems found.'; }
+    return line.slice(0, 280);
 }
 
 
@@ -556,23 +559,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             if (owner) { cardsByTeam[teamOf(owner)] = (cardsByTeam[teamOf(owner)] || 0) + 1; }
         }
 
-        // A small classifier summarises a JSON object badly — asked to describe
-        // six columns it answered "6 columns" — but it copies a prepared phrase
-        // reliably. The counts are a FACT, not a judgement, so they are formatted
-        // here and quoted by the model, rather than left for it to derive.
-        const shapeOf = (counts: Record<string, number>): string =>
-            Object.entries(counts)
-                .sort((a, b) => b[1] - a[1])
-                .map(([k, v]) => `${v} ${k.toLowerCase()}`)
-                .join(', ') || 'no cards';
-        const boardShape = shapeOf(cardsByColumn);
-        const teamShape = Object.keys(seatsByTeam).length
-            ? Object.entries(seatsByTeam).map(([t, m]) => `${t} ${m.length}`).join(', ')
-            : 'no seats up';
-
         const boardFacts = {
-            boardShape,
-            teamShape,
             seatsAlive: liveSeatNames,
             seatsAliveCount: liveSeatNames.length,
             seatsByTeam,

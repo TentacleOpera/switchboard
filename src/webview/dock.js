@@ -1077,20 +1077,6 @@
                 card.appendChild(mk('div', 'font-size:12.5px; line-height:1.5; margin-top:9px; '
                     + 'color:var(--text-color);', verdict));
 
-                const cols = f.cardsByColumn && typeof f.cardsByColumn === 'object' ? f.cardsByColumn : null;
-                if (cols) {
-                    card.appendChild(mk('div', SECTION, 'Columns'));
-                    const entries = Object.keys(cols).map(function (k) { return [k, cols[k]]; })
-                        .sort(function (a, b) { return b[1] - a[1]; });
-                    for (const pair of entries) {
-                        const row = mk('div', ROW);
-                        row.appendChild(mk('span', 'color:var(--text-color);', pair[0]));
-                        row.appendChild(mk('span', 'color:var(--accent-primary); font-variant-numeric:tabular-nums;',
-                            String(pair[1])));
-                        card.appendChild(row);
-                    }
-                }
-
                 // Teams. "No seats up" is a finding, not an empty state, so it is
                 // said in words rather than rendered as a blank section.
                 const seats = f.seatsByTeam && typeof f.seatsByTeam === 'object' ? f.seatsByTeam : {};
@@ -1125,6 +1111,13 @@
                 // Next up, with the action on it. The offer comes from the evidence
                 // block, never from the prose, so a rephrase cannot remove it.
                 const offer = f.nextHighestPriority || null;
+                if (!offer || !offer.id) {
+                    // An absent section would read as "not reported yet". Nothing
+                    // ready is a finding about the board and is said out loud.
+                    card.appendChild(mk('div', SECTION, 'Next up'));
+                    card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
+                        'Nothing ready to dispatch.'));
+                }
                 if (offer && offer.id) {
                     card.appendChild(mk('div', SECTION, 'Next up'));
                     card.appendChild(mk('div', 'font-size:12px; line-height:1.45; color:var(--text-color);',

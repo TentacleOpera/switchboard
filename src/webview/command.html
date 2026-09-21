@@ -1067,7 +1067,9 @@
                              set HERE — the phone is the surface this feature is
                              meant to reach, so it cannot depend on a CLI or an
                              env var. The key field is write-only. -->
-                        <div style="display:flex; flex-direction:column; gap:5px; padding:6px; background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px;">
+                        <details style="border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg);">
+                        <summary style="cursor:pointer; list-style:none; font-size:10px; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim); padding:7px 10px; user-select:none;">Model config</summary>
+                        <div style="display:flex; flex-direction:column; gap:5px; padding:6px;">
                             <label for="agent-control-provider" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Provider</label>
                             <select id="agent-control-provider" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;"></select>
                             <!-- Endpoint: only for providers that do not carry a
@@ -1085,12 +1087,13 @@
                             <button class="secondary-action-btn" id="btn-agent-config-save" style="align-self:flex-end; padding:6px 14px;">Save config</button>
                             <div id="agent-control-config-status" style="font-size:10px; color:var(--text-dim);"></div>
                         </div>
+                        </details>
                         <div class="agent-poll" id="agent-poll" style="display:flex; align-items:center; gap:6px; margin-top:8px; padding-top:8px; border-top:1px solid var(--border-color);">
                             <button type="button" class="secondary-action-btn" id="agent-poll-start">Start</button>
                             <button type="button" class="secondary-action-btn" id="agent-poll-stop">Stop</button>
                             <span id="agent-poll-state" style="font-size:10px; color:var(--text-dim); margin-left:4px;">stopped</span>
                         </div>
-                        <div id="agent-poll-report" style="margin-top:10px; max-height:300px; overflow-y:auto; display:flex; flex-direction:column; gap:8px;"></div>
+                        <div id="agent-poll-report" style="margin-top:10px; flex:1 1 auto; min-height:0; display:flex; flex-direction:column; gap:8px;"></div>
                         <div id="agent-poll-controls" style="display:flex; align-items:center; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-color); flex-wrap:wrap;">
                             <label for="agent-poll-project" style="font-size:9px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Project</label>
                             <select id="agent-poll-project" style="background:var(--panel-bg2); color:var(--text-color); border:1px solid var(--border-color); border-radius:2px; font-family:var(--font-family); font-size:12px; padding:10px 12px; min-height:44px;"></select>

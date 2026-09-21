@@ -334,13 +334,32 @@
         }
         .agent-poll-report {
             margin-top: 10px;
-            max-height: 300px;
-            overflow-y: auto;
+            /* The report is meant to be READ WHOLE. It takes the remaining
+               height of the pane rather than a fixed 300px box with a
+               scrollbar, which is why the config sits behind a disclosure. */
+            flex: 1 1 auto;
+            min-height: 0;
             display: flex;
             flex-direction: column;
             gap: 8px;
             padding-right: 2px;
         }
+        .agent-control-config-wrap { border: 1px solid var(--border-color); border-radius: 4px; }
+        .agent-control-config-toggle {
+            cursor: pointer;
+            list-style: none;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-dim);
+            padding: 7px 10px;
+            user-select: none;
+        }
+        .agent-control-config-toggle::-webkit-details-marker { display: none; }
+        .agent-control-config-toggle::before { content: '\25B8  '; }
+        details[open] > .agent-control-config-toggle::before { content: '\25BE  '; }
+        .agent-control-config-toggle:hover { color: var(--accent-primary); }
+        .agent-control-config-wrap > .agent-control-config { border: 0; }
         .agent-poll-msg {
             display: flex;
             flex-direction: column;
@@ -645,6 +664,8 @@
              is write-only — it renders set/unset and never echoes the value.
              Which of these fields applies to which provider is decided by the
              shared controller in sharedUtils.js, not here and not in dock.js. -->
+        <details class="agent-control-config-wrap">
+            <summary class="agent-control-config-toggle">Model config</summary>
         <div class="agent-control-config">
             <label for="agent-control-provider">Provider</label>
             <select id="agent-control-provider"></select>
@@ -658,6 +679,7 @@
             <button type="button" class="agent-control-config-save" id="agent-control-config-save">Save config</button>
             <div class="agent-control-config-status" id="agent-control-config-status"></div>
         </div>
+        </details>
         <div class="agent-poll" id="agent-poll">
             <button type="button" class="agent-poll-btn" id="agent-poll-start">Start</button>
             <button type="button" class="agent-poll-btn" id="agent-poll-stop">Stop</button>
