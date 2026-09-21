@@ -13042,6 +13042,10 @@ export class LocalApiServer {
         // answers with a JSON fragment instead of a sentence, because it was
         // handed a broken document. Counts plus the rows that are actually
         // suspicious is smaller AND the thing worth asking about.
+        const liveSeats = (this._options.getRegisteredTerminals?.() || [])
+            .map((t: any) => String(t?.friendlyName || '').trim()).filter(Boolean);
+        const liveSeatSet = new Set<string>(liveSeats);
+
         const byColumn: Record<string, number> = {};
         const held: Array<{ id: string; topic: string; column: string; owner: string }> = [];
         for (const row of board) {
@@ -13049,7 +13053,14 @@ export class LocalApiServer {
             const col = String(row.kanbanColumn || 'unknown');
             byColumn[col] = (byColumn[col] || 0) + 1;
             const owner = String(row.ownerSeat || '').trim();
-            if (owner && !row.completedAt && held.length < 20) {
+            // A HOLD BY A TERMINAL THAT DOES NOT EXIST IS NOT A HOLD — the same
+            // rule heldUnposted applies. `owner_seat` is historical attribution
+            // and is never cleared, so a renamed or retired seat leaves rows
+            // stamped forever. Measured: 310 such rows on this board, of which
+            // only a handful name a live seat. Handing the unfiltered list to the
+            // model made it report cards stuck under seats that no longer exist —
+            // an honest answer to a dishonest question.
+            if (owner && liveSeatSet.has(owner) && !row.completedAt && held.length < 20) {
                 held.push({
                     id: String(row.planId || '').slice(0, 8),
                     topic: String(row.topic || '').slice(0, 70),
@@ -13058,8 +13069,6 @@ export class LocalApiServer {
                 });
             }
         }
-        const liveSeats = (this._options.getRegisteredTerminals?.() || [])
-            .map((t: any) => String(t?.friendlyName || '')).filter(Boolean);
 
         const messages = [
             {
@@ -15396,6 +15405,34 @@ export class LocalApiServer {
                 const judgementRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
                 try {
                     const judgement = await store.readJudgement(judgementRoot);
+                    // ONE STORE FOR ONE FACT. The operator configures a model on the
+                    // agent panel; the controller reads `controller.judgement`. Those
+                    // were two stores for the same thing, and the second was always
+                    // empty — so every pass reported "no judgement backend configured"
+                    // while a model sat configured and reachable, and all seven
+                    // model-judged rows stayed inert.
+                    //
+                    // When no tier is declared, derive one from the configured model.
+                    // Tagged `agent-control-model` so a derived tier is never mistaken
+                    // for one the operator declared.
+                    if (judgement && Array.isArray(judgement.tiers) && judgement.tiers.length === 0) {
+                        const m = await this._resolveAgentControlModel();
+                        if (m && !('error' in m)) {
+                            const local = /(^|\/\/)(127\.0\.0\.1|localhost)/.test(m.url);
+                            judgement.tiers = [{
+                                providerId: m.provider || 'local',
+                                role: 'classifier',
+                                locality: local ? 'loopback' : 'tailnet',
+                                operator: 'self',
+                                costClass: 'free',
+                                endpoint: m.url,
+                                model: m.model,
+                                keySet: !!m.apiKey,
+                                source: 'agent-control-model',
+                            } as any];
+                            judgement.source = 'agent-control-model (derived — no tier declared)';
+                        }
+                    }
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: true, judgement }));
                 } catch (err) {

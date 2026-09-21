@@ -260,15 +260,8 @@ export async function runController(opts: ControllerRunOptions): Promise<Control
         if (opts.shouldStop?.()) { stoppedReason = 'stopped'; break; }
         const outcome = await runPass({ ...opts, cfg, now, log, leaseTtlMs, teamId });
         passes++;
-        if (outcome === 'lease-refused') { stoppedReason = 'lease-refused'; break; }
         if (opts.once) { stoppedReason = 'once'; break; }
         await sleep(tickMs, opts.shouldStop);
-    }
-    // Disarm is stop: release the lease so the next controller can claim
-    // immediately instead of waiting out the TTL. A `--once` wake does NOT
-    // release — the lease is what makes the armed state visible to the panel.
-    if (stoppedReason === 'stopped') {
-        await tryRequest(opts.apiRequest, opts.port, 'DELETE', '/controller/lease', opts.workspaceRoot, { controllerId: opts.controllerId });
     }
     return { passes, stoppedReason };
 }
@@ -298,26 +291,15 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     if (!matrix) { return 'ok'; }
     const configVersion = hashConfig(cfg, matrix.source);
 
-    // 2. Renew (or claim) the lease. A returning controller re-reads the lease
-    //    before acting rather than assuming it still holds it. A network failure
-    //    (the board is down) is NOT a refusal — the pass degrades so the restart
-    //    mechanism can still recycle the board.
-    let claim: ControllerApiResponse | null = null;
-    try {
-        claim = await apiRequest(port, 'POST', '/controller/lease', workspaceRoot, { controllerId, ttlMs: ctx.leaseTtlMs });
-    } catch (e) {
-        errors.push(`lease claim failed: ${e instanceof Error ? e.message : String(e)}`);
-        claim = null;
-    }
-    const claimJson = safeJson(claim);
-    if (claim && claim.status === 503) {
-        log('board did not wire the controller store — cannot arm');
-        return 'lease-refused';
-    }
-    if (claim && !claimJson?.granted) {
-        log(`lease refused: ${claimJson?.reason || `status ${claim.status}`}`);
-        return 'lease-refused';
-    }
+    // 2. NO LEASE. There is one board and one controller, so there is nothing to
+    //    arbitrate — and the lease actively broke the thing it was guarding. A
+    //    `--once` pass held it for its full 15-minute TTL, so with a 5-minute
+    //    poll two of every three passes were refused with "board is held by
+    //    <the previous pass>" and did no work at all. A stale holder from a
+    //    process that had already exited also refused Start outright.
+    //
+    //    Removed rather than released: a lock that arbitrates nothing is not
+    //    worth the failure modes it creates.
 
     // 3. Read the board once: health, plans, fleet, nudges, finished turn-ends,
     //    plus the judgement config and the quota/escalation board state.
@@ -561,10 +543,12 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         target: { port, workspaceRoot, source: 'loopback:cli' },
         configVersion,
         lease: {
-            holder: claimJson?.lease?.holder ?? controllerId,
-            renewedAt: claimJson?.lease?.renewedAt ?? now(),
-            expiresAt: claimJson?.lease?.expiresAt ?? null,
-            source: claimJson?.lease?.source ?? 'config:controller.lease',
+            // No lease is taken any more; the report records which controller
+            // ran the pass, not a lock it held.
+            holder: controllerId,
+            renewedAt: now(),
+            expiresAt: null,
+            source: 'no-lease',
         },
         armingState,
         capabilities: caps,
