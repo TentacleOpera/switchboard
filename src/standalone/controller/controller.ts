@@ -484,7 +484,15 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     // total collapse: which teams are enabled, which seats are actually alive,
     // and how much work is sitting owned-but-uncompleted.
     if (capabilityForKey('model', caps).enabled) {
-        const liveSeatNames = Object.keys(seatByName || {});
+        // `fleet` is the live terminal list. This previously read
+        // `Object.keys(seatByName)` — and seatByName is a MAP, so Object.keys
+        // returned [] on every wake. seatsAlive was therefore always empty and
+        // the model answered "agents are down" while four seats were running.
+        // It was answering a false premise correctly.
+        const liveSeatNames = (fleet || [])
+            .filter((t: any) => t && t.status !== 'exited')
+            .map((t: any) => String(t.friendlyName || '').trim())
+            .filter(Boolean);
         const ownedNotDone = (plans || []).filter((p: any) => {
             const owner = String(p?.ownerSeat ?? p?.owner_seat ?? '').trim();
             const done = p?.completedAt ?? p?.completed_at ?? null;

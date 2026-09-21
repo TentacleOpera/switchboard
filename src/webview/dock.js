@@ -1005,7 +1005,7 @@
                             const m = l.match(/^-\s*outcome:\s*\*\*([a-z-]+)\*\*\s*(?:—|--)?\s*(.*)$/i);
                             if (m) {
                                 const verdict = (m[2] || '').trim();
-                                lines.push(time + '  ' + (verdict || m[1]));
+                                lines.push({ time: time, text: verdict || m[1] });
                             }
                         }
                     }
@@ -1017,14 +1017,45 @@
                         if (nx >= 0) { body = body.slice(0, nx); }
                         for (const raw of body.split('\n')) {
                             const l = raw.trim();
-                            if (l.startsWith('- ')) { lines.push(time + '  ' + l.slice(2).trim()); }
+                            if (l.startsWith('- ')) { lines.push({ time: time, text: l.slice(2).trim() }); }
                         }
                     }
                 }
                 // Newest last, and only the recent tail — the report is an append
                 // only history and old entries are not what the operator is watching.
                 const tail = lines.slice(-25);
-                reportEl.textContent = tail.length ? tail.join('\n') : 'Nothing reported yet.';
+                reportEl.textContent = '';
+                if (tail.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'agent-poll-empty';
+                    empty.style.cssText = 'font-size:11px; color:var(--text-dim); padding:6px 0;';
+                    empty.textContent = 'Nothing reported yet.';
+                    reportEl.appendChild(empty);
+                } else {
+                    for (const entry of tail) {
+                        const row = document.createElement('div');
+                        row.className = 'agent-poll-entry';
+                        row.style.cssText = 'display:flex; gap:10px; align-items:baseline; padding:5px 0; '
+                            + 'border-bottom:1px solid var(--border-color);';
+                        const t = document.createElement('span');
+                        t.className = 'agent-poll-time';
+                        t.style.cssText = 'flex:0 0 auto; font-size:10px; color:var(--text-dim);';
+                        t.textContent = entry.time;
+                        const txt = document.createElement('span');
+                        txt.className = 'agent-poll-text';
+                        txt.style.cssText = 'flex:1 1 auto; font-size:12px; line-height:1.4;';
+                        // "nothing wrong" is the healthy answer; anything else is
+                        // the model naming a problem, and reads as one.
+                        if (!/^nothing wrong/i.test(entry.text)) {
+                            row.className += ' is-problem';
+                            txt.style.color = '#f0883e';
+                        }
+                        txt.textContent = entry.text;
+                        row.appendChild(t);
+                        row.appendChild(txt);
+                        reportEl.appendChild(row);
+                    }
+                }
                 reportEl.scrollTop = reportEl.scrollHeight;
             } catch {
                 reportEl.textContent = 'Report unavailable.';

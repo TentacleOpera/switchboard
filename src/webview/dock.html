@@ -305,19 +305,35 @@
             margin-left: 4px;
         }
         .agent-poll-report {
-            margin-top: 6px;
-            max-height: 220px;
+            margin-top: 8px;
+            max-height: 240px;
             overflow-y: auto;
-            background: var(--panel-bg2);
-            border: 1px solid var(--border-color);
-            border-radius: 3px;
-            padding: 6px 8px;
-            font-family: var(--font-code);
+        }
+        .agent-poll-entry {
+            display: flex;
+            gap: 10px;
+            align-items: baseline;
+            padding: 5px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .agent-poll-entry:last-child { border-bottom: none; }
+        .agent-poll-time {
+            flex: 0 0 auto;
             font-size: 10px;
-            line-height: 1.45;
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+        }
+        .agent-poll-text {
+            flex: 1 1 auto;
+            font-size: 12px;
+            line-height: 1.4;
             color: var(--text-color);
-            white-space: pre-wrap;
-            word-break: break-word;
+        }
+        .agent-poll-entry.is-problem .agent-poll-text { color: #f0883e; }
+        .agent-poll-empty {
+            font-size: 11px;
+            color: var(--text-dim);
+            padding: 6px 0;
         }
         .agent-control-config {
             padding: 8px 10px;
@@ -609,7 +625,7 @@
             <button type="button" class="agent-poll-btn" id="agent-poll-stop">Stop</button>
             <span class="agent-poll-state" id="agent-poll-state">stopped</span>
         </div>
-        <pre class="agent-poll-report" id="agent-poll-report">No controller report yet.</pre>
+        <div class="agent-poll-report" id="agent-poll-report"></div>
         <div class="agent-control-status" id="agent-control-status">Control surface ready.</div>
     </div>
     <div id="dock-cli-pane"></div>
