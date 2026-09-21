@@ -481,12 +481,23 @@ test('dropSystemAuthoredRows is idempotent and pure', () => {
 
 test('every host read site uses loadEffectiveStandingOrders; client renders persisted rows as-is', () => {
     const sites = [
-        // Three in TaskViewerProvider (prompt composition, delivery, and the
-        // turn-end/standing-orders read) plus one in the standalone bootstrap.
         // Exact counts, not an allowlist: a NEW raw read added inside an
         // already-permitted file is exactly the drift this catches.
-        ['services/TaskViewerProvider.ts', 3],
-        ['standalone/bootstrap.ts', 1]
+        //
+        // TaskViewerProvider was 3 and is 2: 41b8231e ("stop pushing standing
+        // orders at new and cleared seats") deleted the on-establish delivery
+        // ON PURPOSE, because standing orders ride every prompt delivery and
+        // that push handed a booting CLI something it could not act on. The
+        // intended shape is 2 — prompt composition and the turn-end read — so
+        // the count moves down rather than the call site coming back.
+        //
+        // bootstrap was 1 and is 2 since a8da4102 (Coding Rounds 05), which
+        // added a second SANCTIONED reader. That drift predates 41b8231e by
+        // 13 days and was invisible: assert.strictEqual throws on the first
+        // mismatch, and TaskViewerProvider is checked first, so while it still
+        // read 3 this file was never reached.
+        ['services/TaskViewerProvider.ts', 2],
+        ['standalone/bootstrap.ts', 2]
     ];
     for (const [file, count] of sites) {
         const body = SRC(...file.split('/'));
@@ -532,12 +543,18 @@ function walkSrc() {
 // PRESENCE: delete the loader's own read and this test goes red instead of green.
 test('getConfigJson(STANDING_ORDERS_CONFIG_KEY) occurs exactly once in each of exactly three files', () => {
     const EXPECTED = new Map([
-        // loadEffectiveStandingOrders — the only delivery-path reader.
-        [path.normalize('services/teamWiring.ts'), 1],
+        // TWO in teamWiring: loadEffectiveStandingOrders (the delivery-path
+        // reader) and inspectStandingOrders (the inspection read, which needs
+        // the RAW rows by design — identity-stable ids, and it must show rows
+        // that exist on disk but are never delivered).
+        [path.normalize('services/teamWiring.ts'), 2],
         // mutateStandingOrders — the serialising read-modify-write primitive.
         [path.normalize('services/standingOrders.ts'), 1],
-        // _handleStandingOrdersList — needs the RAW rows by design (identity-stable ids).
-        [path.normalize('services/LocalApiServer.ts'), 1],
+        // LocalApiServer is NO LONGER a raw reader. Its _handleStandingOrdersList
+        // read was consolidated into inspectStandingOrders at a9497bd6, so the
+        // getStandingOrders verb and GET /terminals/standing-orders cannot drift
+        // on what an order "is". That consolidation is why teamWiring is 2: the
+        // read MOVED, it was not duplicated.
     ]);
     const RAW_READ = /getConfigJson\s*(?:<[^>]*>)?\s*\(\s*STANDING_ORDERS_CONFIG_KEY/g;
 
@@ -578,7 +595,18 @@ function fakeDb(seed = {}) {
     };
 }
 
-testAsync('loadEffectiveStandingOrders rewrites the config key once and backs it up once', async () => {
+// THIS GATE WAS INVERTED ON PURPOSE. It used to assert that the read PERSISTED
+// its filtered array — "the persisted row must no longer contain the system
+// row". That contract was deliberately reversed: on 2026-09-14 persisting the
+// filter deleted all six of an operator's standing orders, including a
+// team-head order carrying the lead's dispatch rule. loadEffectiveStandingOrders
+// now filters at READ ONLY and leaves the store intact (see its comment in
+// teamWiring.ts, which names this hazard and the incident).
+//
+// So the assertion below is the reverse of what it was, and that is the point:
+// a future agent finding this gate red must NOT "fix" it by restoring the
+// write-back. The system row surviving on disk is the data-loss fix working.
+testAsync('loadEffectiveStandingOrders filters delivery WITHOUT deleting from disk', async () => {
     const before = cleanupRows();
     const db = fakeDb({ [STANDING_ORDERS_CONFIG_KEY]: before });
 
@@ -586,22 +614,24 @@ testAsync('loadEffectiveStandingOrders rewrites the config key once and backs it
     assert.ok(!first.some(o => o.id === 'context-aware-completion:team_x:team'), 'the system row must be absent from delivery');
     assert.ok(first.some(o => o.id === 'x1'), 'an operator-authored ad-hoc order must survive untouched');
 
-    // Persisted: the system row is gone from DISK, not just from the render.
+    // The store is NOT rewritten by a read. The dropped row is still on disk,
+    // recoverable, exactly as the 2026-09-14 fix requires.
     const persisted = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []);
-    assert.ok(!persisted.some(o => o.id === 'context-aware-completion:team_x:team'), 'the persisted row must no longer contain the system row');
+    assert.ok(persisted.some(o => o.id === 'context-aware-completion:team_x:team'),
+        'the filtered row must SURVIVE on disk — persisting the filter is what destroyed an operator\'s orders');
+    assert.ok(persisted.some(o => o.id === 'x1'), 'the operator row is on disk too');
 
-    // Backup holds the pre-migration array verbatim.
-    const onDisk = (v) => JSON.parse(JSON.stringify(v));
-    assert.deepStrictEqual(await db.getConfigJson(STANDING_ORDERS_PREMIGRATION_BAK_KEY, null), onDisk(before),
-        'the premigration backup must hold the pre-migration array verbatim');
+    // Nothing is destroyed, so nothing needs a pre-migration backup. A backup
+    // written here would mean the destructive persist had come back.
+    assert.strictEqual(await db.getConfigJson(STANDING_ORDERS_PREMIGRATION_BAK_KEY, null), null,
+        'no premigration backup is written: the read destroys nothing to back up');
 
-    // Second pass: reference short-circuit, no write-chain entry at all.
+    // Second pass: the lazy definitions migration already ran, so it recognises
+    // nothing new and never enters the write chain again.
     const writesAfterFirst = db.writes.length;
     const second = await loadEffectiveStandingOrders(db);
     assert.strictEqual(db.writes.length, writesAfterFirst,
         'a second pass must recognise nothing and never enter the write chain');
-    assert.deepStrictEqual(await db.getConfigJson(STANDING_ORDERS_PREMIGRATION_BAK_KEY, null), onDisk(before),
-        'the backup must never be overwritten by a later persist');
     assert.deepStrictEqual(second.map(o => o.id).sort(), first.map(o => o.id).sort(),
         'the effective set must be stable across passes');
 });
@@ -613,12 +643,33 @@ testAsync('a failed persist still delivers a cleaned prompt', async () => {
     assert.ok(!effective.some(o => o.id === 'context-aware-completion:team_x:team'), 'the system row must still be filtered');
 });
 
-testAsync('an install with nothing stale is never written to', async () => {
+// Was 'an install with nothing stale is never written to', asserting db.writes
+// stayed empty. The lazy definitions migration superseded that: a hand-written
+// order with no definitionId gets one minted and the library row created, which
+// is a legitimate write on an otherwise clean install. What still holds — and
+// is what this gate is actually protecting — is that the write happens ONCE and
+// the operator's own fields are untouched.
+testAsync('a clean install is written once by the definitions migration, and never again', async () => {
     const clean = [order({ id: 'x1', parent: 'a', child: 'b', scope: 'pair', instruction: 'hand-written' })];
     const db = fakeDb({ [STANDING_ORDERS_CONFIG_KEY]: clean });
     const out = await loadEffectiveStandingOrders(db);
-    assert.deepStrictEqual(out, JSON.parse(JSON.stringify(clean)));
-    assert.deepStrictEqual(db.writes, [], 'no recogniser fired, so nothing may be written — not even a backup');
+
+    assert.strictEqual(out.length, 1, 'the operator row is delivered');
+    for (const [k, v] of Object.entries(clean[0])) {
+        assert.deepStrictEqual(out[0][k], v, `the migration must not alter the operator's own field '${k}'`);
+    }
+    assert.strictEqual(typeof out[0].definitionId, 'string',
+        'the lazy definitions migration mints a definitionId for a hand-written order');
+
+    // Written once, and idempotent thereafter — a migration that re-fired on
+    // every read would rewrite the store on every prompt delivery.
+    const writesAfterFirst = db.writes.length;
+    assert.ok(writesAfterFirst > 0, 'the first pass performs the one-time migration write');
+    await loadEffectiveStandingOrders(db);
+    assert.strictEqual(db.writes.length, writesAfterFirst,
+        'a second pass must write nothing — the migration is self-healing, not repeating');
+    assert.strictEqual(await db.getConfigJson(STANDING_ORDERS_PREMIGRATION_BAK_KEY, null), null,
+        'a clean install destroys nothing, so no backup is written');
 });
 
 // ── The read endpoint returns persisted rows as-is — no staleness markers ──

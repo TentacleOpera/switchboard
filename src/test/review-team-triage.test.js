@@ -62,7 +62,18 @@ async function runTests() {
         assert.ok(/Apportion categories 2 and 3 back to the reviewer that reviewed them/.test(p),
             'fixes go back to the reviewer that formed the opinion');
         assert.ok(/Do not fix categories 1 or 4/.test(p), 'categories 1 and 4 are never fixed');
-        assert.ok(/Write one markdown artifact to the plans folder/.test(p), 'one artifact, in the plans folder');
+        // The artifact instruction is GONE, deliberately. It told the head to
+        // write a summary .md to .switchboard/plans/ (and the fragment copy
+        // said .switchboard/plans/intake/) — and PlanIngestionEngine
+        // ._scanForNewFiles sweeps plans/ top level, plans/intake/ AND
+        // features/, so either destination imported the summary as a duplicate
+        // card on the board. There is no safe directory to move it to, so the
+        // instruction was removed rather than repointed. This asserts it stays
+        // removed: restoring it re-creates the duplicate-card bug.
+        assert.ok(!/Write one markdown artifact/.test(p),
+            'the head must not be told to write a summary .md — every candidate directory is swept into the board');
+        assert.ok(/Do NOT write a summary markdown file/.test(p),
+            'the prohibition that replaced it must survive, or the instruction creeps back');
         assert.ok(/Never move a card backwards/.test(p), 'the card-movement rule is present');
     });
 

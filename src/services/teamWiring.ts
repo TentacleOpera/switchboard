@@ -17,6 +17,7 @@ import {
 import {
     composeStandingOrderFragments,
     GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY,
+    REVIEW_HEAD_WORK,
     STANDING_ORDER_FRAGMENT_IDS,
     StandingOrderCompositionContext,
     TEAM_HEAD_COMMIT_FRAGMENT_BODY,
@@ -1076,24 +1077,27 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop.';
 
+/**
+ * The Review team's head prompt.
+ *
+ * ONE SOURCE, not two. The review-head contract used to be written out twice —
+ * here, and as the `team.review-head.work` standing-order fragment
+ * (`REVIEW_HEAD_WORK`) — and the two copies drifted: this one told the head to
+ * write its summary artifact to `.switchboard/plans/`, the fragment said
+ * `.switchboard/plans/intake/`. A review head received both, in one prompt,
+ * naming different directories for the same file. Two copies of a rule are two
+ * rules the moment anyone edits one, so the shared contract now lives in
+ * `REVIEW_HEAD_WORK` and this constant appends only what is specific to the
+ * team definition (the commit discipline and the queue-pop tail).
+ *
+ * NOTE: this dedupes the SOURCE, so the two can no longer disagree. A review
+ * head is still handed the contract through two CHANNELS — this headPrompt and
+ * the standing-order fragment that rides every delivery. Collapsing those
+ * channels is a delivery-architecture decision, not a text edit, and is left to
+ * the operator.
+ */
 export const NEW_REVIEW_TEAM_HEAD_PROMPT =
-    'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
-    + 'Never move a card to a new column yourself. '
-    + 'You lead this review team. When a feature lands in your terminal, assign its subtask plans to your '
-    + 'reviewer seats in batches of up to two per reviewer. The review turn is read-only: reviewers append '
-    + 'their findings to the plan files and report back. READ-ONLY GOVERNS THE REVIEW TURN ONLY. A later dispatch '
-    + 'from you that names fixes IS the fix turn, and a reviewer working it edits code as instructed — that is not a '
-    + 'violation of the read-only rule, it is the next turn. Say which turn you are dispatching, so a seat never has '
-    + 'to guess whether it may touch code. When all reviewers report, triage findings into four '
-    + 'categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
-    + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
-    + '(file-disjoint where possible) via node "<cliPath>" verb ptySendPrompt \'{"name":"<reviewer seat>","data":"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks (typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false}\'. '
-    + 'Do not fix categories 1 or 4. Write one markdown artifact to the plans '
-    + 'folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures. '
-    + 'A SEAT\'S REPORT TO YOU IS NOT ITS COMPLETION. Reporting to you and posting completion are two separate acts, '
-    + 'and a seat that does only the first holds its card until the board flags it stalled. When a seat reports '
-    + 'finished, expect it to have posted completion as well; if its card is still held, tell it to post completion '
-    + 'rather than re-reporting to you. Board column never implies completion state — a card reaches a column when work STARTS, not when it finishes. '
+    REVIEW_HEAD_WORK + ' '
     + 'When review and fixes are complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
