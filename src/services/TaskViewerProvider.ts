@@ -4,6 +4,7 @@ import { BroadcastHub } from './broadcastHub';
 import { SURFACES } from './wsHub';
 import { TASKVIEWER_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
+import { createDependencyReadinessSource, isDependencyReady, isQueueDispatchCandidate, type DependencyReadinessSource } from './kanbanOrdering';
 import {
     applyStandingOrders,
     stripStandingOrdersBlock,
@@ -13452,15 +13453,26 @@ Each plan file must include:
         }
 
         // Ground truth over self-report: always verify queue state against the board.
-        // The queue candidate predicate matches dispatchNextFromQueue in LocalApiServer.ts
-        // exactly: column STAGING AND (!featureId || featureId === '').
-        // STAGING only — a handoff that "succeeded" off a full PLAN REVIEWED lane with
-        // an empty queue would exit Mission Control having handed the lead nothing it
-        // will actually be given, which is the outage this gate exists to refuse.
-        const isQueueable = (p: any): boolean =>
-            !!p
-            && (!p.featureId || p.featureId === '');
-
+        //
+        // This must answer the same question `dispatchNextFromQueue` will answer
+        // a moment later — "is there a card the lead will actually be given?" —
+        // so it shares that pop's card predicate (`isQueueDispatchCandidate`)
+        // and its dependency gate rather than restating them. It previously
+        // carried its own inline copy documented as matching the pop "exactly",
+        // which was false: it tested only the subtask exclusion, so a COMPLETED
+        // plan parked in STAGING passed here and was refused there, and Mission
+        // Control could exit having handed the lead a queue that yields nothing.
+        //
+        // STAGING only — a handoff that "succeeded" off a full PLAN REVIEWED lane
+        // with an empty queue is the same outage in a different column.
+        //
+        // The ONE remaining difference, stated because the last comment's claim
+        // of identity is what hid the bug: a MISSION-SCOPED pop narrows further,
+        // to the launching mission's members. That can only ever make the pop
+        // stricter than this check, and handoff is never mission-scoped (it hands
+        // the whole staged queue to a lead, it does not launch a mission). Every
+        // other term is shared. Nothing may be added here that makes this side
+        // LOOSER than the pop.
         const db = await this._getKanbanDb(root);
         if (!db) {
             return {
@@ -13471,12 +13483,46 @@ Each plan file must include:
         }
         const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
         const board: any[] = (await db.getBoard?.(wsId)) || [];
-        const candidates = board.filter((p: any) => p && p.kanbanColumn === 'STAGING' && isQueueable(p));
+        const staged = board.filter((p: any) => p && p.kanbanColumn === 'STAGING' && isQueueDispatchCandidate(p));
+
+        // Dependency gate, same rule and same source as the pop. A card whose
+        // predecessor has not asserted completion is not dispatchable, so
+        // counting it here would report a queue the lead cannot start. Per-card
+        // and fail-CLOSED, exactly as the pop does it: a lookup fault blocks the
+        // card it happened on, because a gate that exists to refuse must fail by
+        // refusing. With no rows in `plan_dependencies` this is one empty query
+        // per staged card and the count is unchanged.
+        let candidates = staged;
+        if (typeof (db as any).getPlanDependencies === 'function' && staged.length > 0) {
+            try {
+                const base = createDependencyReadinessSource(db, board, '[TaskViewerProvider]');
+                const ready: any[] = [];
+                for (const p of staged) {
+                    const readiness: DependencyReadinessSource = { ...base };
+                    try {
+                        if (await isDependencyReady(String(p.planId), readiness)) { ready.push(p); }
+                    } catch (err) {
+                        console.warn(`[TaskViewerProvider] Dependency lookup failed for '${p.planId}'; not counting it toward the handoff queue:`, err);
+                    }
+                }
+                candidates = ready;
+            } catch (err) {
+                // Source construction failed — the gate could not run at all.
+                // Keep the un-gated staged set rather than refusing a handoff on
+                // an infrastructure fault: over-counting here degrades to the
+                // pre-gate behaviour, where refusing would strand Mission Control.
+                console.warn('[TaskViewerProvider] Dependency check setup failed; counting staged cards un-gated:', err);
+                candidates = staged;
+            }
+        }
         if (candidates.length === 0) {
+            const blockedByDeps = staged.length > 0;
             return {
                 success: false,
                 status: 409,
-                error: 'Empty queue: no dispatchable top-level cards in STAGING — stage the scoped plans into the session queue before handing off'
+                error: blockedByDeps
+                    ? 'Empty queue: every top-level card in STAGING is waiting on a dependency — the lead would be handed a queue it cannot start'
+                    : 'Empty queue: no dispatchable top-level cards in STAGING — stage the scoped plans into the session queue before handing off'
             };
         }
 

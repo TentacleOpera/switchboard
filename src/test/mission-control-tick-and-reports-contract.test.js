@@ -834,8 +834,12 @@ async function run() {
         // the exact outage the surrounding comment says this gate exists to refuse.
         // Reconciling them means editing LocalApiServer.ts / TaskViewerProvider.ts.
         assert.ok(
-            /!p\.featureId/.test(body),
-            'handoff queue validation predicate must share dispatchNextFromQueue\'s feature-subtask exclusion (!featureId)'
+            /isQueueDispatchCandidate\(/.test(body),
+            'handoff must call the SHARED queue candidate predicate, not restate one inline'
+        );
+        assert.ok(
+            !/const isQueueable\s*=/.test(body),
+            'handoff has re-grown its own inline candidate predicate — the last one was documented as matching the pop "exactly" and did not, and a COMPLETED card in STAGING fell through the gap'
         );
         assert.ok(
             /if \(!db\)[\s\S]{0,100}status: 409/.test(body),
@@ -1000,6 +1004,56 @@ async function run() {
     });
 
     console.log('');
+    // The divergence this case exists for, as a value not a grep: Mission
+    // Control's pre-handoff queue check and the queue pop must answer "is there
+    // a card the lead will actually be given?" the same way. They used to carry
+    // separate inline predicates whose comments claimed they matched exactly,
+    // and a COMPLETED plan parked in STAGING passed the handoff check and was
+    // refused by the pop — handoff exited having handed a lead a queue that
+    // yields nothing, the outage the handoff gate's own comment says it refuses.
+    await check('a COMPLETED card in STAGING is not a queue candidate for either gate', () => {
+        const { isQueueDispatchCandidate } = require(path.join(ROOT, 'out', 'services', 'kanbanOrdering.js'));
+
+        const completedInStaging = { planId: 'p-done', kanbanColumn: 'STAGING', completedAt: '2026-09-21T00:00:00.000Z' };
+        assert.strictEqual(
+            isQueueDispatchCandidate(completedInStaging), false,
+            'a completed STAGING card must NOT count as a dispatchable queue candidate — this is the exact card that diverged'
+        );
+
+        // The positive half, so the predicate cannot be "fixed" by refusing everything.
+        assert.strictEqual(
+            isQueueDispatchCandidate({ planId: 'p-live', kanbanColumn: 'STAGING' }), true,
+            'an incomplete top-level STAGING card must still be a candidate'
+        );
+        assert.strictEqual(
+            isQueueDispatchCandidate({ planId: 'p-sub', kanbanColumn: 'STAGING', featureId: 'f-1' }), false,
+            'a feature subtask must not be a candidate'
+        );
+        assert.strictEqual(
+            isQueueDispatchCandidate({ planId: 'p-empty', kanbanColumn: 'STAGING', featureId: '' }), true,
+            'an empty-string featureId is top-level, not a subtask'
+        );
+
+        // Both consumers must reach the SAME predicate. A second implementation
+        // is how the first divergence happened.
+        for (const file of ['src/services/LocalApiServer.ts', 'src/services/TaskViewerProvider.ts']) {
+            assert.ok(
+                /isQueueDispatchCandidate\(/.test(read(file)),
+                `${file} does not use the shared queue candidate predicate — two copies is how the completed-card gap opened`
+            );
+        }
+
+        // And both must apply the dependency gate, or the handoff side goes
+        // looser again: a queue of dependency-blocked cards is one the lead
+        // cannot start, and counting it is the same outage in a later frame.
+        for (const file of ['src/services/LocalApiServer.ts', 'src/services/TaskViewerProvider.ts']) {
+            assert.ok(
+                /isDependencyReady\(/.test(read(file)),
+                `${file} does not apply the shared dependency gate before reporting the queue dispatchable`
+            );
+        }
+    });
+
     if (failures > 0) {
         console.error(`${failures} contract(s) failed.`);
         process.exit(1);

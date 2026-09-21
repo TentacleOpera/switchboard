@@ -65,7 +65,7 @@ import { substituteCliPath } from '../utils/cliPathToken';
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION, TURN_END_VERIFY_INSTRUCTION_STANDALONE } from './PlanIngestionEngine';
-import { compareByPrecedence, isDependencyReady, resolveSendableBatch, type DependencyReadinessSource } from './kanbanOrdering';
+import { compareByPrecedence, createDependencyReadinessSource, isDependencyReady, isQueueDispatchCandidate, resolveSendableBatch, type DependencyReadinessSource } from './kanbanOrdering';
 import { TransferBundleService } from './TransferBundleService';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
@@ -4351,10 +4351,14 @@ export class LocalApiServer {
             // The stage gate is NOT here: it lives in `inPopScope`, one predicate
             // shared with the dependency gate, so "which cards may this pop
             // dispatch" has exactly one answer.
+            // The incomplete + top-level half is `isQueueDispatchCandidate`
+            // (kanbanOrdering), shared with Mission Control's pre-handoff queue
+            // check — they previously carried separate inline copies whose
+            // comments claimed they matched, and a COMPLETED card in STAGING
+            // fell through the gap. Dependency and mission scope are layered
+            // here because both are pop-specific and can only narrow this set.
             const isQueueable = (p: any): boolean =>
-                !!p
-                && (!p.completedAt)
-                && (!p.featureId || p.featureId === '')
+                isQueueDispatchCandidate(p)
                 && !dependencyBlockers.has(String(p.planId))
                 && (!missionMemberIds || missionMemberIds.has(String(p.planId)));
 
@@ -7255,34 +7259,11 @@ export class LocalApiServer {
      * predecessors are still real, so resolution goes through the union
      * (hot + cold) before declaring absence.
      */
+    /** Delegates to the shared factory in kanbanOrdering so the pre-handoff
+     *  queue check can build the same source. Kept as a method only to preserve
+     *  this host's log prefix on stale-edge warnings. */
     private _dependencyReadinessSource(db: any, board: any[]): DependencyReadinessSource {
-        const boardById = new Map<string, any>();
-        for (const p of board || []) {
-            if (!p) continue;
-            if (p.planId) boardById.set(String(p.planId), p);
-            if (p.sessionId) boardById.set(String(p.sessionId), p);
-        }
-        return {
-            getPlanDependencies: (planId: string) => db.getPlanDependencies(planId),
-            resolvePlan: async (depId: string) => {
-                const onBoard = boardById.get(depId);
-                if (onBoard) return onBoard;
-                if (typeof db.getPlanByPlanIdUnion === 'function') {
-                    const unioned = await db.getPlanByPlanIdUnion(depId);
-                    if (unioned) return unioned;
-                }
-                if (typeof db.getPlanByPlanId === 'function') {
-                    const hot = await db.getPlanByPlanId(depId);
-                    if (hot) return hot;
-                }
-                return 'absent';
-            },
-            onStaleEdge: (planId: string, depId: string) => {
-                console.warn(
-                    `[LocalApiServer] Stale dependency edge: '${planId}' depends on '${depId}', which no longer exists. Treating the edge as satisfied.`
-                );
-            },
-        };
+        return createDependencyReadinessSource(db, board, '[LocalApiServer]');
     }
 
     /**

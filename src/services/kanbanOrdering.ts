@@ -245,6 +245,80 @@ export async function isDependencyReady(planId: string, source: DependencyReadin
     return true;
 }
 
+/**
+ * THE card-intrinsic half of "may the queue dispatch this card", shared by the
+ * queue pop (`dispatchNextFromQueue`) and Mission Control's pre-handoff queue
+ * check (`handoffMissionControlSession`).
+ *
+ * The two used to carry separate inline predicates whose comment claimed they
+ * matched "exactly". They did not: handoff tested only the subtask exclusion, so
+ * a COMPLETED plan parked in STAGING read as queueable to handoff and as
+ * not-queueable to the dispatcher. Mission Control could then exit having handed
+ * a lead a queue that yields nothing — the outage the handoff gate's own comment
+ * says it exists to refuse.
+ *
+ * What is NOT here, and why: the stage gate (the pop's `inPopScope` is
+ * mission-aware and may accept a releasable non-STAGING column; handoff is
+ * always plain STAGING), the dependency gate (async, board-scoped — see
+ * {@link createDependencyReadinessSource}), and mission membership (a scoped pop
+ * narrows to the launching mission's members; handoff is never mission-scoped).
+ * Each caller layers those on top. The rule for anything layered on: it may only
+ * ever make a caller STRICTER. A term that makes the handoff side looser than
+ * the pop reintroduces exactly the bug above.
+ */
+export function isQueueDispatchCandidate(p: any): boolean {
+    return !!p
+        && (!p.completedAt)
+        && (!p.featureId || p.featureId === '');
+}
+
+/**
+ * Build the board-scoped {@link DependencyReadinessSource} both queue gates use.
+ *
+ * Lived as a private method on LocalApiServer, which meant the only consumer
+ * that could apply the dependency gate was the pop — and a gate one caller
+ * cannot reach is a gate the two callers disagree about. It takes no server
+ * state (just `db` and the board snapshot), so it belongs beside
+ * {@link isDependencyReady}, with the readiness rule it feeds.
+ *
+ * A predecessor absent from both the hot board and the archive is a stale edge;
+ * `isDependencyReady` treats it as satisfied, because an unsatisfiable edge
+ * would deadlock the queue forever with no UI to clear it.
+ */
+export function createDependencyReadinessSource(
+    db: any,
+    board: any[],
+    logPrefix = '[kanbanOrdering]'
+): DependencyReadinessSource {
+    const boardById = new Map<string, any>();
+    for (const p of board || []) {
+        if (!p) continue;
+        if (p.planId) boardById.set(String(p.planId), p);
+        if (p.sessionId) boardById.set(String(p.sessionId), p);
+    }
+    return {
+        getPlanDependencies: (planId: string) => db.getPlanDependencies(planId),
+        resolvePlan: async (depId: string) => {
+            const onBoard = boardById.get(depId);
+            if (onBoard) return onBoard;
+            if (typeof db.getPlanByPlanIdUnion === 'function') {
+                const unioned = await db.getPlanByPlanIdUnion(depId);
+                if (unioned) return unioned;
+            }
+            if (typeof db.getPlanByPlanId === 'function') {
+                const hot = await db.getPlanByPlanId(depId);
+                if (hot) return hot;
+            }
+            return 'absent';
+        },
+        onStaleEdge: (planId: string, depId: string) => {
+            console.warn(
+                `${logPrefix} Stale dependency edge: '${planId}' depends on '${depId}', which no longer exists. Treating the edge as satisfied.`
+            );
+        },
+    };
+}
+
 /** A card the sendable resolver can consider. */
 export interface SendableCandidate extends OrderableCard {
     planId: string;
