@@ -7992,6 +7992,11 @@ export class LocalApiServer {
 
             const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
 
+            if (pathname === '/kanban/missions/progress' && req.method === 'GET') {
+                await this._handleGetMissionProgress(req, res);
+                return;
+            }
+
             if (pathname === '/kanban/missions' && req.method === 'GET') {
                 const list = await db.getMissions(wsId);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -12197,6 +12202,163 @@ export class LocalApiServer {
             const board = await this._resolveBoard(db);
             const features = (board || []).filter((p: any) => p.isFeature === 1 || p.isFeature === true);
             return this._withRecommendedRole(features);
+        });
+    }
+
+    /**
+     * GET /kanban/missions/progress — how far each MISSION has got, aggregated
+     * board-side.
+     *
+     * A mission is long-horizon: days of work across many subtasks. A panel that
+     * wants to say so needs each mission's subtask totals, and the alternative was
+     * shipping the whole board (929KB, 737 rows) to a phone to count rows in the
+     * browser. This counts them here and sends the counts.
+     *
+     * A mission is IN PROGRESS when it sits in a working column, NOT when
+     * `ownerSince` is set. `owner_since` is nulled on every column move, so a
+     * mission that has been worked for two days and moved twice has none — the
+     * panel read that as "no mission is running" while 32 were in flight.
+     */
+    private async _handleGetMissionProgress(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._requireReadableStore(req);
+            const board = (await this._resolveBoard(db)) || [];
+            const isFeature = (p: any) => p && (p.isFeature === 1 || p.isFeature === true);
+
+            const subsByFeature = new Map<string, any[]>();
+            for (const p of board as any[]) {
+                if (!p || isFeature(p)) { continue; }
+                const fid = String(p.featureId ?? p.feature_id ?? '').trim();
+                if (!fid) { continue; }
+                const list = subsByFeature.get(fid) || [];
+                list.push(p);
+                subsByFeature.set(fid, list);
+            }
+
+            const WORKING = new Set(['STAGING', 'LEAD CODED', 'CODER CODED', 'INTERN CODED', 'CODE REVIEWED']);
+            const ms = (v: any): number => {
+                const t = Date.parse(String(v ?? ''));
+                return isNaN(t) ? 0 : t;
+            };
+
+            const byId = new Map<string, any>();
+            for (const p of board as any[]) { if (p && p.planId) { byId.set(String(p.planId), p); } }
+
+            const wsRoot = new URL(req.url || '', `http://localhost:${this._port}`)
+                .searchParams.get('workspaceRoot') || this._options.workspaceRoot || '';
+            const mdb = await this._options.getKanbanDatabase?.(wsRoot);
+            const wsId = (await mdb?.getWorkspaceId?.()) || (await mdb?.getDominantWorkspaceId?.()) || '';
+            const raw = mdb ? await mdb.getMissions(wsId) : [];
+
+            const out: any[] = [];
+            let subtasksTotal = 0;
+            let subtasksDone = 0;
+            for (const m of raw as any[]) {
+                // A mission's work is its member features' subtasks plus any plans
+                // held directly. Counting only the features would under-report a
+                // mission that carries loose plans.
+                const cards: any[] = [];
+                for (const fid of (m.features || [])) {
+                    const subs = subsByFeature.get(String(fid)) || [];
+                    if (subs.length) { cards.push(...subs); }
+                    else { const f = byId.get(String(fid)); if (f) { cards.push(f); } }
+                }
+                for (const pid of (m.plans || [])) {
+                    const p = byId.get(String(pid));
+                    if (p) { cards.push(p); }
+                }
+                const done = cards.filter(x => x.completedAt ?? x.completed_at);
+                const inFlight = cards.filter(x => (x.ownerSince ?? x.owner_since) && !(x.completedAt ?? x.completed_at));
+                let lastMovementAt = ms(m.updatedAt);
+                for (const x of cards) { lastMovementAt = Math.max(lastMovementAt, ms(x.updatedAt)); }
+                const columns: Record<string, number> = {};
+                for (const x of cards) {
+                    const c = String(x.kanbanColumn ?? '') || '(none)';
+                    columns[c] = (columns[c] || 0) + 1;
+                }
+                subtasksTotal += cards.length;
+                subtasksDone += done.length;
+                out.push({
+                    id: m.id,
+                    name: m.name,
+                    goal: m.goal,
+                    team: m.team || null,
+                    teams: m.teams || [],
+                    ready: !!m.ready,
+                    paused: !!m.paused,
+                    maxExtraWorktrees: m.maxExtraWorktrees ?? 0,
+                    featureCount: (m.features || []).length,
+                    planCount: (m.plans || []).length,
+                    cardsTotal: cards.length,
+                    cardsDone: done.length,
+                    cardsInFlight: inFlight.length,
+                    cardsWorking: cards.filter(x => WORKING.has(String(x.kanbanColumn ?? ''))).length,
+                    columns,
+                    startedAt: m.createdAt ?? null,
+                    lastMovementAt: lastMovementAt || null,
+                });
+            }
+            out.sort((a, b) => (b.lastMovementAt || 0) - (a.lastMovementAt || 0));
+
+            // Work in flight that belongs to NO mission. Without this the panel
+            // says "no mission running" on a board with 32 features being worked,
+            // which is true and useless — the operator reads it as "nothing is
+            // happening". Loose work is a different claim, so it is its own field.
+            const inMission = new Set<string>();
+            for (const m of raw as any[]) {
+                for (const fid of (m.features || [])) { inMission.add(String(fid)); }
+                for (const pid of (m.plans || [])) { inMission.add(String(pid)); }
+            }
+            // IN FLIGHT means a seat is holding the card right now: owner_since set
+            // and not completed. It does NOT mean "sits in a coding column".
+            // Cards move on START and nothing advances them afterwards, so
+            // LEAD CODED and CODE REVIEWED are mostly finished work nobody moved
+            // on. Counting those called 39 features in flight on a board with no
+            // seats running and nothing held — the operator's answer was 0.
+            let looseInFlight = 0;
+            let looseInFlightCards = 0;
+            let looseParked = 0;
+            let looseParkedCards = 0;
+            let looseParkedDone = 0;
+            for (const f of board as any[]) {
+                if (!isFeature(f) || f.completedAt) { continue; }
+                if (inMission.has(String(f.planId ?? ''))) { continue; }
+                const subs = subsByFeature.get(String(f.planId ?? '')) || [];
+                const held = subs.filter(x => (x.ownerSince ?? x.owner_since) && !(x.completedAt ?? x.completed_at));
+                if (held.length) {
+                    looseInFlight += 1;
+                    looseInFlightCards += held.length;
+                    continue;
+                }
+                // Started at some point, not finished, nobody on it. That is a
+                // third state and it is the one worth surfacing — but it is not
+                // in flight, and must not be reported as though it were.
+                const done = subs.filter(x => x.completedAt ?? x.completed_at).length;
+                const touched = done > 0
+                    || WORKING.has(String(f.kanbanColumn ?? ''))
+                    || subs.some(x => WORKING.has(String(x.kanbanColumn ?? '')));
+                if (!touched) { continue; }
+                looseParked += 1;
+                looseParkedCards += subs.length;
+                looseParkedDone += done;
+            }
+
+            return {
+                missions: out,
+                summary: {
+                    missions: out.length,
+                    running: out.filter(x => !x.paused && x.cardsDone < x.cardsTotal).length,
+                    cardsTotal: subtasksTotal,
+                    cardsDone: subtasksDone,
+                },
+                outsideMissions: {
+                    inFlightFeatures: looseInFlight,
+                    inFlightCards: looseInFlightCards,
+                    parkedFeatures: looseParked,
+                    parkedCards: looseParkedCards,
+                    parkedCardsDone: looseParkedDone,
+                },
+            };
         });
     }
 

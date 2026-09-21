@@ -1118,38 +1118,23 @@
                     + 'background:linear-gradient(180deg, var(--panel-bg2), var(--panel-bg)); '
                     + 'overflow:hidden;');
 
-                // Missions first: they are the subject. Counts come from each
-                // mission's own subtasks, which the features list does not carry.
+                // Missions first: they are the subject. A MISSION is the board's
+                // own long-horizon entity (name, goal, team, worktree allowance,
+                // members) — not a feature. One aggregate call carries every
+                // mission's progress; counting it in the browser meant shipping
+                // the whole board, 929KB, to a phone.
                 let missions = [];
+                let mSummary = null;
+                let loose = null;
                 let missionsReadable = true;
                 try {
-                    const fr = await fetch('/kanban/features');
+                    const fr = await fetch('/kanban/missions/progress');
                     const fd = await fr.json();
-                    const feats = (fd && Array.isArray(fd.data)) ? fd.data : [];
-                    missions = feats.filter(function (x) {
-                        return x && !x.completedAt && x.ownerSince;
-                    }).sort(function (a, b) {
-                        return (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0);
-                    }).slice(0, 4);
-                    for (const m of missions) {
-                        try {
-                            const sr = await fetch('/kanban/plans?featureId=' + encodeURIComponent(m.planId));
-                            const sd = await sr.json();
-                            const subs = (sd && (sd.data || (sd.result || {}).data)) || [];
-                            m._total = subs.length;
-                            m._done = subs.filter(function (s) { return s && s.completedAt; }).length;
-                        } catch { m._total = 0; m._done = 0; }
-                    }
+                    const d = (fd && fd.data) || {};
+                    missions = Array.isArray(d.missions) ? d.missions : [];
+                    mSummary = d.summary || null;
+                    loose = d.outsideMissions || null;
                 } catch { missionsReadable = false; }
-
-                // How old this report is. A report that stopped arriving must not
-                // read as current — it is the one thing a calm panel can hide.
-                let age = '';
-                const reportMs = Date.parse(latest.stamp);
-                if (!isNaN(reportMs)) {
-                    const m = Math.max(0, Math.round((Date.now() - reportMs) / 60000));
-                    age = m < 1 ? 'just now' : (m < 60 ? m + ' min ago' : Math.round(m / 60) + 'h ago');
-                }
 
                 const elapsed = function (iso) {
                     const t = Date.parse(iso);
@@ -1178,7 +1163,31 @@
                     lamp = 'var(--warning)';
                     caption = 'Mission state could not be read.';
                 } else if (missions.length) {
-                    caption = missions.length + (missions.length === 1 ? ' mission running' : ' missions running');
+                    const t = mSummary ? mSummary.cardsTotal : 0;
+                    const dn = mSummary ? mSummary.cardsDone : 0;
+                    caption = missions.length + (missions.length === 1 ? ' mission' : ' missions')
+                        + (t ? ' \u00b7 ' + dn + ' of ' + t + ' cards done' : '');
+                } else if (loose && (loose.inFlightFeatures || loose.parkedFeatures)) {
+                    // No mission. Work being HELD and work merely left part-done are
+                    // different claims and are said separately — reporting parked
+                    // work as in flight said 39 features were running on a board
+                    // where nothing was.
+                    word = 'STANDBY';
+                    const parts = ['No mission set up.'];
+                    if (loose.inFlightFeatures) {
+                        parts.push(loose.inFlightFeatures
+                            + (loose.inFlightFeatures === 1 ? ' feature' : ' features')
+                            + ' in flight (' + loose.inFlightCards + ' cards held).');
+                    } else {
+                        parts.push('Nothing in flight.');
+                    }
+                    if (loose.parkedFeatures) {
+                        parts.push(loose.parkedFeatures
+                            + (loose.parkedFeatures === 1 ? ' feature' : ' features')
+                            + ' part-done and parked, ' + loose.parkedCardsDone
+                            + ' of ' + loose.parkedCards + ' cards finished.');
+                    }
+                    caption = parts.join(' ');
                 } else {
                     caption = 'No mission running. Nothing needs you.';
                 }
@@ -1208,13 +1217,13 @@
                         const s = mk('div', 'padding:9px 15px; border-bottom:1px solid '
                             + 'color-mix(in srgb, var(--border-color) 55%, transparent);');
                         s.appendChild(mk('div', 'font-size:12.5px; line-height:1.35; color:var(--text-primary);',
-                            String(m.topic || m.planId || '')));
+                            String(m.name || m.id || '')));
 
                         // A progress bar only where there is progress to show. A
                         // bar drawn from a zero denominator is a picture of a
                         // fact nobody has.
-                        if (m._total > 0) {
-                            const pct = Math.round((m._done / m._total) * 100);
+                        if (m.cardsTotal > 0) {
+                            const pct = Math.round((m.cardsDone / m.cardsTotal) * 100);
                             const track = mk('div', 'height:3px; border-radius:2px; margin-top:7px; '
                                 + 'background:color-mix(in srgb, var(--border-color) 80%, transparent); '
                                 + 'overflow:hidden;');
@@ -1222,12 +1231,19 @@
                                 + 'background:var(--accent-primary);'));
                             s.appendChild(track);
                         }
+                        // Long horizon is the point: how much work, how far in,
+                        // how long it has been going, and when it last moved.
                         const meta = [];
-                        if (m._total > 0) { meta.push(m._done + ' of ' + m._total); }
-                        if (m.dispatchedTeamGroup) { meta.push(String(m.dispatchedTeamGroup)); }
-                        const mv = elapsed(m.updatedAt);
+                        if (m.cardsTotal > 0) { meta.push(m.cardsDone + ' of ' + m.cardsTotal + ' cards'); }
+                        if (m.featureCount) { meta.push(m.featureCount + (m.featureCount === 1 ? ' feature' : ' features')); }
+                        if (m.cardsInFlight) { meta.push(m.cardsInFlight + ' in flight'); }
+                        if (m.team) { meta.push(String(m.team)); }
+                        const started = elapsed(m.startedAt);
+                        if (started) { meta.push('running ' + started); }
+                        const mv = elapsed(m.lastMovementAt ? new Date(m.lastMovementAt).toISOString() : null);
                         if (mv) { meta.push('moved ' + mv + ' ago'); }
-                        if (m.worktreeStatus && m.worktreeStatus !== 'none') { meta.push('worktree'); }
+                        if (m.maxExtraWorktrees) { meta.push(m.maxExtraWorktrees + ' worktrees'); }
+                        if (m.paused) { meta.push('PAUSED'); }
                         s.appendChild(mk('div', STENCIL + ' margin-top:6px;', meta.join('  ·  ')));
                         strips.appendChild(s);
                     }
