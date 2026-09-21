@@ -288,17 +288,19 @@
             padding-top: 8px;
             border-top: 1px solid var(--border-color);
         }
+        /* Matches .dock-start-btn — the dock's own button convention. */
         .agent-poll-btn {
-            background: transparent;
-            color: var(--text-color);
-            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            border: 1px solid var(--accent-dim);
             border-radius: 3px;
+            color: var(--text-primary);
             font-family: var(--font-family);
             font-size: 11px;
-            padding: 4px 14px;
+            padding: 3px 10px;
             cursor: pointer;
         }
-        .agent-poll-btn:hover { background: var(--accent-primary); color: var(--bg-color); }
+        .agent-poll-btn:hover { background: var(--accent-dim); color: var(--text-primary); }
+        .agent-poll-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
         .agent-poll-state {
             font-size: 10px;
             color: var(--text-dim);
@@ -322,13 +324,13 @@
             color: var(--text-dim);
         }
         .agent-poll-project {
-            background: var(--panel-bg2);
-            color: var(--text-color);
-            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            color: var(--text-primary);
+            border: 1px solid var(--accent-dim);
             border-radius: 3px;
             font-family: var(--font-family);
             font-size: 11px;
-            padding: 3px 6px;
+            padding: 3px 8px;
         }
         .agent-poll-report {
             margin-top: 10px;
