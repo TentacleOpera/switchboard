@@ -1173,21 +1173,9 @@
                     // work as in flight said 39 features were running on a board
                     // where nothing was.
                     word = 'STANDBY';
-                    const parts = ['No mission set up.'];
-                    if (loose.inFlightFeatures) {
-                        parts.push(loose.inFlightFeatures
-                            + (loose.inFlightFeatures === 1 ? ' feature' : ' features')
-                            + ' in flight (' + loose.inFlightCards + ' cards held).');
-                    } else {
-                        parts.push('Nothing in flight.');
-                    }
-                    if (loose.parkedFeatures) {
-                        parts.push(loose.parkedFeatures
-                            + (loose.parkedFeatures === 1 ? ' feature' : ' features')
-                            + ' part-done and parked, ' + loose.parkedCardsDone
-                            + ' of ' + loose.parkedCards + ' cards finished.');
-                    }
-                    caption = parts.join(' ');
+                    caption = loose.inFlightFeatures
+                        ? 'No mission set up, but work is in flight.'
+                        : 'No mission set up. Nothing is in flight.';
                 } else {
                     caption = 'No mission running. Nothing needs you.';
                 }
@@ -1209,6 +1197,87 @@
                 }
                 ann.appendChild(mk('div', STENCIL + ' margin-top:8px;', checkedBits.join('  ·  ')));
                 card.appendChild(ann);
+
+                // ── SYSTEMS CHECK ────────────────────────────────────────────
+                // With nothing flying, the panel's job is to say whether the board
+                // is READY to fly. Each row is a system, its lamp, and the one fact
+                // that decides it. A row that cannot be read says so rather than
+                // reporting a system as good.
+                if (!missions.length) {
+                    const sys = mk('div', 'padding:4px 0 2px;');
+                    const line = function (label, ok, detail) {
+                        const el = mk('div', 'display:flex; align-items:baseline; gap:9px; '
+                            + 'padding:5px 15px;');
+                        const colour = ok === null ? 'var(--warning)'
+                            : (ok ? 'var(--success)' : 'var(--border-bright)');
+                        el.appendChild(mk('span', 'width:5px; height:5px; border-radius:50%; '
+                            + 'flex-shrink:0; position:relative; top:-2px; background:' + colour
+                            + (ok ? '; box-shadow:0 0 6px ' + colour : '') + ';'));
+                        el.appendChild(mk('span', 'font-size:9px; letter-spacing:0.14em; '
+                            + 'text-transform:uppercase; color:var(--text-secondary); '
+                            + 'min-width:74px; flex-shrink:0;', label));
+                        el.appendChild(mk('div', 'font-size:12px; line-height:1.4; color:'
+                            + (ok === false ? 'var(--text-secondary)' : 'var(--text-primary)') + ';', detail));
+                        sys.appendChild(el);
+                    };
+
+                    // Pilot: is the watch actually armed. A configured model that is
+                    // not running is not a green system.
+                    let armed = null;
+                    try {
+                        const pr = await fetch('/controller/poll/state');
+                        const pd = await pr.json();
+                        armed = !!(pd && pd.running);
+                    } catch { armed = null; }
+                    line('Pilot', armed === null ? null : armed,
+                        armed === null ? 'Watch state could not be read.'
+                            : (armed ? 'Watching the board every 5 minutes.'
+                                : 'Not watching. Press Start to arm the watch.'));
+
+                    // Teams: seats are what actually do the work.
+                    const teams = (f.seatsByTeam && typeof f.seatsByTeam === 'object')
+                        ? Object.keys(f.seatsByTeam) : [];
+                    const seatCount = f.seatsAliveCount || 0;
+                    line('Teams', seatCount > 0,
+                        seatCount > 0
+                            ? seatCount + (seatCount === 1 ? ' seat up' : ' seats up')
+                                + (teams.length ? ' · ' + teams.join(', ') : '')
+                            : 'No seats up. Start a team before a mission can run.');
+
+                    // Board: is there anything ready to be flown.
+                    const cols = (f.cardsByColumn && typeof f.cardsByColumn === 'object') ? f.cardsByColumn : null;
+                    if (cols) {
+                        const ready = cols['PLAN REVIEWED'] || 0;
+                        const created = cols['CREATED'] || 0;
+                        line('Board', ready > 0,
+                            ready > 0
+                                ? ready + ' plans ready'
+                                    + (created ? ' · ' + created + ' awaiting review' : '')
+                                : 'Nothing plan-reviewed. Nothing is ready to start.');
+                    } else {
+                        line('Board', null, 'Column counts were not reported this pass.');
+                    }
+
+                    // Missions: the thing this panel exists for.
+                    line('Missions', false, 'None set up.');
+
+                    // Work already under way but unattended. This is the number that
+                    // says how long-horizon this board is.
+                    if (loose && (loose.parkedFeatures || loose.inFlightFeatures)) {
+                        const bits = [];
+                        if (loose.inFlightFeatures) {
+                            bits.push(loose.inFlightFeatures + ' in flight');
+                        }
+                        if (loose.parkedFeatures) {
+                            bits.push(loose.parkedFeatures + ' part-done and parked, '
+                                + loose.parkedCardsDone + ' of ' + loose.parkedCards + ' cards finished');
+                        }
+                        line('Work', !!loose.inFlightFeatures, bits.join(' · '));
+                    } else if (!missionsReadable) {
+                        line('Work', null, 'Mission state could not be read.');
+                    }
+                    card.appendChild(sys);
+                }
 
                 // ── MISSION STRIPS ───────────────────────────────────────────
                 if (missions.length) {
