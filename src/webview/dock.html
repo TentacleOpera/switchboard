@@ -344,6 +344,32 @@
             gap: 8px;
             padding-right: 2px;
         }
+        .agent-models {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .agent-model-row {
+            display: flex;
+            gap: 8px;
+            align-items: baseline;
+            font-size: 11px;
+        }
+        .agent-model-role {
+            font-size: 9px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--accent-primary);
+            min-width: 62px;
+        }
+        .agent-report-teams {
+            display: flex;
+            gap: 6px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-color);
+            flex-wrap: wrap;
+        }
         .agent-control-config-wrap { border: 1px solid var(--border-color); border-radius: 4px; }
         .agent-control-config-toggle {
             cursor: pointer;
@@ -657,6 +683,9 @@
         <div id="dock-empty-hint"></div>
     </div>
     <div id="dock-agent-pane">
+        <!-- Who is flying. Pilot is the controller's own judgement model;
+             Navigator is the supervisor it escalates to. -->
+        <div class="agent-models" id="agent-models"></div>
         <div class="agent-control-quickactions" id="agent-control-quickactions"></div>
         
         <!-- The surface's own config: provider, model and key are set HERE,
@@ -686,10 +715,7 @@
             <span class="agent-poll-state" id="agent-poll-state">stopped</span>
         </div>
         <div class="agent-poll-report" id="agent-poll-report"></div>
-        <div class="agent-poll-controls" id="agent-poll-controls">
-            <label class="agent-poll-proj-label" for="agent-poll-project">Project</label>
-            <select id="agent-poll-project" class="agent-poll-project"></select>
-        </div>
+        <div class="agent-report-teams" id="agent-report-teams"></div>
         <div class="agent-control-status" id="agent-control-status">Control surface ready.</div>
     </div>
     <div id="dock-cli-pane"></div>

@@ -981,6 +981,63 @@
         const reportEl = document.getElementById('agent-poll-report');
 
 
+        // A team's own reports: what its seats said they finished, blocked on,
+        // or are working on. The controller writes one report for the whole
+        // board, so these tabs are not a filter over it — they are a different
+        // source, and the panel says which one it is showing.
+        async function renderTeamReports(teamId) {
+            try {
+                const res = await fetch('/teams/' + encodeURIComponent(teamId) + '/reports?limit=12');
+                const d = await res.json();
+                const rows = (d && Array.isArray(d.data)) ? d.data.slice() : [];
+                reportEl.textContent = '';
+                const card = document.createElement('div');
+                card.style.cssText = 'border:1px solid var(--accent-primary); border-radius:4px; '
+                    + 'padding:11px 13px; background:var(--panel-bg2);';
+                if (rows.length === 0) {
+                    // An empty tab is a claim about the team, and it needs a source.
+                    const e = document.createElement('div');
+                    e.style.cssText = 'font-size:12px; color:var(--text-dim);';
+                    e.textContent = 'No reports from ' + teamId + ' yet.';
+                    card.appendChild(e);
+                } else {
+                    // Newest first: a team's latest word is what is being looked for.
+                    rows.reverse();
+                    for (const r of rows) {
+                        const body = String((r && r.content) || '');
+                        const meta = {};
+                        const fm = body.match(/^---\n([\s\S]*?)\n---/);
+                        if (fm) {
+                            for (const line of fm[1].split('\n')) {
+                                const kv = line.match(/^([a-zA-Z]+):\s*(.*)$/);
+                                if (kv) { meta[kv[1]] = kv[2].trim(); }
+                            }
+                        }
+                        const text = body.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+                        const row = document.createElement('div');
+                        row.style.cssText = 'padding:6px 0; border-top:1px solid var(--border-color);';
+                        const h = document.createElement('div');
+                        h.style.cssText = 'font-size:9px; letter-spacing:0.06em; text-transform:uppercase; '
+                            + 'color:var(--accent-primary); margin-bottom:3px;';
+                        let when = meta.created || '';
+                        try { when = new Date(meta.created).toLocaleString(); } catch { /* keep raw */ }
+                        h.textContent = (meta.from || 'unknown seat') + ' \u00b7 ' + (meta.kind || 'report')
+                            + (when ? ' \u00b7 ' + when : '');
+                        const t = document.createElement('div');
+                        t.style.cssText = 'font-size:12px; line-height:1.45; color:var(--text-color); '
+                            + 'word-break:break-word;';
+                        t.textContent = text || '(empty report)';
+                        row.appendChild(h);
+                        row.appendChild(t);
+                        card.appendChild(row);
+                    }
+                }
+                reportEl.appendChild(card);
+            } catch {
+                reportEl.textContent = 'Team reports unavailable.';
+            }
+        }
+
         // ONE report, replaced in place every poll. This was a scrolling
         // transcript, which meant a five-minute poll on a quiet board stacked the
         // same paragraph over and over and the current state of the board had to
@@ -988,6 +1045,7 @@
         // report only: columns, teams, assessment, and what is next.
         async function refreshReport() {
             if (!reportEl) { return; }
+            if (selectedTeam) { await renderTeamReports(selectedTeam); return; }
             try {
                 const res = await fetch('/controller/report');
                 const d = await res.json();
@@ -1058,10 +1116,9 @@
                 // Header — the time is the whole point of a replacing report: it is
                 // how the operator knows whether they are looking at now or at a
                 // board that stopped being reported on an hour ago.
-                const head = mk('div', 'display:flex; justify-content:space-between; align-items:baseline; '
+                const head = mk('div', 'display:flex; justify-content:flex-end; align-items:baseline; '
                     + 'gap:8px; border-bottom:1px solid var(--border-color); padding-bottom:7px;');
-                head.appendChild(mk('span', 'font-size:10px; letter-spacing:0.08em; text-transform:uppercase; '
-                    + 'color:var(--accent-primary); font-weight:600;', 'Agent report'));
+
                 // The AGE, not just the clock time. The assessment is a snapshot from
                 // the last wake and can be five minutes behind the board; a bare
                 // timestamp reads as "now" and hid exactly that.
@@ -1257,48 +1314,118 @@
             });
         }
 
-        // ── Project scope ─────────────────────────────────────
-        // There is no standing "dispatch highest priority" button: the agent's
-        // own message carries the offer, naming the card it would start. A
-        // second button that dispatched something unnamed was the redundant one.
-        const projectSel = document.getElementById('agent-poll-project');
-
-        // `ready` order IS priority order — the board already sorts it. The
-        // highest priority card for a scope is the first one in that scope, so
-        // nothing here re-implements a ranking the board owns.
-        async function readyCards() {
-            const res = await fetch('/kanban/plans');
-            const d = await res.json();
-            const rows = (d && (d.data || d.plans || d.result)) || [];
-            return Array.isArray(rows) ? rows : [];
+        // ── Who is flying ─────────────────────────────────────────────────
+        // Pilot is the controller's own judgement model. Navigator is the
+        // supervisor it escalates to. An unconfigured Navigator says so: a
+        // supervisor that is absent must never read like one that is present.
+        function prettyModel(id) {
+            const raw = String(id || '').trim();
+            if (!raw) { return null; }
+            const bits = raw.split(':');
+            const family = bits[0].replace(/[-_]/g, ' ').replace(/([a-z])(\d)/gi, '$1 $2')
+                .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+            const variant = bits.length > 1 ? String(bits[1]).split('-')[0].toUpperCase() : '';
+            return (family + (variant ? ' ' + variant : '')).trim();
         }
 
-        async function loadProjects() {
-            if (!projectSel) { return; }
+        async function loadModels() {
+            const host = document.getElementById('agent-models');
+            if (!host) { return; }
+            let pilot = null;
+            let navigator = null;
             try {
-                const rows = await readyCards();
-                const names = [];
-                for (const r of rows) {
-                    const n = String((r && (r.project || r.projectName)) || '').trim();
-                    if (n && names.indexOf(n) < 0) { names.push(n); }
+                const r = await fetch('/controller/judgement');
+                const d = await r.json();
+                const j = (d && d.judgement) || {};
+                const tier = (j.tiers || [])[0];
+                if (tier && tier.model) {
+                    // Locality comes from the tier, never guessed from the URL.
+                    // Omitted rather than assumed when the tier does not say.
+                    const loc = String(tier.locality || '');
+                    const where = (loc === 'local' || loc === 'tailnet') ? 'local'
+                        : (loc === 'cloud' ? 'cloud' : '');
+                    pilot = { name: prettyModel(tier.model), where: where, raw: tier.model };
                 }
-                names.sort();
-                const keep = projectSel.value;
-                projectSel.textContent = '';
-                const all = document.createElement('option');
-                all.value = '__all__';
-                all.textContent = 'All projects';
-                projectSel.appendChild(all);
-                for (const n of names) {
-                    const o = document.createElement('option');
-                    o.value = n; o.textContent = n;
-                    projectSel.appendChild(o);
+                const sup = j.supervisorSeat;
+                if (sup && (sup.model || sup.seat)) {
+                    navigator = {
+                        name: prettyModel(sup.model) || String(sup.seat || ''),
+                        where: 'cloud',
+                        raw: sup.model || sup.seat,
+                    };
                 }
-                if (keep) { projectSel.value = keep; }
-            } catch { /* leave whatever is there */ }
+            } catch { /* both stay null, and both say so below */ }
+
+            host.textContent = '';
+            const row = function (role, m) {
+                const el = document.createElement('div');
+                el.className = 'agent-model-row';
+                el.style.cssText = 'display:flex; gap:8px; align-items:baseline; font-size:11px;';
+                const r = document.createElement('span');
+                r.className = 'agent-model-role';
+                r.style.cssText = 'font-size:9px; letter-spacing:0.08em; text-transform:uppercase; '
+                    + 'color:var(--accent-primary); min-width:62px;';
+                r.textContent = role;
+                const v = document.createElement('span');
+                if (m) {
+                    v.style.cssText = 'color:var(--text-color);';
+                    v.textContent = m.name + (m.where ? ' (' + m.where + ')' : '');
+                    v.title = String(m.raw || '');
+                } else {
+                    v.style.cssText = 'color:var(--text-dim);';
+                    v.textContent = 'not configured';
+                }
+                el.appendChild(r);
+                el.appendChild(v);
+                return el;
+            };
+            host.appendChild(row('Pilot', pilot));
+            host.appendChild(row('Navigator', navigator));
         }
 
-        void loadProjects();
+        // ── Report scope: the board, or one team ──────────────────────────
+        // The controller writes ONE report, so these do not switch which
+        // controller report is shown — there is only one. They switch to the
+        // team's own reports, which is where that team's seats say what they
+        // finished, blocked on, or are working on.
+        const TEAM_TABS = [
+            { label: 'Planning', id: 'team_Planning' },
+            { label: 'Coding', id: 'team_Coding' },
+            { label: 'Review', id: 'team_Review' },
+            { label: 'Missions', id: 'team_Feature' },
+        ];
+        let selectedTeam = null;
+
+        function paintTeamTabs() {
+            const host = document.getElementById('agent-report-teams');
+            if (!host) { return; }
+            host.textContent = '';
+            for (const t of TEAM_TABS) {
+                const b = document.createElement('button');
+                b.type = 'button';
+                // Both class names: each surface styles the one it owns.
+                b.className = 'agent-poll-btn secondary-action-btn';
+                b.textContent = t.label;
+                // The real team id in the tooltip. "Missions" is this product's
+                // word for the Feature team, and hiding that mapping entirely
+                // would make an empty tab impossible to explain.
+                b.title = t.id;
+                if (selectedTeam === t.id) {
+                    b.style.cssText = 'border-color:var(--accent-primary); color:var(--accent-primary);';
+                }
+                b.addEventListener('click', () => {
+                    // Pressing the active tab returns to the board report, so the
+                    // agent's own assessment is always one press away.
+                    selectedTeam = (selectedTeam === t.id) ? null : t.id;
+                    paintTeamTabs();
+                    void refreshReport();
+                });
+                host.appendChild(b);
+            }
+        }
+
+        paintTeamTabs();
+        void loadModels();
         void refreshState();
         void refreshReport();
 
