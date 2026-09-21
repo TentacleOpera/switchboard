@@ -340,12 +340,24 @@ async function run() {
     });
 
     // 5c. V81: release ceased to exist as a concept. `card/release`,
-    //     `team/release` and `released_at` are deleted — there is nothing to
-    //     release from once ownership is advisory and dispatch is never refused.
-    await check('card/release and released_at are deleted outright', async () => {
+    //     `releaseCardInternal` and `released_at` are deleted — there is nothing
+    //     to release from once ownership is advisory and dispatch is never
+    //     refused. REVERSAL (8b8c5366): `/kanban/team/release` was reinstated —
+    //     the terminals panel's "release held cards" button has POSTed it since
+    //     the panel was written, and the route never existed, so the button
+    //     404'd and looked inert. The reinstated route is a hold-only operator
+    //     valve: `clearOwnerStamp`, scoped to the poster's own team, no
+    //     `completed_at` / `released_at` / column move.
+    await check('card/release and released_at are deleted outright; team/release is the scoped operator valve', async () => {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
         assert.strictEqual(src.includes('/kanban/card/release'), false, 'card/release route must be absent');
-        assert.strictEqual(src.includes('/kanban/team/release'), false, 'team/release route must be absent');
+        const armStart = src.indexOf("pathname === '/kanban/team/release'");
+        assert.ok(armStart > 0, 'team/release route must exist — the shipped button has POSTed it since the panel was written (reinstated 8b8c5366)');
+        const armEnd = src.indexOf("pathname === '/kanban/", armStart + 1);
+        const arm = src.slice(armStart, armEnd > armStart ? armEnd : armStart + 4000);
+        assert.ok(arm.includes('clearOwnerStamp'), 'team/release must release the hold via clearOwnerStamp');
+        assert.ok(!/\bcompleted_at\b|\breleased_at\b/.test(arm), 'team/release must not write completed_at or released_at — it releases the hold, it does not complete the work');
+        assert.ok(arm.includes('resolveTeamMembers'), 'team/release must scope the release to the poster\'s own team');
         assert.strictEqual(/\breleaseCardInternal\b/.test(src), false, 'releaseCardInternal must be deleted');
         const dbSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanDatabase.ts'), 'utf8');
         assert.strictEqual(/\breleasedAt\b/.test(dbSrc), false, 'the releasedAt record field must be gone');

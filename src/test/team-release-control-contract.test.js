@@ -123,9 +123,22 @@ async function main() {
         assert.strictEqual(/\bresolveTeamInFlight\b/.test(localApiServer), false, 'resolveTeamInFlight must be deleted');
     });
 
-    await check('release endpoints and releaseCardInternal are deleted', () => {
+    await check('card/release and releaseCardInternal are deleted; team/release is the scoped operator valve', () => {
         assert.strictEqual(localApiServer.includes('/kanban/card/release'), false, 'card/release route must be absent');
-        assert.strictEqual(localApiServer.includes('/kanban/team/release'), false, 'team/release route must be absent');
+        // REVERSAL (8b8c5366): `/kanban/team/release` was reinstated — the
+        // terminals panel's "release held cards" button has POSTed it since the
+        // panel was written, and the route never existed, so the button 404'd
+        // and looked inert. V81's deletion removed the PROGRAMMATIC release
+        // concept; the reinstated route is a hold-only operator valve:
+        // `clearOwnerStamp` (no `completed_at`, no `released_at`, no column
+        // move), scoped to the poster's own team via `resolveTeamMembers`.
+        const armStart = localApiServer.indexOf("pathname === '/kanban/team/release'");
+        assert.ok(armStart > 0, 'team/release route must exist — the shipped button has POSTed it since the panel was written (reinstated 8b8c5366)');
+        const armEnd = localApiServer.indexOf("pathname === '/kanban/", armStart + 1);
+        const arm = localApiServer.slice(armStart, armEnd > armStart ? armEnd : armStart + 4000);
+        assert.ok(arm.includes('clearOwnerStamp'), 'team/release must release the hold via clearOwnerStamp');
+        assert.ok(!/\bcompleted_at\b|\breleased_at\b/.test(arm), 'team/release must not write completed_at or released_at — it releases the hold, it does not complete the work');
+        assert.ok(arm.includes('resolveTeamMembers'), 'team/release must scope the release to the poster\'s own team');
         assert.strictEqual(/\breleaseCardInternal\b/.test(localApiServer), false, 'releaseCardInternal must be deleted');
         // `releasedAt` (the record field) is gone outright. `released_at`
         // (the SQL column) survives ONLY inside historical migration bodies —
@@ -156,8 +169,15 @@ async function main() {
         // 409 is reserved for write-validation conflicts (version races,
         // ambiguous close sets, shutdown flush), which are allowed; assert none
         // of them sits inside the dispatch or queue-pop code paths.
-        const releaseArm = /pathname\s*===?\s*'\/kanban\/(?:card|team)\/release'/.test(localApiServer);
-        assert.strictEqual(releaseArm, false);
+        // `/kanban/team/release` exists again (8b8c5366 — the shipped button
+        // posted it into a 404). The 409 invariant survives the reinstatement:
+        // the arm may release holds, it may never refuse one.
+        const releaseArmStart = localApiServer.indexOf("pathname === '/kanban/team/release'");
+        assert.ok(releaseArmStart > 0, 'team/release route must exist (reinstated 8b8c5366)');
+        const releaseArmEnd = localApiServer.indexOf("pathname === '/kanban/", releaseArmStart + 1);
+        const releaseArmBody = localApiServer.slice(releaseArmStart, releaseArmEnd > releaseArmStart ? releaseArmEnd : releaseArmStart + 4000);
+        assert.strictEqual(/writeHead\(409/.test(releaseArmBody), false, 'team/release must not write 409 — it releases holds, it never refuses');
+        assert.strictEqual(/pathname\s*===?\s*'\/kanban\/card\/release'/.test(localApiServer), false, 'card/release route must be absent');
         for (const fn of ['performKanbanDispatch', '_runQueuePop', '_runQueueDone']) {
             const start = localApiServer.indexOf(fn);
             assert.notStrictEqual(start, -1, `${fn} must exist`);
