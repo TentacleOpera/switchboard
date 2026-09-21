@@ -9343,10 +9343,43 @@ export class LocalApiServer {
                     if (db) {
                         const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
                         const board: any[] = (await db.getBoard?.(wsId)) || [];
+                        // A HOLD BY A TERMINAL THAT DOES NOT EXIST IS NOT A HOLD.
+                        //
+                        // `owner_seat` is documented as historical attribution — "it
+                        // records the last seat the card was handed to" — and is
+                        // deliberately never cleared (_columnMoveDispatchClearSql nulls
+                        // only `owner_since`). The only thing that stops a row counting
+                        // here is a completion post from that seat. So when a seat is
+                        // renamed or retired, every card it ever held becomes a
+                        // permanent hold that nobody can ever release.
+                        //
+                        // Measured on this board 2026-09-21: 317 rows counted as held,
+                        // of which 305 named seats from a previous naming scheme
+                        // (`planner-1`, `reviewer-1`, `analyst-4`) that no longer exist.
+                        // Only 12 belonged to a live seat. The inflated count is what
+                        // the terminals panel shows and what the operator is asked to
+                        // clear by hand.
+                        //
+                        // Intersecting with the live fleet fixes it on the READ side:
+                        // nothing is cleared, `owner_seat` keeps its documented meaning,
+                        // and the next naming change cannot re-accumulate. The fleet is
+                        // already in this very response — this runs inside the
+                        // ptyListTerminals arm — so there is no second source to drift.
+                        const liveSeats = new Set<string>();
+                        for (const key of ['terminals', 'hiddenTerminals']) {
+                            const rows = (result as any)[key];
+                            if (!Array.isArray(rows)) { continue; }
+                            for (const t of rows) {
+                                const n = typeof t?.friendlyName === 'string' ? t.friendlyName.trim() : '';
+                                if (n) { liveSeats.add(n); }
+                            }
+                        }
                         const counts: Record<string, number> = {};
                         for (const p of board) {
                             if (p && !p.completedAt && typeof p.ownerSeat === 'string' && p.ownerSeat.trim().length > 0) {
                                 const term = p.ownerSeat.trim();
+                                // Hidden seats count: hidden is a display state, not death.
+                                if (!liveSeats.has(term)) { continue; }
                                 counts[term] = (counts[term] || 0) + 1;
                             }
                         }
