@@ -72,8 +72,15 @@ async function runTests() {
         // removed: restoring it re-creates the duplicate-card bug.
         assert.ok(!/Write one markdown artifact/.test(p),
             'the head must not be told to write a summary .md — every candidate directory is swept into the board');
-        assert.ok(/Do NOT write a summary markdown file/.test(p),
-            'the prohibition that replaced it must survive, or the instruction creeps back');
+        assert.ok(/Do NOT collect them into a new markdown file/.test(p),
+            'the prohibition must survive, or the instruction creeps back');
+        // Telling the head only where findings must NOT go leaves it with
+        // nowhere to put them, which is how the swept-directory instruction got
+        // written in the first place. The destination is named, and pinned.
+        assert.ok(/## Deferred Findings/.test(p),
+            'the head must be told WHERE findings go, not only where they must not');
+        assert.ok(/PLAN FILE it belongs to/.test(p),
+            'the destination is the plan file the finding concerns — per-plan, not one blob, and not swept');
         assert.ok(/Never move a card backwards/.test(p), 'the card-movement rule is present');
     });
 
