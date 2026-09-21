@@ -4518,17 +4518,6 @@ export class TicketsPanelProvider {
                 }
                 return { success: true };
             }
-            case 'enableTriagePipeline': {
-                const provider = msg.provider === 'linear' ? 'linear' : 'clickup';
-                const result = await this._taskViewerProvider!.handleEnableTriagePipeline(
-                    provider,
-                    typeof msg.token === 'string' ? msg.token : ''
-                );
-                this._pushTo(targetPanel, 'tickets', { type: 'triagePipelineResult', provider, ...result });
-                await this._taskViewerProvider!.postSetupPanelState();
-                await this._seams().commands.executeCommand('switchboard.refreshUI');
-                return { success: true };
-            }
             case 'browseIntegrationTicketSaveLocation': {
                 const provider = msg.provider;
                 const folderUri = await this._seams().ui.showOpenDialog({

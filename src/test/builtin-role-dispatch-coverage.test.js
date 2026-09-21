@@ -78,7 +78,7 @@ function run() {
     const dispatchMethodSource = extractMethodBody(taskViewerSource, '_handleTriggerAgentActionInternal');
 
     test('DEFAULT_KANBAN_COLUMNS includes expected built-in roles', () => {
-        for (const role of ['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester']) {
+        for (const role of ['planner', 'lead', 'coder', 'intern', 'reviewer']) {
             assert.ok(builtInRoles.includes(role), `Expected DEFAULT_KANBAN_COLUMNS to include '${role}'`);
         }
     });
@@ -117,20 +117,14 @@ function run() {
         );
     });
 
-    test('_handleTriggerAgentActionInternal includes tester dispatch prompt', () => {
-        assert.match(
-            dispatchMethodSource,
-            /else if \(role === 'tester'\)[\s\S]{0,500}buildKanbanBatchPrompt\('tester'/,
-            'Expected tester branch to dispatch via buildKanbanBatchPrompt'
-        );
-    });
-
-    test('_workflowNameForDispatchRole includes tester', () => {
-        assert.match(
-            taskViewerSource,
-            /'tester'\s*:\s*'tester-pass'/,
-            "Expected workflowMap to include 'tester': 'tester-pass'"
-        );
+    test('no retired role keeps a dispatch branch', () => {
+        for (const role of ['tester', 'ticket_updater', 'claude_designer', 'claude_artifacts', 'claude_import']) {
+            assert.doesNotMatch(
+                dispatchMethodSource,
+                new RegExp(`role === '${role}'`),
+                `Expected no dispatch branch for retired role '${role}'`
+            );
+        }
     });
 
     console.log(`\nResult: ${passed} passed, ${failed} failed`);

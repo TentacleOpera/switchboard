@@ -10920,8 +10920,8 @@
      * Agents tab can toggle.
      */
     const GRID_BUILTIN_ROLES = [
-        'planner', 'lead', 'coder', 'intern', 'reviewer', 'tester',
-        'analyst', 'ticket_updater', 'researcher', 'claude_designer', 'phone_a_friend'
+        'planner', 'lead', 'coder', 'intern', 'reviewer',
+        'analyst', 'researcher', 'phone_a_friend'
     ];
 
     /**
@@ -10934,9 +10934,7 @@
         lead: 180,
         coder: 190,
         intern: 200,
-        reviewer: 300,
-        tester: 350,
-        ticket_updater: 9000
+        reviewer: 300
     };
     roleOrderMap = { ...KANBAN_ROLE_ORDER_FALLBACK };
 

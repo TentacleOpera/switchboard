@@ -3337,11 +3337,11 @@ export class LocalApiServer {
                 // to paste into), so we strip it from the response and use targetColumn
                 // to report where the card landed.
                 //
-                // _getNextColumnId (KanbanProvider.ts:7428) already skips columns whose
-                // agent is disabled (visibleAgents[role] === false), so RESEARCHER and
-                // TICKET UPDATER are never reached on this board. If one were enabled,
-                // the card would advance there — same as the board — and the console
-                // would simply report the destination without rendering the prompt.
+                // _getNextColumnId (KanbanProvider.ts) already skips columns whose
+                // agent is disabled (visibleAgents[role] === false), so RESEARCHER is
+                // never reached on this board. If it were enabled, the card would
+                // advance there — same as the board — and the console would simply
+                // report the destination without rendering the prompt.
                 // A card in the final stage: `promptSelected` returns
                 // `{ success: true, prompt, advanced: 0 }` with NO `targetColumn` — it
                 // copied a prompt and moved nothing. Reporting that as an advance is a
@@ -10078,7 +10078,6 @@ export class LocalApiServer {
             'applyClickUpConfig',
             'applyLinearConfig',
             'applyNotionConfig',
-            'enableTriagePipeline',
             'setApiToken',
             'setClickUpToken',
             'setLinearToken',

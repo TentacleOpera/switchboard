@@ -146,7 +146,7 @@ suite('Kanban complexity parsing', () => {
         }
     });
 
-    test('_columnToRole maps ACCEPTANCE TESTED to tester', async () => {
+    test('_columnToRole maps ACCEPTANCE TESTED to null — the column is retired', async () => {
         const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-kanban-'));
         const provider = new KanbanProvider(
             vscode.Uri.file(tempDir),
@@ -161,7 +161,7 @@ suite('Kanban complexity parsing', () => {
         );
 
         try {
-            assert.strictEqual(provider['_columnToRole']('ACCEPTANCE TESTED'), 'tester');
+            assert.strictEqual(provider['_columnToRole']('ACCEPTANCE TESTED'), null);
         } finally {
             provider.dispose();
             await fs.promises.rm(tempDir, { recursive: true, force: true });

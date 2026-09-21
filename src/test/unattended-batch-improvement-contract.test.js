@@ -81,7 +81,7 @@ async function main() {
     });
 
     await test('the unattended directive is gated on role=planner', () => {
-        for (const role of ['coder', 'reviewer', 'lead', 'tester']) {
+        for (const role of ['coder', 'reviewer', 'lead', 'analyst']) {
             const prompt = buildKanbanBatchPrompt(role, plannerPlans, { unattended: true });
             assert.ok(!/Never ask questions in chat/.test(prompt), `the improver contract leaked into the ${role} prompt`);
         }

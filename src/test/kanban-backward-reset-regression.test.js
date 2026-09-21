@@ -18,16 +18,24 @@ function run() {
         'move-to-code-reviewed should derive forward manual moves to CODE REVIEWED'
     );
 
+    // ACCEPTANCE TESTED is retired — historical events naming it must not
+    // resurrect the column; both directions derive to CODE REVIEWED.
     assert.strictEqual(
         deriveKanbanColumn([{ workflow: 'reset-to-acceptance-tested' }], []),
-        'ACCEPTANCE TESTED',
-        'reset-to-acceptance-tested should derive back to ACCEPTANCE TESTED'
+        'CODE REVIEWED',
+        'reset-to-acceptance-tested should derive back to CODE REVIEWED'
     );
 
     assert.strictEqual(
         deriveKanbanColumn([{ workflow: 'move-to-acceptance-tested' }], []),
-        'ACCEPTANCE TESTED',
-        'move-to-acceptance-tested should derive forward manual moves to ACCEPTANCE TESTED'
+        'CODE REVIEWED',
+        'move-to-acceptance-tested should derive forward manual moves to CODE REVIEWED'
+    );
+
+    assert.strictEqual(
+        deriveKanbanColumn([{ workflow: 'tester-pass' }], []),
+        'CODE REVIEWED',
+        'tester-pass should derive to CODE REVIEWED — the tester stage is retired'
     );
 
     const customAgents = [

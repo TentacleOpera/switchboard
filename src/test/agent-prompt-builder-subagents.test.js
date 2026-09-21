@@ -32,7 +32,7 @@ const missingRepoScopeText = '[not set — add **Repo:** to the plan metadata be
 
 function testSinglePlan() {
     console.log('Testing single plan (no subagent info)...');
-    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder'];
+    const roles = ['planner', 'reviewer', 'lead', 'coder'];
     for (const role of roles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(subagentText), `Role ${role} should NOT include subagent info for single plan`);
@@ -42,7 +42,7 @@ function testSinglePlan() {
 
 function testMultiplePlans() {
     console.log('Testing multiple plans (with subagent info when enabled)...');
-    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder'];
+    const roles = ['planner', 'reviewer', 'lead', 'coder'];
     for (const role of roles) {
         const prompt = buildKanbanBatchPrompt(role, plans2, { useSubagentsEnabled: true });
         assert.ok(prompt.includes(subagentText), `Role ${role} SHOULD include subagent info for multiple plans when useSubagentsEnabled=true`);
@@ -58,7 +58,7 @@ function testMultiplePlans() {
 
 function testExecutionDirective() {
     console.log('Testing execution directive presence...');
-    // §5 — tester no longer gets AUTHORIZATION (it's a review role, not execution)
+    // §5 — reviewer gets no AUTHORIZATION (it's a review role, not execution)
     const roles = ['lead', 'coder'];
     for (const role of roles) {
         // Test single plan
@@ -69,7 +69,7 @@ function testExecutionDirective() {
         const prompt2 = buildKanbanBatchPrompt(role, plans2);
         assert.ok(prompt2.includes(executionDirective), `Role ${role} SHOULD include execution directive (multiple plans)`);
     }
-    const otherRoles = ['planner', 'reviewer', 'tester'];
+    const otherRoles = ['planner', 'reviewer'];
     for (const role of otherRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(executionDirective), `Role ${role} should NOT include execution directive`);
@@ -80,7 +80,7 @@ function testExecutionDirective() {
 function testGitProhibitionDirective() {
     console.log('Testing git prohibition directive presence...');
     // §6 — analyst is NOT a code-touching role; git guardrail is role-scoped via assembleSuffix.
-    const alwaysRoles = ['reviewer', 'tester', 'lead', 'coder', 'intern'];
+    const alwaysRoles = ['reviewer', 'lead', 'coder', 'intern'];
     for (const role of alwaysRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(prompt.includes('GIT POLICY'), `Role ${role} SHOULD include git prohibition directive`);
@@ -99,7 +99,7 @@ function testGitProhibitionDirective() {
 function testGitProhibitionDisabledForExecutionRoles() {
     console.log('Testing git prohibition is excluded when disabled for execution roles...');
     // §6 — analyst excluded (not code-touching, never gets GIT POLICY)
-    const executionRoles = ['lead', 'coder', 'reviewer', 'tester', 'intern'];
+    const executionRoles = ['lead', 'coder', 'reviewer', 'intern'];
     for (const role of executionRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1, { gitProhibitionEnabled: false });
         assert.ok(!prompt.includes('GIT POLICY'), `Role ${role} should NOT include git prohibition when gitProhibitionEnabled: false`);
@@ -125,7 +125,7 @@ function testGitGuardrailCoexistsWithWorktrees() {
 function testChatCritiqueDirective() {
     console.log('Testing chat critique directive absence...');
     // No role should include the chat critique directive after the bugfix
-    const allRoles = ['planner', 'reviewer', 'tester', 'lead', 'coder'];
+    const allRoles = ['planner', 'reviewer', 'lead', 'coder'];
     for (const role of allRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(chatCritiqueText), `Role ${role} should NOT include chat critique directive`);
@@ -143,7 +143,7 @@ function testNoRepoContextForUnscopedPlans() {
 
 function testSingleWorkingDirectoryContext() {
     console.log('Testing shared working directory directive...');
-    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst'];
+    const roles = ['planner', 'reviewer', 'lead', 'coder', 'intern', 'analyst'];
     for (const role of roles) {
         const prompt = buildKanbanBatchPrompt(role, sameDirPlans);
         assert.ok(prompt.includes('WORKING DIRECTORY: /workspace/be'), `Role ${role} should include the shared working directory`);

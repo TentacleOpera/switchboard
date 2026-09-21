@@ -1349,7 +1349,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         members: [
             { role: 'reviewer', count: 2, label: '' },
         ],
-        purpose: 'For reviewing several plans at once. The head hands each reviewer up to two plans to read without touching code, so a stack of finished work is reviewed in parallel rather than one plan at a time; it then triages what comes back and sends only the real fixes to the reviewer that found them, so nobody fixes code they never read. Send it work that has already been built.',
+        purpose: 'For reviewing several plans at once. The head hands each reviewer up to two plans to read without touching code, so a stack of finished work is reviewed in parallel rather than one plan at a time; it then triages what comes back and sends only the real fixes to the reviewer that found them, so nobody fixes code they never read. The head also judges acceptance — that deferred findings are resolved and the work meets the plan\'s Goal — and may write a bounded follow-up plan when it does not. Send it work that has already been built.',
         trigger: 'Move finished work to Reviewed.',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
@@ -3439,7 +3439,7 @@ export async function inspectStandingOrders(
  */
 export function plausibleOriginTerminal(record: any): string {
     const KNOWN_ROLE_WORDS = new Set([
-        'planner', 'coder', 'lead', 'reviewer', 'intern', 'tester', 'analyst', 'researcher',
+        'planner', 'coder', 'lead', 'reviewer', 'intern', 'analyst', 'researcher',
     ]);
     const terminal = String(record?.ownerSeat || '').trim();
     if (terminal) { return terminal; }

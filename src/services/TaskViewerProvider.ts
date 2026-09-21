@@ -2963,7 +2963,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (await db.ensureReady()) {
                     // Workspace-scoped: enumerate db config keys with the roleConfig prefix.
                     // getConfigJsonSync reads a single key; use the known role list for enumeration.
-                    const wsRoles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'claude_designer'];
+                    const wsRoles = ['planner', 'lead', 'coder', 'reviewer', 'intern', 'analyst', 'researcher'];
                     for (const role of wsRoles) {
                         const fullKey = `switchboard.prompts.roleConfig_${role}`;
                         const val = db.getConfigJsonSync<any>(fullKey, undefined);
@@ -6443,9 +6443,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
-            case 'ACCEPTANCE TESTED': return 'tester';
             case 'RESEARCHER': return 'researcher';
-            case 'TICKET UPDATER': return 'ticket_updater';
             case 'COMPLETED': return null;
             default: return column.startsWith('custom_agent_') ? column : null;
         }
@@ -6476,8 +6474,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'PLAN REVIEWED';
             case 'researcher':
                 return 'PLAN REVIEWED';
-            case 'ticket_updater':
-                return 'TICKET UPDATER';
             case 'lead':
             case 'coder':
             case 'intern':
@@ -6485,8 +6481,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return this._codedColumnForRole(role);
             case 'reviewer':
                 return 'CODE REVIEWED';
-            case 'tester':
-                return 'ACCEPTANCE TESTED';
             default:
                 return role.startsWith('custom_agent_') ? role : null;
         }
@@ -6498,8 +6492,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'planner';
             case 'RESEARCHER':
                 return 'researcher';
-            case 'TICKET UPDATER':
-                return 'ticket_updater';
             case 'LEAD CODED':
                 return 'lead';
             case 'CODER CODED':
@@ -6508,8 +6500,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'intern';
             case 'CODE REVIEWED':
                 return 'reviewer';
-            case 'ACCEPTANCE TESTED':
-                return 'tester';
             default:
                 return column.startsWith('custom_agent_') ? column : null;
         }
@@ -6658,8 +6648,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'INTERN CODED':
                 return 'CODE REVIEWED';
             case 'CODE REVIEWED':
-                return await this._isAcceptanceTesterActive(workspaceRoot) ? 'ACCEPTANCE TESTED' : null;
-            case 'ACCEPTANCE TESTED':
                 return null;
             default: {
                 const columnIds = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns).map(column => column.id);
@@ -7237,7 +7225,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         // Resolve the agent name for the role
         const agentName = await this._getAgentNameForRole(role, resolvedWorkspaceRoot)
-            || (role === 'claude_artifacts' ? 'Claude Artifacts' : role);
+            || role;
         const suffixedKey = this._suffixedName(agentName);
 
         let terminal: vscode.Terminal | undefined;
@@ -8019,9 +8007,7 @@ Each plan file must include:
         const workflowMap: Record<string, string> = {
             'planner': 'sidebar-review',
             'reviewer': 'reviewer-pass',
-            'tester': 'tester-pass',
             'jules': 'jules',
-            'ticket_updater': 'ticket-update',
             'researcher': 'deep-research'
         };
         return workflowMap[role];
@@ -8053,10 +8039,6 @@ Each plan file must include:
             : (sessionIds[0] ? await this._resolveWorkspaceRootForSession(sessionIds[0]) : null);
         const targetColumn = this._normalizeLegacyKanbanColumn(options.targetColumn || '');
         if (!resolvedWorkspaceRoot || !targetColumn) {
-            return false;
-        }
-
-        if (role === 'tester' && !await this._ensureAcceptanceTesterDispatchEligible(resolvedWorkspaceRoot)) {
             return false;
         }
 
@@ -8406,26 +8388,6 @@ Each plan file must include:
         };
     }
 
-    /**
-     * The Completion Tested stage is active exactly when the Acceptance Tester role
-     * is visible. See the twin reader in KanbanProvider: one switch, one meaning.
-     * Do NOT reintroduce a separate column-participation setting — the role is
-     * Optional and unchecked by default, so enabling it IS the opt-in.
-     */
-    private async _isAcceptanceTesterActive(workspaceRoot?: string): Promise<boolean> {
-        const visibleAgents = await this.getVisibleAgents(workspaceRoot);
-        return visibleAgents.tester !== false;
-    }
-
-    private async _ensureAcceptanceTesterDispatchEligible(workspaceRoot?: string): Promise<boolean> {
-        const visibleAgents = await this.getVisibleAgents(workspaceRoot);
-        if (visibleAgents.tester === false) {
-            this._seams().ui.showErrorMessage('Acceptance Tester is currently disabled in Setup.');
-            return false;
-        }
-        return true;
-    }
-
     public async handleKanbanForwardMove(sessionIds: string[], targetColumn: string, workspaceRoot?: string, sourceColumn?: string) {
         const resolvedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
@@ -8489,10 +8451,6 @@ Each plan file must include:
         }
 
         // Determine workflow name for runsheet updates
-        if (role === 'tester' && !await this._ensureAcceptanceTesterDispatchEligible(resolvedWorkspaceRoot)) {
-            return false;
-        }
-
         const workflowName = this._workflowNameForDispatchRole(role, instruction);
         const targetColumn = options?.targetColumn
             ? this._normalizeLegacyKanbanColumn(options.targetColumn)
@@ -9028,18 +8986,6 @@ Each plan file must include:
         }
 
 
-        // Fallback: claude_artifacts defaults to 'claude' when configured command is missing/blank
-        if (role === 'claude_artifacts' && (!cmd || cmd.trim() === '')) {
-            cmd = 'claude';
-            console.log(`[TaskViewerProvider] Applied claude_artifacts fallback command: ${cmd}`);
-        }
-
-        // Fallback: claude_import defaults to 'claude' when configured command is missing/blank
-        if (role === 'claude_import' && (!cmd || cmd.trim() === '')) {
-            cmd = 'claude';
-            console.log(`[TaskViewerProvider] Applied claude_import fallback command: ${cmd}`);
-        }
-
         // Fallback: project_manager defaults to 'claude' when configured command is missing/blank
         if (role === 'project_manager' && (!cmd || cmd.trim() === '')) {
             cmd = 'claude';
@@ -9072,13 +9018,10 @@ Each plan file must include:
             coder: true,
             intern: true,
             reviewer: true,
-            tester: false,
             planner: true,
             analyst: true,
             jules: false,
-            ticket_updater: false,
             researcher: false,
-            claude_artifacts: false,
             phone_a_friend: false,
             project_manager: true
         };
@@ -9382,7 +9325,7 @@ Each plan file must include:
             return {};
         }
         const workspaceRoot = this._resolveWorkspaceRoot() || '';
-        const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+        const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'intern', 'analyst'];
         const placeholder: BatchPromptPlan = {
             topic: '[your selected plans]',
             absolutePath: '/path/to/plan.md',
@@ -10265,141 +10208,6 @@ Each plan file must include:
             return { success: true, ...status };
         } catch (err: any) {
             return { success: false, isAdmin: null, error: err?.message || 'Failed to check Linear admin status' };
-        }
-    }
-
-    /**
-     * §6 — One-click "Enable Triage Pipeline". After the user has connected a provider
-     * and selected a list/project, this sets opinionated triage defaults, creates a
-     * project board named after the list/project, wires a default triage automation
-     * rule, and assigns already-imported cards to the new board. Everything it creates
-     * is fully editable afterward.
-     */
-    public async handleEnableTriagePipeline(
-        provider: 'clickup' | 'linear',
-        token: string
-    ): Promise<{ success: boolean; error?: string; projectName?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot();
-        if (!resolvedRoot) {
-            return { success: false, error: 'No workspace open' };
-        }
-
-        try {
-            const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
-            const db = KanbanDatabase.forWorkspace(effectiveRoot);
-            await db.ensureReady();
-            const workspaceId = await this._getWorkspaceIdForRoot(effectiveRoot);
-
-            let projectName: string;
-            let importSourceType: 'clickup-import' | 'linear-import';
-
-            if (provider === 'clickup') {
-                const trimmed = String(token || '').trim();
-                if (trimmed) {
-                    await this._context.secrets.store('switchboard.clickup.apiToken', trimmed);
-                }
-                const svc = this._getClickUpService(resolvedRoot);
-                svc.clearApiTokenCache();
-                const config = await svc.loadConfig();
-                if (!config || !config.setupComplete) {
-                    return { success: false, error: 'Connect ClickUp and select a list before enabling the triage pipeline.' };
-                }
-                const listName = config.selectedListName || 'ClickUp';
-                projectName = `Bug Triage — ${listName}`;
-                importSourceType = 'clickup-import';
-
-                config.realTimeSyncEnabled = true;
-                config.autoPullEnabled = true;
-                config.pullIntervalMinutes = 15;
-                config.completeSyncEnabled = true;
-                config.excludeBacklog = false; // redundant with list selection
-                config.deleteSyncEnabled = false;
-
-                const triggerList = config.selectedListId
-                    || Object.values(config.columnMappings || {}).find((v) => typeof v === 'string' && v.trim().length > 0)
-                    || '';
-                const ruleName = `Triage — ${listName}`;
-                config.automationRules = [
-                    ...(config.automationRules || []).filter((r) => r.name !== ruleName),
-                    {
-                        name: ruleName,
-                        enabled: true,
-                        triggerTag: 'triage',
-                        triggerLists: triggerList ? [triggerList] : [],
-                        targetColumn: 'TICKET UPDATER',
-                        finalColumn: 'COMPLETED',
-                        writeBackOnComplete: true
-                    }
-                ];
-                await svc.saveConfig(config);
-                this._invalidateClickUpConfigCache(resolvedRoot);
-            } else {
-                const trimmed = String(token || '').trim();
-                if (trimmed) {
-                    await this._context.secrets.store('switchboard.linear.apiToken', trimmed);
-                }
-                const svc = this._getLinearService(resolvedRoot);
-                svc.clearApiTokenCache();
-                const config = await svc.loadConfig();
-                if (!config || !config.setupComplete) {
-                    return { success: false, error: 'Connect Linear and select a project before enabling the triage pipeline.' };
-                }
-                const projectLabel = config.selectedProjectName || 'Linear';
-                projectName = `Bug Triage — ${projectLabel}`;
-                importSourceType = 'linear-import';
-
-                config.realTimeSyncEnabled = true;
-                config.autoPullEnabled = true;
-                config.pullIntervalMinutes = 15;
-                config.completeSyncEnabled = true;
-                config.excludeBacklog = true;
-                config.deleteSyncEnabled = false;
-
-                // The Linear rule requires real state IDs; use the state mapped to the
-                // inbox column (CREATED). If nothing is mapped yet, skip the rule rather
-                // than persist an invalid one — the user can add it after mapping columns.
-                const inboxStateId = config.columnToStateId?.['CREATED'] || '';
-                if (inboxStateId) {
-                    const ruleName = `Triage — ${projectLabel}`;
-                    config.automationRules = [
-                        ...(config.automationRules || []).filter((r) => r.name !== ruleName),
-                        {
-                            name: ruleName,
-                            enabled: true,
-                            triggerLabel: 'triage',
-                            triggerStates: [inboxStateId],
-                            targetColumn: 'TICKET UPDATER',
-                            finalColumn: 'COMPLETED',
-                            writeBackOnComplete: true
-                        }
-                    ];
-                }
-                await svc.saveConfig(config);
-            }
-
-            // Create the project board and assign already-imported cards to it.
-            await db.addProject(workspaceId, projectName);
-            // The board's project dropdown is built from KanbanProvider's memoised
-            // `allWorkspaceProjects`, not from this write. Without this the triage
-            // project exists, cards land in it, and the operator cannot select it until
-            // the host restarts — the same stale-memo fault the standalone addProject
-            // arm had. Every writer of the `projects` table invalidates.
-            this._kanbanProvider?.invalidateProjectCache();
-            const allPlans = await db.getAllPlans(workspaceId);
-            const importedIds = allPlans
-                .filter((p) => p.sourceType === importSourceType)
-                .map((p) => p.planId);
-            if (importedIds.length > 0) {
-                await db.setProjectForPlans(workspaceId, importedIds, projectName);
-            }
-
-            await this._kanbanProvider?.initializeIntegrationAutoPull();
-            await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
-            await this._seams().commands.executeCommand('switchboard.refreshUI');
-
-            return { success: true, projectName };
-        } catch (error) {
-            return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
     }
 
@@ -13961,7 +13769,7 @@ Each plan file must include:
         }
 
         // Merge with roleConfigs from globalState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'intern', 'analyst', 'researcher'];
         for (const role of roles) {
             const config: any = this._readRoleConfigScoped(role, initiatorProject);
             if (config && config.prompt?.trim()) {
@@ -20893,17 +20701,13 @@ Each plan file must include:
 
             // Await column advance to ensure reliability — reuse outer-scope variables
             // (effectiveColumn, role, planRecord already resolved at lines 12618-12642)
-            const isTesterEligible = effectiveColumn === 'CODE REVIEWED' && role === 'tester'
-                && await this._isAcceptanceTesterActive(resolvedWorkspaceRoot);
             const workflowName = effectiveColumn === 'CREATED'
                 ? 'improve-plan'
                 : effectiveColumn === 'PLAN REVIEWED'
                     ? undefined
                     : this._isCompletedCodingColumn(effectiveColumn)
                         ? 'reviewer-pass'
-                        : isTesterEligible
-                            ? 'tester-pass'
-                            : undefined;
+                        : undefined;
             if (workflowName) {
                 try {
                     const targetColumn = this._targetColumnForRole(role);
@@ -22699,7 +22503,7 @@ Each plan file must include:
         if (!this._hasFleet()) { return false; }
         // Authoritative single lookup: ask the fleet for an ACTIVE terminal of this role.
         // A miss means "no fleet terminal for this role" — return false and let the caller
-        // run its unchanged VS Code path (roles like claude_artifacts may exist only there).
+        // run its unchanged VS Code path.
         const res = await this._ptyHostVerb('ptyListTerminals', {});
         if (!res?.success || !Array.isArray(res.terminals)) { return false; }
         const normalizedRole = this._normalizeAgentKey(role);
@@ -22738,7 +22542,7 @@ Each plan file must include:
 
         const agentName = opts?.name
             || (await this._getAgentNameForRole(role, resolvedWorkspaceRoot))
-            || (role === 'claude_artifacts' ? 'Claude Artifacts' : role);
+            || role;
 
         // Pre-spawn re-check: verify if an active terminal for this role exists
         // to prevent duplicate spawns from near-simultaneous dispatches.
@@ -23650,17 +23454,6 @@ Each plan file must include:
                 review_mode: strictReviewPrompts ? 'direct_execute_strict' : 'direct_execute_light',
                 bypass_workflow_triggers: 'true'
             };
-        } else if (role === 'tester') {
-            if (!await this._ensureAcceptanceTesterDispatchEligible(resolvedWorkspaceRoot)) {
-                clearDispatchLock();
-                return false;
-            }
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('tester', dispatchPlans, effectiveWorkspaceRoot, {
-                originTerminal: targetAgent,
-                ...delegateOptions,
-                gitProhibitionEnabled
-            });
-            messageMetadata.phase_gate = { enforce_persona: 'tester' };
         } else if (role === 'lead') {
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('lead', dispatchPlans, effectiveWorkspaceRoot, {
                 includeInlineChallenge,
@@ -24570,7 +24363,6 @@ Each plan file must include:
         'coder 2': 'coder.md', // Backwards compatibility
         'reviewer': 'reviewer.md',
         'planner': 'planner.md',
-        'tester': 'tester.md',
         'researcher': 'researcher.md',
         'intern': 'intern.md',
         'task runner': 'task_runner.md',

@@ -2439,31 +2439,14 @@
                 if (plan.column === 'PLAN REVIEWED') return 'Copy Coder Prompt';
                 // Coded columns → reviewer stage
                 if (kind === 'coded') return 'Copy Review Prompt';
-                // CODE REVIEWED → derive label from the actual next actionable column.
-                // The old code hardcoded 'Copy Acceptance Test Prompt' regardless of
-                // whether an ACCEPTANCE TESTED column (or acceptance-tester agent)
-                // exists. Now: find the next column via _optimisticNextColumn; if
-                // none exists (terminal), no copy-prompt button. If the next column
-                // is ACCEPTANCE TESTED, label is the acceptance-test prompt. For
-                // other next columns, derive from that column's id/kind.
-                if (plan.column === 'CODE REVIEWED') {
-                    const nextCol = _optimisticNextColumn(plan.column);
-                    if (!nextCol) return null;
-                    if (nextCol === 'ACCEPTANCE TESTED') return 'Copy Acceptance Test Prompt';
-                    const nextDef = _kanbanAvailableColumns.find(c => c.id === nextCol);
-                    const nextKind = nextDef?.kind;
-                    if (nextKind === 'completed') return null;
-                    if (nextCol === 'TICKET UPDATER') return 'Copy Ticket Updater Prompt';
-                    if (nextKind === 'custom-agent' || nextKind === 'custom-user') return 'Copy Advance Prompt';
-                    return 'Copy Prompt';
-                }
-                // Non-standard lanes — handle by explicit id (kind overlaps standard columns)
-                if (plan.column === 'TICKET UPDATER') return 'Copy Ticket Updater Prompt';
+                // CODE REVIEWED is the last actionable stage — the only next column
+                // is terminal, so there is no copy-prompt button.
+                if (plan.column === 'CODE REVIEWED') return null;
                 // Terminal lanes — no next stage
-                if (plan.column === 'ACCEPTANCE TESTED' || kind === 'completed') return null;
+                if (kind === 'completed') return null;
                 // Custom columns
                 if (kind === 'custom-agent' || kind === 'custom-user') return 'Copy Advance Prompt';
-                // Unknown reviewed-kind column that isn't CODE REVIEWED/ACCEPTANCE TESTED/TICKET UPDATER
+                // Unknown reviewed-kind column that isn't CODE REVIEWED
                 if (kind === 'reviewed') return null;
                 return 'Copy Prompt';
             }

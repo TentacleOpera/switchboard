@@ -6,7 +6,8 @@ import { buildLinearIssueFilter, LinearSyncService, type LinearConfig } from './
 import {
     type LinearAutomationDestination,
     type LinearAutomationRule,
-    matchesLinearAutomationRule
+    matchesLinearAutomationRule,
+    retiredAutomationColumn
 } from '../models/PipelineDefinition';
 
 const DEFAULT_WRITEBACK_TARGET: 'description' | 'comment' = 'description';
@@ -95,7 +96,17 @@ export class LinearAutomationService {
     }
 
     private _getRules(config: LinearConfig): LinearAutomationRule[] {
-        return config.automationRules.filter((rule) => rule.enabled !== false);
+        return config.automationRules.filter((rule) => {
+            if (rule.enabled === false) {
+                return false;
+            }
+            const retired = retiredAutomationColumn(rule);
+            if (retired) {
+                console.warn(`[LinearAutomation] Skipping rule '${rule.name}' — it references retired column '${retired}'. Update or remove the rule; it will not run.`);
+                return false;
+            }
+            return true;
+        });
     }
 
     private _getWatchedStateIds(config: LinearConfig): string[] {

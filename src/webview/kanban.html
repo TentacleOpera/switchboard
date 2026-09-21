@@ -2584,7 +2584,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
             </div>
             <div class="dep-tree-container" id="uat-checklist-container">
-                <div class="empty-state">No plans in CODE REVIEWED or ACCEPTANCE TESTED columns with manual verification steps.</div>
+                <div class="empty-state">No plans in CODE REVIEWED column with manual verification steps.</div>
             </div>
         </div>
     </div>
@@ -3021,7 +3021,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             { id: 'CODER CODED', label: 'Coder', role: 'coder', kind: 'coded' },
             { id: 'INTERN CODED', label: 'Intern', role: 'intern', kind: 'coded' },
             { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer' },
-            { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'tester' },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed' }
         ];
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
@@ -5976,12 +5975,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         copyLabel = 'Copy coder prompt';
                     } else if (nextDef.role === 'reviewer' || nextDef.id === 'CODE REVIEWED') {
                         copyLabel = 'Copy review prompt';
-                    } else if (nextDef.role === 'tester') {
-                        copyLabel = 'Copy acceptance test prompt';
                     } else if (nextDef.role === 'researcher') {
                         copyLabel = 'Copy research prompt';
-                    } else if (nextDef.role === 'ticket_updater') {
-                        copyLabel = 'Copy ticket updater prompt';
                     } else {
                         copyLabel = 'Copy advance prompt';
                     }
@@ -9285,7 +9280,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (!container) return;
 
             if (!plans || plans.length === 0) {
-                container.innerHTML = '<div class="empty-state">No plans in CODE REVIEWED or ACCEPTANCE TESTED columns with manual verification steps.</div>';
+                container.innerHTML = '<div class="empty-state">No plans in CODE REVIEWED column with manual verification steps.</div>';
                 return;
             }
             let html = '';

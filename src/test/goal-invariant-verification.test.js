@@ -374,13 +374,13 @@ behaviouralTest('methodology neutrality: GSD workflowFilePath does not change re
         'Goal clause must be identical under Superpowers workflow path.');
 });
 
-behaviouralTest('no tester dependency: goal verdict present with tester column disabled', () => {
-    // The goal verdict is in reviewerBaseInstructions, not testerBase.
-    // It must appear regardless of whether the ACCEPTANCE TESTED column is enabled.
+behaviouralTest('goal verdict is reviewer base text', () => {
+    // The goal verdict lives in reviewerBaseInstructions — acceptance judging
+    // folded into the review role when the tester stage was retired.
     const prompt = buildKanbanBatchPrompt('reviewer', mockPlan, {});
     assert.ok(
         prompt.includes('GOAL VERDICT'),
-        'Goal verdict must be present with no tester column — it is reviewer base text.'
+        'Goal verdict must be present in the reviewer prompt — it is reviewer base text.'
     );
 });
 

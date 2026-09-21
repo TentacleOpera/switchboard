@@ -10,7 +10,8 @@ import {
 import { KanbanDatabase } from './KanbanDatabase';
 import {
     type ClickUpAutomationRule,
-    matchesClickUpAutomationRule
+    matchesClickUpAutomationRule,
+    retiredAutomationColumn
 } from '../models/PipelineDefinition';
 
 const DEFAULT_WRITEBACK_TARGET: ClickUpWriteBackTarget = 'description';
@@ -70,7 +71,17 @@ export class ClickUpAutomationService {
     }
 
     private _getRules(config: ClickUpConfig): ClickUpAutomationRule[] {
-        return config.automationRules.filter((rule) => rule.enabled !== false);
+        return config.automationRules.filter((rule) => {
+            if (rule.enabled === false) {
+                return false;
+            }
+            const retired = retiredAutomationColumn(rule);
+            if (retired) {
+                console.warn(`[ClickUpAutomation] Skipping rule '${rule.name}' — it references retired column '${retired}'. Update or remove the rule; it will not run.`);
+                return false;
+            }
+            return true;
+        });
     }
 
     private _getWatchedListIds(config: ClickUpConfig): string[] {

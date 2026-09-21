@@ -5490,18 +5490,6 @@
         });
     });
 
-    document.getElementById('btn-import-claude-design')?.addEventListener('click', () => {
-        const projectInput = document.getElementById('claude-design-project');
-        const projectRef = projectInput ? projectInput.value.trim() : '';
-        const folder = getDesignWorkspaceRootFallback();
-        const prompt = CLAUDE_IMPORT_PROMPT({ folder, projectRef });
-        vscode.postMessage({
-            type: 'sendClaudeImportPrompt',
-            prompt,
-            workspaceRoot: folder || undefined
-        });
-    });
-
     // ── HTML PREVIEWS tab: publish the selected file to claude.ai as an Artifact ──
     // Upload-only (no download direction). Reads the shared state.activeDocName /
     // state.activeDocSourceFolder set by the shared selectDoc handler, guarded by

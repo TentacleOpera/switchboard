@@ -1706,8 +1706,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // plan 4 delegate to TaskViewer via a non-null-asserted `_taskViewerProvider`,
     // so without this the standalone host throws on applyClickUpConfig,
     // applyLinearConfig, saveClickUpAutomation, saveClickUpMappings,
-    // saveLinearAutomation, enableTriagePipeline, linearBrowseProjects and
-    // getIntegrationSetupStates. The editor host wires it at extension.ts:1275.
+    // saveLinearAutomation, linearBrowseProjects and
+    // getIntegrationSetupStates. The editor host wires it at extension.ts.
     ticketsProvider.setTaskViewerProvider(taskViewerProvider);
     // Host capability measurement and headroom tracking (plan: host-does-not-know-what-hardware-it-is-on)
     const hostCapability = new HostCapabilityService();
@@ -3643,9 +3643,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             }
                         );
                     } catch (promptErr) {
-                        // generateUnifiedPrompt THROWS for the tester role with no PRD.
-                        // buildPromptForCards never threw, so this arm had no failure
-                        // path. Report it instead of rejecting out of the verb handler.
+                        // generateUnifiedPrompt may throw for a role whose prompt
+                        // cannot be built. buildPromptForCards never threw, so this
+                        // arm had no failure path. Report it instead of rejecting
+                        // out of the verb handler.
                         return {
                             success: false,
                             delivery: 'not-delivered',

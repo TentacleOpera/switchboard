@@ -4194,11 +4194,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             Optional. When not set, imported tickets are saved under <code>.switchboard/tickets/clickup/</code> in your workspace. Set a path here only if you want them saved somewhere else. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
                         </div>
                         <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
-                        <button id="btn-enable-triage-clickup" class="action-btn w-full" style="margin-top: 8px; display:none;">⚡ ENABLE TRIAGE PIPELINE</button>
-                        <div class="hint-text" style="margin-top:6px; display:none;">
-                            Enables auto-pull (15-min interval), creates a <strong>"Bug Triage"</strong> project filter, and adds an automation rule that imports <code>triage</code>-tagged tickets, moves them to the <strong>Ticket Updater</strong> column, and dispatches the ticket_updater agent. When the card reaches <strong>Completed</strong>, the result is written back to the ticket. Requires a configured Ticket Updater agent (Prompts tab) and the integration to be set up first.
-                        </div>
-                        <div id="clickup-triage-result" style="min-height:16px; font-size:10px; margin-top:6px; display:none;"></div>
                         <div id="clickup-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                         <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
@@ -4391,11 +4386,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             Optional. When not set, imported tickets are saved under <code>.switchboard/tickets/linear/</code> in your workspace. Set a path here only if you want them saved somewhere else. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
                         </div>
                         <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
-                        <button id="btn-enable-triage-linear" class="action-btn w-full" style="margin-top: 8px; display:none;">⚡ ENABLE TRIAGE PIPELINE</button>
-                        <div class="hint-text" style="margin-top:6px; display:none;">
-                            Enables auto-pull (15-min interval), creates a <strong>"Bug Triage"</strong> project filter, and adds an automation rule that imports <code>triage</code>-tagged tickets, moves them to the <strong>Ticket Updater</strong> column, and dispatches the ticket_updater agent. When the card reaches <strong>Completed</strong>, the result is written back to the ticket. Requires a configured Ticket Updater agent (Prompts tab) and the integration to be set up first.
-                        </div>
-                        <div id="linear-triage-result" style="min-height:16px; font-size:10px; margin-top:6px; display:none;"></div>
                         <div id="linear-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                         <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>

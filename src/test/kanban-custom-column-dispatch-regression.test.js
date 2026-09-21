@@ -38,8 +38,13 @@ function run() {
     );
     assert.match(
         kanbanProviderSource,
-        /const acceptanceTesterActive = await this\._isAcceptanceTesterActive\(workspaceRoot\);[\s\S]*if \(!this\._isParallelCodedLane\(normalizedColumn\)\) \{[\s\S]*candidate\.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive[\s\S]*if \(normalizedColumn === 'CODE REVIEWED' && candidate\.id === 'COMPLETED' && !acceptanceTesterActive\) \{[\s\S]*return null;[\s\S]*\}[\s\S]*if \(!this\._isParallelCodedLane\(candidate\.id\)\)/s,
-        'Expected _getNextColumnId() to skip only the built-in tester/coded special cases while still honoring ordered custom lanes.'
+        /if \(normalizedColumn === 'CODE REVIEWED'\) \{ return null; \}[\s\S]*const shouldSkip = \(col: typeof allColumns\[0\]\): boolean => \{[\s\S]*if \(!this\._isParallelCodedLane\(normalizedColumn\)\) \{[\s\S]*if \(!this\._isParallelCodedLane\(candidate\.id\)\)/s,
+        'Expected _getNextColumnId() to treat CODE REVIEWED as terminal and to honor ordered custom lanes while skipping role-less/parallel-coded candidates.'
+    );
+    assert.match(
+        kanbanProviderSource,
+        /if \(!col\.role && col\.kind !== 'completed'\) \{\s*return true;/,
+        'Expected _getNextColumnId() to skip role-less non-completed columns while keeping COMPLETED reachable.'
     );
     assert.match(
         kanbanProviderSource,

@@ -4246,7 +4246,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'INTERN CODED': 'intern',
             'PLANNED': 'planner',
             'CODE REVIEWED': 'reviewer',
-            'ACCEPTANCE TESTED': 'tester',
         };
         const role = roleFromColumn[targetColumn];
         if (!role) return; // Column not in tracking scope
@@ -5591,8 +5590,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // no existing team are imported. Returns null when nothing was
             // imported. Never overwrites an operator's existing team.
             const BUILTIN_ROLES = [
-                'planner', 'lead', 'coder', 'reviewer', 'tester', 'intern',
-                'analyst', 'ticket_updater', 'researcher', 'claude_designer',
+                'planner', 'lead', 'coder', 'reviewer', 'intern',
+                'analyst', 'researcher',
                 'phone_a_friend', 'project_manager',
             ];
             const roleConfigs: Record<string, any> = {};
@@ -5872,7 +5871,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         } catch { /* file may not exist or be invalid */ }
 
         // Merge with roleConfigs from workspaceState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'intern', 'analyst', 'researcher'];
         for (const role of roles) {
             const config: any = this._getRoleConfig(role);
             if (config && config.prompt?.trim()) {
@@ -5925,7 +5924,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             case 'coder':
             case 'intern': return 'Planned';        // PLAN REVIEWED → "Planned"
             case 'reviewer': return 'Lead Coder';   // LEAD CODED → "Lead Coder" (primary)
-            case 'tester': return 'Reviewed';        // CODE REVIEWED → "Reviewed"
             default: return undefined;
         }
     }
@@ -5935,7 +5933,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     ): Promise<Record<string, string>> {
         // Generate preview prompts for each role
         const previews: Record<string, string> = {};
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'intern', 'analyst'];
         for (const role of roles) {
             try {
                 // Context-aware plan filtering
@@ -5962,8 +5960,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         }
                         case 'reviewer':
                             return c.column === 'LEAD CODED' || c.column === 'CODER CODED' || c.column === 'INTERN CODED';
-                        case 'tester':
-                            return c.column === 'CODE REVIEWED';
                         default:
                             return false;
                     }
@@ -7446,7 +7442,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // Per-project PRD (project-context toggle): resolves PRD links from the
         // PLANS' OWN project fields (not the board filter) and injects them into
         // the shared dispatchPrefixCore (all roles) — it is NOT a per-role add-on.
-        // Resolved here, before the role branches, so the tester reconciliation
+        // Resolved here, before the role branches, so the reviewer branch
         // below can see it.
         {
             const prdReferences = await this._resolvePrdReferences(workspaceRoot, plans);
@@ -7603,20 +7599,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     }
                 } catch { /* a missing build result must not break the dispatch */ }
             }
-        } else if (role === 'tester') {
-            // Completion testing takes the PLAN'S `## Goal` as its primary intent
-            // baseline; the active project's PRD (resolved above into
-            // resolvedOptions.prdReferences) is a CONTEXTUAL extra, used when present
-            // and never required.
+
+            // Acceptance judging folded into review: the reviewer takes the PLAN'S
+            // `## Goal` as its primary intent baseline; the active project's PRD
+            // (resolved above into resolvedOptions.prdReferences) is a CONTEXTUAL
+            // extra, used when present and never required.
             //
             // Do NOT reinstate a "no PRD => throw" guard here. It was removed
-            // deliberately: the incident this stage exists to catch (a plan whose
+            // deliberately: the incident this check exists to catch (a plan whose
             // steps were satisfied while its goal was inverted) was an internal
-            // refactor with no PRD entry, so a PRD precondition makes the stage
+            // refactor with no PRD entry, so a PRD precondition makes the check
             // unreachable on exactly the class of work it is for. The plan's Goal is
             // always present; that is the yardstick.
 
-            // Resolve the workspace constitution for the tester regardless of planner.constitutionEnabled (always-included supplementary invariants when the file exists)
+            // Resolve the workspace constitution for the reviewer regardless of planner.constitutionEnabled (always-included supplementary invariants when the file exists)
             const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot, true);
             resolvedOptions.constitutionLink = constitutionLink;
             resolvedOptions.constitutionContent = constitutionContent;
@@ -7624,8 +7620,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             resolvedOptions.researchDepth = promptsConfig.researchDepth;
             resolvedOptions.saveToLocalDocs = promptsConfig.saveToLocalDocs;
             resolvedOptions.localDocsPath = promptsConfig.localDocsPath;
-        } else if (role === 'ticket_updater') {
-            resolvedOptions.ticketUpdateMode = promptsConfig.ticketUpdateMode;
         } else if (role === 'chat') {
             resolvedOptions.chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
         }
@@ -7838,7 +7832,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             hostCores,
             // stage is resolved ONCE here from the seat's role via STAGE_BY_ROLE,
             // so both hosts receive it free — no second STAGE_BY_ROLE read in
-            // either host. An unmapped role (tester, analyst, '') yields
+            // either host. An unmapped role (analyst, '') yields
             // undefined → no trailer instruction. No fallback, no sentinel: a
             // wrong stage is worse than a missing one.
             stage: STAGE_BY_ROLE[role],
@@ -7853,16 +7847,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const coderConfig: any = this._getRoleConfig('coder');
         const leadConfig: any = this._getRoleConfig('lead');
         const reviewerConfig: any = this._getRoleConfig('reviewer');
-        const testerConfig: any = this._getRoleConfig('tester');
         const internConfig: any = this._getRoleConfig('intern');
         const analystConfig: any = this._getRoleConfig('analyst');
         const researcherConfig: any = this._getRoleConfig('researcher');
-        const ticketUpdaterConfig: any = this._getRoleConfig('ticket_updater');
-        // §Git — claude_designer was previously absent from KanbanProvider entirely
-        // (it rode the `?? true` default at the resolvedOptions read site for the
-        // guardrail only). Load it here so its new granular git-policy radios take
-        // effect at dispatch via the *ByRole maps below.
-        const claudeDesignerConfig: any = this._getRoleConfig('claude_designer');
 
         return {
             workflowFilePathEnabledByRole: {
@@ -7870,22 +7857,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 lead: leadConfig?.addons?.workflowFilePathEnabled ?? false,
                 coder: coderConfig?.addons?.workflowFilePathEnabled ?? false,
                 reviewer: reviewerConfig?.addons?.workflowFilePathEnabled ?? false,
-                tester: testerConfig?.addons?.workflowFilePathEnabled ?? false,
                 intern: internConfig?.addons?.workflowFilePathEnabled ?? false,
                 analyst: analystConfig?.addons?.workflowFilePathEnabled ?? false,
                 researcher: researcherConfig?.addons?.workflowFilePathEnabled ?? false,
-                ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
                 planner: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', 'improve-plan')),
                 lead: leadConfig?.addons?.workflowFilePath || '',
                 coder: coderConfig?.addons?.workflowFilePath || '',
                 reviewer: reviewerConfig?.addons?.workflowFilePath || '',
-                tester: testerConfig?.addons?.workflowFilePath || '',
                 intern: internConfig?.addons?.workflowFilePath || '',
                 analyst: analystConfig?.addons?.workflowFilePath || '',
                 researcher: researcherConfig?.addons?.workflowFilePath || '',
-                ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePath || '',
             },
             accurateCodingEnabledByRole: {
                 lead: leadConfig?.addons?.accurateCoding ?? config.get<boolean>('accurateCoding.enabled', false),
@@ -7920,22 +7903,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 lead: leadConfig?.addons?.skipCompilation ?? true,
                 coder: coderConfig?.addons?.skipCompilation ?? true,
                 reviewer: reviewerConfig?.addons?.skipCompilation ?? false,
-                tester: testerConfig?.addons?.skipCompilation ?? false,
                 intern: internConfig?.addons?.skipCompilation ?? true,
                 analyst: analystConfig?.addons?.skipCompilation ?? false,
                 researcher: researcherConfig?.addons?.skipCompilation ?? false,
-                ticket_updater: ticketUpdaterConfig?.addons?.skipCompilation ?? false,
             },
             skipTestsByRole: {
                 planner: plannerConfig?.addons?.skipTests ?? false,
                 lead: leadConfig?.addons?.skipTests ?? true,
                 coder: coderConfig?.addons?.skipTests ?? true,
                 reviewer: reviewerConfig?.addons?.skipTests ?? false,
-                tester: testerConfig?.addons?.skipTests ?? false,
                 intern: internConfig?.addons?.skipTests ?? true,
                 analyst: analystConfig?.addons?.skipTests ?? false,
                 researcher: researcherConfig?.addons?.skipTests ?? false,
-                ticket_updater: ticketUpdaterConfig?.addons?.skipTests ?? false,
             },
             gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
             researchDepth: researcherConfig?.researchComplexity || 'deep',
@@ -7946,12 +7925,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 lead: leadConfig?.addons?.gitProhibition ?? true,
                 coder: coderConfig?.addons?.gitProhibition ?? true,
                 reviewer: reviewerConfig?.addons?.gitProhibition ?? true,
-                tester: testerConfig?.addons?.gitProhibition ?? true,
                 intern: internConfig?.addons?.gitProhibition ?? true,
                 analyst: analystConfig?.addons?.gitProhibition ?? true,
                 researcher: researcherConfig?.addons?.gitProhibition ?? true,
-                ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
-                claude_designer: claudeDesignerConfig?.addons?.gitProhibition ?? true,
             },
             // §Git — granular git-policy strategy maps. The `?? 'notSpecified'` here is
             // the SINGLE source of the neutral default for built-in code roles: per the
@@ -7965,80 +7941,63 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 lead: leadConfig?.addons?.gitBranchStrategy ?? 'notSpecified',
                 coder: coderConfig?.addons?.gitBranchStrategy ?? 'notSpecified',
                 intern: internConfig?.addons?.gitBranchStrategy ?? 'notSpecified',
-                claude_designer: claudeDesignerConfig?.addons?.gitBranchStrategy ?? 'notSpecified',
                 reviewer: 'notSpecified',
-                tester: 'notSpecified',
                 analyst: 'notSpecified',
                 researcher: 'notSpecified',
-                ticket_updater: 'notSpecified',
             },
             gitCommitStrategyByRole: {
                 planner: (plannerConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : plannerConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 lead: (leadConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : leadConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 coder: (coderConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : coderConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 intern: (internConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : internConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
-                claude_designer: (claudeDesignerConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : claudeDesignerConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 reviewer: (reviewerConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : reviewerConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
-                tester: 'notSpecified',
                 analyst: 'notSpecified',
                 researcher: 'notSpecified',
-                ticket_updater: 'notSpecified',
             },
             gitPushStrategyByRole: {
                 planner: 'notSpecified',
                 lead: leadConfig?.addons?.gitPushStrategy ?? 'notSpecified',
                 coder: coderConfig?.addons?.gitPushStrategy ?? 'notSpecified',
                 intern: internConfig?.addons?.gitPushStrategy ?? 'notSpecified',
-                claude_designer: claudeDesignerConfig?.addons?.gitPushStrategy ?? 'notSpecified',
                 reviewer: 'notSpecified',
-                tester: 'notSpecified',
                 analyst: 'notSpecified',
                 researcher: 'notSpecified',
-                ticket_updater: 'notSpecified',
             },
             switchboardSafeguardsByRole: {
                 planner: plannerConfig?.addons?.switchboardSafeguards ?? true,
                 lead: leadConfig?.addons?.switchboardSafeguards ?? true,
                 coder: coderConfig?.addons?.switchboardSafeguards ?? true,
                 reviewer: reviewerConfig?.addons?.switchboardSafeguards ?? true,
-                tester: testerConfig?.addons?.switchboardSafeguards ?? true,
                 intern: internConfig?.addons?.switchboardSafeguards ?? true,
                 analyst: analystConfig?.addons?.switchboardSafeguards ?? true,
                 researcher: researcherConfig?.addons?.switchboardSafeguards ?? true,
-                ticket_updater: ticketUpdaterConfig?.addons?.switchboardSafeguards ?? true,
             },
             useSubagentsByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'useSubagents' || (plannerConfig?.addons?.subagentPolicy === undefined && plannerConfig?.addons?.useSubagents === true),
                 lead: leadConfig?.addons?.subagentPolicy === 'useSubagents' || (leadConfig?.addons?.subagentPolicy === undefined && leadConfig?.addons?.useSubagents === true),
                 coder: coderConfig?.addons?.subagentPolicy === 'useSubagents' || (coderConfig?.addons?.subagentPolicy === undefined && coderConfig?.addons?.useSubagents === true),
                 reviewer: reviewerConfig?.addons?.subagentPolicy === 'useSubagents' || (reviewerConfig?.addons?.subagentPolicy === undefined && reviewerConfig?.addons?.useSubagents === true),
-                tester: testerConfig?.addons?.subagentPolicy === 'useSubagents' || (testerConfig?.addons?.subagentPolicy === undefined && testerConfig?.addons?.useSubagents === true),
                 intern: internConfig?.addons?.subagentPolicy === 'useSubagents' || (internConfig?.addons?.subagentPolicy === undefined && internConfig?.addons?.useSubagents === true),
                 analyst: analystConfig?.addons?.subagentPolicy === 'useSubagents' || (analystConfig?.addons?.subagentPolicy === undefined && analystConfig?.addons?.useSubagents === true),
                 researcher: researcherConfig?.addons?.subagentPolicy === 'useSubagents' || (researcherConfig?.addons?.subagentPolicy === undefined && researcherConfig?.addons?.useSubagents === true),
-                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'useSubagents' || (ticketUpdaterConfig?.addons?.subagentPolicy === undefined && ticketUpdaterConfig?.addons?.useSubagents === true),
             },
             noSubagentsByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'noSubagents',
                 lead: leadConfig?.addons?.subagentPolicy === 'noSubagents',
                 coder: coderConfig?.addons?.subagentPolicy === 'noSubagents',
                 reviewer: reviewerConfig?.addons?.subagentPolicy === 'noSubagents',
-                tester: testerConfig?.addons?.subagentPolicy === 'noSubagents',
                 intern: internConfig?.addons?.subagentPolicy === 'noSubagents',
                 analyst: analystConfig?.addons?.subagentPolicy === 'noSubagents',
                 researcher: researcherConfig?.addons?.subagentPolicy === 'noSubagents',
-                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents',
             },
             customSubagentNameByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.customSubagentName || '') : '',
                 lead: leadConfig?.addons?.subagentPolicy === 'customSubagent' ? (leadConfig?.addons?.customSubagentName || '') : '',
                 coder: coderConfig?.addons?.subagentPolicy === 'customSubagent' ? (coderConfig?.addons?.customSubagentName || '') : '',
                 reviewer: reviewerConfig?.addons?.subagentPolicy === 'customSubagent' ? (reviewerConfig?.addons?.customSubagentName || '') : '',
-                tester: testerConfig?.addons?.subagentPolicy === 'customSubagent' ? (testerConfig?.addons?.customSubagentName || '') : '',
                 intern: internConfig?.addons?.subagentPolicy === 'customSubagent' ? (internConfig?.addons?.customSubagentName || '') : '',
                 analyst: analystConfig?.addons?.subagentPolicy === 'customSubagent' ? (analystConfig?.addons?.customSubagentName || '') : '',
                 researcher: researcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (researcherConfig?.addons?.customSubagentName || '') : '',
-                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.customSubagentName || '') : '',
             },
             useWorktreesPerPlanByRole: {
                 lead: leadConfig?.addons?.useWorktreesPerPlan === true,
@@ -8056,22 +8015,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 lead: leadConfig?.addons?.clearAntigravityContext ?? false,
                 coder: coderConfig?.addons?.clearAntigravityContext ?? false,
                 reviewer: reviewerConfig?.addons?.clearAntigravityContext ?? false,
-                tester: testerConfig?.addons?.clearAntigravityContext ?? false,
                 intern: internConfig?.addons?.clearAntigravityContext ?? false,
                 analyst: analystConfig?.addons?.clearAntigravityContext ?? false,
                 researcher: researcherConfig?.addons?.clearAntigravityContext ?? false,
-                ticket_updater: ticketUpdaterConfig?.addons?.clearAntigravityContext ?? false,
             },
             cavemanOutputByRole: {
                 planner: plannerConfig?.addons?.cavemanOutput ?? true,
                 lead: leadConfig?.addons?.cavemanOutput ?? true,
                 coder: coderConfig?.addons?.cavemanOutput ?? true,
                 reviewer: reviewerConfig?.addons?.cavemanOutput ?? true,
-                tester: testerConfig?.addons?.cavemanOutput ?? false,
                 intern: internConfig?.addons?.cavemanOutput ?? true,
                 analyst: analystConfig?.addons?.cavemanOutput ?? false,
                 researcher: researcherConfig?.addons?.cavemanOutput ?? false,
-                ticket_updater: ticketUpdaterConfig?.addons?.cavemanOutput ?? false,
             },
             suppressWalkthroughByRole: {
                 lead: leadConfig?.addons?.suppressWalkthrough ?? false,
@@ -8083,64 +8038,50 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 coder: coderConfig?.addons?.staggeredImplementation ?? false,
                 intern: internConfig?.addons?.staggeredImplementation ?? false,
             },
-            ticketUpdateMode: ticketUpdaterConfig?.addons?.ticketUpdateMode
-                ?? (ticketUpdaterConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
-                    : ticketUpdaterConfig?.addons?.ticketUpdateEnabled === false ? 'disabled'
-                    : 'disabled'),
             featureUseSubagentsByRole: {
                 planner: plannerConfig?.addons?.featureSubagentPolicy === 'useSubagents',
                 lead: leadConfig?.addons?.featureSubagentPolicy === 'useSubagents',
                 coder: coderConfig?.addons?.featureSubagentPolicy === 'useSubagents',
                 reviewer: reviewerConfig?.addons?.featureSubagentPolicy === 'useSubagents',
-                tester: testerConfig?.addons?.featureSubagentPolicy === 'useSubagents',
                 intern: internConfig?.addons?.featureSubagentPolicy === 'useSubagents',
                 analyst: analystConfig?.addons?.featureSubagentPolicy === 'useSubagents',
                 researcher: researcherConfig?.addons?.featureSubagentPolicy === 'useSubagents',
-                ticket_updater: ticketUpdaterConfig?.addons?.featureSubagentPolicy === 'useSubagents',
             },
             featureNoSubagentsByRole: {
                 planner: plannerConfig?.addons?.featureSubagentPolicy === 'noSubagents',
                 lead: leadConfig?.addons?.featureSubagentPolicy === 'noSubagents',
                 coder: coderConfig?.addons?.featureSubagentPolicy === 'noSubagents',
                 reviewer: reviewerConfig?.addons?.featureSubagentPolicy === 'noSubagents',
-                tester: testerConfig?.addons?.featureSubagentPolicy === 'noSubagents',
                 intern: internConfig?.addons?.featureSubagentPolicy === 'noSubagents',
                 analyst: analystConfig?.addons?.featureSubagentPolicy === 'noSubagents',
                 researcher: researcherConfig?.addons?.featureSubagentPolicy === 'noSubagents',
-                ticket_updater: ticketUpdaterConfig?.addons?.featureSubagentPolicy === 'noSubagents',
             },
             featureCustomSubagentNameByRole: {
                 planner: plannerConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.featureCustomSubagentName || '') : '',
                 lead: leadConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (leadConfig?.addons?.featureCustomSubagentName || '') : '',
                 coder: coderConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (coderConfig?.addons?.featureCustomSubagentName || '') : '',
                 reviewer: reviewerConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (reviewerConfig?.addons?.featureCustomSubagentName || '') : '',
-                tester: testerConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (testerConfig?.addons?.featureCustomSubagentName || '') : '',
                 intern: internConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (internConfig?.addons?.featureCustomSubagentName || '') : '',
                 analyst: analystConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (analystConfig?.addons?.featureCustomSubagentName || '') : '',
                 researcher: researcherConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (researcherConfig?.addons?.featureCustomSubagentName || '') : '',
-                ticket_updater: ticketUpdaterConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.featureCustomSubagentName || '') : '',
             },
             featureWorkflowFilePathEnabledByRole: {
                 planner: plannerConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
                 lead: leadConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
                 coder: coderConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
                 reviewer: reviewerConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
-                tester: testerConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
                 intern: internConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
                 analyst: analystConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
                 researcher: researcherConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
-                ticket_updater: ticketUpdaterConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
             },
             featureWorkflowFilePathByRole: {
                 planner: normalizeRetiredWorkflowPath(plannerConfig?.addons?.featureWorkflowFilePath || ''),
                 lead: leadConfig?.addons?.featureWorkflowFilePath || '',
                 coder: coderConfig?.addons?.featureWorkflowFilePath || '',
                 reviewer: reviewerConfig?.addons?.featureWorkflowFilePath || '',
-                tester: testerConfig?.addons?.featureWorkflowFilePath || '',
                 intern: internConfig?.addons?.featureWorkflowFilePath || '',
                 analyst: analystConfig?.addons?.featureWorkflowFilePath || '',
                 researcher: researcherConfig?.addons?.featureWorkflowFilePath || '',
-                ticket_updater: ticketUpdaterConfig?.addons?.featureWorkflowFilePath || '',
             },
             plannerFeatureWorkflowPath: normalizeRetiredWorkflowPath(
                 (plannerConfig?.addons?.featureWorkflowFilePathEnabled && plannerConfig?.addons?.featureWorkflowFilePath)
@@ -8264,7 +8205,7 @@ This step is what moves the plans forward in the Switchboard pipeline.
                 oldestPlan = columnPlans[columnPlans.length - 1]; // oldest by updated_at (ORDER BY updated_at DESC)
                 resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot);
                 // Guard: if _getNextColumnId returns null the source column is at the end of the
-                // pipeline (e.g. CODE REVIEWED without an acceptance tester). Emitting a SQL UPDATE
+                // pipeline (e.g. CODE REVIEWED, which is terminal for advance). Emitting a SQL UPDATE
                 // with a made-up fallback column would silently corrupt the plan record, so we emit
                 // a warning instruction instead.
                 sqlInstruction = resolvedNextColumn === null
@@ -8901,11 +8842,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
             this._getCustomKanbanColumns(workspaceRoot)
         ]);
         const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-        const acceptanceTesterActive = await this._isAcceptanceTesterActive(workspaceRoot);
         const allColumns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
 
         const idx = allColumns.findIndex(c => c.id === normalizedColumn);
         if (idx < 0 || idx >= allColumns.length - 1) { return null; }
+
+        // CODE REVIEWED is terminal for advance — written, not emergent. Its
+        // only successor is COMPLETED, and advancing there would copy a
+        // lead/coder fallback prompt for a role-less destination. Cards reach
+        // COMPLETED by drag or completeAll, never by advance.
+        if (normalizedColumn === 'CODE REVIEWED') { return null; }
 
         /** Returns true if the column should NOT be considered a next step. */
         const shouldSkip = (col: typeof allColumns[0]): boolean => {
@@ -8918,17 +8864,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // Mission Control placement).
             //
             // COMPLETED is the ONE role-less column that must stay reachable:
-            // it is the pipeline's terminal stage, advanced into from TICKET
-            // UPDATER (or ACCEPTANCE TESTED when the updater is hidden). An
-            // unqualified `!col.role` skip returns null there, which the
-            // moveSelected/moveAll handlers surface as "No next column after
-            // 'TICKET UPDATER'" and the scheduled-agent prompt builder turns
+            // it is the pipeline's terminal stage, advanced into from the last
+            // role column before it. An unqualified `!col.role` skip returns
+            // null there, which the moveSelected/moveAll handlers surface as
+            // "No next column" and the scheduled-agent prompt builder turns
             // into a "do NOT run the SQL UPDATE" warning. Mirrors the webview's
             // getNextColumn skip, which carries the same carve-out.
             if (!col.role && col.kind !== 'completed') {
-                return true;
-            }
-            if (col.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
                 return true;
             }
             if (col.dragDropMode === 'disabled') {
@@ -8948,9 +8890,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 if (shouldSkip(candidate)) {
                     continue;
-                }
-                if (normalizedColumn === 'CODE REVIEWED' && candidate.id === 'COMPLETED' && !acceptanceTesterActive) {
-                    return null;
                 }
                 return candidate.id;
             }
@@ -9034,7 +8973,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 switch (roleSourceDef.kind) {
                     case 'created': role = 'planner'; break;
                     case 'coded': role = 'reviewer'; break;
-                    case 'reviewed': role = 'tester'; break;
+                    case 'reviewed': role = null; break; // no built-in role owns a reviewed-kind source — fall through to the generic path
                     case 'review': role = null; break; // execution fallback
                     case 'custom-user': role = null; break; // custom-user columns have role set via columnDef.role
                     case 'custom-agent': role = null; break; // custom-agent columns have role set via columnDef.role
@@ -9063,9 +9002,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
         let targetRole = role;
         if (!targetRole || (
             targetRole !== 'lead' && targetRole !== 'coder' && targetRole !== 'intern' &&
-            targetRole !== 'planner' && targetRole !== 'reviewer' && targetRole !== 'tester' &&
+            targetRole !== 'planner' && targetRole !== 'reviewer' &&
             targetRole !== 'researcher' && targetRole !== 'analyst' &&
-            targetRole !== 'ticket_updater' &&
             !targetRole.startsWith('custom_agent_')
         )) {
             const hasHighComplexity = this._dynamicComplexityRoutingEnabled
@@ -9421,7 +9359,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return this._taskViewerProvider.getVisibleAgents(workspaceRoot);
         }
         // The canonical constant, NOT a second inline copy. This literal used to be
-        // declared here and had already drifted: it omitted `claude_designer`,
+        // declared here and had already drifted: it omitted
         // `phone_a_friend` and `project_manager`, so those roles read as
         // `undefined` — and `undefined !== false` means VISIBLE, the opposite of
         // what the shipped defaults say. Two compiled-in copies of a membership
@@ -15683,8 +15621,6 @@ ${FOCUS_DIRECTIVE}`;
                                 }
                                 case 'reviewer':
                                     return c.column === 'LEAD CODED' || c.column === 'CODER CODED' || c.column === 'INTERN CODED';
-                                case 'tester':
-                                    return c.column === 'CODE REVIEWED';
                                 default:
                                     return false;
                             }
@@ -16479,9 +16415,7 @@ ${FOCUS_DIRECTIVE}`;
                     const db = this._getKanbanDb(workspaceRoot);
                     const workspaceId = await this._readWorkspaceId(workspaceRoot) || await db.getWorkspaceId() || await db.getDominantWorkspaceId();
                     if (workspaceId) {
-                        const reviewedPlans = await db.getPlansByColumn(workspaceId, 'CODE REVIEWED', this._projectFilter);
-                        const acceptancePlans = await db.getPlansByColumn(workspaceId, 'ACCEPTANCE TESTED', this._projectFilter);
-                        const allPlans = [...reviewedPlans, ...acceptancePlans];
+                        const allPlans = await db.getPlansByColumn(workspaceId, 'CODE REVIEWED', this._projectFilter);
                         const plansWithSteps = [];
                         for (const plan of allPlans) {
                             if (plan.planFile) {
@@ -17069,7 +17003,6 @@ ${FOCUS_DIRECTIVE}`;
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
-            case 'ACCEPTANCE TESTED': return 'tester';
             case 'COMPLETED': return null;
             default: return column.startsWith('custom_agent_') ? column : null;
         }
@@ -17544,27 +17477,6 @@ ${FOCUS_DIRECTIVE}`;
         const hit = live.find(t => t.teamId === wanted);
         return hit ? hit.head : null;
     }
-
-    /**
-     * The Completion Tested stage is active exactly when the Acceptance Tester role
-     * is visible. ONE switch, one meaning: the role ships Optional and unchecked, so
-     * enabling it in Setup is the deliberate act that gives the pipeline this stage.
-     *
-     * Do NOT split this into a separate "column participation" setting. That split
-     * existed briefly and only made sense alongside promoting the role to core —
-     * which was rejected: the Acceptance Tester stays optional. With the role hidden
-     * by default there is nothing to decouple, and a second switch would just be a
-     * way for the board and the dispatch path to disagree about whether the stage
-     * exists.
-     */
-    private async _isAcceptanceTesterActive(workspaceRoot: string): Promise<boolean> {
-        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-        return visibleAgents.tester !== false;
-    }
-
-
-
-
 
     private async _getHtml(webview: vscode.Webview, viewMarker?: 'agent-control'): Promise<string> {
         // Agent Control is a real standalone panel (agent-control.html +

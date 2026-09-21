@@ -180,7 +180,7 @@ function testPromptLineBreaksAreNormalized() {
 
 function testNoTripleNewlinesInAnyRole() {
     console.log('Testing no triple newlines in any role across option combinations...');
-    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher'];
+    const roles = ['planner', 'reviewer', 'lead', 'coder', 'intern', 'analyst', 'researcher'];
 
     const optionCombos = [
         // All options disabled (minimal prompt)

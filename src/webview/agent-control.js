@@ -134,9 +134,7 @@
             coder: 'Implements low-complexity boilerplate, routine functions, and minor enhancements.',
             intern: 'Executes simple, repetitive code edits and heavily guided tasks at lowest cost.',
             reviewer: 'Evaluates completed implementations against plans, checking for regressions and scope creep.',
-            tester: 'Validates implemented changes against the Design Doc/PRD, applies fixes for requirement gaps, and logs verification results.',
             analyst: 'Researches general-purpose technical queries and outlines plan dependencies.',
-            ticket_updater: 'Reads a ticket and posts a short triage verdict (severity, area, recommended action, auto/needs-human) back to ClickUp/Linear.',
             researcher: 'Researches general topics and saves results as documents to local docs storage (.switchboard/docs/).',
             jules: 'Offloads tasks to Google Jules cloud-coding service for quota-free background execution.'
         };
@@ -2846,7 +2844,7 @@
         // installer can reappear after a delete; the SYSTEM-INSTALLED label
         // makes that legible instead of looking like a failed delete.
         const standingOrdersTabInstallerPrefixes = ['completion-directive:role:', 'review-callback:', 'global-queue-done:'];
-        const standingOrdersTabBuiltInRoles = ['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester', 'analyst', 'researcher', 'ticket_updater', 'jules'];
+        const standingOrdersTabBuiltInRoles = ['planner', 'lead', 'coder', 'intern', 'reviewer', 'analyst', 'researcher', 'jules'];
 
         function standingOrdersTabEscapeHtml(s) {
             return String(s == null ? '' : s)

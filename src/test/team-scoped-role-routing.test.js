@@ -723,13 +723,13 @@ async function item7() {
     });
 
     await test('resolveTeamScopedRoleTerminal is role-generic (not reviewer-specific)', () => {
-        // The plan says the helper must be role-generic so tester can be wired later.
-        // Verify the helper does not hardcode 'reviewer'.
+        // The plan says the helper must be role-generic so further roles can be
+        // wired later. Verify the helper does not hardcode 'reviewer'.
         const helperStart = teamWiringTs.indexOf('export async function resolveTeamScopedRoleTerminal');
         assert.ok(helperStart > 0);
         const helper = teamWiringTs.slice(helperStart, helperStart + 1500);
         assert.ok(!/'reviewer'/.test(helper),
-            'resolveTeamScopedRoleTerminal must not hardcode reviewer — it is role-generic for future tester wiring');
+            'resolveTeamScopedRoleTerminal must not hardcode reviewer — it is role-generic for future role wiring');
         assert.ok(helper.includes('role'), 'helper must accept a role parameter');
     });
 }

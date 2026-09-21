@@ -146,21 +146,18 @@ suite('KanbanProvider', () => {
             { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
             { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
             { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', dragDropMode: 'cli' },
-            { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', dragDropMode: 'cli' },
-            { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', dragDropMode: 'prompt' },
             { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', dragDropMode: 'cli' }
         ];
 
-        const stubDeps = (visibleAgents: Record<string, boolean>, acceptanceTesterActive: boolean) => {
+        const stubDeps = (visibleAgents: Record<string, boolean>) => {
             sandbox.stub(provider as any, '_getCustomAgents').resolves([]);
             sandbox.stub(provider as any, '_getCustomKanbanColumns').resolves([]);
             sandbox.stub(provider as any, '_buildKanbanColumns').returns(defaultColumns);
             sandbox.stub(provider as any, '_getVisibleAgents').resolves(visibleAgents);
-            sandbox.stub(provider as any, '_isAcceptanceTesterActive').resolves(acceptanceTesterActive);
         };
 
         test('PLAN REVIEWED -> next is LEAD CODED', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED');
         });
@@ -172,7 +169,7 @@ suite('KanbanProvider', () => {
         // Asserted with researcher VISIBLE: a regression that merely re-hid the
         // column would pass the negative test above while restoring the stall.
         test('PLAN REVIEWED -> next is LEAD CODED even with researcher visible', async () => {
-            stubDeps({ researcher: true, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: true });
             const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED');
         });
@@ -185,76 +182,71 @@ suite('KanbanProvider', () => {
             );
         });
 
-        test('CODE REVIEWED -> next returns null when tester inactive (skips ACCEPTANCE TESTED and COMPLETED bypass)', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+        test('CODE REVIEWED -> next returns null — the stage is terminal for advance', async () => {
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('CODE REVIEWED', workspaceRoot);
             assert.strictEqual(next, null);
         });
 
-        test('CODE REVIEWED -> next goes to ACCEPTANCE TESTED when tester active and design doc configured', async () => {
-            stubDeps({ researcher: false, tester: true, ticket_updater: false }, true);
-            const next = await (provider as any)._getNextColumnId('CODE REVIEWED', workspaceRoot);
-            assert.strictEqual(next, 'ACCEPTANCE TESTED');
-        });
-
         test('LEAD CODED -> next exits parallel lane to CODE REVIEWED', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('LEAD CODED', workspaceRoot);
             assert.strictEqual(next, 'CODE REVIEWED');
         });
 
         test('CODER CODED -> next exits parallel lane to CODE REVIEWED', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('CODER CODED', workspaceRoot);
             assert.strictEqual(next, 'CODE REVIEWED');
         });
 
         test('INTERN CODED -> next exits parallel lane to CODE REVIEWED', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('INTERN CODED', workspaceRoot);
             assert.strictEqual(next, 'CODE REVIEWED');
         });
 
         test('RESEARCHER -> next advances to LEAD CODED when researcher invisible', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('RESEARCHER', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED');
         });
 
         test('PLAN REVIEWED -> next skips STAGING (no role) to LEAD CODED', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED', 'STAGING has no dispatch role — advance must skip it');
         });
 
         test('RESEARCHER -> next skips STAGING to LEAD CODED', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('RESEARCHER', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED', 'STAGING has no dispatch role — advance must skip it');
         });
 
         test('CREATED -> next goes to PLAN REVIEWED, not STAGING', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('CREATED', workspaceRoot);
             assert.strictEqual(next, 'PLAN REVIEWED', 'CREATED must advance to PLAN REVIEWED, skipping STAGING');
         });
 
-        test('TICKET UPDATER -> COMPLETED (the role-less skip must not close the pipeline)', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: true }, false);
-            const next = await (provider as any)._getNextColumnId('TICKET UPDATER', workspaceRoot);
+        test('custom reviewed column after CODE REVIEWED -> COMPLETED (the role-less skip must not close the pipeline)', async () => {
+            const columnsWithTrailing: KanbanColumnDefinition[] = [
+                ...defaultColumns.slice(0, -1),
+                { id: 'CUSTOM_UAT', label: 'UAT', role: 'custom_agent_uat', order: 500, kind: 'reviewed', source: 'custom-agent', dragDropMode: 'prompt' },
+                defaultColumns[defaultColumns.length - 1]
+            ];
+            sandbox.stub(provider as any, '_getCustomAgents').resolves([]);
+            sandbox.stub(provider as any, '_getCustomKanbanColumns').resolves([]);
+            sandbox.stub(provider as any, '_buildKanbanColumns').returns(columnsWithTrailing);
+            sandbox.stub(provider as any, '_getVisibleAgents').resolves({ researcher: false });
+            const next = await (provider as any)._getNextColumnId('CUSTOM_UAT', workspaceRoot);
             assert.strictEqual(next, 'COMPLETED',
                 'COMPLETED has no role but is the terminal stage — the STAGING skip must carve it out, or nothing can ever be advanced to Completed');
         });
 
-        test('ACCEPTANCE TESTED -> COMPLETED when the ticket updater is hidden', async () => {
-            stubDeps({ researcher: false, tester: true, ticket_updater: false }, true);
-            const next = await (provider as any)._getNextColumnId('ACCEPTANCE TESTED', workspaceRoot);
-            assert.strictEqual(next, 'COMPLETED',
-                'with TICKET UPDATER hidden the walk must still reach COMPLETED, not fall off the end');
-        });
-
         test('Last column returns null', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false });
             const next = await (provider as any)._getNextColumnId('COMPLETED', workspaceRoot);
             assert.strictEqual(next, null);
         });
@@ -268,8 +260,7 @@ suite('KanbanProvider', () => {
             sandbox.stub(provider as any, '_getCustomAgents').resolves([]);
             sandbox.stub(provider as any, '_getCustomKanbanColumns').resolves([]);
             sandbox.stub(provider as any, '_buildKanbanColumns').returns(columnsWithCustom);
-            sandbox.stub(provider as any, '_getVisibleAgents').resolves({ researcher: false, custom_agent_devin: false, tester: false });
-            sandbox.stub(provider as any, '_isAcceptanceTesterActive').resolves(false);
+            sandbox.stub(provider as any, '_getVisibleAgents').resolves({ researcher: false, custom_agent_devin: false });
             const next = await (provider as any)._getNextColumnId('CREATED', workspaceRoot);
             assert.strictEqual(next, 'PLAN REVIEWED');
         });
@@ -886,28 +877,28 @@ Manual verification steps:
         // disagreed with the real order; both were unreachable while only the
         // CODED_AUTO branch classified, and both became live when the
         // specific-target branch got its first caller.
-        test('direction ranks TICKET UPDATER before COMPLETED (9000 < 9999), so the move back is backward', async () => {
+        test('direction ranks CODE REVIEWED before COMPLETED (300 < 9999), so the move back is backward', async () => {
             const { execStub, recordRunSheet } = wireMove([card('p1', 'COMPLETED')]);
             (provider as any)._boardMoveCliTriggersEnabled = true;
 
-            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'TICKET UPDATER' });
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'CODE REVIEWED' });
 
             assert.strictEqual(result.moved.length, 1, 'backward card still moves');
             assert.strictEqual(result.dispatched, false,
-                'COMPLETED → TICKET UPDATER is backward; ranking it forward dispatches a ticket updater on every drag back');
+                'COMPLETED → CODE REVIEWED is backward; ranking it forward dispatches a reviewer on every drag back');
             assert.ok(!dispatchedWithTrigger(execStub));
-            assert.ok(recordRunSheet.calledWith('p1', 'TICKET UPDATER', 'backward', workspaceRoot));
+            assert.ok(recordRunSheet.calledWith('p1', 'CODE REVIEWED', 'backward', workspaceRoot));
         });
 
-        test('direction ranks PLAN REVIEWED before RESEARCHER (100 < 110), matching _getNextColumnId', async () => {
+        test('direction ranks PLAN REVIEWED before STAGING (100 < 115), matching _getNextColumnId', async () => {
             const { recordRunSheet } = wireMove([card('p1', 'PLAN REVIEWED')]);
             (provider as any)._boardMoveCliTriggersEnabled = false;
 
-            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'RESEARCHER' });
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'STAGING' });
 
             assert.strictEqual(result.moved.length, 1);
-            assert.ok(recordRunSheet.calledWith('p1', 'RESEARCHER', 'forward', workspaceRoot),
-                'PLAN REVIEWED → RESEARCHER is the advance _getNextColumnId makes; the run sheet must not call it backward');
+            assert.ok(recordRunSheet.calledWith('p1', 'STAGING', 'forward', workspaceRoot),
+                'PLAN REVIEWED → STAGING is a forward move; the run sheet must not call it backward');
         });
 
         test('target undefined resolves the next pipeline stage from sourceColumn', async () => {

@@ -4960,16 +4960,6 @@
                 }
                 break;
             }
-            case 'artifactPromptSent': {
-                const btn = document.getElementById('btn-send-artifact-prompt');
-                if (btn) {
-                    const originalText = btn.textContent;
-                    btn.textContent = 'Sent ✓';
-                    setTimeout(() => { btn.textContent = originalText; }, 2000);
-                }
-                break;
-            }
-
             case 'planningHtmlFoldersListed': {
                 if (!state.planningHtmlFolderPathsByRoot) state.planningHtmlFolderPathsByRoot = {};
                 state.planningHtmlFolderPathsByRoot[msg.workspaceRoot || ''] = msg.paths || [];
@@ -7120,19 +7110,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         btnCopyPrompt.addEventListener('click', () => {
             const { prompt, kind } = buildArtifactPrompt();
             vscode.postMessage({ type: 'copyArtifactPrompt', prompt, kind });
-        });
-    }
-
-    const btnSendPrompt = document.getElementById('btn-send-artifact-prompt');
-    if (btnSendPrompt) {
-        btnSendPrompt.addEventListener('click', () => {
-            const { prompt, kind } = buildArtifactPrompt();
-            vscode.postMessage({
-                type: 'sendArtifactPromptToTerminal',
-                prompt,
-                kind,
-                workspaceRoot: state.planningHtmlWorkspaceRootFilter || undefined
-            });
         });
     }
 

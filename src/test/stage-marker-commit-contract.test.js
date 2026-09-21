@@ -97,13 +97,12 @@ test('STAGE_BY_ROLE is pinned exactly — a new committing role cannot ship unma
         lead: 'coded',
         coder: 'coded',
         intern: 'coded',
-        claude_designer: 'coded',
         reviewer: 'reviewed'
     });
 });
 
 test('an unmapped role yields undefined — no default, no "unknown" sentinel', () => {
-    for (const role of ['tester', 'analyst', 'researcher', 'ticket_updater', 'not_a_role']) {
+    for (const role of ['tester', 'analyst', 'researcher', 'ticket_updater', 'claude_designer', 'not_a_role']) {
         assert.strictEqual(STAGE_BY_ROLE[role], undefined, `${role} must not map to a stage`);
     }
 });
@@ -175,7 +174,7 @@ test('stage absent → byte-identical to before markers (AgentSkillExporter / cu
 });
 
 test('an unmapped role passes stage: undefined and emits no trailer', () => {
-    const out = buildGitPolicyBlock({ commit: 'whenDone', stage: STAGE_BY_ROLE['tester'], planIds: [PLAN_A] });
+    const out = buildGitPolicyBlock({ commit: 'whenDone', stage: STAGE_BY_ROLE['analyst'], planIds: [PLAN_A] });
     assert.ok(!out.includes('Switchboard-'));
 });
 

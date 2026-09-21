@@ -3604,25 +3604,6 @@ Start by checking which documents exist, then present the menu.`;
                 this._pushTo(targetPanel, 'planning', { type: 'artifactPromptCopied', kind: msg.kind });
                 break;
             }
-            case 'sendArtifactPromptToTerminal': {
-                const prompt = String(msg.prompt || '');
-                if (!prompt) break;
-                if (this._taskViewerProvider) {
-                    const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'claude_artifacts', prompt, msg.workspaceRoot
-                    );
-                    if (sent) {
-                        const targetPanel = isProject ? this._projectPanel : this._panel;
-                        this._pushTo(targetPanel, 'planning', { type: 'artifactPromptSent', kind: msg.kind });
-                        return { success: true };
-                    }
-                    await this._seams().clipboard.writeText(prompt);
-                    return { success: false, error: 'No claude_artifacts terminal could be reached — prompt copied to clipboard instead.', prompt };
-                }
-                await this._seams().clipboard.writeText(prompt);
-                showTemporaryNotification('Agent terminal unavailable — copied artifact prompt to clipboard instead.');
-                return { success: false, error: 'Agent terminal unavailable — prompt copied to clipboard instead.', prompt };
-            }
             case 'copyHtmlTweakPrompt': {
                 const prompt = String(msg.prompt || '');
                 if (!prompt) break;
@@ -7922,8 +7903,7 @@ Please format the updated output document strictly as follows:
         // Build built-in role defaults matching KanbanProvider._getVisibleAgents
         const visibleAgentDefaults: Record<string, boolean> = {
             lead: true, coder: true, intern: true, reviewer: true,
-            tester: false, planner: true, analyst: true, jules: false,
-            ticket_updater: false, researcher: false
+            planner: true, analyst: true, jules: false, researcher: false
         };
         let visibleAgents: Record<string, boolean> = { ...visibleAgentDefaults };
         try {

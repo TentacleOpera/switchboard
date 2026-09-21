@@ -4,13 +4,10 @@ const DEFAULT_VISIBLE_AGENTS = {
     coder: true,
     intern: true,
     reviewer: true,
-    tester: false,
     planner: true,
     analyst: true,
     jules: false,
-    ticket_updater: false,
     researcher: false,
-    claude_designer: false,
     phone_a_friend: false,
     project_manager: true
 };
@@ -24,12 +21,9 @@ const DEFAULT_ROLE_CONFIG = {
     lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
     coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
     reviewer: { prompt: '', addons: { switchboardSafeguards: true, advancedRegression: true, reviewerConciseMode: false, reviewerCompactPlanUpdate: false, noSeparateReviewArtifacts: true, reviewerRisksToMemo: true, gitProhibition: true, gitCommitStrategy: 'notSpecified', clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
-    tester: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
     intern: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
     analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
-    ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateMode: 'disabled', clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
     researcher: { prompt: '', researchComplexity: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, researchEnabled: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
-    claude_designer: { prompt: 'Import a design from claude.ai/design into the target folder, writing the implementation into the designated workspace folder, built with the repo\'s existing components and styles.', addons: { switchboardSafeguards: true, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
     phone_a_friend: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
     project_manager: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } }
 };
@@ -41,11 +35,8 @@ const BUILT_IN_AGENT_LABELS = [
     { key: 'coder', label: 'Coder' },
     { key: 'intern', label: 'Intern' },
     { key: 'reviewer', label: 'Reviewer' },
-    { key: 'tester', label: 'Acceptance Tester' },
     { key: 'analyst', label: 'Analyst' },
-    { key: 'ticket_updater', label: 'Ticket Updater' },
     { key: 'researcher', label: 'Researcher' },
-    { key: 'claude_designer', label: 'Claude Designer' },
     { key: 'jules', label: 'Jules' },
     { key: 'phone_a_friend', label: 'Phone-a-Friend' },
     { key: 'project_manager', label: 'Project Manager' }
@@ -56,11 +47,11 @@ const ROLE_KEYS = Object.keys(DEFAULT_ROLE_CONFIG);
 
 // Specialized roles that operate via skills/addons, not prompt overrides.
 // Used by setup.html to filter the prompt customization UI.
-const PROMPT_OVERRIDE_EXCLUDED_KEYS = new Set(['ticket_updater']);
+const PROMPT_OVERRIDE_EXCLUDED_KEYS = new Set();
 
 // Shared git-policy radio groups (Branch / Commit / Push). The commit radio is
-// attached to the six commit-capable roles inside ROLE_ADDONS (planner, lead,
-// coder, intern, claude_designer, reviewer); branch/push radios stay on the
+// attached to the five commit-capable roles inside ROLE_ADDONS (planner, lead,
+// coder, intern, reviewer); branch/push radios stay on the
 // four code-writing roles. The guardrail checkbox stays independent. No
 // worktree option — feature-worktree isolation stays at feature granularity
 // (see plan: expand-git-policy-granular-...).
@@ -186,16 +177,6 @@ const ROLE_ADDONS = {
         FEATURE_SUBAGENT_POLICY_RADIO,
         FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
-    tester: [
-        { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-        { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
-        { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
-        { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: false },
-        SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
-        FEATURE_SUBAGENT_POLICY_RADIO,
-        FEATURE_WORKFLOW_FILE_PATH_ADDON
-    ],
     intern: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
         { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Only do Routine (Band A) work', default: false },
@@ -227,36 +208,11 @@ const ROLE_ADDONS = {
         FEATURE_SUBAGENT_POLICY_RADIO,
         FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
-    ticket_updater: [
-        { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-        { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
-        { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
-        { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: false },
-        SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
-        FEATURE_SUBAGENT_POLICY_RADIO,
-        FEATURE_WORKFLOW_FILE_PATH_ADDON
-    ],
     researcher: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
         { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'researchEnabled', label: 'Enable Deep Research', tooltip: 'Enable deep research mode (50-100 sources, codebase + web)', default: true },
-        SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
-        FEATURE_SUBAGENT_POLICY_RADIO,
-        FEATURE_WORKFLOW_FILE_PATH_ADDON
-    ],
-    claude_designer: [
-        { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-        { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
-        GIT_BRANCH_STRATEGY_RADIO,
-        GIT_COMMIT_STRATEGY_RADIO,
-        GIT_PUSH_STRATEGY_RADIO,
-        { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
-        { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
-        { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
-        { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
         { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
         FEATURE_SUBAGENT_POLICY_RADIO,

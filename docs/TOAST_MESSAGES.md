@@ -160,74 +160,72 @@
 
 ---
 
-## Error Messages (69)
+## Error Messages (62)
 
 | # | Message |
 |---|---------|
 | 1 | `No agent assigned to role 'analyst'. Please assign a terminal first.` |
 | 2 | `No agent assigned to role '${role}'. Please assign a terminal first.` |
 | 3 | `No agent assigned to role '${role}'. Cannot dispatch batch.` |
-| 4 | `Acceptance Tester is currently disabled in Setup.` |
-| 5 | `Acceptance Tester requires a Design Doc / PRD to be enabled and attached in Setup.` |
-| 6 | `Analyst terminal is not open.` |
-| 7 | `Auto-pull interval must be 5, 15, 30, or 60 minutes.` |
-| 8 | `Unknown integration for auto-pull settings.` |
-| 9 | `Could not locate the plan file to delete. The plan may have already been removed or the runsheet is corrupted.` |
-| 10 | `Custom database path cannot be empty.` |
-| 11 | `Document not found` |
-| 12 | `Failed to open review panel: invalid plan path.` |
-| 13 | `Failed to open review panel: no workspace folder found.` |
-| 14 | `Kanban provider unavailable. Cannot evaluate plan complexity for batch dispatch.` |
-| 15 | `No workspace folder found. Cannot create an autoban terminal.` |
-| 16 | `No workspace folder open` |
-| 17 | `No workspace root found.` |
-| 18 | `Plan not found in registry.` |
-| 19 | `Plan path is outside the configured plan-source directories.` |
-| 20 | `Review plan path is outside the workspace boundary.` |
-| 21 | `Plugin README.md not found.` |
-| 22 | `No ClickUp lists are mapped. Update ClickUp in the Setup panel first.` |
-| 23 | `Unsupported autoban pool role '${role}'.` |
-| 24 | `Unknown role: ${role}` |
-| 25 | `Workspace root not found: ${targetWorkspaceRoot}` |
-| 26 | `Plan cannot be restored from status "${entry.status}".` |
-| 27 | `Plan not found in database for session: ${sessionId}` |
-| 28 | `Plan creation failed: ${msg}` |
-| 29 | `Notion token is invalid or expired.` |
-| 30 | `Failed to import ${failedPlans.length} plan(s). Check output panel for details.` |
-| 31 | `Failed to claim plan: ${e}` |
-| 32 | `Failed to copy plan link: ${errorMessage}` |
-| 33 | `Failed to create directory: ${error instanceof Error ? error.message : String(error)}` |
-| 34 | `Failed to delete DB: ${err}` |
-| 35 | `Failed to export prompt settings: ${error.message || error}` |
-| 36 | `Failed to import prompt settings: ${error.message || error}` |
-| 37 | `Failed to link to document: ${String(err)}` |
-| 38 | `Failed to mark plan complete: ${e}` |
-| 39 | `Failed to open agent terminals: ${msg}` |
-| 40 | `Failed to open plan: ${e}` |
-| 41 | `Failed to open review panel: ${e}` |
-| 42 | `Failed to open review panel: ${message}` |
-| 43 | `Failed to send analyst message: ${e}` |
-| 44 | `Failed to send message: ${e}` |
-| 45 | `Failed to write external content back to plan ${sessionId}: ${error}` |
-| 46 | `Folder "${folderName}" still not found. Please create it and try again.` |
-| 47 | `Import failed: ${err.message} Run "Switchboard: Reset Kanban Database" to recreate.` |
-| 48 | `Import failed: ${result.error}` |
-| 49 | `Clipboard import failed: ${msg}` |
-| 50 | `Invalid analyst agent name configured: ${targetAgent}` |
-| 51 | `Invalid analyst agent name: ${targetAgent}` |
-| 52 | `Migration failed: ${result.skipped}` |
-| 53 | `NotebookLM export failed: ${msg}` |
-| 54 | `NotebookLM send to coder failed: ${msg}` |
-| 55 | `NotebookLM sync failed: ${msg}` |
-| 56 | `Notion fetch failed: ${result.error}` |
-| 57 | `Reconciliation failed: ${err instanceof Error ? err.message : String(err)}` |
-| 58 | `Merge failed for session ${sessionId}: ${err.message}` |
-| 59 | `Setup panel error: ${errorMessage}` |
-| 60 | `Switchboard housekeeping failed: ${msg}` |
-| 61 | `Error: ${errorMessage}` |
-| 62 | `⚠️ Database test error: ${dbErr.message}` |
-| 63 | `❌ Database connection failed: ${error}` |
-| 64 | `❌ Invalid path: ${validation.error}` |
+| 4 | `Analyst terminal is not open.` |
+| 5 | `Auto-pull interval must be 5, 15, 30, or 60 minutes.` |
+| 6 | `Unknown integration for auto-pull settings.` |
+| 7 | `Could not locate the plan file to delete. The plan may have already been removed or the runsheet is corrupted.` |
+| 8 | `Custom database path cannot be empty.` |
+| 9 | `Document not found` |
+| 10 | `Failed to open review panel: invalid plan path.` |
+| 11 | `Failed to open review panel: no workspace folder found.` |
+| 12 | `Kanban provider unavailable. Cannot evaluate plan complexity for batch dispatch.` |
+| 13 | `No workspace folder found. Cannot create an autoban terminal.` |
+| 14 | `No workspace folder open` |
+| 15 | `No workspace root found.` |
+| 16 | `Plan not found in registry.` |
+| 17 | `Plan path is outside the configured plan-source directories.` |
+| 18 | `Review plan path is outside the workspace boundary.` |
+| 19 | `Plugin README.md not found.` |
+| 20 | `No ClickUp lists are mapped. Update ClickUp in the Setup panel first.` |
+| 21 | `Unsupported autoban pool role '${role}'.` |
+| 22 | `Unknown role: ${role}` |
+| 23 | `Workspace root not found: ${targetWorkspaceRoot}` |
+| 24 | `Plan cannot be restored from status "${entry.status}".` |
+| 25 | `Plan not found in database for session: ${sessionId}` |
+| 26 | `Plan creation failed: ${msg}` |
+| 27 | `Notion token is invalid or expired.` |
+| 28 | `Failed to import ${failedPlans.length} plan(s). Check output panel for details.` |
+| 29 | `Failed to claim plan: ${e}` |
+| 30 | `Failed to copy plan link: ${errorMessage}` |
+| 31 | `Failed to create directory: ${error instanceof Error ? error.message : String(error)}` |
+| 32 | `Failed to delete DB: ${err}` |
+| 33 | `Failed to export prompt settings: ${error.message || error}` |
+| 34 | `Failed to import prompt settings: ${error.message || error}` |
+| 35 | `Failed to link to document: ${String(err)}` |
+| 36 | `Failed to mark plan complete: ${e}` |
+| 37 | `Failed to open agent terminals: ${msg}` |
+| 38 | `Failed to open plan: ${e}` |
+| 39 | `Failed to open review panel: ${e}` |
+| 40 | `Failed to open review panel: ${message}` |
+| 41 | `Failed to send analyst message: ${e}` |
+| 42 | `Failed to send message: ${e}` |
+| 43 | `Failed to write external content back to plan ${sessionId}: ${error}` |
+| 44 | `Folder "${folderName}" still not found. Please create it and try again.` |
+| 45 | `Import failed: ${err.message} Run "Switchboard: Reset Kanban Database" to recreate.` |
+| 46 | `Import failed: ${result.error}` |
+| 47 | `Clipboard import failed: ${msg}` |
+| 48 | `Invalid analyst agent name configured: ${targetAgent}` |
+| 49 | `Invalid analyst agent name: ${targetAgent}` |
+| 50 | `Migration failed: ${result.skipped}` |
+| 51 | `NotebookLM export failed: ${msg}` |
+| 52 | `NotebookLM send to coder failed: ${msg}` |
+| 53 | `NotebookLM sync failed: ${msg}` |
+| 54 | `Notion fetch failed: ${result.error}` |
+| 55 | `Reconciliation failed: ${err instanceof Error ? err.message : String(err)}` |
+| 56 | `Merge failed for session ${sessionId}: ${err.message}` |
+| 57 | `Setup panel error: ${errorMessage}` |
+| 58 | `Switchboard housekeeping failed: ${msg}` |
+| 59 | `Error: ${errorMessage}` |
+| 60 | `⚠️ Database test error: ${dbErr.message}` |
+| 61 | `❌ Database connection failed: ${error}` |
+| 62 | `❌ Invalid path: ${validation.error}` |
 
 ---
 

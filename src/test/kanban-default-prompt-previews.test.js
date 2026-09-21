@@ -48,22 +48,18 @@ async function run() {
                 lead: false,
                 coder: false,
                 reviewer: false,
-                tester: false,
                 intern: false,
                 analyst: false,
-                researcher: false,
-                ticket_updater: false
+                researcher: false
             },
             skipTestsByRole: {
                 planner: false,
                 lead: false,
                 coder: false,
                 reviewer: false,
-                tester: false,
                 intern: false,
                 analyst: false,
-                researcher: false,
-                ticket_updater: false
+                researcher: false
             },
             gitProhibitionByRole: {},
             switchboardSafeguardsByRole: {},
@@ -88,7 +84,7 @@ async function run() {
         // The actual implementation of _getDefaultPromptPreviews copied from KanbanProvider.ts
         async _getDefaultPromptPreviews(workspaceRoot) {
             const previews = {};
-            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+            const roles = ['planner', 'lead', 'coder', 'reviewer', 'intern', 'analyst'];
             const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
             // Mirrors generateUnifiedPrompt's resolution step, including its
             // `collectBareName` pass: a planner workflow value with no separator

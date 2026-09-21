@@ -158,9 +158,9 @@ test('marker integrity: exactly one clean marker pair, no agents-protocol marker
         'agents-protocol source markers must be stripped from the CLAUDE.md block');
 });
 
-test('card-move rule is present for the five execution seats', () => {
+test('card-move rule is present for the execution seats', () => {
     const plan = [{ topic: 'p', absolutePath: '/abs/p.md' }];
-    for (const role of ['planner', 'coder', 'intern', 'reviewer', 'tester']) {
+    for (const role of ['planner', 'coder', 'intern', 'reviewer']) {
         const opts = role === 'planner'
             ? { plannerWorkflowPath: 'improve-plan', gitProhibitionEnabled: false }
             : { gitProhibitionEnabled: true, switchboardSafeguardsEnabled: true };

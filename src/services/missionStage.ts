@@ -95,7 +95,7 @@ export function resolveStageForColumn(column: unknown): PipelineStage | null {
     return PIPELINE_STAGES.find(s => s.key === id) || null;
 }
 
-/** Normalised comparison key for a role: `ticket_updater` and `Ticket Updater` agree. */
+/** Normalised comparison key for a role: `phone_a_friend` and `Phone a Friend` agree. */
 function roleKey(role: unknown): string {
     return String(role ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }

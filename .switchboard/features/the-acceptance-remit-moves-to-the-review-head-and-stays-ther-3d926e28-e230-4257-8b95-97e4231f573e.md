@@ -120,8 +120,8 @@ outside this feature.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Agents Tab Stops Offering Roles Nobody Should Pick](../plans/the-agents-tab-stops-offering-roles-nobody-should-pick.md) — **PLAN REVIEWED** — ID: cdbf4ebe-8181-418c-abf6-4241076b2148
-- [ ] [The Folded Acceptance Remit Survives the Review Head Becoming Its Own Role](../plans/the-review-lead-inherits-the-acceptance-testers-intent-remit.md) — **PLAN REVIEWED** — ID: fe022a93-4843-4d2d-b17a-b5c0a18cef26
+1. [The Agents Tab Stops Offering Roles Nobody Should Pick](../plans/the-agents-tab-stops-offering-roles-nobody-should-pick.md) — **LEAD CODED**
+2. [The Folded Acceptance Remit Survives the Review Head Becoming Its Own Role](../plans/the-review-lead-inherits-the-acceptance-testers-intent-remit.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

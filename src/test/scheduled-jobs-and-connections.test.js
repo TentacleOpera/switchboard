@@ -199,9 +199,9 @@ Advance plans through workflow stages using subagents. Produce declared moves in
     });
 
     await test('a custom column present on the board validates', async () => {
-        // 'CODED' is NOT a built-in id (the built-ins are CREATED / RESEARCHER /
-        // PLAN REVIEWED / LEAD CODED / CODER CODED / INTERN CODED / CODE REVIEWED /
-        // ACCEPTANCE TESTED / TICKET UPDATER / COMPLETED), yet the moves grammar in
+        // 'CODED' is NOT a built-in id (the built-ins are CREATED /
+        // PLAN REVIEWED / STAGING / LEAD CODED / CODER CODED / INTERN CODED /
+        // CODE REVIEWED / COMPLETED), yet the moves grammar in
         // the plan uses it and per-column mirrors exist for it. It must therefore
         // validate via the live board, not a hand-listed set.
         const tmp = mkTmp();

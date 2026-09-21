@@ -1480,12 +1480,6 @@
                 <!-- OPTIONAL -->
                 <div class="agents-group-label">Optional</div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="onboard-agent-toggle" data-role="tester"
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Acceptance Tester</label><input type="text" id="onboard-cli-tester"
-                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="jules"
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Jules</label>
@@ -2021,7 +2015,6 @@
                 lead: 'Lead coder',
                 coder: 'Coder',
                 reviewer: 'Reviewer',
-                tester: 'Acceptance Tester',
                 planner: 'Planner',
                 team: 'Team',
                 analyst: 'Analyst',
@@ -2583,7 +2576,6 @@
                     { id: 'CODER CODED', label: 'Coder' },
                     { id: 'CODED', label: 'Coded' },
                     { id: 'CODE REVIEWED', label: 'Reviewed' },
-                    { id: 'ACCEPTANCE TESTED', label: 'Completion Tested' },
                     { id: 'COMPLETED', label: 'Completed' }
                 ];
 
@@ -3071,7 +3063,6 @@
                     ...(va.coder !== false ? ['coder'] : []),
                     ...(va.intern !== false ? ['intern'] : []),
                     ...(va.reviewer !== false ? ['reviewer'] : []),
-                    ...(va.tester !== false ? ['tester'] : []),
                     ...(va.analyst !== false ? ['analyst'] : []),
                     ...lastCustomAgents.filter(a => va[a.role] !== false).map(a => a.role)
                 ];
@@ -3185,13 +3176,6 @@
                 agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
                     'REVIEW CODE',
                     terminals => findTerminalByRole(terminals, 'reviewer')
-                ));
-            }
-
-            if (va.tester !== false) {
-                agentListStandard.appendChild(createAgentRow('ACCEPTANCE TESTER', 'tester',
-                    'TEST REQUIREMENTS',
-                    terminals => findTerminalByRole(terminals, 'tester')
                 ));
             }
 
@@ -3514,11 +3498,10 @@
                 coder: document.getElementById('onboard-cli-coder').value,
                 intern: document.getElementById('onboard-cli-intern').value,
                 reviewer: document.getElementById('onboard-cli-reviewer').value,
-                tester: document.getElementById('onboard-cli-tester').value,
                 planner: document.getElementById('onboard-cli-planner').value,
                 analyst: document.getElementById('onboard-cli-analyst').value
             };
-            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: false };
+            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, planner: true, analyst: true, jules: false };
             document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
                 const role = cb.dataset.role;
                 if (role) visibleAgents[role] = cb.checked;

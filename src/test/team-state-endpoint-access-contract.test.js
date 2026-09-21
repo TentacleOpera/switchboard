@@ -58,12 +58,10 @@ function run() {
     const BUILTIN_ROLES = [
         'planner',
         'reviewer',
-        'tester',
         'lead',
         'coder',
         'intern',
         'analyst',
-        'ticket_updater',
         'researcher',
         'chat'
     ];

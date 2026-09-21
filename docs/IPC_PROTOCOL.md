@@ -175,7 +175,7 @@ Webview: `src/webview/planning.js`. Provider: `src/services/PlanningPanelProvide
 | `createLocalDoc` / `draftImproveLocalDoc` / `resolveDuplicate` / `deleteLocalDoc` | docs ~2834 / ~2895 | ~3288 / ~3293 / ~3326 / ~3331 | Local doc create/draft/resolve/delete. |
 | `saveOnlineDocFile` / `deleteImportedDoc` | docs | ~3366 / ~3413 | Online doc save/delete. |
 | `importPlans` | plans ~5417 | ~3457 | Import plans. |
-| `copyArtifactPrompt` / `sendArtifactPromptToTerminal` | artifact ~7124 | ~3462 / ~3468 | Copy/send artifact prompt. |
+| `copyArtifactPrompt` | artifact ~7124 | ~3462 | Copy artifact prompt. |
 | `copyHtmlTweakPrompt` / `sendHtmlTweakPrompt` | html tweak | ~3487 / ~3494 | Copy/send HTML tweak prompt. |
 | `copyChatPrompt` | chat | ~3514 | Copy chat prompt. |
 | `uploadPlanAttachment` | attachment | ~3523 | Upload a plan attachment. |
@@ -279,7 +279,7 @@ Webview: `src/webview/design.js`. Provider: `src/services/DesignPanelProvider.ts
 | `saveFileContent` | editor | ~2679 | Save file content. |
 | `fetchPreview` | preview | ~2748 | Fetch a preview. |
 | `copyStitchTweakPrompt` / `copyDesignSystemPrompt` / `bindDesignSystemToProject` / `createDesignSystemTemplate` | design system ~5551 | ~2831 / ~2839 / ~2873 / ~2932 | Design-system prompt/bind/template. |
-| `sendStitchTweakPrompt` / `copyHtmlTweakPrompt` / `sendHtmlTweakPrompt` / `copyClaudeImportPrompt` / `sendClaudeImportPrompt` / `copyClaudeArtifactPrompt` / `sendClaudeArtifactPrompt` | prompts ~1100 / ~5532 | ~2971 / ~2993 / ~3001 / ~3023 / ~3031 / ~3052 / ~3061 | Copy/send various prompts. |
+| `sendStitchTweakPrompt` / `copyHtmlTweakPrompt` / `sendHtmlTweakPrompt` / `copyClaudeImportPrompt` / `copyClaudeArtifactPrompt` | prompts ~1100 / ~5532 | ~2971 / ~2993 / ~3001 / ~3023 / ~3031 | Copy/send various prompts. |
 | `linkToDocument` / `linkToFolder` | link ~815 / ~854 / ~1091 | ~3085 / ~3100 | Link doc/folder. |
 | `serveAndOpenHtml` | html | ~3105 | Serve and open HTML. |
 | `stitchSaveApiKey` / `stitchSaveAuthConfig` / `stitchValidateAuth` | stitch ~4954 | ~3125 / ~3151 / ~3183 | Stitch auth. |
@@ -393,7 +393,6 @@ Webview: `src/webview/tickets.js`. Provider: `src/services/TicketsPanelProvider.
 | `ticketsAskAgent` | ask agent | ~4036 | Ask agent about a ticket. |
 | `applyClickUpConfig` / `saveClickUpMappings` / `saveClickUpAutomation` / `applyLinearConfig` / `saveLinearAutomation` | config ~5975 / ~6009 / ~6021 / ~5982 / ~6032 | ~4080 / ~4090 / ~4099 / ~4108 / ~4127 | Apply/save integration config. |
 | `linearBrowseProjects` | browse ~6035 / ~6038 | ~4136 | Browse Linear projects. |
-| `enableTriagePipeline` | triage ~5993 / ~6002 | ~4176 | Enable triage pipeline. |
 | `browseIntegrationTicketSaveLocation` / `saveIntegrationTicketSaveLocation` / `getIntegrationTicketSaveLocations` | save location ~6049 / ~6052 / ~6056 / ~6061 / ~8389 / ~8393 / ~6099 | ~4187 / ~4204 / ~4219 | Integration save-location ops. |
 | `getIntegrationSetupStates` / `getPlanningSources` / `savePlanningSources` | states ~6098 / ~6087 | ~4241 / ~4246 / ~4261 | Integration states / planning sources. |
 | `openExternalUrl` / `copyDiagramPrompt` / `copyToClipboard` / `renderMarkdownLive` / `linearLoadAutomationCatalog` | util ~3312 / ~5311 | ~4281 / ~4284 / ~4287 / ~4290 / ~4293 | Shared util arms. |
@@ -406,7 +405,7 @@ Key push types: `ticketsRoots`, `ticketsFoldersListed`, `linearProjectLoaded`,
 `clickupListStatusesLoaded`, `clickupSpaceTagsLoaded`, `ticketFileContent`,
 `linearTaskDetails`, `clickupTaskDetails`, `ticketSyncStatuses`, `ticketCommentsLoaded`,
 `ticketAttachmentResult`, `moveTargetsLoaded`, `ticketCreated`, `ticketUpdated`,
-`ticketDeleted`, `ticketImportResult`, `triagePipelineResult`, `integrationSetupStates`,
+`ticketDeleted`, `ticketImportResult`, `integrationSetupStates`,
 `integrationTicketSaveLocations`, `planningSources`, `commentResult`, plus shared
 theme/animation settings pushes. (Line refs omitted — see `this.postMessage({ type: ... })`
 calls in `TicketsPanelProvider.ts`.)

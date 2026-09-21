@@ -19,7 +19,7 @@ async function run() {
             { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', kind: 'review', source: 'built-in' },
             { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', kind: 'coded', source: 'built-in' },
             { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', kind: 'reviewed', source: 'built-in' },
-            { id: 'ACCEPTANCE TESTED', label: 'Accepted', role: 'tester', kind: 'reviewed', source: 'built-in' },
+            { id: 'COMPLETED', label: 'Completed', kind: 'completed', source: 'built-in' },
             { id: 'CUSTOM_AGENT', label: 'Custom Agent', role: 'custom_agent_role', kind: 'custom-agent', source: 'custom-agent' }
         ],
         _generatePromptForDestinationRole: async (cards, role, workspaceRoot, sourceLabel) => {
@@ -63,7 +63,7 @@ async function run() {
                 switch (roleSourceDef.kind) {
                     case 'created': role = 'planner'; break;
                     case 'coded': role = 'reviewer'; break;
-                    case 'reviewed': role = 'tester'; break;
+                    case 'reviewed': role = null; break;
                     case 'review': role = null; break;
                 }
             }
@@ -89,11 +89,11 @@ async function run() {
     let result = await KanbanProvider._generatePromptForColumn([], 'LEAD CODED', '/root', 'CODE REVIEWED');
     assert.strictEqual(result, 'ROLE:reviewer|SOURCE:Lead Coder', 'LEAD CODED -> CODE REVIEWED should use reviewer role');
 
-    // TEST 2: CODE REVIEWED -> ACCEPTANCE TESTED
-    // Source: CODE REVIEWED (reviewer), Dest: ACCEPTANCE TESTED (tester)
-    // Expected: role should be 'tester'
-    result = await KanbanProvider._generatePromptForColumn([], 'CODE REVIEWED', '/root', 'ACCEPTANCE TESTED');
-    assert.strictEqual(result, 'ROLE:tester|SOURCE:Reviewed', 'CODE REVIEWED -> ACCEPTANCE TESTED should use tester role');
+    // TEST 2: CODE REVIEWED -> COMPLETED
+    // Source: CODE REVIEWED (reviewer), Dest: COMPLETED (no role)
+    // Expected: role should be null — no stage follows review
+    result = await KanbanProvider._generatePromptForColumn([], 'CODE REVIEWED', '/root', 'COMPLETED');
+    assert.strictEqual(result, 'ROLE:null|SOURCE:Reviewed', 'CODE REVIEWED -> COMPLETED should have no role');
 
     // TEST 3: PLAN REVIEWED -> LEAD CODED (Handoff to implementation)
     // Source: PLAN REVIEWED, Dest: LEAD CODED

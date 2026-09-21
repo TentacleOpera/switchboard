@@ -12,7 +12,7 @@ import type { RemoteProviderKind } from './RemoteControlService';
  * outward, Linear/Notion follow via the provider's `archiveCard` capability.
  *
  * The trigger column is **designated, not hardcoded** — the board's late
- * pipeline can branch and grow (e.g. a PRD-tester stage inserted before
+ * pipeline can branch and grow (e.g. a custom UAT stage inserted before
  * Completed), so the user picks the sweep column from a setup-tab dropdown.
  *
  * No backfill: manual bulk-archive buttons already exist in both Switchboard

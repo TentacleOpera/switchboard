@@ -9,7 +9,7 @@
  * Classification:
  *   - surviving: card is still in a pre-review column (STAGING, LEAD CODED,
  *     CODER CODED, INTERN CODED) → the block is still real backlog.
- *   - stale: card has moved on (CODE REVIEWED, ACCEPTANCE TESTED, COMPLETED,
+ *   - stale: card has moved on (CODE REVIEWED, COMPLETED,
  *     PLAN REVIEWED, CREATED) or was deleted/archived → the block resolved.
  *
  * Import: the most recent surviving report per planId is imported (deduped),

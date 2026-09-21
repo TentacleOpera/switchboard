@@ -237,7 +237,7 @@ async function testTeamHeadGateResolvesOffTheTerminalName() {
     // is the assumption Mission 02 removes — a coder-headed Coding team and a
     // reviewer-headed Review team ARE heads, and their batches were never entering
     // batch mode. What still must not pass is a role that heads no team at all.
-    for (const role of ['intern', 'tester', 'researcher']) {
+    for (const role of ['intern', 'researcher']) {
         assert.strictEqual(await provider.isCodingTeamHead('/ws', role, 'Coding-lead'), false, `${role} heads no team and must never gate as a team head`);
     }
 
@@ -290,7 +290,7 @@ async function testEveryHeadRoleGates() {
     }
     // A role in NO derived set never even reaches the roster check, even against a
     // terminal that really does head a team.
-    assert.strictEqual(await provider.isCodingTeamHead('/ws', 'tester', 'lead-head'), false, 'tester heads no team');
+    assert.strictEqual(await provider.isCodingTeamHead('/ws', 'not_a_role', 'lead-head'), false, 'a role in no derived set heads no team');
 
     console.log('  PASS: every derived head role gates true');
 }

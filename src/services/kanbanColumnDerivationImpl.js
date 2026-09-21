@@ -25,7 +25,9 @@ function deriveKanbanColumn(events, customAgents) {
         'lead-coded': 'LEAD CODED',
         'coder-coded': 'CODER CODED',
         'code-reviewed': 'CODE REVIEWED',
-        'acceptance-tested': 'ACCEPTANCE TESTED',
+        // ACCEPTANCE TESTED retired with the tester role — a stored
+        // move-to-acceptance-tested event lands where the card was reviewed.
+        'acceptance-tested': 'CODE REVIEWED',
         'coded': 'CODED'
     };
 
@@ -82,7 +84,9 @@ function deriveKanbanColumn(events, customAgents) {
                 return 'CODE REVIEWED';
 
             case 'tester-pass':
-                return 'ACCEPTANCE TESTED';
+                // Retired stage marker — land the card where it was reviewed,
+                // not in the removed ACCEPTANCE TESTED column.
+                return 'CODE REVIEWED';
 
             // Workflows that do not determine column position — skip
             case 'accuracy':

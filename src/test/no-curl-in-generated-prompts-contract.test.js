@@ -80,8 +80,8 @@ function run() {
     ];
 
     const BUILTIN_ROLES = [
-        'planner', 'reviewer', 'tester', 'lead', 'coder',
-        'intern', 'analyst', 'ticket_updater', 'researcher', 'chat'
+        'planner', 'reviewer', 'lead', 'coder',
+        'intern', 'analyst', 'researcher', 'chat'
     ];
 
     check('buildKanbanBatchPrompt: no curl/$BASE/api-server-port.txt for any role (apiPort > 0)', () => {

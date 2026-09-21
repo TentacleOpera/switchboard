@@ -147,7 +147,7 @@ function run() {
 
     // 3. No DesignPanelProvider send arm returns a bare { success: true } after
     //    awaiting sendPromptToAgentTerminal.
-    const sendArms = ['sendStitchTweakPrompt', 'sendHtmlTweakPrompt', 'sendClaudeImportPrompt', 'sendClaudeArtifactPrompt'];
+    const sendArms = ['sendStitchTweakPrompt', 'sendHtmlTweakPrompt'];
     for (const arm of sendArms) {
         test(`DesignPanelProvider ${arm} propagates the real result (no bare success:true)`, () => {
             const caseMarker = new RegExp(`case\\s+'${arm}'\\s*:\\s*\\{`);

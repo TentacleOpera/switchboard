@@ -205,8 +205,8 @@ switchboard api DELETE "/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also
 | `POST /mission-control/stop` | — | Disarm Mission Control and archive `session.md` to `sessions/session-<ISO>.md` |
 
 ```bash
-# Column vocabulary: CREATED | PLAN REVIEWED | LEAD CODED | CODER CODED | INTERN CODED
-#                    | CODE REVIEWED | ACCEPTANCE TESTED | COMPLETED   (see GET /kanban/columns)
+# Column vocabulary: CREATED | PLAN REVIEWED | STAGING | LEAD CODED | CODER CODED | INTERN CODED
+#                    | CODE REVIEWED | COMPLETED   (see GET /kanban/columns)
 switchboard api POST /kanban/move '{"planId":"a1b2c3d4","targetColumn":"CODE REVIEWED"}'
 
 switchboard api POST /kanban/feature '{"name":"Auth Refactor","planIds":["id1","id2"],"description":"Group the auth work."}'

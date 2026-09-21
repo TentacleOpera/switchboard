@@ -216,7 +216,7 @@ suite('agentPromptBuilder', () => {
         });
 
         test('reviewerRisksToMemo default does not leak into non-reviewer roles', () => {
-            for (const role of ['coder', 'lead', 'intern', 'tester', 'planner']) {
+            for (const role of ['coder', 'lead', 'intern', 'planner']) {
                 const prompt = buildKanbanBatchPrompt(role, makePlans(1), {
                     switchboardSafeguardsEnabled: false,
                     gitProhibitionEnabled: false
@@ -258,14 +258,14 @@ suite('agentPromptBuilder', () => {
         test('AgentSkillExporter.normalizeBuiltinAddons role-gates the risks-to-memo default', () => {
             // The role gate is the riskiest line in this feature: normalizeBuiltinAddons
             // runs for EVERY built-in role, so a bare `?? true` would render a
-            // "Risks to Memo" section into coder/tester/planner skill exports.
+            // "Risks to Memo" section into coder/planner skill exports.
             const normalize = (AgentSkillExporter as any).normalizeBuiltinAddons.bind(AgentSkillExporter);
 
             assert.strictEqual(normalize({ switchboardSafeguards: true }, 'reviewer').reviewerRisksToMemoEnabled, true,
                 'reviewer defaults ON when the key is absent');
             assert.strictEqual(normalize({ reviewerRisksToMemo: false }, 'reviewer').reviewerRisksToMemoEnabled, false,
                 'explicit false is honoured for the reviewer');
-            for (const role of ['coder', 'lead', 'intern', 'tester', 'planner', 'analyst']) {
+            for (const role of ['coder', 'lead', 'intern', 'planner', 'analyst']) {
                 assert.strictEqual(normalize({ switchboardSafeguards: true }, role).reviewerRisksToMemoEnabled, false,
                     `${role} must not inherit the reviewer default`);
             }
@@ -430,14 +430,6 @@ suite('agentPromptBuilder', () => {
                 'Compact reviewer prompt must instruct appending a ## Deferred Findings section');
         });
 
-        test('tester step 5 records remaining requirement gaps in the deferred-findings section', () => {
-            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
-            assert.ok(prompt.includes('## Deferred Findings'),
-                'Tester prompt must direct remaining requirement gaps to the ## Deferred Findings section (one concept, one vocabulary)');
-            assert.ok(!prompt.includes('remaining requirement gaps'),
-                'Tester must no longer use the now-moot "remaining requirement gaps" vocabulary');
-        });
-
         test('reconcile preset is byte-identical — this change did not edit it', () => {
             const prompt = buildReconcilePrompt();
             // The reconcile preset scans for ## Completion Report / ## Review
@@ -596,16 +588,16 @@ suite('agentPromptBuilder', () => {
             assert.strictEqual(columnToPromptRole('INTERN CODED'), 'reviewer');
         });
 
-        test('maps CODE REVIEWED to tester', () => {
-            assert.strictEqual(columnToPromptRole('CODE REVIEWED'), 'tester');
+        test('maps CODE REVIEWED to null — the stage is terminal', () => {
+            assert.strictEqual(columnToPromptRole('CODE REVIEWED'), null);
         });
 
         test('maps RESEARCHER to researcher', () => {
             assert.strictEqual(columnToPromptRole('RESEARCHER'), 'researcher');
         });
 
-        test('maps TICKET UPDATER to ticket_updater', () => {
-            assert.strictEqual(columnToPromptRole('TICKET UPDATER'), 'ticket_updater');
+        test('maps TICKET UPDATER to null — the column is retired', () => {
+            assert.strictEqual(columnToPromptRole('TICKET UPDATER'), null);
         });
 
         test('maps CODED to reviewer (legacy normalization)', () => {
@@ -761,146 +753,99 @@ suite('agentPromptBuilder', () => {
         });
     });
 
-    suite('completion-testing stage — column, role and prompt', () => {
-        const completionColumn = () => DEFAULT_KANBAN_COLUMNS.find(c => c.id === 'ACCEPTANCE TESTED');
+    suite('retired roles and columns', () => {
+        const fs = require('fs');
+        const path = require('path');
+        const root = path.resolve(__dirname, '..', '..', '..');
+        const RETIRED_COLUMNS = ['ACCEPTANCE TESTED', 'TICKET UPDATER'];
+        const RETIRED_ROLES = ['tester', 'ticket_updater', 'claude_designer', 'claude_artifacts', 'claude_import'];
 
-        test('the column keeps its stored id while carrying the completion-testing label', () => {
-            const col = completionColumn();
-            assert.ok(col, 'ACCEPTANCE TESTED must remain the stored column id');
-            // The id is in ~4,000 installs' card rows. Relabel and re-role freely;
-            // renaming the id strands every card sitting in it.
-            assert.strictEqual(col!.label, 'Completion Tested');
+        test('the retired columns are gone from the column table — CODE REVIEWED is the last actionable stage', () => {
+            for (const id of RETIRED_COLUMNS) {
+                assert.ok(
+                    !DEFAULT_KANBAN_COLUMNS.some(c => c.id === id),
+                    `${id} must not remain in DEFAULT_KANBAN_COLUMNS`
+                );
+            }
+            const ids = DEFAULT_KANBAN_COLUMNS.map(c => c.id);
+            assert.deepStrictEqual(ids.slice(-2), ['CODE REVIEWED', 'COMPLETED']);
         });
 
-        test('the column routes to the role that owns the completion-testing prompt', () => {
-            // REGRESSION: the column was briefly re-roled to 'planner'. Every
-            // column->role map fed 'planner' into the dispatch, which builds the
-            // improve-plan PLANNER prompt — a plan rewriter, not a judge — while the
-            // completion-testing prompt sat unreachable on the tester branch.
-            // The role name is the prompt selector; it must name the branch that
-            // actually renders this stage.
-            assert.strictEqual(completionColumn()!.role, 'tester');
-            // ...and the stage's entry point (the column before it) must hand off to
-            // that same role.
-            assert.strictEqual(columnToPromptRole('CODE REVIEWED'), 'tester');
-            // Terminal by design: nothing auto-advances past completion testing.
-            assert.strictEqual(columnToPromptRole('ACCEPTANCE TESTED'), null);
-        });
-
-        test('every provider column->role map agrees the stage is the tester', () => {
-            // There are FOUR of these maps across two providers, and they are the
-            // dispatch's actual role source — the column definition alone does not
-            // settle it. A map left behind sends the stage to a different persona
-            // with a different git policy, and no gate below this one can see it.
-            const fs = require('fs');
-            const path = require('path');
-            const servicesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'services');
-            for (const file of ['KanbanProvider.ts', 'TaskViewerProvider.ts']) {
-                const src = fs.readFileSync(path.join(servicesDir, file), 'utf8');
-                const mappings = src.match(/'ACCEPTANCE TESTED':\s*(?:return\s*)?'(\w+)'|case 'ACCEPTANCE TESTED':\s*\n\s*return '(\w+)'/g) || [];
-                assert.ok(mappings.length > 0, `${file} must map ACCEPTANCE TESTED to a role`);
-                for (const m of mappings) {
-                    assert.ok(
-                        /'tester'/.test(m),
-                        `${file}: ACCEPTANCE TESTED must map to 'tester', found: ${m}`
-                    );
-                }
+        test('no retired column maps to a prompt role', () => {
+            assert.strictEqual(columnToPromptRole('CODE REVIEWED'), null);
+            for (const id of RETIRED_COLUMNS) {
+                assert.strictEqual(columnToPromptRole(id), null, `${id} must not resolve a prompt role`);
             }
         });
 
-        test('the Acceptance Tester stays OPTIONAL — it is not a core role', () => {
-            // Decided, and reversed once already. The role ships unchecked under
-            // <!-- OPTIONAL --> and `tester: false` in both defaults sources;
-            // enabling it in Setup is what gives the pipeline this stage. Promoting
-            // it to core makes an empty Completion Tested column appear on every
-            // existing board, which is why it is not core. Do not re-promote it.
-            const fs = require('fs');
-            const path = require('path');
-            const root = path.resolve(__dirname, '..', '..', '..');
-
-            const shared = fs.readFileSync(path.join(root, 'src', 'webview', 'sharedDefaults.js'), 'utf8');
-            assert.ok(/tester:\s*false/.test(shared), 'sharedDefaults.js must default tester to false');
-
-            const global = fs.readFileSync(path.join(root, 'src', 'services', 'GlobalIntegrationConfigService.ts'), 'utf8');
-            assert.ok(/tester:\s*false/.test(global), 'GlobalIntegrationConfigService must default tester to false');
-
-            const html = fs.readFileSync(path.join(root, 'src', 'webview', 'agent-control.html'), 'utf8');
-            const optionalIdx = html.indexOf('<!-- OPTIONAL -->');
-            const testerRowIdx = html.indexOf('data-role="tester"');
-            assert.ok(optionalIdx > 0 && testerRowIdx > optionalIdx,
-                'the Acceptance Tester row must sit under the Optional group, not Core');
-            const row = html.slice(html.lastIndexOf('<div class="startup-row"', testerRowIdx), testerRowIdx);
-            assert.ok(!/\bchecked\b/.test(row), 'the Acceptance Tester row must ship unchecked');
+        test('retired roles are not buildable prompts', () => {
+            for (const role of ['tester', 'ticket_updater']) {
+                assert.throws(
+                    () => buildKanbanBatchPrompt(role as any, makePlans(1), {}),
+                    /Unknown role/,
+                    `${role} must not reach a prompt branch`
+                );
+            }
         });
 
-        test('the Acceptance Tester is not offered as a team member', () => {
-            // Its only home is the Completion Tested column. Intent checking inside a
-            // review team is the LEAD's job (category 4 of its triage), so a
-            // reviewer+tester team has nothing for the tester to do.
-            // Retargeted from agent-control.js's SHIPPED_TEAM_TYPES, which is deleted:
-            // there is ONE team catalogue now, DEFAULT_TEAM_DEFINITIONS in
-            // teamWiring.ts. The invariant is unchanged — no shipped team seats a
-            // tester — it is just asserted where the teams actually ship.
-            const fs = require('fs');
-            const path = require('path');
+        test('the Agents tab offers no retired role', () => {
+            const html = fs.readFileSync(path.join(root, 'src', 'webview', 'agent-control.html'), 'utf8');
+            for (const role of ['tester', 'ticket_updater', 'claude_artifacts']) {
+                assert.ok(
+                    !html.includes(`data-role="${role}"`),
+                    `agent-control.html must not offer ${role}`
+                );
+            }
+        });
+
+        test('no shared default or config catalogue carries a retired role', () => {
+            const shared = fs.readFileSync(path.join(root, 'src', 'webview', 'sharedDefaults.js'), 'utf8');
+            for (const role of RETIRED_ROLES) {
+                assert.ok(
+                    !new RegExp(`${role}:`).test(shared),
+                    `sharedDefaults.js must not carry a ${role} entry`
+                );
+            }
+            const agentConfig = fs.readFileSync(path.join(root, 'src', 'services', 'agentConfig.ts'), 'utf8');
+            for (const role of RETIRED_ROLES) {
+                assert.ok(
+                    !new RegExp(`'${role}'`).test(agentConfig),
+                    `agentConfig.ts must not carry a ${role} literal`
+                );
+            }
+        });
+
+        test('no shipped team seats a retired role', () => {
             const teamWiring = fs.readFileSync(
-                path.resolve(__dirname, '..', '..', '..', 'src', 'services', 'teamWiring.ts'), 'utf8');
+                path.resolve(root, 'src', 'services', 'teamWiring.ts'), 'utf8');
             const start = teamWiring.indexOf('export const DEFAULT_TEAM_DEFINITIONS');
             const end = teamWiring.indexOf('export const DEFAULT_TEAM_IDS', start);
             const templates = start >= 0 && end > start ? teamWiring.slice(start, end) : '';
             assert.ok(templates.length > 0, 'DEFAULT_TEAM_DEFINITIONS must exist and be boundable');
-            assert.ok(!/SHIPPED_TEAM_TYPES\s*=/.test(fs.readFileSync(
-                path.resolve(__dirname, '..', '..', '..', 'src', 'webview', 'agent-control.js'), 'utf8')),
-                'agent-control.js must declare no second team catalogue');
-            assert.ok(!/role:\s*'tester'/.test(templates),
-                'no shipped team may seat a tester — the stage is a column, not a team role');
+            for (const role of RETIRED_ROLES) {
+                assert.ok(
+                    !new RegExp(`role:\\s*'${role}'`).test(templates),
+                    `no shipped team may seat ${role}`
+                );
+            }
         });
 
-        test('the stage prompt states both acceptance criteria', () => {
-            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
-            assert.ok(prompt.includes('Completion Tester'), 'Should name the completion-testing persona');
-            assert.ok(/deferred risks resolved/i.test(prompt), 'Should carry the deferred-risk criterion');
-            assert.ok(/intent satisfied/i.test(prompt), 'Should carry the intent criterion');
-        });
-
-        test("the intent baseline is the plan's Goal, with the PRD optional", () => {
-            // The incident this stage exists to catch had NO PRD entry — its intent
-            // lived only in the plan's ## Goal. A PRD-primary baseline is blind to
-            // exactly that class of failure.
-            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
-            assert.ok(
-                prompt.includes("Treat the plan's ## Goal as the primary intent baseline"),
-                'The plan Goal must be the primary intent baseline'
-            );
-            assert.ok(/PRD when present/i.test(prompt), 'The PRD must be optional, not required');
-        });
-
-        test('the stage distinguishes "no deferred record" from "no deferred findings"', () => {
-            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
-            assert.ok(prompt.includes('no deferred record'), 'Should report a missing record distinctly');
-            assert.ok(
-                /pre-existing plan written before the structured deferred-findings section existed/.test(prompt),
-                'Should explain why a historical plan has no record rather than reading as clean'
-            );
-        });
-
-        test('the stage may plan, but never edits code and never commits', () => {
-            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), { gitProhibitionEnabled: false });
-            assert.ok(prompt.includes('Do NOT edit code'), 'Should withhold the code-editing remit');
-            assert.ok(
-                /follow-up plan file in \.switchboard\/plans\//.test(prompt),
-                'Should grant the plan write'
-            );
-            assert.ok(
-                /Do NOT plan net-new scope/.test(prompt),
-                'Planning must be bounded to recorded findings and named intent gaps'
-            );
-            assert.ok(!/\bgit commit\b/i.test(prompt), 'The stage must not be told to commit');
+        test('the review head carries the folded acceptance remit', () => {
+            const fragments = fs.readFileSync(
+                path.resolve(root, 'src', 'services', 'standingOrderFragments.ts'), 'utf8');
+            const start = fragments.indexOf('export const REVIEW_HEAD_WORK');
+            assert.ok(start >= 0, 'REVIEW_HEAD_WORK must exist');
+            const body = fragments.slice(start, fragments.indexOf('export const', start + 10));
+            assert.ok(/judge ACCEPTANCE/i.test(body), 'review head must judge acceptance');
+            assert.ok(/## Deferred Findings/.test(body), 'review head must inspect the deferred-findings record');
+            assert.ok(/no deferred record/.test(body), 'a missing record must read distinctly from a None record');
+            assert.ok(/## Goal/.test(body), 'the Goal must be the intent baseline');
+            assert.ok(/ONE bounded follow-up plan/.test(body), 'the follow-up plan write must be bounded');
         });
     });
 
     suite('SWITCHBOARD_LIVENESS_DIRECTIVE & apiPort injection', () => {
-        const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst'] as const;
+        const roles = ['planner', 'reviewer', 'lead', 'coder', 'intern', 'analyst'] as const;
 
         test('SWITCHBOARD_LIVENESS_DIRECTIVE produces expected instruction string', () => {
             const directive = SWITCHBOARD_LIVENESS_DIRECTIVE(58312);
@@ -909,7 +854,7 @@ suite('agentPromptBuilder', () => {
             assert.ok(directive.includes('Skip any port-discovery or health-check steps'));
         });
 
-        test('liveness directive is injected for all 7 roles when apiPort > 0', () => {
+        test('liveness directive is injected for all 6 roles when apiPort > 0', () => {
             const plans = makePlans(1);
             for (const r of roles) {
                 const prompt = buildKanbanBatchPrompt(r as any, plans, { apiPort: 58312 });
@@ -924,7 +869,7 @@ suite('agentPromptBuilder', () => {
             }
         });
 
-        test('liveness directive is omitted for all 7 roles when apiPort is 0 or undefined', () => {
+        test('liveness directive is omitted for all 6 roles when apiPort is 0 or undefined', () => {
             const plans = makePlans(1);
             for (const r of roles) {
                 const promptWithZero = buildKanbanBatchPrompt(r as any, plans, { apiPort: 0 });

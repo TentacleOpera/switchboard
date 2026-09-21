@@ -64,8 +64,7 @@
     // │ Priority popover/import/link/task details . lines 3229–3577
     // │ Task detail renderers (Linear/ClickUp) .... lines 3334–3727
     // │ Integration config (ClickUp/Linear apply,
-    // │   mappings, automation, save locations,
-    // │   triage pipeline) ....................... lines 3728–6102
+    // │   mappings, automation, save locations) .. lines 3728–6102
     // │ Host message listener & dispatch .......... lines 6103–7262
     // │ ClickUp list statuses / save-location
     // │   pasteback / init ....................... lines 7263–8435
@@ -6037,26 +6036,6 @@ Instructions:
             vscode.postMessage({ type: 'applyLinearConfig', token, options: collectLinearApplyOptions() });
         });
 
-        // Triage pipeline buttons
-        document.getElementById('btn-enable-triage-clickup')?.addEventListener('click', () => {
-            let token = document.getElementById('clickup-token-input')?.value.trim() || '';
-            if (token === '**********') { token = ''; }
-            const btn = document.getElementById('btn-enable-triage-clickup');
-            const resultEl = document.getElementById('clickup-triage-result');
-            if (btn) { setButtonBusy(btn, true, 'ENABLING…'); }
-            if (resultEl) { resultEl.style.color = 'var(--text-secondary)'; resultEl.textContent = ''; }
-            vscode.postMessage({ type: 'enableTriagePipeline', provider: 'clickup', token });
-        });
-        document.getElementById('btn-enable-triage-linear')?.addEventListener('click', () => {
-            let token = document.getElementById('linear-token-input')?.value.trim() || '';
-            if (token === '**********') { token = ''; }
-            const btn = document.getElementById('btn-enable-triage-linear');
-            const resultEl = document.getElementById('linear-triage-result');
-            if (btn) { setButtonBusy(btn, true, 'ENABLING…'); }
-            if (resultEl) { resultEl.style.color = 'var(--text-secondary)'; resultEl.textContent = ''; }
-            vscode.postMessage({ type: 'enableTriagePipeline', provider: 'linear', token });
-        });
-
         // ClickUp mappings/automation
         document.getElementById('btn-clickup-save-mappings')?.addEventListener('click', () => {
             const btn = document.getElementById('btn-clickup-save-mappings');
@@ -8451,22 +8430,6 @@ Instructions:
                     setLinearSetupMessage('Linear settings applied. Review automation rules below.');
                 }
                 break;
-            case 'triagePipelineResult': {
-                const resultEl = document.getElementById(message.provider === 'linear' ? 'linear-triage-result' : 'clickup-triage-result');
-                const btn = document.getElementById(message.provider === 'linear' ? 'btn-enable-triage-linear' : 'btn-enable-triage-clickup');
-                if (btn) { setButtonBusy(btn, false); }
-                if (resultEl) {
-                    if (message.success) {
-                        const projName = message.projectName || 'Bug Triage';
-                        resultEl.style.color = 'var(--accent-green, var(--text-secondary))';
-                        resultEl.innerHTML = `✓ Triage pipeline enabled — project <strong>"${projName}"</strong> created. Tagged tickets will auto-import to the <strong>Ticket Updater</strong> column and dispatch the ticket_updater agent. Verdicts are written back on completion.`;
-                    } else {
-                        resultEl.style.color = 'var(--accent-red)';
-                        resultEl.textContent = message.error || 'Failed to enable triage pipeline.';
-                    }
-                }
-                break;
-            }
             case 'linearBrowseProjectsResult':
                 if (message.success && Array.isArray(message.projects)) {
                     const targetInput = message.target === 'include'

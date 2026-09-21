@@ -3501,9 +3501,9 @@ export class KanbanDatabase {
     }
 
     /**
-     * One-time migration: move any cards stranded in deprecated columns
-     * (CONTEXT GATHERER, CODE_RESEARCHER, SPLITTER) to PLAN REVIEWED.
-     * Idempotent — once no cards remain in those columns, this is a no-op.
+     * One-time migration: move any cards stranded in deprecated columns to the
+     * surviving column that preserves their reviewed state. Idempotent — once no
+     * cards remain in those columns, this is a no-op.
      */
     public async migrateDeprecatedColumns(workspaceId: string): Promise<number> {
         // RESEARCHER retired 2026-09-20 (plan: the-researcher-is-a-team-seat-not-a-board-column).
@@ -3512,26 +3512,40 @@ export class KanbanDatabase {
         // into it and they stopped there. PLAN REVIEWED is the correct destination: a
         // card that reached a review-kind column at 110 had already been planned, and
         // sending it to CREATED would re-enter it as unplanned and discard that work.
-        const deprecatedColumns = ['CONTEXT GATHERER', 'CODE_RESEARCHER', 'SPLITTER', 'RESEARCHER'];
-        const placeholders = deprecatedColumns.map(() => '?').join(', ');
-        const now = new Date().toISOString();
-        const sql = `UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
-        const params: unknown[] = ['PLAN REVIEWED', now, now, workspaceId, ...deprecatedColumns];
+        //
+        // ACCEPTANCE TESTED and TICKET UPDATER retired with their roles. Both sat
+        // after CODE REVIEWED, so they migrate there — PLAN REVIEWED would discard
+        // reviewed state and COMPLETED would declare unfinished work done.
+        const migrations: Array<{ from: string[]; to: string }> = [
+            { from: ['CONTEXT GATHERER', 'CODE_RESEARCHER', 'SPLITTER', 'RESEARCHER'], to: 'PLAN REVIEWED' },
+            { from: ['ACCEPTANCE TESTED', 'TICKET UPDATER'], to: 'CODE REVIEWED' },
+        ];
         if (!(await this.ensureReady()) || !this._db) return 0;
         try {
-            // Count matching rows first (the local sql.js type doesn't expose getRowsModified)
-            const checkSql = `SELECT COUNT(*) as cnt FROM plans WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
-            const countStmt = this._db.prepare(checkSql, [workspaceId, ...deprecatedColumns]);
             let migrated = 0;
-            try {
-                if (countStmt.step()) {
-                    migrated = (countStmt.getAsObject() as any).cnt as number;
+            for (const { from, to } of migrations) {
+                const placeholders = from.map(() => '?').join(', ');
+                // Count matching rows first (the local sql.js type doesn't expose getRowsModified)
+                const checkSql = `SELECT COUNT(*) as cnt FROM plans WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
+                const countStmt = this._db.prepare(checkSql, [workspaceId, ...from]);
+                let count = 0;
+                try {
+                    if (countStmt.step()) {
+                        count = (countStmt.getAsObject() as any).cnt as number;
+                    }
+                } finally {
+                    countStmt.free();
                 }
-            } finally {
-                countStmt.free();
+                if (count === 0) continue;
+                const now = new Date().toISOString();
+                const sql = `UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
+                this._db.run(sql, [to, now, now, workspaceId, ...from]);
+                migrated += count;
+                // Per-destination count: "which rule moved this card" must be
+                // answerable after the fact.
+                console.log(`[KanbanDatabase] migrateDeprecatedColumns: workspaceId=${workspaceId}, moved ${count} card(s) from [${from.join(', ')}] to '${to}'`);
             }
             if (migrated === 0) return 0;
-            this._db.run(sql, params);
             // Route through _persist() so the plans-table write reaches disk
             // (previously lost on reload — a latent persistence bug) AND bumps
             // _dataVersion so the board refreshes to reflect the migration.
@@ -13976,9 +13990,9 @@ FROM plans
         }
         if (!role) return null;
 
-        // 2. Check visibility. Defaults: tester/researcher/jules/ticket_updater = false;
+        // 2. Check visibility. Defaults: researcher/jules = false;
         // custom agents default true. state.visibleAgents overrides.
-        const defaultVisible = !['tester', 'researcher', 'jules', 'ticket_updater'].includes(role);
+        const defaultVisible = !['researcher', 'jules'].includes(role);
         if (visibleAgents[role] === false) return null;
         if (!(role in visibleAgents) && !defaultVisible) return null;
 

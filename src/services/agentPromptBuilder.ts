@@ -35,22 +35,6 @@ import {
 export { DIRECTIVE_PROTOCOL_NAMES, resolveProtocolSet };
 export type { ProtocolResolution };
 
-// One-time diagnostic for the ticket_updater mode collapse. Users who configured
-// 'refine-ticket' or 'research-and-refine' (modes that rewrote ticket descriptions)
-// silently lose that behavior — the role now always performs triage-only verdicts.
-// This is a console log, not a UI dialog (per the no-confirm-dialogs rule).
-let _ticketUpdateModeWarned = false;
-export function warnOnLegacyTicketUpdateMode(mode: string | undefined): void {
-    if (_ticketUpdateModeWarned) return;
-    if (mode && mode !== 'disabled' && mode !== 'comment-only') {
-        _ticketUpdateModeWarned = true;
-        console.warn(
-            `[Switchboard] ticketUpdateMode '${mode}' is no longer supported — ` +
-            `the ticket_updater role now always performs triage-only verdicts.`
-        );
-    }
-}
-
 export interface BatchPromptPlan {
     topic: string;
     absolutePath: string;
@@ -896,7 +880,6 @@ export const STAGE_BY_ROLE: Record<string, string> = {
     lead: 'coded',
     coder: 'coded',
     intern: 'coded',
-    claude_designer: 'coded',
     reviewer: 'reviewed'
 };
 
@@ -1163,7 +1146,6 @@ function buildPrdReferenceBlockFromRefs(refs: Array<{ projectName: string; prdLi
  * Gated by `options.prdReferences` presence (the project-context toggle + resolved PRD links).
  */
 export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
-    if (role === 'tester') return '';
     return buildPrdReferenceBlockFromRefs(options?.prdReferences);
 }
 
@@ -1179,8 +1161,8 @@ export function buildDesignSystemReferencesBlockFromRefs(refs: Array<{ projectNa
         const block = buildDesignSystemBlock({
             link: r.designSystemLink,
             content,
-            // Reviewer AND acceptance-tester check conformance; everyone else authors.
-            mode: (role === 'reviewer' || role === 'tester') ? 'review' : 'author',
+            // Reviewer checks conformance; everyone else authors.
+            mode: role === 'reviewer' ? 'review' : 'author',
             // Prompt-size budget: the planner keeps the full document; coding and
             // review roles get the extracted token table + a link to the file.
             includeFullContent: role === 'planner'
@@ -1364,7 +1346,7 @@ export const DELEGATION_ANTI_LEAKAGE_STEP = `ANTI-LEAKAGE RULE (delegation) — 
    means demanding the coder's verification results, not running them yourself.`;
 
 // Deferred-findings section instruction, shared by both completion steps and the
-// tester's "remaining requirement gaps" step. One concept, one vocabulary, one
+// acceptance check's "remaining requirement gaps" step. One concept, one vocabulary, one
 // section — regardless of which role occupies the completion-testing stage. The
 // empty case is stated explicitly ("None") so a missing section always means
 // "not answered" and never "nothing found" (same ambiguity SKIP_DISCLOSURE_STEP
@@ -1864,7 +1846,7 @@ export function normalizeRetiredWorkflowPath(p: string): string {
 // Default-safe: with the planner's shipped defaults (`gitProhibition: false`,
 // every strategy `notSpecified`) `buildGitPolicyBlock` returns `''` and
 // `assembleSuffix` filters it out, so no default prompt changes.
-const CODE_TOUCHING_ROLES = new Set(['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester']);
+const CODE_TOUCHING_ROLES = new Set(['planner', 'lead', 'coder', 'intern', 'reviewer']);
 
 /**
  * Card-move prohibition — relocated here from the resident CLAUDE.md/AGENTS.md
@@ -1882,7 +1864,7 @@ const CODE_TOUCHING_ROLES = new Set(['planner', 'lead', 'coder', 'intern', 'revi
  * the rule text itself so it travels with the prohibition.
  */
 const CARD_MOVE_RULE = `KANBAN COLUMN TRANSITIONS: the system moves cards automatically as work progresses — never move a card yourself (no SQL, no move-card.js, no manual board edit). Moving a card yourself races the system and can drop or duplicate it. THE ONE EXCEPTION: a reviewer escalating a destination or goal change returns the card via \`switchboard api POST /kanban/move\` — that is the sanctioned escalation path, not an unsanctioned move. Reach it through the CLI, never as a raw HTTP POST: the endpoint is state-changing, so a request with no \`X-Switchboard-Client\` marker is refused by the CSRF guard.`;
-const CARD_MOVE_ROLES = new Set(['planner', 'coder', 'intern', 'reviewer', 'tester']);
+const CARD_MOVE_ROLES = new Set(['planner', 'coder', 'intern', 'reviewer']);
 
 /**
  * Shared suffix-block assembler. Canonicalises inclusion rules so they can't
@@ -2136,7 +2118,7 @@ export function buildKanbanBatchPrompt(
     // every role's suffixBlock without touching each role branch individually.
     const remoteModeBlock = options?.remoteControlActive ? buildRemoteModeDirective(options?.resolvedProtocols) : '';
     // Per-project PRD: fold into the shared prefix so it reaches every role's
-    // suffixBlock (planner, lead, coder, reviewer, tester, …) without
+    // suffixBlock (planner, lead, coder, reviewer, …) without
     // touching each role branch — same pattern as the §11 remote-mode block.
     const prdBlock = buildPrdReferenceBlock(options, role);
     const dsReferencesBlock = buildDesignSystemReferencesBlockFromRefs(options?.designSystemReferences, role);
@@ -2432,76 +2414,6 @@ UNATTENDED IMPROVER CONTRACT:
         return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
     }
 
-    if (role === 'tester') {
-        const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
-        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
-        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
-            ? `${effectiveBatchExecutionRules}`
-            : '';
-
-        const testerBase = `Mode:
-- You are the Completion Tester (planner role) for this task.
-- Do not start any auxiliary workflow; execute this task directly.
-- Judge the finished change against two acceptance criteria: (1) deferred risks resolved, and (2) intent satisfied.
-- Intent baseline: Treat the plan's ## Goal as the primary intent baseline, the constitution as inviolate invariants, and the PRD when present (optional).
-- Deferred findings check: Inspect the plan file's recorded deferred findings. Check whether every recorded deferred finding is resolved or re-deferred with a clear reason. Distinguish "no deferred record" (pre-existing plan written before the structured deferred-findings section existed) from "no deferred findings" (structured section exists with 0 findings). A plan with "no deferred record" must be reported as lacking a deferred record rather than as clean.
-- Intent check: For ${planTarget}, judge whether the change delivers the product intent and the spirit of the plan's ## Goal (and PRD if present), as experienced by the end user — not merely whether it matches the plan line-by-line. Flag both directions: requirements/intent not met, and code that satisfies the plan's letter but misses the product's intent.
-- What you may plan: If acceptance criteria are NOT met, you may author a follow-up plan file in .switchboard/plans/. The follow-up plan is strictly bounded to: (a) findings recorded as deferred by the reviewer, or (b) named intent gaps against the plan's ## Goal. Do NOT plan net-new scope, unrecorded improvements, or opportunistic refactors.
-- Do NOT edit code: You have no code-editing remit. Do not modify or fix implementation files. If fixes are needed, record them in a follow-up plan.
-- If the PRD and constitution conflict, the constitution's invariants take precedence; flag the conflict to the user.
-
-For each plan:
-1. Check the plan file for recorded deferred findings under ## Review Findings / ## Deferred Findings. Verify every recorded deferred finding is resolved or re-deferred with a reason; if no deferred findings section exists, explicitly report "no deferred record".
-2. Assess intent conformance against the plan's ## Goal, the constitution, and the PRD (when present). Identify any named intent gaps.
-3. If acceptance criteria are not met, write a bounded follow-up plan covering only the unresolved deferred findings or named intent gaps. Do not modify code.
-4. Run verification checks as applicable and include results.
-5. Update the original plan with validation results and completion status. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION}`;
-
-        let baseInstructions = resolveBaseInstructions('tester', testerBase, options);
-        if (cavemanOutputEnabled) {
-            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
-        }
-
-        const intro = plans.length <= 1
-            ? 'The implementation for this plan passed code review. Execute a completion-testing review to verify deferred risks are resolved and intent is satisfied.'
-            : `The implementation for each of the following ${plans.length} plans passed code review. Execute a completion-testing review for each plan to verify deferred risks are resolved and intent is satisfied.`;
-
-        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: 'dontCommit', push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: undefined, planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
-        const suffixBlock = assembleSuffix('tester', {
-            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
-        });
-
-        // Precedence-ordered acceptance-baseline block builder
-        const blocks: string[] = [];
-
-        if (options?.prdReferences && options.prdReferences.length > 0) {
-            for (const r of options.prdReferences) {
-                blocks.push(`PRODUCT REQUIREMENTS (PRD) — project "${r.projectName}" — contextual baseline:\nRead ${r.prdLink.trim()} and assess against it.`);
-            }
-        }
-
-        if (options?.constitutionContent) {
-            blocks.push(`PROJECT CONSTITUTION — inviolate invariants:\n\n${options.constitutionContent.trim()}`);
-        } else if (options?.constitutionLink) {
-            blocks.push(`PROJECT CONSTITUTION — inviolate invariants:\n${options.constitutionLink.trim()}`);
-        }
-
-        const acceptanceBaselineBlock = blocks.join('\n\n');
-
-        const promptParts = [
-            intro,
-            safeguardsBlock,
-            baseInstructions,
-            suffixBlock,
-            featureDirectiveBlock,
-            `PLANS TO PROCESS:\n${planList}`,
-            acceptanceBaselineBlock
-        ].filter(Boolean).join('\n\n');
-
-        return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
-    }
-
     if (role === 'lead') {
         // Drive-mode leads dispatch to coders and review diffs — they don't
         // implement. The implementation-oriented addons (SKIP COMPILATION,
@@ -2777,71 +2689,6 @@ For each plan:
         return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
     }
 
-    if (role === 'ticket_updater') {
-        // The role used to carry a 4-mode selector (disabled/comment-only/refine-ticket/
-        // research-and-refine). It is collapsed to a single triage-only behavior. The
-        // stored ticketUpdateMode config key is still read (so old configs don't error)
-        // but its value is ignored — see the one-time migration warning emitted by
-        // warnOnLegacyTicketUpdateMode().
-        warnOnLegacyTicketUpdateMode(options?.ticketUpdateMode);
-
-        const triagerRefs = renderProtocolReferences(
-            ['clickup-api', 'linear-api', 'notion-api'],
-            ['ClickUp', 'Linear', 'Notion'],
-            options?.resolvedProtocols
-        );
-        const updaterBase = `You are a Ticket Triager Agent.
-
-You read ONE imported ticket (its title, description, and any captured comments in the plan
-file) and post a single short triage verdict back to the source ticket as a comment.
-
-Resolve the provider ticket ID from the plan metadata: the "**ClickUp Task ID:**" line
-(ClickUp), the "**Linear Issue ID:**" line (Linear), or the "**Notion Page ID:**" line
-(Notion). Use that ID — not the legacy "**Ticket:**" field. If none is present, skip posting
-and notify the user.
-
-Post the verdict as a comment using ${triagerRefs.clause}. These post through the Switchboard local API
-bridge — never call the provider API directly and never touch tokens. NEVER overwrite the
-ticket description — comment only.
-
-Your verdict MUST be a single short comment, target ≤ 120 words, in exactly this shape:
-
-**Severity:** blocker / high / normal / low
-**Area:** one or two tags
-**Assessment:** 1–2 sentence root-cause hypothesis or restatement of the real problem
-**Recommended action:** the concrete next step
-**Routing:** auto (simple enough to action directly) OR needs-human (complex/ambiguous/
-cross-cutting → move to the planning.html Tickets tab)
-
-Rules: no preamble, no restating the whole ticket, no markdown section dumps beyond the five
-fields above, no speculative implementation detail. Comment only.${triagerRefs.bodies}`;
-
-        let baseInstructions = resolveBaseInstructions('ticket_updater', updaterBase, options);
-        if (cavemanOutputEnabled) {
-            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
-        }
-
-        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
-        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
-            ? effectiveBatchExecutionRules : '';
-        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
-        // §6 — ticket_updater is NOT code-touching; gitBlock excluded by assembleSuffix.
-        const suffixBlock = assembleSuffix('ticket_updater', {
-            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
-        });
-
-        const promptParts = [
-            baseInstructions,
-            safeguardsBlock,
-            suffixBlock,
-            featureDirectiveBlock,
-            `PLANS TO PROCESS:\n${planList}`
-        ].filter(Boolean).join('\n\n');
-
-        return finalizeAgentPrompt(promptParts, options?.cliPath, options?.cliInvocation);
-    }
-
     if (role === 'researcher') {
         const researchDepth = options?.researchDepth || 'deep';
 
@@ -2930,7 +2777,7 @@ fields above, no speculative implementation detail. Comment only.${triagerRefs.b
 
     // No fallback — every built-in role must have an explicit template.
     // Custom agents are NOT routed through this function; they use plan-file-link-only prompts built at call sites.
-    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, chat. Custom agents should be handled at the call site, not here.`);
+    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, lead, coder, intern, analyst, researcher, chat. Custom agents should be handled at the call site, not here.`);
 }
 
 /**
@@ -2946,10 +2793,7 @@ export function columnToPromptRole(column: string): string | null {
         case 'CODER CODED':
         case 'INTERN CODED':
             return 'reviewer';
-        case 'CODE REVIEWED':
-            return 'tester';
         case 'RESEARCHER': return 'researcher';
-        case 'TICKET UPDATER': return 'ticket_updater';
         default:
             return column.startsWith('custom_agent_') ? column : null;
     }

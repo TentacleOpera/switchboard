@@ -106,7 +106,7 @@ export interface RemoteSyncHealth {
  * The columns that `queue` mode re-points at the session queue: the coding
  * columns a remote move would otherwise fan out to a coder, plus the two
  * staging targets that already mean "queue this". Everything else (CREATED,
- * PLAN REVIEWED, CODE REVIEWED, ACCEPTANCE TESTED, COMPLETED, BACKLOG…) keeps
+ * PLAN REVIEWED, CODE REVIEWED, COMPLETED, BACKLOG…) keeps
  * mirroring through `onColumnMove` in queue mode exactly as it does in `full`
  * — `queue` is an anti-stampede setting for coder dispatch, not a rule that
  * every remote status change becomes work to code.

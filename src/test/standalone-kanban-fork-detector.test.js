@@ -46,7 +46,7 @@ test('no column-ID to column-ID mapping literal in bootstrap.ts', () => {
     // A mapping between kanban column IDs is the structural signature of the
     // fork. This regex matches a Record<string,string> (or similar object
     // literal) where both keys and values are known kanban column IDs.
-    const columnIdPattern = /'(CREATED|RESEARCHER|PLAN REVIEWED|LEAD CODED|CODER CODED|INTERN CODED|CODE REVIEWED|ACCEPTANCE TESTED|COMPLETED|TICKET UPDATER)'\s*:\s*'(CREATED|RESEARCHER|PLAN REVIEWED|LEAD CODED|CODER CODED|INTERN CODED|CODE REVIEWED|ACCEPTANCE TESTED|COMPLETED|TICKET UPDATER)'/;
+    const columnIdPattern = /'(CREATED|PLAN REVIEWED|STAGING|LEAD CODED|CODER CODED|INTERN CODED|CODE REVIEWED|COMPLETED)'\s*:\s*'(CREATED|PLAN REVIEWED|STAGING|LEAD CODED|CODER CODED|INTERN CODED|CODE REVIEWED|COMPLETED)'/;
     assert.ok(
         !columnIdPattern.test(bootstrapCode),
         'bootstrap.ts must not contain a column-ID→column-ID mapping literal — this is the shape of the deleted getNextKanbanColumn fork'

@@ -1,4 +1,4 @@
-export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'ticket_updater' | 'researcher';
+export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'planner' | 'analyst' | 'researcher';
 
 export interface DelegateDefinition {
     role: string;
@@ -189,9 +189,7 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
     coder: 'Coder',
     intern: 'Intern',
     reviewer: 'Reviewer',
-    tester: 'Acceptance Tester',
     analyst: 'Analyst',
-    ticket_updater: 'Ticket Updater',
     researcher: 'Researcher',
 };
 
@@ -200,13 +198,10 @@ export const DEFAULT_VISIBLE_AGENTS: Record<string, boolean> = {
     coder: true,
     intern: true,
     reviewer: true,
-    tester: false,
     planner: true,
     analyst: true,
     jules: false,
-    ticket_updater: false,
     researcher: false,
-    claude_designer: false,
     phone_a_friend: false,
     project_manager: true
 };
@@ -219,8 +214,6 @@ export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
     { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
     { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', dragDropMode: 'cli' },
-    { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', dragDropMode: 'cli' },
-    { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', dragDropMode: 'prompt' },
     { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', dragDropMode: 'cli' },
 ];
 
@@ -616,7 +609,7 @@ export function parseDefaultPromptOverrides(
 ): Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
     const result: Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> = {};
-    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher'];
+    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'intern', 'analyst', 'researcher'];
     const VALID_MODES: PromptOverrideMode[] = ['append', 'prepend', 'replace'];
     for (const role of VALID_ROLES) {
         const entry = (raw as Record<string, unknown>)[role];

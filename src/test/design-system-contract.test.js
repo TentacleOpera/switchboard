@@ -10,7 +10,7 @@
  *        the two dark mechanisms merge into ONE group, raw CSS works (#8 reuse)
  *  - #4: pointer-file bind/unbind roundtrip; empty refs ⇒ no block
  *  - #5: role policy — planner gets full content, coder gets table+link,
- *        reviewer/tester get review framing; exactly one block per prompt
+ *        reviewer gets review framing; exactly one block per prompt
  *  - #7: the starter template parses through the #3 extractor with both schemes
  *
  * Requires `npm run compile-tests` (loads compiled output from out/).
@@ -181,8 +181,8 @@ async function main() {
         assert.strictEqual(count, 1, `expected exactly one DESIGN SYSTEM block, got ${count}`);
     });
 
-    await test('#5: reviewer and tester prompts use review framing', () => {
-        for (const role of ['reviewer', 'tester']) {
+    await test('#5: reviewer prompt uses review framing', () => {
+        for (const role of ['reviewer']) {
             const block = buildDesignSystemReferencesBlockFromRefs(refs, role);
             assert.ok(block.includes('DESIGN SYSTEM REVIEW CONSTRAINTS'), `${role} missing review framing`);
         }

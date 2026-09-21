@@ -105,14 +105,11 @@ back at them. That is a bug in your response, not a correction.
 | **New** | `CREATED` |
 | **Backlog** | `BACKLOG` *(display mode of `CREATED`)* |
 | **Planned** | `PLAN REVIEWED` |
-| **Dispatch** | `DISPATCH` *(display mode of `PLAN REVIEWED`)* |
-| **Researcher** | `RESEARCHER` |
+| **Staging** | `STAGING` |
 | **Lead Coder** | `LEAD CODED` |
 | **Coder** | `CODER CODED` |
 | **Intern** | `INTERN CODED` |
 | **Reviewed** | `CODE REVIEWED` |
-| **Acceptance Tested** | `ACCEPTANCE TESTED` |
-| **Ticket Updater** | `TICKET UPDATER` |
 | **Completed** | `COMPLETED` |
 
 **Three traps — guessing gets these wrong:**

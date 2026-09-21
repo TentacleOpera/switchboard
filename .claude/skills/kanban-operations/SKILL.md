@@ -40,7 +40,7 @@ node .agents/skills/kanban_operations/move-card.js my-plan.md CODER_CODED
 
 - `<session_or_plan_file>` can be a legacy `session_id`, or a **plan file path** (relative or absolute), or a plan basename. The script resolves it to the DB `planId`.
 
-**Valid columns:** Sourced from `VALID_KANBAN_COLUMNS` export in `KanbanDatabase.ts`. Includes all built-in columns (CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, INTERN CODED, LEAD CODED, CODER CODED, CODE REVIEWED, ACCEPTANCE TESTED, CODED, COMPLETED) plus any custom agent columns matching the safe-name regex.
+**Valid columns:** Sourced from `VALID_KANBAN_COLUMNS` export in `KanbanDatabase.ts`. Includes all built-in columns (CREATED, BACKLOG, PLAN REVIEWED, STAGING, INTERN CODED, LEAD CODED, CODER CODED, CODE REVIEWED, CODED, COMPLETED) plus any custom agent columns matching the safe-name regex.
 
 ### ⚠️ The user names the BOARD LABEL — translate it before you move anything
 
@@ -53,14 +53,11 @@ storage ids back at them.
 | **New** | `CREATED` |
 | **Backlog** | `BACKLOG` |
 | **Planned** | `PLAN REVIEWED` |
-| **Dispatch** | `DISPATCH` |
-| **Researcher** | `RESEARCHER` |
+| **Staging** | `STAGING` |
 | **Lead Coder** | `LEAD CODED` |
 | **Coder** | `CODER CODED` |
 | **Intern** | `INTERN CODED` |
 | **Reviewed** | `CODE REVIEWED` |
-| **Acceptance Tested** | `ACCEPTANCE TESTED` |
-| **Ticket Updater** | `TICKET UPDATER` |
 | **Completed** | `COMPLETED` |
 
 **This is a correctness hazard on a write path, not a naming nicety.** Two labels resolve to the
@@ -213,7 +210,7 @@ node .agents/skills/kanban_operations/split-feature.js "a1b2-..." '["c3d4-...","
 
 Triggered by the **SUGGEST FEATURES** board button, which copies a prompt to the clipboard. The agent must follow this flow:
 
-1. **Scan** — read the board with `get-state.js` and look only at pre-coding columns: CREATED, BACKLOG, CONTEXT GATHERER, PLAN REVIEWED. Ignore cards that are already features or already assigned (they carry an `featureId`).
+1. **Scan** — read the board with `get-state.js` and look only at pre-coding columns: CREATED, BACKLOG, PLAN REVIEWED. Ignore cards that are already features or already assigned (they carry an `featureId`).
 2. **Propose** — in a SINGLE chat message, propose every grouping at once, listing each member plan with its `planId` and current kanban column. Leave standalone plans ungrouped. **Flag any cross-column groupings** (plans from different columns in the same feature) with a ⚠ CROSS-COLUMN warning — see `group-into-features/SKILL.md` for the warning text and replan-button guidance. Then stop.
 3. **Confirm** — wait for the user's one approval (or edits). Create nothing before approval.
 4. **Execute** — run `create-feature.js` once per approved group, no further confirmation. Use `assign-to-feature.js` to add more plans later. For any cross-column feature, write the **⚠ Cross-Column Review Note** into the feature file (see `group-into-features/SKILL.md` for the template).

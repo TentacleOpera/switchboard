@@ -95,7 +95,7 @@ export class AgentSkillExporter {
         out.noSeparateReviewArtifactsEnabled = builtinAddons.noSeparateReviewArtifacts ?? true;
         // Default ON for the reviewer, but role-gated: normalizeBuiltinAddons is
         // called for every built-in role, and a bare `?? true` would render the
-        // Risks-to-Memo section into coder/tester/planner skill exports too.
+        // Risks-to-Memo section into coder/planner skill exports too.
         out.reviewerRisksToMemoEnabled = role === 'reviewer' ? (builtinAddons.reviewerRisksToMemo ?? true) : false;
         if (builtinAddons.leadChallenge !== undefined) out.includeInlineChallenge = !!builtinAddons.leadChallenge;
         if (builtinAddons.accurateCoding !== undefined) out.accurateCodingEnabled = !!builtinAddons.accurateCoding;

@@ -233,6 +233,37 @@ export function normalizeLinearAutomationRules(raw: unknown): LinearAutomationRu
     return normalized;
 }
 
+/**
+ * Column ids retired with their owning roles. A stored automation rule that
+ * still names one as its delivery or completion column is skipped at the rule
+ * filter — never rewritten, never executed.
+ */
+export const RETIRED_AUTOMATION_COLUMNS: ReadonlySet<string> = new Set([
+    'ACCEPTANCE TESTED',
+    'TICKET UPDATER'
+]);
+
+function _isRetiredAutomationColumn(column: string | undefined): boolean {
+    return RETIRED_AUTOMATION_COLUMNS.has(_normalizeString(column).toUpperCase());
+}
+
+/**
+ * The retired column a rule references, or undefined. The caller skips the
+ * rule and logs the returned column name — the stored rule is left intact.
+ */
+export function retiredAutomationColumn(
+    rule: { targetColumn?: string; finalColumn?: string; destination?: LinearAutomationDestination }
+): string | undefined {
+    const target = rule.destination?.kind === 'column' ? rule.destination.column : rule.targetColumn;
+    if (_isRetiredAutomationColumn(target)) {
+        return _normalizeString(target).toUpperCase();
+    }
+    if (_isRetiredAutomationColumn(rule.finalColumn)) {
+        return _normalizeString(rule.finalColumn).toUpperCase();
+    }
+    return undefined;
+}
+
 export function matchesLinearAutomationRule(
     issue: { labels?: { nodes?: Array<{ name?: string }> }; state?: { id?: string } } | null | undefined,
     rule: LinearAutomationRule

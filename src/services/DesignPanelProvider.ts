@@ -3044,27 +3044,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 return { success: true };
             }
 
-            case 'sendClaudeImportPrompt': {
-                const prompt = String(message.prompt || '');
-                if (!prompt) return { success: false, error: 'prompt is required' };
-                if (this._taskViewerProvider) {
-                    const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'claude_import', prompt, message.workspaceRoot || undefined
-                    );
-                    if (sent) {
-                        showTemporaryNotification('Sent Claude import prompt to agent terminal.');
-                        return { success: true };
-                    }
-                    await this._seams().clipboard.writeText(prompt);
-                    showTemporaryNotification('Agent terminal unreachable — copied Claude import prompt to clipboard instead.');
-                    return { success: false, error: 'No claude_import terminal could be reached — prompt copied to clipboard instead.', prompt };
-                } else {
-                    await this._seams().clipboard.writeText(prompt);
-                    showTemporaryNotification('Agent terminal unavailable — copied Claude import prompt to clipboard instead.');
-                    return { success: false, error: 'Agent terminal unavailable — prompt copied to clipboard instead.', prompt };
-                }
-            }
-
             case 'copyClaudeArtifactPrompt': {
                 if (message.error) { showTemporaryNotification(String(message.error)); return { success: false, error: String(message.error) }; }
                 const prompt = String(message.prompt || '');
@@ -3072,30 +3051,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await this._seams().clipboard.writeText(prompt);
                 showTemporaryNotification('Copied Claude artifact upload prompt to clipboard.');
                 return { success: true };
-            }
-
-            case 'sendClaudeArtifactPrompt': {
-                if (message.error) { showTemporaryNotification(String(message.error)); return { success: false, error: String(message.error) }; }
-                const prompt = String(message.prompt || '');
-                if (!prompt) return { success: false, error: 'prompt is required' };
-                if (this._taskViewerProvider) {
-                    const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'claude_artifacts', prompt, message.workspaceRoot || undefined
-                    );
-                    if (sent) {
-                        showTemporaryNotification('Sent artifact upload prompt to Claude.');
-                        return { success: true };
-                    }
-                    // Host clipboard for the editor; `prompt` in the body for the browser.
-                    await this._seams().clipboard.writeText(prompt);
-                    showTemporaryNotification('Agent terminal unreachable — copied artifact upload prompt to clipboard instead.');
-                    return { success: false, error: 'No claude_artifacts terminal could be reached — prompt copied to clipboard instead.', prompt };
-                } else {
-                    // No agent terminal wired up — fall back to clipboard so the button still does something.
-                    await this._seams().clipboard.writeText(prompt);
-                    showTemporaryNotification('Agent terminal unavailable — copied artifact upload prompt to clipboard instead.');
-                    return { success: false, error: 'Agent terminal unavailable — prompt copied to clipboard instead.', prompt };
-                }
             }
 
             case 'linkToDocument': {
