@@ -3,9 +3,19 @@
 const assert = require('assert');
 const path = require('path');
 const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder');
+const { resolveProtocolSet, DIRECTIVE_PROTOCOL_NAMES } = require('../../out/services/protocolDirectives');
 
 /**
  * Unit tests for KanbanProvider._getDefaultPromptPreviews
+ *
+ * The mock below stands in for the real method, which delegates to
+ * `generateUnifiedPrompt`. That delegation RESOLVES the directive protocol set
+ * (and any bare planner workflow NAME) and threads the result through as
+ * `resolvedProtocols`, so a production preview inlines each protocol body. The
+ * mock did not, so every protocol read as unresolved and the builder emitted the
+ * `switchboard api GET /protocol/<name>` fallback instead — which is why the
+ * accuracy-mode assertion could never pass. The mock now calls the real
+ * `resolveProtocolSet`, so it cannot drift from the delegation again.
  */
 async function run() {
     console.log('Running KanbanProvider._getDefaultPromptPreviews unit tests...');
@@ -80,12 +90,23 @@ async function run() {
             const previews = {};
             const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
             const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
+            // Mirrors generateUnifiedPrompt's resolution step, including its
+            // `collectBareName` pass: a planner workflow value with no separator
+            // and no `.md` suffix is a protocol NAME and joins the resolve set, so
+            // the composed prompt carries the body instead of a fetch instruction.
+            const cfg = await this._getPromptsConfig(workspaceRoot);
+            const names = new Set(DIRECTIVE_PROTOCOL_NAMES);
+            for (const v of [cfg.plannerWorkflowPath, cfg.plannerFeatureWorkflowPath]) {
+                if (v && !v.includes('/') && !v.includes('\\') && !/\.md$/i.test(v)) names.add(v);
+            }
+            const resolvedProtocols = await resolveProtocolSet(Array.from(names), workspaceRoot);
             for (const role of roles) {
                 try {
                     const promptsConfig = await this._getPromptsConfig(workspaceRoot);
                     const preview = buildKanbanBatchPrompt(role, [], {
                         workspaceRoot,
                         defaultPromptOverrides,
+                        resolvedProtocols,
                         gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
                         switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
                         researchDepth: role === 'researcher' ? promptsConfig.researchDepth : undefined,
@@ -125,7 +146,11 @@ async function run() {
     let previews = await KanbanProvider._getDefaultPromptPreviews('/root');
     
     // Check planner workflow path defaults (should have the default workflow string)
-    assert.ok(previews.planner.includes('Read and follow the `improve-plan` protocol'), 'Planner preview should include the default improve-plan protocol reference');
+    // Resolved, exactly as a dispatched planner prompt is: the body is inlined,
+    // not named as something to go and fetch.
+    assert.ok(previews.planner.includes('Read and follow the workflow below step-by-step.'), 'Planner preview should reference the inlined workflow');
+    assert.ok(previews.planner.includes('--- BEGIN PROTOCOL improve-plan ---'), 'Planner preview should inline the improve-plan protocol body');
+    assert.ok(!previews.planner.includes('switchboard api GET /protocol/improve-plan'), 'Planner preview must not fall back to the fetch instruction when the protocol resolves');
     assert.ok(!previews.planner.includes('PAIR PROGRAMMING OPTIMISATION'), 'Planner preview should not include aggressive pair programming when disabled');
     assert.ok(!previews.reviewer.includes('ADVANCED REGRESSION ANALYSIS'), 'Reviewer preview should not include advanced regression block when disabled');
     assert.ok(previews.reviewer.includes('NOT authoritative on codebase facts'), 'Reviewer preview should include plan-authority split when advanced regression is disabled');

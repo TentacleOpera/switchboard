@@ -34,6 +34,7 @@ const IMPROVE_FEATURE = fs.readFileSync(
 const VSIX_TEST = fs.readFileSync(
     path.join(REPO_ROOT, 'src', 'test', 'vsix-packaging-contract.test.js'), 'utf8'
 );
+const VSCODEIGNORE = fs.readFileSync(path.join(REPO_ROOT, '.vscodeignore'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -196,20 +197,39 @@ test('improve-feature SKILL.md references Goal Invariants', () => {
     );
 });
 
-// ── Source-level: vsix-packaging-contract.test.js must-not-exist ────────────
+// ── Source-level: vsix-packaging-contract.test.js must-not-ship ────────────
+//
+// This case used to pin three literal strings inside the packaging test — a
+// comment header ("Must-not-exist assertions") and a phrasing ("does NOT ship").
+// e26ac375 rewrote that file; the negative coverage survived, the wording did
+// not, and this gate went red while nothing was actually wrong. Pinning a
+// sibling test's prose is not a contract. Assert the two things that are:
+// that the packaging test still executes negative cases through its vsce
+// filter, and that the exclusion this case cared about is really configured.
 
-test('vsix-packaging-contract.test.js has must-not-exist assertions', () => {
+test('vsix-packaging-contract.test.js still asserts negative (must-not-ship) cases', () => {
+    const negativeCases = (VSIX_TEST.match(/check\('[^']*\b(?:not|no)\b[^']*'/g) || []);
     assert.ok(
-        VSIX_TEST.includes('Must-not-exist assertions'),
-        'Expected the packaging test to have a must-not-exist section.'
+        negativeCases.length >= 2,
+        `Expected the packaging test to keep at least two must-not-ship cases; found ${negativeCases.length}.`
     );
     assert.ok(
-        VSIX_TEST.includes('does NOT ship'),
-        'Expected at least one must-not-exist assertion.'
+        /assert\.deepStrictEqual\([^,]+,\s*\[\]/.test(VSIX_TEST),
+        'Expected at least one must-not-ship case to assert an EMPTY shipped-file list, not just a boolean.'
+    );
+});
+
+test('.switchboard/ runtime data is excluded from the packaged extension', () => {
+    // The board's plans, features and database live under .switchboard/.
+    // Packaging them publishes the operator's working board to the marketplace.
+    const rules = VSCODEIGNORE.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+    assert.ok(
+        rules.includes('.switchboard/**'),
+        'Expected .vscodeignore to exclude .switchboard/** so board runtime data never ships.'
     );
     assert.ok(
-        VSIX_TEST.includes('.switchboard'),
-        'Expected a must-not-exist assertion for .switchboard/ runtime data.'
+        !rules.includes('!.switchboard/**'),
+        'Expected no negation re-admitting .switchboard/** after the exclusion.'
     );
 });
 

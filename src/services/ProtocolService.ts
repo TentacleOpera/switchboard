@@ -33,6 +33,47 @@ export const WORKSPACE_PROJECTED_PROTOCOLS: ReadonlySet<string> = new Set([
     "improve-feature",
 ]);
 
+/** Cached workspace-file reads, keyed by absolute path and validated against
+ *  `mtimeMs` + `size`. The read sits in the prompt-build path and the file is
+ *  ~19 KB, so an uncached `readFileSync` per protocol per prompt is real work on
+ *  a Pi. `statSync` is a metadata-only syscall and stays — it is what makes an
+ *  operator's edit visible on the very next prompt without a restart, which is
+ *  the whole point of preferring the file. A stale cache here would silently
+ *  serve the pre-edit text, which is the same class of bug the preference exists
+ *  to fix, so the entry is discarded the moment either stat field moves. */
+const workspaceFileCache = new Map<string, { mtimeMs: number; size: number; body: string }>();
+
+/** Read a projected protocol's workspace file, caching on mtime+size.
+ *  Returns undefined when the file is absent, unreadable or blank — the caller
+ *  then falls through to the registry, and records that in `source`. */
+function readProjectedProtocolFile(filePath: string): string | undefined {
+    let stat: import("fs").Stats;
+    try {
+        stat = fs.statSync(filePath);
+    } catch {
+        // Not projected in this workspace. Drop any entry so a deleted file can
+        // never keep answering from cache.
+        workspaceFileCache.delete(filePath);
+        return undefined;
+    }
+    const hit = workspaceFileCache.get(filePath);
+    if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) {
+        return hit.body;
+    }
+    try {
+        const body = fs.readFileSync(filePath, "utf8");
+        if (!body.trim()) {
+            workspaceFileCache.delete(filePath);
+            return undefined;
+        }
+        workspaceFileCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, body });
+        return body;
+    } catch {
+        workspaceFileCache.delete(filePath);
+        return undefined;
+    }
+}
+
 export class ProtocolService {
     /**
      * Seeds all bundled protocols into the control_plane table of the database.
@@ -108,17 +149,9 @@ export class ProtocolService {
         // file alive; this is the read side of that guarantee.
         let workspaceBody: string | undefined;
         if (workspaceRoot && WORKSPACE_PROJECTED_PROTOCOLS.has(name)) {
-            try {
-                const diskBody = fs.readFileSync(
-                    path.join(workspaceRoot, ".agents", "protocols", name, "SKILL.md"),
-                    "utf8"
-                );
-                if (diskBody.trim()) {
-                    workspaceBody = diskBody;
-                }
-            } catch {
-                // Not projected in this workspace — the registry answers.
-            }
+            workspaceBody = readProjectedProtocolFile(
+                path.join(workspaceRoot, ".agents", "protocols", name, "SKILL.md")
+            );
         }
 
         const override = entry?.overrideBody ?? entry?.workspaceOverride;

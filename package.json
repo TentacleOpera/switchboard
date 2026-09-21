@@ -1106,6 +1106,7 @@
     "test:contract:minimal-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/minimal-prompt.test.js",
     "test:contract:claude-protocol-block": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/claude-protocol-block-size-contract.test.js",
     "test:contract:prompt-split-guidance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/prompt-split-guidance-sync.test.js",
+    "test:contract:planner-workflow-path-migration": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/planner-workflow-path-migration.test.js",
     "test:contract:skill-preconditions": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/skill-preconditions-contract.test.js",
     "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js",
     "test:contract:mission-control-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mission-control-tick-and-reports-contract.test.js",

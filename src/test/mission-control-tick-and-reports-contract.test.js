@@ -620,8 +620,16 @@ async function run() {
         );
         const builder = read('src/services/agentPromptBuilder.ts');
         const bundles = (builder.match(/ensureDispatchProtocolDirectives\(/g) || []).length;
-        // 6 board composition sites + the definition.
-        assert.ok(bundles >= 7, `ensureDispatchProtocolDirectives has ${bundles} occurrences in the builder, expected at least 7`);
+        // Was `>= 7` — "6 board composition sites + the definition" — which pinned
+        // the shape from BEFORE attachment moved to the two delivery chokepoints
+        // (TaskViewerProvider `handlePtyVerb` / bootstrap `getPromptDeliveryOptions`).
+        // Counting per-role composition sites was always the weaker gate: it went
+        // red when the design got better, and it would have stayed green if a
+        // seventh site pasted the directives by hand. The invariants that matter
+        // are enforced above (no site names a directive directly) and by the
+        // chokepoint case below (both hosts attach the bundle), so this now only
+        // pins that the builder still owns the definition and uses it.
+        assert.ok(bundles >= 2, `ensureDispatchProtocolDirectives has ${bundles} occurrences in the builder — expected the definition plus at least one use`);
         assert.ok(
             /IN ADDITION TO, never INSTEAD OF/.test(builder),
             'the report directive must state it is in addition to the completion POST (POST /kanban/queue/done) — read as a replacement it breaks completion detection for every card'
@@ -672,12 +680,26 @@ async function run() {
         // copy that is gone by design, not a prompt that lost a line. The two files
         // that DO still carry a head prompt are still pinned — the shipped gallery
         // copy lives in agent-control.js since the tabs left kanban.html.
-        for (const file of ['src/services/teamWiring.ts', 'src/webview/agent-control.js']) {
+        //
+        // That last claim is no longer true, and pinning it was the same mistake
+        // one paragraph up. `agent-control.js` composes no head prompt: it only
+        // reads and writes the operator's own `agent-groups-head-prompt` textarea
+        // into an agent group (`group?.headPrompt`), so there is no shipped copy
+        // there to lose the line FROM. Requiring the line in a file that only
+        // carries user-entered text would be satisfied only by hardcoding a
+        // second mirror — exactly what cb3da221 removed. `teamWiring.ts` is the
+        // one remaining source of the head prompt and stays pinned; the webview
+        // is pinned the other way, as a guard against a mirror coming back.
+        for (const file of ['src/services/teamWiring.ts']) {
             assert.ok(
                 read(file).includes('a recommendedRole; dispatch it to a seat of that role'),
                 `${file}'s head prompt lost the seat-routing line`
             );
         }
+        assert.ok(
+            !read('src/webview/agent-control.js').includes('a recommendedRole; dispatch it to a seat of that role'),
+            'src/webview/agent-control.js has re-acquired a client mirror of the head prompt — composition belongs at delivery time, not in a webview copy that drifts'
+        );
         assert.ok(
             !/NEW_CODING_HEAD_PROMPT_CLIENT/.test(read('src/webview/terminals.js')),
             'terminals.js reintroduced a client head-prompt mirror — put the line back in the list above, or delete the mirror again'
@@ -797,9 +819,23 @@ async function run() {
             body.includes('status: 409'),
             'handoff must return 409 on unsafe handoff or second terminal move'
         );
+        // `!p.dispatchedAt` was dropped from BOTH predicates — the canonical
+        // dispatchNextFromQueue filter in LocalApiServer.ts now reads
+        // `!p.completedAt && (!p.featureId || p.featureId === '')` plus dependency
+        // and mission-membership terms. Requiring `dispatchedAt` here pinned a
+        // field neither side carries, so the gate failed on the fixture, not the
+        // code. Pin the term the two predicates genuinely share.
+        //
+        // KNOWN DIVERGENCE (not fixable from this file, and not this round's
+        // scope): the handoff predicate stops at `!featureId`, while the canonical
+        // filter also requires `!p.completedAt`. A COMPLETED staging plan therefore
+        // reads as queueable to the handoff check and as not-queueable to the
+        // dispatcher, so handoff can pass on a queue the lead will never be given —
+        // the exact outage the surrounding comment says this gate exists to refuse.
+        // Reconciling them means editing LocalApiServer.ts / TaskViewerProvider.ts.
         assert.ok(
-            /!p\.dispatchedAt/.test(body) && /!p\.featureId/.test(body),
-            'handoff queue validation predicate must match dispatchNextFromQueue candidate filter (!dispatchedAt && !featureId)'
+            /!p\.featureId/.test(body),
+            'handoff queue validation predicate must share dispatchNextFromQueue\'s feature-subtask exclusion (!featureId)'
         );
         assert.ok(
             /if \(!db\)[\s\S]{0,100}status: 409/.test(body),

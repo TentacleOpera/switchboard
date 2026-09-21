@@ -293,8 +293,31 @@ async function testWorkspaceFileOutranksTheShippedBody() {
     assert.notStrictEqual(shipped.source, 'workspace-file', 'With no workspace file the source must name the registry/bundle, not the file');
     assert.ok(!shipped.body.includes('OPERATOR EDIT SENTINEL'), 'The shipped body must not carry the removed workspace edit');
 
+    // The read is cached on mtime+size because it sits in the prompt-build path.
+    // A cache that outlived an edit would silently serve the pre-edit text — the
+    // same silent-substitution bug the preference exists to prevent — so prove
+    // the entry is discarded when the file changes, including a same-SIZE edit
+    // where only mtime moves, and when the file is deleted.
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), SENTINEL, 'utf8');
+    const first = await ProtocolService.resolveProtocol('improve-plan', tmp);
+    assert.ok(first.body.includes('OPERATOR EDIT SENTINEL'), 'Precondition: the workspace file answers');
+
+    const sameSize = SENTINEL.replace('OPERATOR EDIT SENTINEL', 'OPERATOR EDIT REVISION');
+    assert.strictEqual(sameSize.length, SENTINEL.length, 'Precondition: the second edit is byte-identical in length');
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), sameSize, 'utf8');
+    const now = new Date();
+    fs.utimesSync(path.join(skillDir, 'SKILL.md'), now, new Date(now.getTime() + 2000));
+    const second = await ProtocolService.resolveProtocol('improve-plan', tmp);
+    assert.strictEqual(second.source, 'workspace-file', 'A same-size edit must still resolve from the workspace file');
+    assert.ok(second.body.includes('OPERATOR EDIT REVISION'), 'A same-size edit must invalidate the cache, not serve the previous body');
+
+    fs.rmSync(path.join(skillDir, 'SKILL.md'));
+    const afterDelete = await ProtocolService.resolveProtocol('improve-plan', tmp);
+    assert.notStrictEqual(afterDelete.source, 'workspace-file', 'A deleted workspace file must not keep answering from cache');
+    assert.ok(!afterDelete.body.includes('OPERATOR EDIT'), 'A deleted workspace file must not keep serving its cached body');
+
     fs.rmSync(tmp, { recursive: true, force: true });
-    console.log('  PASS: Workspace protocol file outranks the shipped body, and the source is recorded');
+    console.log('  PASS: Workspace protocol file outranks the shipped body, cache invalidates on mtime+size, and the source is recorded');
 }
 
 try {

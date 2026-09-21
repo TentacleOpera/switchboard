@@ -331,6 +331,17 @@ jobs:
       - name: Plan-sizing guidance sync across the plan-writing surfaces
         run: npm run test:contract:prompt-split-guidance
 
+      # Planner workflow-path migrations: the only coverage of
+      # normalizeRetiredWorkflowPath's bare-name targets, which is what lets a
+      # persisted `.agents/protocols/improve-plan/SKILL.md` resolve to the
+      # `improve-plan` protocol body instead of handing an agent a path a chat
+      # surface cannot open. It also pins that the profile- and DB-tier rewrites
+      # stay CHAINED, not concurrent — firing them together can read a
+      # pre-normalization value, skip it and seal the marker, stranding a row on
+      # a dead path. Was defined nowhere and invoked nowhere until now.
+      - name: Planner workflow-path migration + retired-path normalization
+        run: npm run test:contract:planner-workflow-path-migration
+
       # Browser send-to-terminal dispatch parity: every browser-originated prompt
       # dispatch must thread the apiOriginated surface flag end-to-end so a browser
       # PTY terminal is reachable, the four stray _dispatchExecuteMessage sites

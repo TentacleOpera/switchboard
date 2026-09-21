@@ -13,7 +13,15 @@
 //   (c) source-asserts the migration methods, two-tier gating, and per-DB
 //       marker exist in TaskViewerProvider.ts with the correct shape — the same
 //       source-assertion style used by local-plan-duplicate-regression.test.js.
-// When run (after compile), all 6 cases must pass.
+//
+// Each temp-workspace case opens its DB with `createIfMissing()`, NOT
+// `ensureReady()`. `ensureReady` deliberately refuses to conjure a board file
+// ("Database file does not exist (not auto-creating)") so that a stray read can
+// never plant an empty board in an arbitrary directory; creation is reserved for
+// intentional flows. This harness IS an intentional flow — it needs a real board
+// per case — so it asks for one explicitly. The suite was written against the
+// older auto-creating `ensureReady` and went red when that stopped; the
+// committed refusal is correct and the fixture was the stale side.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -55,7 +63,7 @@ async function run() {
     const ws1 = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-pwf-migration-1-'));
     try {
         const db1 = KanbanDatabase.forWorkspace(ws1);
-        assert.strictEqual(await db1.ensureReady(), true, 'Expected kanban DB to initialize for migration test 1.');
+        assert.strictEqual(await db1.createIfMissing(), true, 'Expected kanban DB to be created for migration test 1.');
 
         await db1.setProjectConfigJson('projA', ROLE_KEY, { workflowFilePath: '.agent/workflows/improve-plan.md', addons: { x: 1 } });
         await db1.setProjectConfigJson('projB', ROLE_KEY, { workflowFilePath: '.agent/workflows/improve-plan.md' });
@@ -78,7 +86,7 @@ async function run() {
     const ws2 = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-pwf-migration-2-'));
     try {
         const db2 = KanbanDatabase.forWorkspace(ws2);
-        assert.strictEqual(await db2.ensureReady(), true, 'Expected kanban DB to initialize for migration test 2.');
+        assert.strictEqual(await db2.createIfMissing(), true, 'Expected kanban DB to be created for migration test 2.');
         const empty = await db2.getProjectConfigRowsByKeySync(ROLE_KEY);
         assert.deepStrictEqual(empty, [], 'Expected getProjectConfigRowsByKeySync to return [] when no rows match.');
 
@@ -135,7 +143,7 @@ async function run() {
     const ws4 = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-pwf-migration-4-'));
     try {
         const db4 = KanbanDatabase.forWorkspace(ws4);
-        assert.strictEqual(await db4.ensureReady(), true, 'Expected kanban DB to initialize for migration test 4.');
+        assert.strictEqual(await db4.createIfMissing(), true, 'Expected kanban DB to be created for migration test 4.');
 
         // Seed stale values in both DB tiers.
         await db4.setConfigJson(ROLE_KEY, { workflowFilePath: '.agent/workflows/improve-plan.md', prompt: 'keep me' });
@@ -177,7 +185,7 @@ async function run() {
     const ws5 = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-pwf-migration-5-'));
     try {
         const db5 = KanbanDatabase.forWorkspace(ws5);
-        assert.strictEqual(await db5.ensureReady(), true, 'Expected kanban DB to initialize for migration test 5.');
+        assert.strictEqual(await db5.createIfMissing(), true, 'Expected kanban DB to be created for migration test 5.');
 
         await db5.setConfigJson(ROLE_KEY, { workflowFilePath: '.agents/workflows/improve-plan.md' });
         await db5.setProjectConfigJson('projCustom', ROLE_KEY, { workflowFilePath: '.custom/workflows/x.md' });
@@ -215,9 +223,9 @@ async function run() {
     const ws6b = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-pwf-migration-6b-'));
     try {
         const db6a = KanbanDatabase.forWorkspace(ws6a);
-        assert.strictEqual(await db6a.ensureReady(), true, 'Expected kanban DB A to initialize for migration test 6.');
+        assert.strictEqual(await db6a.createIfMissing(), true, 'Expected kanban DB A to be created for migration test 6.');
         const db6b = KanbanDatabase.forWorkspace(ws6b);
-        assert.strictEqual(await db6b.ensureReady(), true, 'Expected kanban DB B to initialize for migration test 6.');
+        assert.strictEqual(await db6b.createIfMissing(), true, 'Expected kanban DB B to be created for migration test 6.');
 
         // Both DBs hold the stale value.
         await db6a.setConfigJson(ROLE_KEY, { workflowFilePath: '.agent/workflows/improve-plan.md' });
@@ -282,14 +290,22 @@ async function run() {
         /const wfProfileMigrated = this\._context\.globalState\.get<boolean>\(\s*'switchboard\.plannerWorkflowPathAgentToAgents\.v1'/,
         'Expected the constructor to read the per-profile migration flag.'
     );
+    // These two pin that the constructor INVOKES each migration. They must not
+    // also pin the statement terminator: the 2026-07-12 four-front-doors refactor
+    // chained the workflows→skills rewrite onto each (`.then(...)`) because firing
+    // them concurrently can read a pre-normalization value, skip it, and seal the
+    // marker — stranding a row on a dead path. The chained shape is asserted in
+    // full below and again in the §B constructor-composition case, so requiring a
+    // trailing `;` here pinned the exact shape those cases forbid. Match the call
+    // itself and let the chaining assertions own the composition.
     assert.match(
         providerSource,
-        /void this\._migratePlannerWorkflowPathProfileTiers\(\);/,
+        /void this\._migratePlannerWorkflowPathProfileTiers\(\)/,
         'Expected the constructor to invoke the profile-tier migration when the flag is absent.'
     );
     assert.match(
         providerSource,
-        /void this\._migratePlannerWorkflowPathDbTiers\(\);/,
+        /void this\._migratePlannerWorkflowPathDbTiers\(\)/,
         'Expected the constructor to invoke the DB-tier migration unconditionally (per-DB marker gates re-entry).'
     );
     assert.match(
@@ -354,7 +370,7 @@ async function run() {
     const ws7 = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-pwf-migration-7-'));
     try {
         const db7 = KanbanDatabase.forWorkspace(ws7);
-        assert.strictEqual(await db7.ensureReady(), true, 'Expected kanban DB to initialize for migration test 7.');
+        assert.strictEqual(await db7.createIfMissing(), true, 'Expected kanban DB to be created for migration test 7.');
 
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
         const NEW_DEFAULT = 'improve-plan';
