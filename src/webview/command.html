@@ -1062,11 +1062,6 @@
                         </div>
                         <div id="agent-status-chip" class="status-chip hidden"></div>
                         <div id="agent-quick-actions" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
-                        <div class="agent-poll" id="agent-poll">
-                            <button type="button" class="agent-control-btn" id="agent-poll-start">Start</button>
-                            <button type="button" class="agent-control-btn" id="agent-poll-stop">Stop</button>
-                            <span class="agent-poll-state" id="agent-poll-state">checking…</span>
-                        </div>
                         
                         <!-- The surface's own config: endpoint, model and key
                              set HERE — the phone is the surface this feature is
@@ -1089,6 +1084,11 @@
                             <input type="password" id="agent-control-key" placeholder="(unset)" autocomplete="off" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
                             <button class="secondary-action-btn" id="btn-agent-config-save" style="align-self:flex-end; padding:6px 14px;">Save config</button>
                             <div id="agent-control-config-status" style="font-size:10px; color:var(--text-dim);"></div>
+                        </div>
+                        <div class="agent-poll" id="agent-poll" style="display:flex; align-items:center; gap:6px; margin-top:8px; padding-top:8px; border-top:1px solid var(--border-color);">
+                            <button type="button" class="secondary-action-btn" id="agent-poll-start" style="padding:6px 14px;">Start</button>
+                            <button type="button" class="secondary-action-btn" id="agent-poll-stop" style="padding:6px 14px;">Stop</button>
+                            <span id="agent-poll-state" style="font-size:10px; color:var(--text-dim); margin-left:4px;">stopped</span>
                         </div>
                     </div>
                 </section>

@@ -280,6 +280,30 @@
             outline: none;
             box-sizing: border-box;
         }
+        .agent-poll {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border-color);
+        }
+        .agent-poll-btn {
+            background: transparent;
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-family: var(--font-family);
+            font-size: 11px;
+            padding: 4px 14px;
+            cursor: pointer;
+        }
+        .agent-poll-btn:hover { background: var(--accent-primary); color: var(--bg-color); }
+        .agent-poll-state {
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-left: 4px;
+        }
         .agent-control-config {
             padding: 8px 10px;
             border-top: 1px solid var(--border-color);
@@ -546,11 +570,6 @@
     </div>
     <div id="dock-agent-pane">
         <div class="agent-control-quickactions" id="agent-control-quickactions"></div>
-        <div class="agent-poll" id="agent-poll">
-            <button type="button" class="agent-control-btn" id="agent-poll-start">Start</button>
-            <button type="button" class="agent-control-btn" id="agent-poll-stop">Stop</button>
-            <span class="agent-poll-state" id="agent-poll-state">checking…</span>
-        </div>
         
         <!-- The surface's own config: provider, model and key are set HERE,
              not via a repurposed startup command or an env var. The key field
@@ -569,6 +588,11 @@
             <input type="password" id="agent-control-key" placeholder="(unset)" autocomplete="off" />
             <button type="button" class="agent-control-config-save" id="agent-control-config-save">Save config</button>
             <div class="agent-control-config-status" id="agent-control-config-status"></div>
+        </div>
+        <div class="agent-poll" id="agent-poll">
+            <button type="button" class="agent-poll-btn" id="agent-poll-start">Start</button>
+            <button type="button" class="agent-poll-btn" id="agent-poll-stop">Stop</button>
+            <span class="agent-poll-state" id="agent-poll-state">stopped</span>
         </div>
         <div class="agent-control-status" id="agent-control-status">Control surface ready.</div>
     </div>

@@ -967,57 +967,64 @@
     setDockActiveTab(initialTab);
 
     // ── Model polling: Start / Stop ────────────────────────────────────────
-    // Start runs one controller pass now and then every 5 minutes; Stop clears
-    // the timer. A pass is `controller --once`, which runs the rules and calls
-    // the model where a rule needs judgement.
-    //
-    // Deliberately NOT /controller/arm: that spawns a supervised process and
-    // takes a board lease, and the lease blocks on a stale holder. There is one
-    // board and one controller, so there is nothing for a lease to arbitrate.
+    // The TIMER LIVES IN THE BOARD, not here. These buttons only toggle it, so
+    // closing this tab does not stop the polling. State is read back from the
+    // board so two open surfaces cannot disagree about whether it is running.
     (function wirePollButtons() {
         const startBtn = document.getElementById('agent-poll-start');
         const stopBtn = document.getElementById('agent-poll-stop');
         const stateEl = document.getElementById('agent-poll-state');
         if (!startBtn && !stopBtn && !stateEl) { return; }
 
-        const EVERY_MS = 5 * 60 * 1000;
-        let timer = null;
-
         function setState(t) { if (stateEl) { stateEl.textContent = t; } }
 
-        async function runPass() {
+        async function post(path) {
             try {
-                const res = await fetch('/controller/run', {
+                const res = await fetch(path, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: '{}'
                 });
                 const data = await res.json().catch(() => null);
-                if (res.ok && data && data.success !== false) {
-                    setState('polling every 5 min — last run ' + new Date().toLocaleTimeString());
-                } else {
-                    setState('run failed: ' + ((data && (data.reason || data.error)) || res.status));
-                }
-            } catch (err) {
-                setState('run failed: ' + String(err));
-            }
+                return { ok: res.ok, status: res.status, data };
+            } catch (err) { return { ok: false, status: 0, data: { error: String(err) } }; }
+        }
+
+        async function refreshState() {
+            try {
+                const res = await fetch('/controller/poll/state');
+                const d = await res.json();
+                if (!d || d.running !== true) { setState('stopped'); return; }
+                const mins = Math.round((d.intervalMs || 0) / 60000);
+                const last = d.lastRunAt ? ' — last run ' + new Date(d.lastRunAt).toLocaleTimeString() : '';
+                setState('polling every ' + mins + ' min' + last + (d.lastError ? ' (last error: ' + d.lastError + ')' : ''));
+            } catch { setState('state unavailable'); }
         }
 
         if (startBtn) {
-            startBtn.addEventListener('click', () => {
-                if (timer) { return; }
-                timer = setInterval(() => void runPass(), EVERY_MS);
+            startBtn.addEventListener('click', async () => {
                 setState('starting…');
-                void runPass();
+                const r = await post('/controller/poll/start');
+                if (!r.ok || !r.data || r.data.success === false) {
+                    setState('start failed: ' + ((r.data && (r.data.reason || r.data.error)) || r.status));
+                    return;
+                }
+                void refreshState();
             });
         }
         if (stopBtn) {
-            stopBtn.addEventListener('click', () => {
-                if (timer) { clearInterval(timer); timer = null; }
-                setState('stopped');
+            stopBtn.addEventListener('click', async () => {
+                setState('stopping…');
+                const r = await post('/controller/poll/stop');
+                if (!r.ok || !r.data || r.data.success === false) {
+                    setState('stop failed: ' + ((r.data && (r.data.reason || r.data.error)) || r.status));
+                    return;
+                }
+                void refreshState();
             });
         }
-        setState('stopped');
+        void refreshState();
+        setInterval(() => void refreshState(), 30000);
     })();
 
 })();

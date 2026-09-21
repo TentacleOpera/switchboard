@@ -1290,6 +1290,21 @@ type PlanLookupResultRow =
     | { outcome: 'unavailable'; tier: 'board' | 'archive'; reason: string };
 
 export class LocalApiServer {
+
+    /**
+     * Server-side model-polling timer. Owned by the BOARD process, not by a
+     * webview: a timer in a page stops when the tab closes, which is not a
+     * timer. Not the Go pty host either — that is a terminal multiplexer and is
+     * deliberately killed with the board.
+     *
+     * Dies with the board by construction. Nothing persists it across a
+     * restart, so Start is explicit and stays explicit.
+     */
+    private _modelPollTimer: NodeJS.Timeout | null = null;
+    private _modelPollEveryMs = 5 * 60 * 1000;
+    private _modelPollStartedAt: number | null = null;
+    private _modelPollLastRunAt: number | null = null;
+    private _modelPollLastError: string | null = null;
     private _server: http.Server | null = null;
     /**
      * The tailnet listener — a second `http.Server` sharing `_handleRequest`
@@ -15613,6 +15628,65 @@ export class LocalApiServer {
                     res.writeHead(500, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: false, error: 'controller disarm failed', reason: err instanceof Error ? err.message : String(err) }));
                 }
+            } else if (pathname === '/controller/poll/start' && req.method === 'POST') {
+                // Start server-side model polling: one pass now, then every
+                // `_modelPollEveryMs`. The timer lives in the BOARD process so it
+                // survives the operator closing the tab.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const lifecycle = this._options.controllerLifecycle;
+                if (!lifecycle) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller lifecycle unavailable' }));
+                    return;
+                }
+                let pollBody: any;
+                try { pollBody = await this._parseJsonBody(req); } catch { pollBody = {}; }
+                const pollRoot = String(pollBody?.workspaceRoot || this._options.workspaceRoot || '').trim();
+                if (pollBody?.intervalMinutes !== undefined && pollBody?.intervalMinutes !== null) {
+                    const n = Number(pollBody.intervalMinutes);
+                    if (!Number.isFinite(n) || n <= 0) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: 'intervalMinutes must be a positive number' }));
+                        return;
+                    }
+                    this._modelPollEveryMs = Math.round(n * 60 * 1000);
+                }
+                // Idempotent: pressing Start twice must not stack two timers.
+                if (this._modelPollTimer) { clearInterval(this._modelPollTimer); this._modelPollTimer = null; }
+                const runOnce = async () => {
+                    try {
+                        const r = await lifecycle.run({ workspaceRoot: pollRoot });
+                        this._modelPollLastRunAt = Date.now();
+                        this._modelPollLastError = r.started ? null : (r.reason || 'pass did not start');
+                    } catch (err) {
+                        this._modelPollLastError = err instanceof Error ? err.message : String(err);
+                    }
+                };
+                this._modelPollTimer = setInterval(() => { void runOnce(); }, this._modelPollEveryMs);
+                // Do not hold the process open on this timer alone.
+                if (typeof this._modelPollTimer.unref === 'function') { this._modelPollTimer.unref(); }
+                this._modelPollStartedAt = Date.now();
+                void runOnce();
+                console.log(`[LocalApiServer] model polling STARTED — every ${Math.round(this._modelPollEveryMs / 60000)} min`);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, running: true, intervalMs: this._modelPollEveryMs }));
+            } else if (pathname === '/controller/poll/stop' && req.method === 'POST') {
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                if (this._modelPollTimer) { clearInterval(this._modelPollTimer); this._modelPollTimer = null; }
+                this._modelPollStartedAt = null;
+                console.log('[LocalApiServer] model polling STOPPED');
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, running: false }));
+            } else if (pathname === '/controller/poll/state' && req.method === 'GET') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    running: !!this._modelPollTimer,
+                    intervalMs: this._modelPollEveryMs,
+                    startedAt: this._modelPollStartedAt,
+                    lastRunAt: this._modelPollLastRunAt,
+                    lastError: this._modelPollLastError,
+                }));
             } else if (pathname === '/controller/run' && req.method === 'POST') {
                 // Run a pass NOW: one wake, then exit (`controller --once`).
                 if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
