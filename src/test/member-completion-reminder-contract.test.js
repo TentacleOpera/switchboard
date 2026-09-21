@@ -396,8 +396,8 @@ testAsync('an absent orders file falls back to the route, never a dangling path'
     assert.strictEqual(sent.length, 1);
     assert.ok(!/member-orders\.md/.test(sent[0].body),
         `the body must not point at a file that is not there. Body: ${sent[0].body}`);
-    assert.ok(/\bdone\b/.test(sent[0].body), 'the fallback must name the completion route itself');
-    assert.ok(!/done --from/.test(sent[0].body), 'the seat route must not ask the agent to supply --from');
+    assert.ok(/\bsubmit\b/.test(sent[0].body), 'the fallback must name the completion route itself');
+    assert.ok(!/submit --from/.test(sent[0].body), 'the seat route must not ask the agent to supply --from');
     assert.ok(!/<cliPath>/.test(sent[0].body), 'the <cliPath> token must be substituted before delivery');
 });
 
@@ -410,7 +410,7 @@ testAsync('an external-headed member gets the report-file route, not the POST re
     });
     assert.strictEqual(sent.length, 1);
     assert.ok(/reports/.test(sent[0].body), `external-head members report by writing a file. Body: ${sent[0].body}`);
-    assert.ok(!/done --from/.test(sent[0].body), 'an external-head member must not be given the POST recipe');
+    assert.ok(!/submit --from/.test(sent[0].body), 'an external-head member must not be given the POST recipe');
 });
 
 // ── 4. Both hosts honour bareDelivery (SEAT BLOCK ONLY) ─────────────────

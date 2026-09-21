@@ -477,7 +477,7 @@ async function testGenerateUnifiedPromptBatchTeamHead() {
     // of the endpoint is strictly stronger than the assertion it replaces, and
     // Mission 02's own criteria — the derived head-role set and the literal
     // `'lead'` grep gate — are untouched by it.
-    assert.ok(prompt.includes('accept --plan "<that plan\'s planId>"'), 'Should carry the CLI accept instruction, not the raw endpoint');
+    assert.ok(prompt.includes('accept <n>'), 'Should carry the CLI accept instruction, not the raw endpoint');
     assert.ok(!prompt.includes('/kanban/task/complete'), 'Must NOT hand out the raw completion endpoint — the CLI is the only way to assert completion');
     assert.ok(prompt.includes('BATCH RULES:'), 'Should contain BATCH RULES');
     assert.ok(prompt.includes('- The plans in this batch are independent and possibly unrelated.'), 'Should state plans are independent');

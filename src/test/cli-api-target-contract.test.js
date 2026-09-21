@@ -620,7 +620,7 @@ async function run() {
 
     check('every remote-capable command resolves through the shared seam, none re-derive a port', () => {
         const cli = read('src/standalone/cli.ts');
-        for (const fn of ['cmdPlans', 'cmdReady', 'cmdDispatch', 'cmdClear', 'cmdFleet', 'cmdVerb', 'cmdApi', 'cmdDone', 'cmdAccept', 'cmdNext', 'cmdReports', 'cmdBoardConsole', 'cmdAbout']) {
+        for (const fn of ['cmdPlans', 'cmdReady', 'cmdDispatch', 'cmdClear', 'cmdFleet', 'cmdVerb', 'cmdApi', 'cmdSubmit', 'cmdAccept', 'cmdNext', 'cmdReports', 'cmdBoardConsole', 'cmdAbout']) {
             const start = cli.indexOf(`function ${fn}(`);
             assert.ok(start > -1, `${fn} not found`);
             const end = cli.indexOf('\n}\n', start);

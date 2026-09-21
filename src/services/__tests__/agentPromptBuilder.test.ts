@@ -190,7 +190,7 @@ suite('agentPromptBuilder', () => {
                 gitProhibitionEnabled: false
             });
             assert.ok(prompt.includes('NO SEPARATE REVIEW ARTIFACTS'), 'Should include noSeparateReviewArtifacts directive');
-            // The completion directive (the `switchboard done --from` instruction)
+            // The completion directive (the `switchboard submit --from` instruction)
             // is now a role-scoped standing order, not prompt-injected. The
             // reviewer's step carries `REVIEW COMPLETION:` (the plan-file update
             // header), not `COMPLETION REPORT:` (the completion handshake).
@@ -355,11 +355,11 @@ suite('agentPromptBuilder', () => {
         });
 
         test('completion directives use CLI form and do NOT contain file watcher mtime phrasing', () => {
-            // The completion directive now uses `switchboard done --from` (CLI form),
+            // The completion directive now uses `switchboard submit --from` (CLI form),
             // not `POST /kanban/queue/done`. The reviewer steps carry the plan-file
             // update instruction, not the completion handshake.
             for (const directive of [CODING_COMPLETION_REPORT_DIRECTIVE]) {
-                assert.ok(directive.includes('done'), `Directive should reference the done command: ${directive}`);
+                assert.ok(directive.includes('submit'), `Directive should reference the submit command: ${directive}`);
                 assert.ok(!directive.includes('the file watcher detects it'), `Directive should not reference file watcher: ${directive}`);
                 assert.ok(directive.startsWith('COMPLETION REPORT:'), `Directive must keep sentinel: ${directive}`);
             }
@@ -368,7 +368,7 @@ suite('agentPromptBuilder', () => {
             }
             assert.ok(MISSION_CONTROL_REPORT_DIRECTIVE.includes('the completion POST'), 'MISSION_CONTROL_REPORT_DIRECTIVE should reference completion POST');
             assert.ok(!MISSION_CONTROL_REPORT_DIRECTIVE.includes('the plan-file completion report'), 'MISSION_CONTROL_REPORT_DIRECTIVE should not say the plan-file completion report');
-            assert.ok(STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('switchboard done --from'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should reference switchboard done --from');
+            assert.ok(STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('switchboard submit'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should reference switchboard submit');
             assert.ok(!STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('POST /kanban/queue/done'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should NOT reference the old POST form');
             assert.ok(!STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('the per-plan completion report (which still goes to each subtask\'s own plan file)'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should not reference per-plan completion report');
         });

@@ -294,7 +294,7 @@ seat.
 
 ### Callback path
 
-Completion is an HTTP call — `switchboard done`, which resolves the seat from
+Completion is an HTTP call — `switchboard submit`, which resolves the seat from
 the host-injected `SWITCHBOARD_TERMINAL` — not a filesystem signal. The remote
 agent must reach the board's API to report completion; on a tailnet it already can (the same listener the browser uses).
 The older mtime-based activity signal is filesystem-local and will not fire

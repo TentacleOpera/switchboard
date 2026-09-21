@@ -141,8 +141,8 @@ function run() {
     // ── 4. Subtask completion post (not feature planId) ─────────────────
 
     check('the completion post uses the subtask planId, not the FEATURE planId', () => {
-        assert.ok(twPrompt.includes('run node "<cliPath>" accept --plan "<the subtask\'s planId>"'),
-            'prompt must instruct accept --plan with the subtask planId (the CLI resolves from)');
+        assert.ok(twPrompt.includes('run node "<cliPath>" accept '),
+            'prompt must instruct the bare accept CLI verb — the server resolves the card the seat holds');
         assert.ok(!twPrompt.includes('<the FEATURE planId>'),
             'prompt must not reference <the FEATURE planId>');
     });

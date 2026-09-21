@@ -245,7 +245,7 @@ export function normalizeNewlines(text: string): string {
  * Prompt fragments are module-level constants (with byte-identical webview
  * mirrors), so they carry the `<cliPath>` token instead of interpolating the
  * bundled CLI's absolute path. This is where the token becomes a runnable
- * path — an unsubstituted token hands the agent `node "<cliPath>" done …`,
+ * path — an unsubstituted token hands the agent `node "<cliPath>" submit …`,
  * which cannot run and silently loses the completion signal.
  */
 function finalizeAgentPrompt(text: string, cliPath?: string, cliInvocation?: string): string {
@@ -1040,7 +1040,7 @@ export const SWITCHBOARD_LIVENESS_DIRECTIVE = (port: number) =>
  * The bundled CLI's absolute path, injected the way the port is. Sibling to
  * {@link SWITCHBOARD_LIVENESS_DIRECTIVE} — the two are complementary, not
  * alternatives: the CLI covers the board callbacks that have subcommands
- * (`done`, `next`, `verb <name>`), and the liveness line covers the endpoints
+ * (`submit`, `accept`, `next`, `verb <name>`), and the liveness line covers the endpoints
  * that do not.
  */
 export const SWITCHBOARD_CLI_DIRECTIVE = (cliPath: string, invocation?: string) =>
@@ -1051,7 +1051,7 @@ export const SWITCHBOARD_CLI_DIRECTIVE = (cliPath: string, invocation?: string) 
   // `invocation` is the per-machine override — a remote seat's own cliPath or
   // bare `switchboard`; it is emitted verbatim, never re-wrapped.
   `SWITCHBOARD CLI: run \`${invocation || formatCliInvocation(cliPath)} <command>\` for board callbacks — ` +
-  `\`done\`, \`next\`, and \`verb <name> '<json>'\`. Use it instead of hand-building those ` +
+  `\`submit\`, \`accept\`, \`next\`, and \`verb <name> '<json>'\`. Use it instead of hand-building those ` +
   `HTTP requests; endpoints this prompt names explicitly stay on HTTP.`;
 
 /**
@@ -1294,9 +1294,9 @@ export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop f
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files (review.md, review_notes.md, review_artifact.md, grumpy_critique.md, balanced_review.md, or any similarly-named new file) at any point in this task. Omit the review-artifact creation step entirely. Record your findings in your response and in the existing target plan file, per the review-completion step above. A new .md file in the workspace is imported as a duplicate card on the kanban board.`;
 export const REVIEWER_RISKS_TO_MEMO_DIRECTIVE = `REMAINING RISKS TO MEMO: After completing your review, append each remaining risk as a separate entry to the workspace root's .switchboard/memo.md (create the file if it does not exist). If a MEMO FILE line follows this paragraph, that absolute path is authoritative — use it verbatim. Otherwise resolve .switchboard/memo.md against the main workspace checkout, never a worktree-local .switchboard/ — a worktree's copy is discarded on cleanup, which loses the risks. Separate each entry from the preceding content by a blank line so the memo parser can split them into distinct entries. Each entry should be a concise, actionable description of the risk (1-3 sentences) — enough context for a future planning pass to understand the issue without re-reading the review. If there are no remaining risks, skip this step. Do NOT clear or truncate existing memo content — append only.`;
-export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion POST (\`switchboard done\`, which signals task completion to the kanban board); do not skip either. Do NOT skip this step.`;
+export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion signal (\`switchboard submit\`, which signals task completion to the kanban board); do not skip either. Do NOT skip this step.`;
 // CODING_COMPLETION_REPORT_DIRECTIVE is the completion-protocol handshake. It
-// tells the dispatched agent to POST /kanban/queue/done when ALL work is complete.
+// tells the dispatched agent to signal completion (`switchboard submit`) when ALL work is complete.
 // The API endpoint calls clearWorkingState (activity-light off-switch) and fires
 // the turn-end notification to the lead. The autoban wake and the switchboard-manage
 // skill's Column Oversight pass depend on this handshake. The directive is
@@ -1306,7 +1306,7 @@ export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: Aft
 // treat this as prose, move it before the override application, or remove the post-override
 // placement — the consumers above will break silently (cards never clear, oversight
 // passes time out on work that succeeded).
-export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" done\` (or \`switchboard done\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
+export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" submit\` (or \`switchboard submit\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
 
 export const GATE_WIRING_AUDIT_STEP = `Gate-wiring audit: for every automated check named in the plan's
    \`### Automated\` verification subsection, verify it is actually invoked by CI
@@ -1401,7 +1401,7 @@ export function ensureCompletionDirective(text: string): string {
 // that carry it do not break, but the body no longer instructs agents to
 // write report files — the completion POST (POST /kanban/queue/done) is the
 // only signal that clears a card, and `switchboard reports` is the read path.
-export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: The host records every turn-end (finished, blocked, stalled) as a plan_events row — queryable via \`switchboard reports [--kind blocked]\`. You do NOT need to write a report file. This is IN ADDITION TO, never INSTEAD OF, the completion report (\`node "<cliPath>" done\`) — that is the signal that clears your card. Do NOT skip it, and do NOT substitute a raw HTTP POST: the endpoint behind it is state-changing, so the CSRF guard refuses any request without an \`X-Switchboard-Client\` marker, and the CLI is what sets it. If you are blocked and cannot continue, report the block in your status and stop; the host records the turn-end and the card stays parked for review.`;
+export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: The host records every turn-end (finished, blocked, stalled) as a plan_events row — queryable via \`switchboard reports [--kind blocked]\`. You do NOT need to write a report file. This is IN ADDITION TO, never INSTEAD OF, the completion report (\`node "<cliPath>" submit\`) — that is the signal that clears your card. Do NOT skip it, and do NOT substitute a raw HTTP POST: the endpoint behind it is state-changing, so the CSRF guard refuses any request without an \`X-Switchboard-Client\` marker, and the CLI is what sets it. If you are blocked and cannot continue, report the block in your status and stop; the host records the turn-end and the card stays parked for review.`;
 
 /**
  * Idempotent report-directive guard. Appends MISSION_CONTROL_REPORT_DIRECTIVE to
@@ -2369,7 +2369,7 @@ UNATTENDED IMPROVER CONTRACT:
         // The reviewer's base text now carries the `REVIEW COMPLETION:` sentinel
         // itself, via the completion-report step (COMPLETION_STEP_FULL /
         // COMPLETION_STEP_COMPACT) in the composed steps array. The completion
-        // directive (the `switchboard done --from` instruction) is now a
+        // directive (the `switchboard submit --from` instruction) is now a
         // role-scoped standing order delivered at the ptySendPrompt layer, not
         // prompt-injected here. Copy-prompt buttons produce clean prompts
         // without it. The dispatch payload gate

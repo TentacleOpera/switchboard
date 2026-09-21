@@ -106,10 +106,10 @@ function makeDb(initialOrders) {
             'COMPLETION REPORT: must be present in applyStandingOrders output when a coder order exists');
     });
 
-    // 3. CLI form (switchboard done --from), not POST /kanban/queue/done.
-    await check('standing order uses CLI form (switchboard done --from)', () => {
-        assert.ok(COMPLETION_DIRECTIVE_ORDER_INSTRUCTION.includes('switchboard done --from'),
-            'COMPLETION_DIRECTIVE_ORDER_INSTRUCTION must use the CLI form (switchboard done --from)');
+    // 3. CLI form (switchboard submit), not POST /kanban/queue/done.
+    await check('standing order uses CLI form (switchboard submit)', () => {
+        assert.ok(COMPLETION_DIRECTIVE_ORDER_INSTRUCTION.includes('switchboard submit'),
+            'COMPLETION_DIRECTIVE_ORDER_INSTRUCTION must use the CLI form (switchboard submit)');
         assert.ok(!COMPLETION_DIRECTIVE_ORDER_INSTRUCTION.includes('POST /kanban/queue/done'),
             'COMPLETION_DIRECTIVE_ORDER_INSTRUCTION must NOT reference the old POST /kanban/queue/done form');
     });
@@ -241,7 +241,7 @@ function makeDb(initialOrders) {
     await check('dispatch payload fallback (CODING_COMPLETION_REPORT_DIRECTIVE) still exists', () => {
         assert.ok(CODING_COMPLETION_REPORT_DIRECTIVE.includes('COMPLETION REPORT:'),
             'CODING_COMPLETION_REPORT_DIRECTIVE must still carry the COMPLETION REPORT: sentinel (dispatch payload fallback)');
-        assert.ok(CODING_COMPLETION_REPORT_DIRECTIVE.includes('done'),
+        assert.ok(CODING_COMPLETION_REPORT_DIRECTIVE.includes('submit'),
             'CODING_COMPLETION_REPORT_DIRECTIVE must reference the done command');
     });
 

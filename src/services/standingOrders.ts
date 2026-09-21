@@ -356,7 +356,7 @@ export function resolveTeamStanding(
  * counts (a team with three dispatched cards and no registered rounds must
  * NOT behave as if it had rounds). Returns `false` on any missing input (no
  * db, no teamId, no resolver, a thrown read) — the safe default that keeps
- * the legacy dispatch + `done --from` pop instructions, so an unresolved team
+ * the legacy dispatch + `submit` pop instructions, so an unresolved team
  * is indistinguishable from a team that never registered rounds rather than
  * silently losing its dispatch instructions.
  */
@@ -655,7 +655,7 @@ export interface StandingOrderRenderOptions {
      * paths and the standing-orders applier in BOTH hosts) via
      * {@link resolveHasRegisteredRounds} — never inferred from card counts.
      * Absent → false (the safe default: a team whose rounds could not be
-     * resolved keeps the legacy dispatch + `done --from` pop instructions
+     * resolved keeps the legacy dispatch + `submit` pop instructions
      * rather than silently dropping them). Only the lead-head fragments
      * consult it.
      */
@@ -706,7 +706,7 @@ function compositionContext(
 
 /**
  * The completion-protocol handshake as a standing order. Tells the agent to
- * run `switchboard done --from` when ALL work is complete. Stored with
+ * run `switchboard submit --from` when ALL work is complete. Stored with
  * a `${terminalName}` placeholder (interpolated at delivery time with the
  * terminal's own name) and the repo-wide `<cliPath>` token (substituted by
  * `substituteCliPath` on the way out of `renderStandaloneOrdersBlock` — a
@@ -718,11 +718,11 @@ function compositionContext(
  * prompt buttons produce clean prompts without this directive; the standing
  * order delivers it only to terminals connected to Switchboard.
  *
- * Uses the CLI form (`switchboard done --from`), NOT the old
+ * Uses the CLI form (`switchboard submit --from`), NOT the old
  * `POST /kanban/queue/done` form — the CLI resolves the port itself, so no
  * `${port}` interpolation is needed for this order.
  */
-export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" done\` (or \`switchboard done\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
+export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" submit\` (or \`switchboard submit\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
 
 const COMPLETION_DIRECTIVE_ORDER_ID_PREFIX = 'completion-directive:role:';
 
@@ -879,7 +879,7 @@ export function renderStandaloneOrdersBlock(
     // Emission seam: fragment text carries the `<cliPath>` token because the
     // fragments are module constants with byte-identical webview mirrors and
     // cannot interpolate. Unsubstituted, the agent is handed
-    // `node "<cliPath>" done …` — a command that cannot run. `cliInvocation`
+    // `node "<cliPath>" submit …` — a command that cannot run. `cliInvocation`
     // resolves the token to the TARGET seat's machine — a remote seat gets its
     // own cliPath or bare `switchboard`, never the host's absolute path.
     return substituteCliPath(block, undefined, options.cliInvocation);

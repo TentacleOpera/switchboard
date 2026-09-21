@@ -55,7 +55,7 @@ export interface StandingOrderCompositionContext {
      * orders describe the register/mark-done loop and drop the hand-dispatch
      * instructions (the system dispatches each round — subtask 03); when false
      * (or unresolved, the safe default), the head keeps the legacy dispatch +
-     * `done --from` pop instructions exactly as before. Only consulted by the
+     * `submit` pop instructions exactly as before. Only consulted by the
      * lead-head fragments; a reviewer/planner head ignores it.
      */
     hasRegisteredRounds?: boolean;
@@ -104,11 +104,11 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
         + '   against the API base named in your SWITCHBOARD STATUS line.\n'
         + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
-        + '     run node "<cliPath>" done.\n'
+        + '     run node "<cliPath>" submit — every time you hand work back, including fix rounds.\n'
         + '     The system will clear your terminal and dispatch the next staged card.\n'
         + '     Output reporting the queue is empty (or, with --json, {"dispatched":null,"reason":"queue empty"})\n'
         + '     means the run is over — say so and stop.\n'
-        + '     If you cannot complete it, run node "<cliPath>" done --outcome failed with a one-line reason.\n'
+        + '     If you cannot complete it, run node "<cliPath>" submit --outcome failed with a one-line reason.\n'
         + '   - If the response shows any other column, report to your head (step 3).\n\n'
         + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
         + '   POST /terminals/teams/' + ctx.teamId + '/queue/done with {"from":"<your terminal name>"}.\n'
@@ -121,7 +121,7 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + 'Report YOUR task, and only yours. Do not infer that a feature is finished from board\n'
         + 'position: a column advances when work STARTS, not when it finishes, so "every subtask is\n'
         + 'in a coding column" is not evidence of anything. Handing a feature to review is your\n'
-        + 'lead\'s call, not yours — the lead asserts completion with `switchboard accept --plan`.\n\n'
+        + 'lead\'s call, not yours — the lead asserts acceptance with `switchboard accept <n>`.\n\n'
         + 'Before reporting, re-read your full orders at .switchboard/teams/' + ctx.teamId + '/member-orders.md';
 }
 
@@ -135,9 +135,9 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
 // and completes the feature when the last round closes. `round/complete`
 // and `feature/complete` are not things a lead is told to post (plan:
 // the-lead-accepts-a-subtask-and-the-system-advances). The hand-assembled
-// POST is replaced by a CLI verb — the lead runs `accept --plan` and the
+// POST is replaced by a CLI verb — the lead runs `accept <n>` and the
 // CLI resolves `from` from the host-injected SWITCHBOARD_TERMINAL, the
-// same identity resolution `done` uses.
+// same identity resolution `submit` uses.
 //
 // There is NO stateless variant. This fragment used to branch on
 // `hasRegisteredRounds` and hand a lead with no rounds the legacy
@@ -150,19 +150,20 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
 const HEAD_COMPLETION_FRAGMENT_BODY =
     'REGISTER ROUNDS: before any round starts, decide how the feature\'s subtasks group into '
     + 'ordered rounds and POST /kanban/round/register with {"from":"<your terminal name>",'
-    + '"featureId":"<the FEATURE\'s planId>","rounds":[[{"planId":"<subtask planId>","seat":"<seat name>"},'
-    + '"<subtask planId>"],["<subtask planId>"]]} against the API base named in your SWITCHBOARD STATUS line. Each '
-    + 'entry in `rounds` is ONE round — an array of that round\'s subtask entries, in dispatch '
-    + 'order. An entry is a bare planId, or {"planId":"<subtask planId>","seat":"<seat name>"} to pin '
-    + 'the subtask to a seat by its roster name — a named seat must be on your roster and must not '
+    + '"rounds":[[{"ordinal":1,"seat":"<seat name>"},2],[3]]} against the API base named in your '
+    + 'SWITCHBOARD STATUS line — no featureId: the server derives the feature from the card your '
+    + 'team holds. Each entry in `rounds` is ONE round — an array of that round\'s subtask entries, '
+    + 'in dispatch order. An entry is the subtask\'s ORDINAL — the number in the feature file\'s '
+    + 'Subtasks list — or {"ordinal":<n>,"seat":"<seat name>"} to pin the subtask to a seat by its '
+    + 'roster name — a named seat must be on your roster and must not '
     + 'be you; unpinned entries are seated by the system. Registering STARTS round 1 — the system dispatches its subtasks to your seats '
     + 'immediately, and dispatches each later round when the one before it closes. You '
     + 'do not dispatch subtasks to seats yourself. Re-registering '
     + 'replaces pending (not-yet-dispatched) rounds and leaves dispatched/closed ones alone.\n\n'
     + 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
-    + 'with it, run node "<cliPath>" accept --plan "<that SUBTASK\'s planId>" against the API '
-    + 'base named in your SWITCHBOARD STATUS line. Accept per subtask, with that subtask\'s '
-    + 'planId — never the feature\'s. Accepting and rejecting are not two different endings: '
+    + 'with it, run node "<cliPath>" accept <n> against the API '
+    + 'base named in your SWITCHBOARD STATUS line, where <n> is the subtask\'s number in the '
+    + 'feature file\'s Subtasks list. Accepting and rejecting are not two different endings: '
     + 'you reject by sending a fix round first, then you accept when the subtask is done. '
     + 'Until you accept, that seat is not cleared and the round does not advance. Your accept '
     + 'is the only fact that releases a seat.\n\n'
@@ -178,7 +179,7 @@ export function buildHeadCompletionFragment(): string {
 
 export function buildHeadNextFragment(ctx: Pick<StandingOrderCompositionContext, 'teamId'>): string {
     return 'Then take the next item, routed by where your own work came from:\n'
-        + '- If you hold a card dispatched from the board, run node "<cliPath>" done. '
+        + '- If you hold a card dispatched from the board, run node "<cliPath>" submit. '
         + 'Output reporting the queue is empty means the run is over — say so and stop.\n'
         + '- Otherwise POST /terminals/teams/' + ctx.teamId + '/queue/done with '
         + '{"from":"<your terminal name>"} to take the next queued item. If there are no more '
@@ -205,12 +206,14 @@ const CODING_HEAD_WORK_WITH_ROUNDS =
     + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
     + 'Read the plan, review against it — never modify its content. '
     + 'ROUNDS: you decide the rounds and the seats. Read the feature, group its subtasks into ordered '
-    + 'rounds, and register them with POST /kanban/round/register. A round entry is a bare planId, or '
-    + '{"planId":"<subtask planId>","seat":"<seat name>"} to pin the subtask to a seat by its roster '
+    + 'rounds, and register them with POST /kanban/round/register — a round entry is the subtask\'s '
+    + 'ordinal in the feature file\'s Subtasks list, or {"ordinal":<n>,"seat":"<seat name>"} to pin the '
+    + 'subtask to a seat by its roster '
     + 'name — pinning at registration is how you choose which seat gets which subtask. Registering '
     + 'starts round 1: the system dispatches each round\'s subtasks to your seats — you never dispatch '
-    + 'a subtask to a seat yourself. As a round\'s seats report finished, mark the round '
-    + 'done with POST /kanban/round/complete; the system dispatches the next registered round. '
+    + 'a subtask to a seat yourself. As a round\'s seats report finished, accept each subtask with '
+    + '`accept <n>`; the system advances the round when its last subtask is accepted and dispatches '
+    + 'the next registered round. '
     + 'Unpinned subtasks are seated positionally within their round — more unpinned subtasks than '
     + 'seats wraps onto a seat already holding one, so pin seats or keep at most one unpinned '
     + 'subtask per seat. '
@@ -249,7 +252,7 @@ export const REVIEW_HEAD_WORK =
     + 'to you. Board column never implies completion state — a card reaches a column when work STARTS, not when it finishes.';
 
 export const GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY =
-    'When you finish the card you were dispatched, run node "<cliPath>" done. '
+    'When you finish the card you were dispatched, run node "<cliPath>" submit. '
     + 'Do not wait to be asked; there is no head to report to. If you cannot complete it, call the same command with '
     + '--outcome failed and a one-line reason. Do not attempt work above your tier '
     + 'and do not report success you cannot evidence. Output reporting the queue is empty means '
@@ -323,10 +326,10 @@ export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     { id: STANDING_ORDER_FRAGMENT_IDS.reviewHead, name: 'Review head work', order: 10, obligation: 'work', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'reviewer', body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.reviewHead).body },
     { id: STANDING_ORDER_FRAGMENT_IDS.headCommit, name: 'Team head commit', order: 30, obligation: 'commit', applies: ctx => ctx.inTeam && ctx.isHead && (ctx.headRole === 'lead' || ctx.headRole === 'reviewer'), body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.headCommit).body },
     { id: STANDING_ORDER_FRAGMENT_IDS.headCompletion, name: 'Close out subtasks', order: 40, obligation: 'completion', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'lead', body: buildHeadCompletionFragment },
-    // headNext tells the head to pop the next item via `done --from` / queue/done.
+    // headNext tells the head to pop the next item via `submit` / queue/done.
     // For a lead head with REGISTERED rounds, the round owns the advance —
-    // `round/complete` auto-dispatches the next round (subtask 04), so the
-    // `done --from` pop races it and must be suppressed. A lead head WITHOUT
+    // accepting the last subtask auto-dispatches the next round (subtask 04), so the
+    // `submit` pop races it and must be suppressed. A lead head WITHOUT
     // rounds (the stateless path) and every REVIEWER head keep the pop —
     // rounds are a coding-team construct and the gate is unchanged for them.
     { id: STANDING_ORDER_FRAGMENT_IDS.headNext, name: 'Request next work', order: 50, obligation: 'queue', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'reviewer', body: buildHeadNextFragment },

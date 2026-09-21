@@ -169,7 +169,7 @@ async function run() {
     await check('context-aware completion order routes to queue/done without mtime guess', async () => {
         const { buildMemberCompletionFragment } = require(path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
         const body = buildMemberCompletionFragment({ teamId: 'test-group', headName: 'lead-1' });
-        assert.ok(body.includes('node "<cliPath>" done.'),
+        assert.ok(body.includes('node "<cliPath>" submit.'),
             'order must instruct coder to signal completion with the bundled CLI\'s bare done command');
         assert.ok(!/done --from/.test(body),
             'the seat supplies no --from: the CLI resolves it from SWITCHBOARD_TERMINAL');
@@ -192,8 +192,8 @@ async function run() {
         const { NEW_CODING_HEAD_PROMPT } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
         assert.ok(!NEW_CODING_HEAD_PROMPT.includes('mission-control/reports/ naming the feature'),
             'head order must not instruct posting a report file for completion');
-        assert.ok(NEW_CODING_HEAD_PROMPT.includes('accept --plan'),
-            'head order must instruct using the accept --plan CLI verb (which posts to task/complete)');
+        assert.ok(NEW_CODING_HEAD_PROMPT.includes('accept'),
+            'head order must instruct using the accept CLI verb (which posts to task/complete)');
     });
 
     // ── System completion orders are composed at delivery, not persisted ──
@@ -232,10 +232,10 @@ async function run() {
         const head = buildHeadCompletionFragment();
         const member = buildMemberCompletionFragment({ teamId: 'test-group', headName: 'lead-1' });
         assert.notStrictEqual(head, member, 'the head must not be handed the member body');
-        // The lead's completion verb is `accept --plan`, not a hand-assembled
+        // The lead's completion verb is `accept <n>`, not a hand-assembled
         // task/complete POST. The system derives round close and feature
         // complete from the accepts.
-        assert.ok(head.includes('accept --plan'),
+        assert.ok(head.includes('accept <n>'),
             'the lead\'s own order must name the accept verb');
         assert.ok(head.includes('"from":"<your terminal name>"'),
             'the register call must be addressed FROM the lead — first person, not a description of what somebody else does');
@@ -427,7 +427,7 @@ async function run() {
 
     await check('agent-control.js + terminals.js mirrors retired the report-file completion channel', async () => {
         // The webview mirrors of NEW_CODING_HEAD_PROMPT must not instruct
-        // writing a completion report file, and must instruct accept --plan
+        // writing a completion report file, and must instruct accept <n>
         // (the CLI verb that posts to task/complete — the lead moved off the
         // hand-assembled POST in plan: the-lead-accepts-a-subtask-and-the-
         // system-advances).
@@ -435,16 +435,14 @@ async function run() {
             assert.ok(!src.includes('Post a finished report to .switchboard/mission-control/reports/ naming the feature'),
                 `${name} must not instruct posting a completion report file`);
         }
-        // Only agent-control.js still CARRIES the Coding headPrompt (it moved
-        // out of kanban.html with the Teams tab). The terminals.js client mirror
-        // (NEW_CODING_HEAD_PROMPT_CLIENT) was retired when system protocol
-        // composition moved to delivery-time fragment composition —
-        // `coding-head-prompt-contract.test.js` pins its absence. Demanding the
-        // completion verb from a file that carries no prompt at all is a gate
-        // that can only ever be red, so assert what is actually true of each:
-        // agent-control.js names the verb, terminals.js declares no mirror.
-        assert.ok(agentControlJsSrc.includes('accept --plan'),
-            'agent-control.js must instruct using the accept --plan CLI verb');
+        // Neither webview file carries the Coding headPrompt anymore —
+        // composition moved to delivery-time fragments (teamWiring.ts), and the
+        // client mirrors were retired. The gate that survives is the negative
+        // one: no stale copy of the completion verb may linger in the webview.
+        for (const [name, src] of [['agent-control.js', agentControlJsSrc], ['terminals.js', terminalsJsSrc]]) {
+            assert.ok(!src.includes('accept --plan'),
+                `${name} must not carry a stale 'accept --plan' instruction — the verb is now accept <n>`);
+        }
         assert.ok(!terminalsJsSrc.includes('NEW_CODING_HEAD_PROMPT_CLIENT'),
             'terminals.js must declare NO Coding headPrompt mirror — the client mirror is retired, '
             + 'and a reinstated one would drift from teamWiring.ts the moment the verb changes');

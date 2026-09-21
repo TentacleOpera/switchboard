@@ -279,9 +279,13 @@ function run() {
 
         const headText = buildHeadCompletionFragment();
         assert.ok(headText.includes('POST /kanban/round/register'), 'head completion registers rounds via POST /kanban/round/register');
-        assert.ok(headText.includes('POST /kanban/task/complete'), 'head completion completes tasks via POST /kanban/task/complete');
-        assert.ok(headText.includes('POST /kanban/round/complete'), 'head completion completes rounds via POST /kanban/round/complete');
-        assert.ok(headText.includes('POST /kanban/feature/complete'), 'head completion completes features via POST /kanban/feature/complete');
+        assert.ok(headText.includes('accept <n>'), 'head completion accepts subtasks via the accept <n> CLI verb');
+        // The lead no longer hand-assembles the state-changing POSTs — the
+        // CLI verb covers task/complete, and round/feature completion are
+        // derived system-side, never posted by the agent.
+        for (const ep of ['POST /kanban/task/complete', 'POST /kanban/round/complete', 'POST /kanban/feature/complete']) {
+            assert.ok(!headText.includes(ep), `head completion must not instruct ${ep} — the agent-facing form is the CLI verb`);
+        }
     });
 
     console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILED`}\n`);

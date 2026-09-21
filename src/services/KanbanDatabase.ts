@@ -9504,8 +9504,14 @@ export class KanbanDatabase {
 
     public async getSubtasksByFeatureId(featurePlanId: string): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
+        // ORDER BY rowid: this order IS the feature's subtask order — the
+        // number the lead reads in the feature file's Subtasks list and the
+        // number `accept <n>` / `round/register` ordinals resolve against.
+        // Without it the order is SQLite's de-facto rowid order anyway, but
+        // only by accident; the renderer and the server-side resolver share
+        // this function, so the ordinal is a defined order, not a mood.
         const stmt = this._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans WHERE feature_id = ? AND status = 'active'`,
+            `SELECT ${PLAN_COLUMNS} FROM plans WHERE feature_id = ? AND status = 'active' ORDER BY rowid ASC`,
             [featurePlanId]
         );
         return this._readRows(stmt);

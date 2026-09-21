@@ -4,7 +4,7 @@
  * Contract: the lead accepts a subtask, and the system advances.
  *
  * The lead has ONE verb: "this subtask is accepted" (POST /kanban/task/complete,
- * driven by `switchboard accept --plan`). The system closes the round when the
+ * driven by `switchboard accept <n>`). The system closes the round when the
  * last subtask in it is accepted, dispatches the next round, and completes the
  * feature when the last round closes. `round/complete` and `feature/complete`
  * stop being things a lead is told to post.
@@ -24,7 +24,7 @@
  *  - a lead whose team has no registered rounds gets today's behaviour exactly;
  *  - re-accepting an already-accepted subtask advances nothing.
  *
- * CLI checks mirror bare-completion-contract.test.js: `accept --plan` with
+ * CLI checks mirror bare-completion-contract.test.js: `accept <n>` with
  * SWITCHBOARD_TERMINAL set resolves the lead; unset fails naming the variable
  * and accepts nothing; `--plan` missing fails with a DIFFERENT message than the
  * identity failure; explicit `--from` overrides the env.

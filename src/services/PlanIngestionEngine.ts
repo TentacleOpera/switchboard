@@ -1831,8 +1831,8 @@ export class PlanIngestionEngine {
                 const nudgeLines: string[] = [
                     `[switchboard:turn-end] Queue stall (seat pacing) — you have gone idle holding card '${heldCard.planId}' with ${queueCards.length} card(s) staged in the dispatch queue.`,
                     `  You have been silent for ${silentFor}s.`,
-                    `  When you finish the card, run \`node "<cliPath>" done\` (or \`switchboard done\`).`,
-                    `  If you cannot complete it, run \`node "<cliPath>" done --outcome failed\` with a one-line reason.`,
+                    `  When you finish the card, run \`node "<cliPath>" submit\` (or \`switchboard submit\`).`,
+                    `  If you cannot complete it, run \`node "<cliPath>" submit --outcome failed\` with a one-line reason.`,
                 ];
                 const nudgeBody = substituteCliPath(nudgeLines.join('\n'));
 
@@ -2133,7 +2133,7 @@ export class PlanIngestionEngine {
      *     writer, `KanbanDatabase.setCompletedAt`, reached only from
      *     `completeCardInternal` on POST /kanban/task/complete — the LEAD's
      *     assertion. A member reporting through its own completion route
-     *     (`switchboard done` → queue/done, or a ptySendPrompt to its head)
+     *     (`switchboard submit` → queue/done, or a ptySendPrompt to its head)
      *     writes no `completed_at`; queue/done only calls `markSeatAtRest`,
      *     which is in-memory in LocalApiServer and has no engine seam. So a
      *     coder that has already reported and is waiting on its lead still
@@ -2386,7 +2386,7 @@ export class PlanIngestionEngine {
             try { ordersFileExists = fs.existsSync(ordersPath); } catch { /* unreadable → treat as absent */ }
             const route = team.externalHead
                 ? `write your report file to ${path.join(folder, '.switchboard', 'teams', team.teamId, 'reports')}`
-                : `run node "<cliPath>" done (or switchboard done)`;
+                : `run node "<cliPath>" submit (or switchboard submit)`;
             const body = substituteCliPath(
                 `[switchboard:turn-end] You have gone idle holding card '${card.planId}'. `
                 + (ordersFileExists

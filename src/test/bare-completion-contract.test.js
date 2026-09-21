@@ -141,20 +141,38 @@ check('the resolved identity is TAGGED with the source that answered', () => {
     assert.strictEqual(body.fromSource, 'env');
 });
 
+// ── 3b. `done` is a loud alias — performs the submit and prints the rename ──
+
+check('`done` performs the submit AND prints the rename notice on stderr', () => {
+    const { code, out, err } = runCli(['done', '--json'], { SWITCHBOARD_TERMINAL: 'Coding-intern' });
+    assert.match(err, /'done' is now 'submit'/,
+        'the alias must say the rename out loud — never a silent success');
+    const body = JSON.parse(out); // stdout stays clean JSON
+    assert.ok(!/SWITCHBOARD_TERMINAL is not set/.test(body.error || ''),
+        'the alias must reach the same resolution path as submit');
+    assert.strictEqual(code, 1, 'same absent-board exit code as submit');
+});
+
+check('`submit` performs identically without the notice', () => {
+    const { code, out, err } = runCli(['submit', '--json'], { SWITCHBOARD_TERMINAL: 'Coding-intern' });
+    assert.ok(!/'done' is now 'submit'/.test(err), 'submit itself prints no rename notice');
+    const body = JSON.parse(out);
+    assert.match(String(body.error || ''), /No running Switchboard instance/);
+    assert.strictEqual(code, 1);
+});
+
 // ── 4. The seat supplies no planId and no workspaceRoot ──────────────────
 
 check('the host resolves the held card from the seat identity — the agent supplies no planId', () => {
     const server = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
     const start = server.indexOf('private _runQueueDone(');
     assert.ok(start > 0, '_runQueueDone must exist');
-    const held = server.indexOf('const held = board.find(', start);
-    assert.ok(held > start, '_runQueueDone must resolve the held card itself');
-    const window = server.slice(held, held + 400);
-    assert.ok(/p\.dispatchedTerminal === from/.test(window),
-        'the card is resolved by dispatchedTerminal === from, never by an agent-supplied planId');
+    const window = server.slice(start, start + 3000);
+    assert.ok(/ownerSeat === from/.test(window),
+        'the card is resolved by ownerSeat === from, never by an agent-supplied planId');
 
     const cli = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'cli.ts'), 'utf8');
-    const cmd = cli.indexOf('async function cmdDone(');
+    const cmd = cli.indexOf('async function cmdSubmit(');
     assert.ok(cmd > 0);
     const cmdBody = cli.slice(cmd, cli.indexOf('\n/**', cmd));
     assert.ok(/workspaceRoot,/.test(cmdBody),
@@ -165,15 +183,15 @@ check('the host resolves the held card from the seat identity — the agent supp
 
 // ── 5. No placeholder identity, ever ─────────────────────────────────────
 
-check('cmdDone substitutes no placeholder identity', () => {
+check('cmdSubmit substitutes no placeholder identity', () => {
     const cli = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'cli.ts'), 'utf8');
-    const cmd = cli.indexOf('async function cmdDone(');
+    const cmd = cli.indexOf('async function cmdSubmit(');
     const cmdBody = cli.slice(cmd, cli.indexOf('\n/**', cmd))
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/^\s*\/\/.*$/gm, '');
     for (const placeholder of ["'unknown'", '"unknown"', "|| 'seat'", "?? 'seat'"]) {
         assert.ok(!cmdBody.includes(placeholder),
-            `cmdDone must not fall back to ${placeholder} — a completion attributed to the `
+            `cmdSubmit must not fall back to ${placeholder} — a completion attributed to the `
             + 'wrong seat clears the wrong terminal');
     }
 });
@@ -212,20 +230,20 @@ check("the lead's completion instruction names the subtask it is accepting", () 
     const frag = fs.readFileSync(
         path.join(process.cwd(), 'src', 'services', 'standingOrderFragments.ts'), 'utf8');
     // There is no longer a stateless variant to scope this to. The lead's
-    // completion verb is `accept --plan <subtask planId>`; the hand-assembled
+    // completion verb is `accept <n>` (subtask ordinal); the hand-assembled
     // task/complete POST it replaced is gone, along with the
     // `hasRegisteredRounds` branch that kept it alive for every team that had
     // not yet registered rounds — which was every team, always.
-    assert.ok(/accept --plan/.test(frag),
-        'the lead accepts by CLI verb — accept --plan is the completion instruction');
+    assert.ok(/accept <n>/.test(frag),
+        'the lead accepts by CLI verb — accept <n> is the completion instruction');
     assert.ok(/<that SUBTASK\\'s planId>/.test(frag),
         'the lead names WHICH subtask it is accepting — never the feature');
     assert.ok(!/task\/complete with \{"from"/.test(frag),
         'the lead is no longer told to hand-assemble a task/complete POST');
 });
 
-check("the lead's completion fragment names accept --plan and NOT round/complete or feature/complete", () => {
-    // The lead's one verb is accept --plan. No lead-facing string names
+check("the lead's completion fragment names accept <n> and NOT round/complete or feature/complete", () => {
+    // The lead's one verb is accept <n>. No lead-facing string names
     // round/complete or feature/complete — the system closes the round and
     // completes the feature as a consequence of the accepts (plan:
     // the-lead-accepts-a-subtask-and-the-system-advances).
@@ -240,8 +258,8 @@ check("the lead's completion fragment names accept --plan and NOT round/complete
     const { buildHeadCompletionFragment } = require(
         path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
     const frag = buildHeadCompletionFragment();
-    assert.ok(/accept --plan/.test(frag),
-        'the lead completion fragment must name accept --plan');
+    assert.ok(/accept <n>/.test(frag),
+        'the lead completion fragment must name accept <n>');
     assert.ok(/round\/register/.test(frag),
         'the lead is told to register its rounds — unconditionally, not only once it already has some');
     assert.ok(!/round\/complete/.test(frag),

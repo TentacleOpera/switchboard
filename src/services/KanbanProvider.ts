@@ -6739,6 +6739,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
+            'OUTSTANDING (numbered — this is the order `accept <n>` resolves against: oldest held card first):',
+            ...plans.map((plan, i) => `${i + 1}. ${plan.topic}`),
+            '',
             'STAGING (one call per plan):',
             `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path> (relative to your repo root). This plan only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
             'origin is your own seat name — it keeps the team-wide context reset from clearing you.',
@@ -6750,7 +6753,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same plan: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then run \`node "<cliPath>" accept --plan "<that plan's planId>"\`. You are ${originVal}. Accept per plan, with that plan's planId. Do NOT POST the endpoint behind it directly — the CSRF guard refuses a request with no \`X-Switchboard-Client\` marker, and the CLI is what sets it. Nothing downstream happens until you accept: the coder is not cleared and you cannot be handed the next plan.`,
+            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then run \`node "<cliPath>" accept <n>\` where <n> is the plan's number in the OUTSTANDING list above (accepted plans keep their slot — the numbers never shift). You are ${originVal}. Do NOT POST the endpoint behind it directly — the CSRF guard refuses a request with no \`X-Switchboard-Client\` marker, and the CLI is what sets it. Nothing downstream happens until you accept: the coder is not cleared and you cannot be handed the next plan.`,
             '',
             'BATCH RULES:',
             '- The plans in this batch are independent and possibly unrelated.',
@@ -6784,8 +6787,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // repo but not the board host's filesystem) can open the feature file.
         const featureFilePath = featurePlan?.relativePath || featurePlan?.absolutePath;
         const featureFileLine = featureFilePath
-            ? `FEATURE FILE: ${featureFilePath} (relative to your repo root). Read it — its Subtasks section has plan IDs and file paths; its Team Dispatch Instructions section has seat assignments, acceptance criteria, and scope constraints for each subtask. This is your single source of truth for dispatch and review.`
-            : 'FEATURE FILE: (not found in prompt). Read the feature plan file for plan IDs, seat assignments, and scope constraints.';
+            ? `FEATURE FILE: ${featureFilePath} (relative to your repo root). Read it — its Subtasks section is a NUMBERED list (the number is what accept <n> and round/register take) with file paths; its Team Dispatch Instructions section has seat assignments, acceptance criteria, and scope constraints for each subtask. This is your single source of truth for dispatch and review.`
+            : 'FEATURE FILE: (not found in prompt). Read the feature plan file for the numbered subtask list, seat assignments, and scope constraints.';
 
         const terminalDirective = head
             ? ' Your seat name is below — do not go looking it up.'
@@ -6805,8 +6808,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
             'REGISTER YOUR ROUNDS (one call, before any work starts):',
-            `node "<cliPath>" api POST /kanban/round/register '{"from":"${originVal}","featureId":"<the FEATURE's planId>","rounds":[[{"planId":"<subtask planId>","seat":"<seat name>"},"<subtask planId>"],["<subtask planId>"]]}'`,
-            'Each entry in `rounds` is ONE round — an array of that round\'s subtask entries, in dispatch order. An entry is a bare planId, or {"planId":"<subtask planId>","seat":"<seat name>"} to pin the subtask to a seat by its roster name (YOUR TEAM above lists names and roles); unpinned entries are seated by the system. A named seat must be on your roster and must not be you. Subtasks inside a round run in parallel; rounds run in sequence. Registering STARTS round 1: the system dispatches its subtasks to your seats immediately, and dispatches each later round when the one before it closes.',
+            `node "<cliPath>" api POST /kanban/round/register '{"from":"${originVal}","rounds":[[{"ordinal":1,"seat":"<seat name>"},2],[3]]}'`,
+            'Each entry in `rounds` is ONE round — an array of that round\'s subtask entries, in dispatch order. An entry is the subtask\'s ORDINAL — its number in the feature file\'s Subtasks list — or {"ordinal":<n>,"seat":"<seat name>"} to pin the subtask to a seat by its roster name (YOUR TEAM above lists names and roles); unpinned entries are seated by the system. A named seat must be on your roster and must not be you. No featureId — the server derives the feature from the card your team holds. Subtasks inside a round run in parallel; rounds run in sequence. Registering STARTS round 1: the system dispatches its subtasks to your seats immediately, and dispatches each later round when the one before it closes.',
             'You do NOT dispatch subtasks to seats. There is no per-subtask staging call — registering the rounds IS the dispatch. Re-registering replaces pending (not-yet-dispatched) rounds and leaves dispatched or closed ones alone.',
             '',
             'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
@@ -6816,7 +6819,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). After two failures on the same subtask, follow the recovery ladder in your standing orders (clear and retry, lateral hand-off, vertical escalation, lead self-fix, stop) — do not escalate vertically without trying the cheaper rungs first.',
             '',
-            `ACCEPT EVERY SUBTASK — ALWAYS, no judgement call. When a seat reports a subtask finished and you are satisfied with it, commit, then run node "<cliPath>" accept --plan "<that SUBTASK's planId>". Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you accept when the subtask is done. Accept per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you accept: the coder is not cleared and the round does not advance. The system closes the round when its last subtask is accepted, dispatches the next round, and completes the feature when the last round closes — you post nothing for either.`,
+            `ACCEPT EVERY SUBTASK — ALWAYS, no judgement call. When a seat reports a subtask finished and you are satisfied with it, commit, then run node "<cliPath>" accept <n> where <n> is the subtask's number in the feature file's Subtasks list. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you accept when the subtask is done. Nothing downstream happens until you accept: the coder is not cleared and the round does not advance. The system closes the round when its last subtask is accepted, dispatches the next round, and completes the feature when the last round closes — you post nothing for either.`,
             '',
             'FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not accepted. No action needed — do not wait for it, do not poll for it.',
             '',
@@ -6824,7 +6827,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'RULES:',
             '- Do NOT rewrite or edit plan files, and do NOT open individual subtask plans — the FEATURE FILE is what you build your rounds from and review against. The plan is the source of truth for the coder that receives it; never modify its content.',
-            '- Do NOT query kanban.db directly. The plan IDs are in the FEATURE FILE\'s Subtasks section; use the API for anything else.',
+            '- Do NOT query kanban.db directly. The numbered subtask list is in the FEATURE FILE\'s Subtasks section; use the API for anything else.',
             '- Do NOT verify work before registering your rounds. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal when at rest (completion received AND next work goes elsewhere), or when following rung 1 of the recovery ladder (clear and re-dispatch the same subtask with named defects). The ladder is in your standing orders.',
             '- The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you accept its subtask. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case, or for rung 1 of the recovery ladder (clear a twice-failed seat and ask the system to re-dispatch with named defects) — not for routine between-subtask clearing.',
@@ -6853,7 +6856,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * works the feature and reach every coding role; the drive block is the
      * lead's operating contract and must not.
      *
-     * It carries "CLOSE OUT EVERY SUBTASK … accept --plan", which is
+     * It carries "CLOSE OUT EVERY SUBTASK … accept <n>", which is
      * the HEAD's assertion — see the plan `add-a-task-complete-endpoint-for-the-lead`
      * — and its own wording gives it away: "the coder is not cleared and you
      * cannot be handed the next subtask" is nonsense addressed to a coder. The
@@ -18310,12 +18313,15 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         try {
             existingContent = await fs.promises.readFile(featureAbsPath, 'utf8');
         } catch { /* file may not exist yet */ }
-        const subtaskLines = subtasks.map(st => {
+        const subtaskLines = subtasks.map((st, i) => {
             const basename = path.basename(st.planFile);
             const topic = st.topic || basename;
             const column = this._normalizeLegacyKanbanColumn(st.kanbanColumn) || 'CREATED';
-            const planId = st.planId ? ` — ID: ${st.planId}` : '';
-            return `- [ ] [${topic}](../plans/${basename}) — **${column}**${planId}`;
+            // The 1-based number IS the subtask's ordinal — what a lead types
+            // as `accept <n>` and registers as `round/register` entries. It
+            // matches the server because both read getSubtasksByFeatureId's
+            // ORDER BY rowid. No planId: agents never restate board state.
+            return `${i + 1}. [${topic}](../plans/${basename}) — **${column}**`;
         });
         const subtaskSection = `<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->\n## Subtasks\n${subtaskLines.join('\n') || '- [ ] (no subtasks)'}\n<!-- END SUBTASKS -->`;
         let newContent: string;

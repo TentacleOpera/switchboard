@@ -473,7 +473,7 @@ async function run() {
     await test('the CLI reports a held release instead of printing nothing', () => {
         const cli = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'cli.ts'), 'utf8');
         const i = cli.indexOf("startsWith('held:')");
-        assert.notStrictEqual(i, -1, 'cmdDone must recognise the held reason');
+        assert.notStrictEqual(i, -1, 'cmdSubmit must recognise the held reason');
         // The CODE of the branch, not the comment about it: the comment says a
         // hold is "not the run is over", and a raw grep cannot tell the two apart.
         const branch = code(cli.slice(i, i + 700));

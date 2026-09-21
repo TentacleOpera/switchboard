@@ -687,7 +687,7 @@ async function run() {
         // The fragments carry a `<cliPath>` token because they are module
         // constants with byte-identical webview mirrors. renderStandaloneOrdersBlock
         // is the emission seam that resolves it — an unsubstituted token hands the
-        // agent `node "<cliPath>" done …`, a command that cannot run, and the
+        // agent `node "<cliPath>" submit …`, a command that cannot run, and the
         // completion signal is lost silently.
         assert.ok(!rendered.includes('<cliPath>'),
             'the <cliPath> token must be substituted at the standing-orders emission seam');

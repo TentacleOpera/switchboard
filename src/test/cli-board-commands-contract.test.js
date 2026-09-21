@@ -30,7 +30,7 @@ function readSource(...segments) {
 }
 
 /** The board subcommands this plan added, plus the pre-existing read-only three. */
-const BOARD_SUBCOMMANDS = ['plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb', 'api', 'help', 'about', 'version', 'setup'];
+const BOARD_SUBCOMMANDS = ['plans', 'ready', 'dispatch', 'done', 'submit', 'next', 'clear', 'fleet', 'verb', 'api', 'help', 'about', 'version', 'setup'];
 
 // ── Banner art ───────────────────────────────────────────────────────────────
 //
@@ -696,7 +696,7 @@ function run() {
 
     const apiStart = cli.indexOf('async function cmdApi(');
     assert.ok(apiStart > 0, 'cli.ts must define cmdApi.');
-    const apiEnd = cli.indexOf('async function cmdDone(');
+    const apiEnd = cli.indexOf('async function cmdSubmit(');
     const apiBody = cli.slice(apiStart, apiEnd > 0 ? apiEnd : undefined);
 
     // Path validation: must start with / and carry no scheme / authority.
@@ -826,7 +826,7 @@ function run() {
         `main() dispatches subcommand(s) missing from KNOWN_SUBCOMMANDS: ${unreachable.join(', ')} — `
         + 'the gate rejects them before the handler runs.'
     );
-    for (const cmd of ['done', 'next', 'api']) {
+    for (const cmd of ['done', 'submit', 'next', 'api']) {
         assert.ok(known.has(cmd), `KNOWN_SUBCOMMANDS must contain '${cmd}'.`);
         assert.ok(dispatched.has(cmd), `main() must dispatch '${cmd}'.`);
     }

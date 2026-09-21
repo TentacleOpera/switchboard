@@ -250,13 +250,15 @@ async function main() {
     await Object.create(KanbanProvider.prototype)._regenerateFeatureFile(featureDir, 'feat-uuid', regenDb);
     const regenerated = fs.readFileSync(path.join(featureDir, featureRel), 'utf8');
     assert.ok(
-        regenerated.includes('- [ ] [Sub One](../plans/sub-one.md) — **CREATED** — ID: sub-uuid-1'),
-        'the auto-generated Subtasks line must carry the subtask plan ID'
+        regenerated.includes('1. [Sub One](../plans/sub-one.md) — **CREATED**'),
+        'the auto-generated Subtasks line is numbered — the ordinal a lead types as accept <n>'
     );
     assert.ok(
-        regenerated.includes('- [ ] [Sub Two](../plans/sub-two.md) — **CREATED**\n'),
-        'a subtask with no planId must emit the line unchanged, not a dangling "— ID:"'
+        regenerated.includes('2. [Sub Two](../plans/sub-two.md) — **CREATED**\n'),
+        'a subtask with no planId is numbered like any other — the block never prints a plan ID'
     );
+    assert.ok(!regenerated.includes('— ID:'),
+        'no planId leaks into the agent-facing Subtasks block');
     fs.rmSync(featureDir, { recursive: true, force: true });
 
     console.log('Drive-mode prompt overhaul contract PASSED');

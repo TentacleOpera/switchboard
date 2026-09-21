@@ -399,20 +399,20 @@ test('the five shipped team defaults carry byte-identical safety + callback text
         readConst('CODING_TEAM_HEAD_PROMPT'),
     ];
     // The Coding head prompt is selected by the accept verb — the ONE call
-    // that ends its turn. `accept --plan` appears in exactly one shipped head
-    // prompt, so it is the stable selector. It replaced `POST /kanban/task/
+    // that ends its turn. `accept` appears in the shipped head prompts,
+    // so it is the stable selector. It replaced `POST /kanban/task/
     // complete` when the lead moved to a CLI verb (plan: the-lead-accepts-a-
     // subtask-and-the-system-advances): the head no longer hand-assembles the
     // POST, it runs the verb and the CLI resolves `from`. See
     // completion-is-asserted-never-inferred.md.
-    // `accept --plan` now appears in TWO head prompts — the Feature team's and the
+    // `accept` now appears in TWO head prompts — the Feature team's and the
     // Coding team's, because both assert their own completion. Select the Feature
     // team's by its own opening sentence, which is unique to it.
     const codingHeadPrompt = headPromptMatches.find(hp => hp.includes('Your coders work the subtasks of one feature'));
     assert.ok(codingHeadPrompt, 'Feature team headPrompt not found among shipped headPrompts');
     const headPrompt = codingHeadPrompt;
-    assert.ok(headPrompt.includes('accept --plan'),
-        'Coding headPrompt must reference the accept --plan CLI verb — the asserted completion signal, the only way the system learns work finished');
+    assert.ok(headPrompt.includes('accept'),
+        'Coding headPrompt must reference the accept CLI verb — the asserted completion signal, the only way the system learns work finished');
     assert.ok(!headPrompt.includes('/kanban/dispatch'),
         'Coding headPrompt must NOT reference POST /kanban/dispatch — the head does not advance the card or dispatch a reviewer; it accepts and pops the queue');
     assert.ok(!headPrompt.includes('CODE REVIEWED'),

@@ -31,8 +31,8 @@ function usage(): string {
        npx switchboard plans [column] [--project <name>] [--search <query>] [--limit N] [--offset N] [--json]
        npx switchboard ready [--project <name>] [--json]
        npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--seat <terminal>] [--json]
-       npx switchboard done [--from <seat>] [--plan <planId>] [--outcome failed] [--json]
-       npx switchboard accept --plan <subtaskPlanId> [--from <lead>] [--json]
+       npx switchboard submit [--from <seat>] [--plan <planId>] [--outcome failed] [--json]
+       npx switchboard accept [<ordinal>] [--plan <subtaskPlanId>] [--from <lead>] [--json]
        npx switchboard next [--from <seat>] [--json]
        npx switchboard reports [--kind blocked|finished] [--limit N] [--json]
        npx switchboard clear <terminal|--all> [--json]
@@ -75,10 +75,16 @@ Board commands (drive the board from a terminal):
                       to auto (complexity routing). Exit codes:
                         0 dispatched  1 offline  2 nothing ready  3 refused
                         4 auth failed  5 bad input  6 unavailable
-  done                Signal task completion for a seat (pops next card if queued).
-  accept              Accept a subtask as a lead (closes the round when the last
-                      subtask in it is accepted; the system dispatches the next
-                      round and completes the feature when the last round closes).
+  submit              Hand the seat's held work back for review — fires on
+                      EVERY round, fix rounds included (pops next card if queued).
+  done                Loud alias for submit — performs the submit and prints a
+                      rename notice; kept so stale on-disk orders cannot strand a seat.
+  accept              Accept a subtask as a lead: 'accept 3' accepts the third
+                      line of the feature file's Subtasks list (bare 'accept'
+                      resolves a single outstanding candidate). Closes the round
+                      when the last subtask in it is accepted; the system
+                      dispatches the next round and completes the feature when
+                      the last round closes.
   next                Pull the next card from the queue for a seat.
   reports             List host turn-end reports (blocked/finished) read from
                       plan_events, joined to each card's current kanban column.
@@ -916,12 +922,12 @@ function localTarget(port: number, workspaceRoot: string): ApiTarget {
 
 /**
  * Request timeout for the board callbacks that BLOCK ON A PROMPT DELIVERY —
- * `done`, `next`, `dispatch`. These do not merely write a row: the server clears
+ * `submit`/`done`, `next`, `dispatch`. These do not merely write a row: the server clears
  * the seat, waits out the clear-readiness state machine, delivers standing
  * orders, then writes the next card's prompt. Since
  * prompt-delivery-should-be-patient-not-precise.md added a per-family delivery
  * floor (15s on Devin/unknown) on top of the clear ceiling (15s + 1s late-signal
- * grace), one `done` can legitimately hold its response for ~35s — well past the
+ * grace), one `submit` can legitimately hold its response for ~35s — well past the
  * 15s default, which would abandon the request and print a failure at an agent
  * whose card actually advanced. The other commands keep the shorter default: a
  * read that hangs 15s IS a fault, and hiding it behind a long ceiling is how a
@@ -2644,13 +2650,17 @@ async function cmdRemote(argv: string[]): Promise<void> {
 }
 
 /**
- * `switchboard done [--from <seat>] [--plan <planId>] [--outcome failed] [--json]`
+ * `switchboard submit [--from <seat>] [--plan <planId>] [--outcome failed] [--json]`
  *
- * Signal task completion for a seat via POST /kanban/queue/done.
+ * Hand the seat's held work back for review via POST /kanban/queue/done — the
+ * verb is `submit`, not `done`, because handing work back happens every round,
+ * fix rounds included, and "done" read as final completion suppressed exactly
+ * those repeat reports (plan: a-seat-says-submit-and-a-lead-says-accept-n).
  * The endpoint clears the card's activity light, fires the turn-end notification,
- * and pops the next card if queued.
+ * and pops the next card if queued. The endpoint path keeps its old name —
+ * it is internal (CLI↔server); only the verb moved.
  */
-async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
+async function cmdSubmit(workspaceRoot: string, argv: string[]): Promise<void> {
     const jsonFlag = argv.includes('--json');
     if (jsonFlag) { routeLogsToStderr(); }
 
@@ -2667,6 +2677,13 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
         if (a.startsWith('--plan=')) { planId = a.slice('--plan='.length); continue; }
         if (a === '--outcome') { outcome = argv[++i]; continue; }
         if (a.startsWith('--outcome=')) { outcome = a.slice('--outcome='.length); continue; }
+        // `submit` takes no positional argument and no other flags — a token
+        // left over here is a mistyped flag or a pasted UUID, and silently
+        // ignoring it submits work the caller may not have meant to hand back.
+        const msg = `Unrecognised argument '${a}' — submit takes no positional argument (flags: --outcome, --plan, --from, --json).`;
+        if (jsonFlag) { emitJson({ success: false, error: msg }); }
+        else { console.error(`[switchboard] ${msg}`); }
+        exitFlushed(5);
     }
 
     // The host already injected this seat's identity into the seat's OWN
@@ -2692,7 +2709,7 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
         // a completion attributed to the wrong seat clears the wrong terminal,
         // and the error text is the only thing that distinguishes "you are not
         // in a seat" from "you typed the command wrong".
-        const msg = 'SWITCHBOARD_TERMINAL is not set — `done` with no arguments is run from inside a seat, '
+        const msg = 'SWITCHBOARD_TERMINAL is not set — `submit` with no arguments is run from inside a seat, '
             + 'which is where the host injects it. If you are driving the CLI by hand, pass --from <seat>.';
         if (jsonFlag) { emitJson({ success: false, error: msg }); }
         else { console.error(`[switchboard] ${msg}`); }
@@ -2735,7 +2752,7 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
     if (jsonFlag) {
         emitJson({ success: code === 0, status: res.status, exitCode: code, from, fromSource, result: data });
     } else if (code === 0) {
-        console.log(`[switchboard] Done signal recorded for seat '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
+        console.log(`[switchboard] Submit signal recorded for seat '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
         if (data?.dispatched) {
             // A WAVE is one dispatch carrying several members (Mission 04), so the
             // single-card fields are absent by construction. Naming the count keeps
@@ -2767,14 +2784,14 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
             }
         }
     } else {
-        const errMsg = String(data?.error || res.body || 'done failed');
+        const errMsg = String(data?.error || res.body || 'submit failed');
         console.error(`[switchboard] ${errMsg}`);
     }
     exitFlushed(code);
 }
 
 /**
- * `switchboard accept --plan <subtaskPlanId> [--from <lead>] [--json]`
+ * `switchboard accept [<ordinal>] [--plan <subtaskPlanId>] [--from <lead>] [--json]`
  *
  * A lead accepts a subtask via POST /kanban/task/complete. The lead's one verb
  * is "this subtask is accepted" — the system closes the round when the last
@@ -2783,13 +2800,18 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
  * the-system-advances). `round/complete` and `feature/complete` stop being
  * things a lead is told to post.
  *
- * Identity resolution mirrors `cmdDone`: `from` resolves from the host-injected
+ * The subtask is named by its ORDINAL — `accept 3` accepts the third line of
+ * the feature file's Subtasks list. The server resolves the number against
+ * the feature the poster holds (and fails loudly naming candidates when the
+ * resolution is ambiguous), so the lead never copies a UUID. Bare `accept`
+ * resolves when exactly one candidate awaits acceptance. `--plan` survives
+ * for the human-CLI escape hatch, exactly as `--from` does, and is named by
+ * no agent-facing prompt.
+ *
+ * Identity resolution mirrors `cmdSubmit`: `from` resolves from the host-injected
  * `SWITCHBOARD_TERMINAL` (set for every seat, leads included), `--from` still
  * wins for the human-CLI path, and a missing identity fails LOUDLY naming the
- * variable — a subtask accepted as the wrong lead clears the wrong seat. The
- * one field the lead supplies is `--plan` (the SUBTASK's planId); missing
- * `--plan` is a distinct, named error from the identity error so a lead can
- * tell "you are not in a seat" from "you did not say which subtask."
+ * variable — a subtask accepted as the wrong lead clears the wrong seat.
  */
 async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
     const jsonFlag = argv.includes('--json');
@@ -2797,29 +2819,67 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
 
     let from: string | undefined;
     let planId: string | undefined;
+    let planSeen = false;
+    let ordinal: number | undefined;
 
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--json') { continue; }
         if (a === '--from') { from = argv[++i]; continue; }
         if (a.startsWith('--from=')) { from = a.slice('--from='.length); continue; }
-        if (a === '--plan') { planId = argv[++i]; continue; }
-        if (a.startsWith('--plan=')) { planId = a.slice('--plan='.length); continue; }
+        if (a === '--plan') { planId = argv[++i]; planSeen = true; continue; }
+        if (a.startsWith('--plan=')) { planId = a.slice('--plan='.length); planSeen = true; continue; }
+        if (a.startsWith('-')) {
+            // An unrecognised flag must never fall through to a bare accept —
+            // `accept --plna` silently resolving a candidate is a state change
+            // the human never asked for.
+            const msg = `Unrecognised flag '${a}' — accept takes [<ordinal>], --plan <subtaskPlanId>, --from <lead>, --json.`;
+            if (jsonFlag) { emitJson({ success: false, error: msg }); }
+            else { console.error(`[switchboard] ${msg}`); }
+            exitFlushed(5);
+        }
+        if (!a.startsWith('-')) {
+            // The positional argument is the subtask's ordinal — the number in
+            // the feature file's Subtasks list. Anything else is a mistyped
+            // flag or a pasted UUID; say what the verb takes rather than
+            // silently forwarding it.
+            if (ordinal !== undefined) {
+                const msg = '`accept` takes at most one positional argument — the subtask ordinal (e.g. `accept 3`).';
+                if (jsonFlag) { emitJson({ success: false, error: msg }); }
+                else { console.error(`[switchboard] ${msg}`); }
+                exitFlushed(5);
+            }
+            if (!/^\d+$/.test(a) || parseInt(a, 10) < 1) {
+                const msg = `Invalid argument '${a}' — accept takes the subtask's ORDINAL (a positive integer, e.g. \`accept 3\`) or --plan <subtaskPlanId>.`;
+                if (jsonFlag) { emitJson({ success: false, error: msg }); }
+                else { console.error(`[switchboard] ${msg}`); }
+                exitFlushed(5);
+            }
+            ordinal = parseInt(a, 10);
+            continue;
+        }
     }
 
-    // `--plan` is the lead's one field. Check it FIRST and name it distinctly
-    // from the identity error: a lead must be able to tell "you did not say
-    // which subtask" from "you are not in a seat." A missing-plan error that
-    // reads like a missing-identity error sends the lead looking for a seat
-    // variable when the problem is the argument it never typed.
-    if (!planId) {
-        const msg = 'Missing required argument: --plan <subtask planId>. `accept` takes the SUBTASK\'s planId — never the feature\'s.';
+    // `--plan` seen but empty (`--plan=` or a missing value) must not quietly
+    // become a bare accept — say the flag needed a value.
+    if (planSeen && !planId) {
+        const msg = '--plan requires a value — `accept` takes the subtask\'s planId or an ordinal, not an empty flag.';
         if (jsonFlag) { emitJson({ success: false, error: msg }); }
         else { console.error(`[switchboard] ${msg}`); }
         exitFlushed(5);
     }
 
-    // Same identity resolution as `cmdDone`. The host injects
+    // Ordinal and --plan are two spellings of the same field — naming both is
+    // a malformed call, not a hint. The server rejects it too; catching it
+    // here keeps the error a CLI-usage error rather than a wire 400.
+    if (planId && ordinal !== undefined) {
+        const msg = '`accept` takes an ordinal OR --plan <subtaskPlanId>, not both.';
+        if (jsonFlag) { emitJson({ success: false, error: msg }); }
+        else { console.error(`[switchboard] ${msg}`); }
+        exitFlushed(5);
+    }
+
+    // Same identity resolution as `cmdSubmit`. The host injects
     // SWITCHBOARD_TERMINAL for every seat (leads included), so the lead never
     // types its own name. `--from` still wins for driving the CLI by hand.
     let fromSource: 'flag' | 'env' = 'flag';
@@ -2853,10 +2913,9 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
         exitFlushed(1);
     }
 
-    const body: Record<string, any> = {
-        from,
-        planId,
-    };
+    const body: Record<string, any> = { from };
+    if (planId) { body.planId = planId; }
+    if (ordinal !== undefined) { body.ordinal = ordinal; }
 
     let res;
     try {
@@ -2872,7 +2931,14 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
     if (jsonFlag) {
         emitJson({ success: code === 0, status: res.status, exitCode: code, from, fromSource, result: data });
     } else if (code === 0) {
-        console.log(`[switchboard] Subtask ${planId} accepted by lead '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
+        // Name what was accepted. The server echoes resolution provenance
+        // (title + ordinal, and the feature in the feature case) so an ordinal
+        // that shifted under the lead is visible in the transcript — "which
+        // card did '3' mean" is never a guess after the fact.
+        const what = data?.resolution?.title
+            ? `'${data.resolution.title}' (subtask ${data.resolution.ordinal}${data.resolution.featureTitle ? ` of '${data.resolution.featureTitle}'` : ''})`
+            : (planId || `<ord ${ordinal}>`);
+        console.log(`[switchboard] Subtask ${what} accepted by lead '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
         if (data?.roundClosed) {
             console.log(`  Round ${data.roundClosed} closed.`);
         }
@@ -2914,7 +2980,7 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
         if (a.startsWith('--from=')) { from = a.slice('--from='.length); continue; }
     }
 
-    // Same identity resolution as `cmdDone` and `cmdAccept`. The host injects
+    // Same identity resolution as `cmdSubmit` and `cmdAccept`. The host injects
     // SWITCHBOARD_TERMINAL for every seat (leads included), so a head popping
     // its own queue never types its own name. `--from` still wins for driving
     // the CLI by hand.
@@ -4208,8 +4274,8 @@ async function main() {
     }
 
     // Only a BOARD launch needs the ceiling, and only a board launch can afford
-    // the re-exec. `main()` runs for every client verb too — `switchboard done`,
-    // `next`, `probe`, `verb`, and the `node "<cliPath>" done` form every agent
+    // the re-exec. `main()` runs for every client verb too — `switchboard submit`,
+    // `next`, `probe`, `verb`, and the `node "<cliPath>" submit` form every agent
     // directive tells seats to use. Re-execing those doubled the process count and
     // the startup cost of the single most frequent command on the box, for a heap
     // ceiling a process that exits in 200 ms never approaches.
@@ -4220,7 +4286,7 @@ async function main() {
     // costs one process start. Visible-or-safe, per the fallback rule.
     const HEAP_REEXEC_EXEMPT_SUBCOMMANDS = new Set([
         'stop', 'status', 'logs', 'init', 'scaffold', 'control-plane', 'secrets',
-        'token', 'export', 'import', 'plans', 'ready', 'dispatch', 'done', 'accept',
+        'token', 'export', 'import', 'plans', 'ready', 'dispatch', 'done', 'submit', 'accept',
         'next', 'reports', 'clear', 'fleet', 'probe', 'heap-snapshot', 'verb', 'api',
         'help', 'about', 'version', 'launcher-state', 'controller', 'remote',
     ]);
@@ -4272,7 +4338,7 @@ async function main() {
     const KNOWN_SUBCOMMANDS = new Set([
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
-        'plans', 'ready', 'dispatch', 'done', 'accept', 'next', 'reports', 'clear', 'fleet', 'probe', 'heap-snapshot', 'verb', 'api',
+        'plans', 'ready', 'dispatch', 'done', 'submit', 'accept', 'next', 'reports', 'clear', 'fleet', 'probe', 'heap-snapshot', 'verb', 'api',
         'help', 'about', 'version', 'setup', 'launcher-state', 'service', 'controller', 'remote',
         // Internal routing token — re-spawned by cmdMainMenu's CLI Mode to
         // enable Back without refactoring cmdBoardConsole's exit semantics.
@@ -4401,7 +4467,7 @@ async function main() {
         && subcommand !== 'scaffold' && subcommand !== 'control-plane'
         && subcommand !== 'stop' && subcommand !== 'status' && subcommand !== 'logs'
         && subcommand !== 'plans' && subcommand !== 'ready' && subcommand !== 'dispatch'
-        && subcommand !== 'done' && subcommand !== 'next'
+        && subcommand !== 'done' && subcommand !== 'submit' && subcommand !== 'next'
         && subcommand !== 'clear' && subcommand !== 'fleet' && subcommand !== 'probe' && subcommand !== 'verb'
         && subcommand !== 'api'
         && subcommand !== 'controller'
@@ -5265,9 +5331,19 @@ async function main() {
         await cmdDispatch(workspaceRoot, process.argv.slice(3));
     }
 
-    // ── done ───────────────────────────────────────────────────────
+    // ── submit ─────────────────────────────────────────────────────
+    if (process.argv[2] === 'submit') {
+        await cmdSubmit(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── done (loud alias for submit) ────────────────────────────────
+    // Stale on-disk member-orders.md and cached prompts still say `done`;
+    // a hard failure there strands the seat's report — the stall this
+    // rename exists to kill. Perform the submit, print the rename, never
+    // a silent success.
     if (process.argv[2] === 'done') {
-        await cmdDone(workspaceRoot, process.argv.slice(3));
+        console.error("[switchboard] 'done' is now 'submit' — same behaviour, new name.");
+        await cmdSubmit(workspaceRoot, process.argv.slice(3));
     }
 
     // ── accept ─────────────────────────────────────────────────────

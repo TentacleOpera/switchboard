@@ -392,7 +392,7 @@ test('no shipped member is a `reviewer` pair, and no shipped default is shared-s
 });
 
 test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
-    for (const lit of ['accept --plan',
+    for (const lit of ['accept <n>',
         'intern → coder → lead', 'seat fails review on the same subtask twice',
         'stop and report to the human instead of dispatching again', 'PLAN FILES ARE THE SOURCE OF TRUTH',
         'Never move a card backwards', 'Never move a card to a new column yourself',

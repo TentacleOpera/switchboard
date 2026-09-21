@@ -35,7 +35,7 @@ import {
     makeStandingOrder,
     makeStandingOrderDefinition,
 } from './standingOrders';
-import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders, resolveTeamByIdIncludingDisabled, DEFAULT_TEAM_DEFINITIONS, readTeamCompletionAuthority } from './teamWiring';
+import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders, resolveTeamByIdIncludingDisabled, DEFAULT_TEAM_DEFINITIONS, readTeamCompletionAuthority, rosterOfGroup } from './teamWiring';
 import { resolveMissionStageFromTeam, releaseVerdict, heldMembers, type PipelineStage } from './missionStage';
 import { computeRosterClearTargets } from './workContextResolver';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
@@ -1159,13 +1159,17 @@ export interface LauncherStateProjection {
  * the post is skipped: the only complete example anywhere else carries the
  * FEATURE planId, so a lead that copies it completes the wrong row.
  *
- * `planId` is the SUBTASK's. Falls back to naming the field when the caller has
- * no id to substitute, rather than emitting a call that would 400.
+ * `planId` is the SUBTASK's; `ordinal` is its number in the feature file's
+ * Subtasks list when the caller can resolve it — the ordinal form is the one
+ * the lead is taught, so it is what the emitted call uses. Falls back to the
+ * `--plan` compatibility form when the caller has no ordinal to substitute,
+ * rather than emitting a call that would 400.
  */
 function composeAcceptanceInstruction(
     leadName: string,
     planId: string | undefined,
-    workspaceRoot: string
+    workspaceRoot: string,
+    ordinal?: number
 ): string {
     // The CLI is the ONLY supported way to assert completion, and naming it here
     // is load-bearing rather than stylistic. The endpoint behind it
@@ -1191,10 +1195,13 @@ function composeAcceptanceInstruction(
     // replaces. Both composition roots wire the seam this reads
     // (`bootstrap.ts` and `TaskViewerProvider.ts` both call
     // `setBundledCliPath`), so it resolves on either host.
+    const acceptCall = Number.isInteger(ordinal) && (ordinal as number) > 0
+        ? `accept ${ordinal}`
+        : `accept --plan "${idPart}"`;
     return substituteCliPath(
         ' When you are done with this subtask, commit, then run '
-        + `\`node "<cliPath>" accept --plan "${idPart}"\`. `
-        + `You are ${leadName}; accept with the SUBTASK's planId, never the feature's. `
+        + `\`node "<cliPath>" ${acceptCall}\`. `
+        + `You are ${leadName}; accept THIS subtask (number ${ordinal ?? '?'} in the feature file's Subtasks list), never the feature. `
         + 'Accept every time — you reject by sending '
         + 'a fix round first, not by withholding the accept. Until you accept, the seat is not cleared and you '
         + 'cannot be handed the next subtask.'
@@ -5375,6 +5382,295 @@ export class LocalApiServer {
      * - Clear accepted work's recorded seat once.
      * - `queue/done` is untouched — it means "give me the next item", not "done".
      */
+
+    /**
+     * Resolve which OPEN feature the poster currently holds — the host-side
+     * evidence `accept <n>` and `round/register` use when no featureId is
+     * named. Two independent sources, both derived from the poster's own seat:
+     *
+     *  1. the feature CARD held by the seat (`isFeature`, `ownerSeat === from`,
+     *     `completedAt IS NULL`) — stamped at dispatch;
+     *  2. the `feature_id` on the poster's team's non-closed `coding_rounds`
+     *     rows — survives a cleared ownerSeat stamp, and is the same
+     *     derivation `round/complete` uses.
+     *
+     * The two must AGREE on a single feature or the read is ambiguous: a lead
+     * holding feature B while feature A's rounds never closed is a real state,
+     * and picking one quietly is how the wrong subtask gets accepted. Union
+     * size > 1 returns the named candidate list, never a guess.
+     *
+     * `board` is supplied by the caller (both call sites already load it or
+     * need it for adjacent reads) so this never fetches the board twice.
+     */
+    private async _resolvePosterFeatureCard(db: any, from: string, board: any[], ownerSeats?: Set<string>): Promise<{
+        featureId: string | null;
+        title: string;
+        evidence: 'held-card' | 'rounds' | 'held-card+rounds' | 'none';
+        ambiguous: Array<{ planId: string; title: string }>;
+    }> {
+        // `ownerSeats` widens the held-card check to the poster's headed
+        // roster — a lead accepts on a feature whose card a coder seat holds,
+        // and a lead registers rounds for it the same way. Absent, the pool is
+        // the poster alone.
+        const held = (Array.isArray(board) ? board : []).filter((p: any) =>
+            p && p.isFeature && !p.completedAt
+            && (ownerSeats
+                ? ownerSeats.has(String(p.ownerSeat || '').trim())
+                : String(p.ownerSeat || '').trim() === from));
+
+        const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
+        const roundFeatureIds = new Set<string>();
+        try {
+            const rounds: CodingRoundRow[] = (await db.getCodingRoundsByTeam?.(teamId)) || [];
+            for (const r of rounds) {
+                if (r && r.featureId && r.state !== 'closed') {
+                    roundFeatureIds.add(String(r.featureId));
+                }
+            }
+        } catch { /* corroboration read is best-effort — the held card still answers alone */ }
+
+        const candidates = new Map<string, string>();
+        for (const f of held) {
+            candidates.set(String(f.planId), String(f.topic || f.planId));
+        }
+        for (const fid of roundFeatureIds) {
+            if (!candidates.has(fid)) { candidates.set(fid, ''); }
+        }
+
+        if (candidates.size !== 1) {
+            return {
+                featureId: null,
+                title: '',
+                evidence: 'none',
+                ambiguous: [...candidates.entries()].map(([planId, title]) => ({ planId, title })),
+            };
+        }
+        const [featureId, title] = [...candidates.entries()][0];
+        const evidence = held.length > 0 && roundFeatureIds.size > 0 ? 'held-card+rounds'
+            : held.length > 0 ? 'held-card' : 'rounds';
+        return { featureId, title, evidence, ambiguous: [] };
+    }
+
+    /**
+     * The seat pool a poster may accept on behalf of — the poster's own seat
+     * plus, when the poster HEADS a team, that team's roster. Headship is read
+     * from the live `terminals.groups` rows, not from `resolveTeamMembers`:
+     * that seam also returns a roster to a mere MEMBER of a group, so trusting
+     * it would widen a planning seat's self-accept candidate set to its whole
+     * team and turn a resolvable bare `accept` into a loud ambiguity. A store
+     * that cannot answer the group read yields poster-only — the narrow
+     * direction, which degrades to a named 400 rather than a wrong accept.
+     */
+    private async _resolveHeadedRoster(db: any, workspaceRoot: string, from: string): Promise<string[] | null> {
+        const headId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
+        let groups: any[] = [];
+        try {
+            // Both keys — the same merge every group reader performs
+            // ('terminals.groups' is the legacy bare key still honoured
+            // alongside TERMINALS_GROUPS_KEY).
+            const scoped = await db.getConfigJson?.(TERMINALS_GROUPS_KEY, []);
+            const legacy = await db.getConfigJson?.('terminals.groups', []);
+            const seen = new Set<string>();
+            for (const g of [...(Array.isArray(scoped) ? scoped : []), ...(Array.isArray(legacy) ? legacy : [])]) {
+                const id = g && typeof g.id === 'string' ? g.id : '';
+                if (id && seen.has(id)) { continue; }
+                if (id) { seen.add(id); }
+                groups.push(g);
+            }
+        } catch (err) {
+            // A failed group read narrows the candidate pool to the poster —
+            // the loud direction (extra 400s, never a wider accept) — but it
+            // must be traceable, not silent.
+            console.warn(`[LocalApiServer] headed-roster resolution failed for '${from}' — falling back to poster-only candidates:`, err);
+            groups = [];
+        }
+        const headed = groups.find(g => g && (teamHeadName(g) === from || String(g.id || '') === headId));
+        if (!headed) { return null; }
+        const roster = rosterOfGroup(headed);
+        if (roster.length > 0) { return roster; }
+        // The group row exists but its roster is unreadable from the group
+        // shape — the wired seam resolves the same group, so ask it before
+        // conceding poster-only.
+        if (this._options.resolveTeamMembers) {
+            try { return await this._options.resolveTeamMembers(workspaceRoot, from); }
+            catch { return null; }
+        }
+        return null;
+    }
+
+    /**
+     * Resolve which card a `task/complete` post refers to when no planId is
+     * given — the server half of `accept <n>` and bare `accept`. Resolving
+     * here (not CLI-side over a GET) keeps the read and the write inside one
+     * request: no read-then-write window, and one place for the loud
+     * ambiguity errors.
+     *
+     * Candidate rule, applied to the POSTER'S evidence only — a non-lead can
+     * never resolve another team's feature or another seat's card:
+     *
+     *  - FEATURE CASE: the poster holds one open feature (see
+     *    `_resolvePosterFeatureCard`). Candidates = `getSubtasksByFeatureId`
+     *    in its defined (rowid) order — the same order the feature file's
+     *    numbered Subtasks list renders. `ordinal` indexes that list 1-based;
+     *    an accepted subtask stays `status='active'`, so ordinals do NOT
+     *    shift as accepts land.
+     *  - NON-FEATURE CASE: candidates = ALL non-feature cards whose ownerSeat
+     *    is the poster's seat or its headed team's roster — accepted ones
+     *    included, so an `accept <n>` ordinal names the same card an hour
+     *    later (the batch prompt's printed numbers never shift). Ordered
+     *    `ownerSince` ASC then planId. Covers the planning-seat self-accept,
+     *    the single-plan head, and the batch lead.
+     *  - BARE (`ordinal === null`): exactly one INCOMPLETE candidate resolves
+     *    it; zero or many is a 400 that names what was checked — the error IS
+     *    the menu the caller retries from.
+     */
+    private async _resolveAcceptanceTarget(
+        db: any,
+        workspaceRoot: string,
+        from: string,
+        board: any[],
+        ordinal: number | null
+    ): Promise<
+        { ok: true; planId: string; ordinal: number; title: string; featureId?: string; featureTitle?: string }
+        | { ok: false; error: string }
+    > {
+        // The seat pool is resolved FIRST — it scopes both the held-feature
+        // read below and the non-feature candidate list. A feature card held
+        // by a coder seat is still the lead's feature to accept on.
+        const candidateSeats = new Set<string>([from]);
+        let seatPoolDescription = `seat '${from}'`;
+        const headedRoster = await this._resolveHeadedRoster(db, workspaceRoot, from);
+        if (headedRoster && headedRoster.length > 0) {
+            for (const s of headedRoster) { candidateSeats.add(s); }
+            seatPoolDescription = `seat '${from}' and its team roster (${headedRoster.join(', ')})`;
+        }
+
+        const feature = await this._resolvePosterFeatureCard(db, from, board, candidateSeats);
+        if (feature.ambiguous.length > 1) {
+            return {
+                ok: false,
+                error: `Cannot resolve which feature '${from}' is accepting on — ${feature.ambiguous.length} open features are associated with it: ${feature.ambiguous.map(f => `'${f.title || f.planId}'`).join(', ')}. Retry with --plan <subtaskPlanId> to name the subtask directly.`,
+            };
+        }
+
+        if (feature.featureId) {
+            const subtasks: any[] = (typeof db.getSubtasksByFeatureId === 'function')
+                ? ((await db.getSubtasksByFeatureId(feature.featureId)) || [])
+                : [];
+            const featureLabel = feature.title || feature.featureId;
+            if (subtasks.length === 0) {
+                return { ok: false, error: `Feature '${featureLabel}' has no subtasks — nothing to accept.` };
+            }
+            if (ordinal !== null) {
+                if (ordinal > subtasks.length) {
+                    return { ok: false, error: `Ordinal ${ordinal} is out of range — feature '${featureLabel}' has ${subtasks.length} subtask(s) (valid ordinals 1-${subtasks.length}).` };
+                }
+                const target = subtasks[ordinal - 1];
+                return {
+                    ok: true,
+                    planId: String(target.planId),
+                    ordinal,
+                    title: String(target.topic || target.planId),
+                    featureId: feature.featureId,
+                    featureTitle: feature.title,
+                };
+            }
+            // Bare accept: exactly one incomplete subtask resolves it.
+            const incomplete = subtasks
+                .map((s, i) => ({ s, n: i + 1 }))
+                .filter(e => e.s && !e.s.completedAt);
+            if (incomplete.length === 1) {
+                const e = incomplete[0];
+                return {
+                    ok: true,
+                    planId: String(e.s.planId),
+                    ordinal: e.n,
+                    title: String(e.s.topic || e.s.planId),
+                    featureId: feature.featureId,
+                    featureTitle: feature.title,
+                };
+            }
+            if (incomplete.length === 0) {
+                return { ok: false, error: `No subtasks awaiting acceptance on feature '${featureLabel}' — all ${subtasks.length} are already accepted.` };
+            }
+            return {
+                ok: false,
+                error: `Bare 'accept' is ambiguous — ${incomplete.length} subtasks await acceptance on feature '${featureLabel}': ${incomplete.map(e => `${e.n}: '${e.s.topic || e.s.planId}'`).join(', ')}. Retry with \`accept <n>\` using the ordinal from the feature file's Subtasks list.`,
+            };
+        }
+
+        // Non-feature case: every card owned by the poster's seat pool —
+        // accepted ones INCLUDED — ordered ownerSince ASC with a planId
+        // tiebreak. Accepted cards keep their slots (same stability rule as
+        // the feature case: `accept 3` an hour later still means the third
+        // card the prompt numbered, and re-accepting is the idempotent path).
+        // Bare `accept` resolves only the INCOMPLETE subset.
+        // (candidateSeats/seatPoolDescription resolved above.)
+        const candidates = (Array.isArray(board) ? board : [])
+            .filter((p: any) => p && !p.isFeature
+                && candidateSeats.has(String(p.ownerSeat || '').trim()))
+            .sort((a: any, b: any) => {
+                const ta = String(a.ownerSince || '');
+                const tb = String(b.ownerSince || '');
+                if (ta !== tb) { return ta < tb ? -1 : 1; }
+                return String(a.planId || '').localeCompare(String(b.planId || ''));
+            });
+        const incomplete = candidates.filter(c => !c.completedAt);
+
+        if (candidates.length === 0) {
+            return { ok: false, error: `No open feature held by '${from}' and no cards awaiting acceptance owned by ${seatPoolDescription} — nothing resolves this accept.` };
+        }
+        if (incomplete.length === 0) {
+            return { ok: false, error: `Nothing awaits acceptance for ${seatPoolDescription} — all ${candidates.length} held card(s) are already accepted.` };
+        }
+        if (ordinal !== null) {
+            if (ordinal > candidates.length) {
+                return { ok: false, error: `Ordinal ${ordinal} is out of range — ${candidates.length} card(s) are held by ${seatPoolDescription} (valid ordinals 1-${candidates.length}): ${candidates.map((c: any, i: number) => `${i + 1}: '${c.topic || c.planId}'${c.completedAt ? ' (accepted)' : ''}`).join(', ')}.` };
+            }
+            const target = candidates[ordinal - 1];
+            return { ok: true, planId: String(target.planId), ordinal, title: String(target.topic || target.planId) };
+        }
+        if (incomplete.length === 1) {
+            const target = incomplete[0];
+            const n = candidates.indexOf(target) + 1;
+            return { ok: true, planId: String(target.planId), ordinal: n, title: String(target.topic || target.planId) };
+        }
+        return {
+            ok: false,
+            error: `Bare 'accept' is ambiguous — ${incomplete.length} cards await acceptance for ${seatPoolDescription}: ${incomplete.map((c: any) => `${candidates.indexOf(c) + 1}: '${c.topic || c.planId}' (seat '${c.ownerSeat}')`).join(', ')}. Retry with \`accept <n>\`.`,
+        };
+    }
+
+    /**
+     * The subtask's 1-based position in its feature's stable Subtasks order —
+     * the `<n>` a lead types as `accept <n>`. `featureId` may be omitted, in
+     * which case it is read off the subtask's own plan row. Undefined when
+     * either lookup fails or the subtask is not in the list; callers degrade
+     * to the `--plan` compatibility form, which is a message-text choice, not
+     * a behaviour change.
+     */
+    private async _subtaskOrdinalForAccept(
+        workspaceRoot: string,
+        planId: string | undefined,
+        featureId?: string
+    ): Promise<number | undefined> {
+        if (!planId) { return undefined; }
+        try {
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db || typeof db.getSubtasksByFeatureId !== 'function') { return undefined; }
+            let fid = featureId;
+            if (!fid && typeof db.getPlanByPlanId === 'function') {
+                fid = (await db.getPlanByPlanId(planId))?.featureId || undefined;
+            }
+            if (!fid) { return undefined; }
+            const subs: any[] = (await db.getSubtasksByFeatureId(fid)) || [];
+            const idx = subs.findIndex((s: any) => s && s.planId === planId);
+            return idx >= 0 ? idx + 1 : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     private async _handleKanbanTaskComplete(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
@@ -5387,9 +5683,25 @@ export class LocalApiServer {
                 : (this._options.workspaceRoot || '').trim();
             const workspaceRoot = this._requireKnownRoot(rawRoot);
             const from = String(body?.from || '').trim();
-            const planId = String(body?.planId || '').trim();
+            let planId = String(body?.planId || '').trim();
             const outcome = typeof body?.outcome === 'string' ? body.outcome.trim() : '';
             const note = typeof body?.note === 'string' ? body.note.trim() : '';
+
+            // `ordinal` is the position in the poster's acceptance-candidate
+            // list — `accept 3` on the CLI posts {"from", "ordinal": 3}. It is
+            // an index into a server-side ordered list, never interpolated
+            // into a path or SQL. planId and ordinal are mutually exclusive:
+            // naming both is a malformed call, not a planId-with-hint.
+            let ordinal: number | null = null;
+            if (body?.ordinal !== undefined && body?.ordinal !== null && String(body.ordinal).trim() !== '') {
+                const n = typeof body.ordinal === 'number' ? body.ordinal : Number(String(body.ordinal).trim());
+                if (!Number.isInteger(n) || n < 1) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Invalid ordinal '${body.ordinal}' — accept takes a positive integer (the subtask's number in the feature file's Subtasks list)` }));
+                    return;
+                }
+                ordinal = n;
+            }
 
             if (!workspaceRoot) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -5401,13 +5713,13 @@ export class LocalApiServer {
                 res.end(JSON.stringify({ success: false, error: "Missing required field: from (the lead's terminal name)" }));
                 return;
             }
-            if (!planId) {
+            if (planId && ordinal !== null) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Missing required field: planId' }));
+                res.end(JSON.stringify({ success: false, error: 'planId and ordinal are mutually exclusive — accept names a subtask by planId OR by its ordinal, not both' }));
                 return;
             }
             // Reject path separators in planId — never interpolate into a path.
-            if (planId.includes('/') || planId.includes('\\') || planId.includes('..')) {
+            if (planId && (planId.includes('/') || planId.includes('\\') || planId.includes('..'))) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: 'Invalid planId: path separators not allowed' }));
                 return;
@@ -5418,6 +5730,33 @@ export class LocalApiServer {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
                 return;
+            }
+
+            // No planId: resolve the poster's acceptance candidates server-side
+            // (see `_resolveAcceptanceTarget`). The resolution and the write run
+            // inside this one request — no read-then-write window — and a bare
+            // or ambiguous accept NEVER writes `completed_at`: it 400s naming
+            // the candidates instead.
+            let resolution: { ordinal: number; title: string; featureId?: string; featureTitle?: string } | null = null;
+            if (!planId) {
+                const wsIdForResolve = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+                const boardForResolve: any[] = (await db.getBoard?.(wsIdForResolve)) || [];
+                const resolved = await this._resolveAcceptanceTarget(db, workspaceRoot, from, boardForResolve, ordinal);
+                if (!resolved.ok) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: resolved.error }));
+                    return;
+                }
+                planId = resolved.planId;
+                // Provenance: which card did the ordinal mean. Logged AND
+                // returned — "which subtask did '3' resolve to" must be
+                // answerable after the fact.
+                resolution = {
+                    ordinal: resolved.ordinal,
+                    title: resolved.title,
+                    ...(resolved.featureId ? { featureId: resolved.featureId, featureTitle: resolved.featureTitle } : {}),
+                };
+                console.log(`[LocalApiServer] task/complete: resolved ${ordinal !== null ? `ordinal ${resolved.ordinal}` : 'bare accept'} for '${from}' → '${resolved.title}' (${planId})${resolved.featureId ? ` on feature '${resolved.featureTitle || resolved.featureId}'` : ''}`);
             }
 
             // Reject a feature planId — use POST /kanban/feature/complete instead.
@@ -5445,8 +5784,8 @@ export class LocalApiServer {
                     // error is being told how to retry, and a raw-HTTP retry is
                     // refused by the CSRF guard (see composeAcceptanceInstruction).
                     const error = outstanding > 0
-                        ? substituteCliPath(`This planId is a feature with ${outstanding} of ${subs.length} subtasks still incomplete. Do NOT complete the feature. Run \`node "<cliPath>" accept --plan "<the SUBTASK's planId>"\` for the subtask you were dispatched, not the feature. Complete the feature only once every subtask has reported done.`)
-                        : substituteCliPath('This planId is a feature, not a subtask. Run `node "<cliPath>" accept --plan "<planId>"` once per subtask; the system completes the feature when the last one is accepted.');
+                        ? substituteCliPath(`This planId is a feature with ${outstanding} of ${subs.length} subtasks still incomplete. Do NOT complete the feature. Run \`node "<cliPath>" accept <n>\` where <n> is the subtask's number in the feature file's Subtasks list. The system completes the feature once every subtask has been accepted.`)
+                        : substituteCliPath('This planId is a feature, not a subtask. Run `node "<cliPath>" accept <n>` once per subtask — <n> is its number in the feature file\'s Subtasks list; the system completes the feature when the last one is accepted.');
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: false, error, outstandingSubtasks: outstanding }));
                     return;
@@ -5778,7 +6117,7 @@ export class LocalApiServer {
             // ── The advance (Mission 04) ───────────────────────────────
             // A mission releases its next wave when EVERY member of the in-flight
             // wave has asserted completion. This is where that fact lands for a
-            // head-paced team: the head accepts per plan (`accept --plan`), so the
+            // head-paced team: the head accepts per plan (`accept <n>`), so the
             // last accept is the signal. Fire-and-forget and enqueued on the pop's
             // own chain — the release is idempotent there (it recomputes "is
             // anything of mine still out?" inside the critical section), so two
@@ -5793,6 +6132,10 @@ export class LocalApiServer {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 ...result,
+                // Resolution provenance for the ordinal/bare form: which card
+                // the number meant, echoed so a shifted ordinal is auditable
+                // in the seat's transcript and in the response.
+                ...(resolution ? { resolution } : {}),
                 ...(roundClosed !== null ? { roundClosed } : {}),
                 ...(roundAlreadyClosed !== null ? { roundAlreadyClosed } : {}),
                 ...(nextRoundInfo !== null ? { nextRound: nextRoundInfo } : {}),
@@ -6108,12 +6451,26 @@ export class LocalApiServer {
      * it registered. It does NOT evaluate the plan — the lead decided, the
      * system records.
      *
-     * Body: `{ from, featureId, rounds: [["planId","planId"], ["planId"]] }`.
+     * Body: `{ from, featureId?, rounds: [[1, 2], [3]] }`.
+     *
+     * `featureId` is OPTIONAL: when absent it is derived from the poster's held
+     * feature card (and corroborated by the team's open `coding_rounds` rows —
+     * see `_resolvePosterFeatureCard`). A poster holding no open feature gets
+     * the same 400 shape as a missing field; a poster associated with more
+     * than one gets a 400 naming them — never a quiet pick.
+     *
+     * Each `rounds` entry is a subtask named by ORDINAL (integer or numeric
+     * string — the number in the feature file's Subtasks list, resolved
+     * through `getSubtasksByFeatureId`'s defined order) or by planId (the
+     * human escape hatch). `{ "planId": …, "seat": … }` and
+     * `{ "ordinal": …, "seat": … }` pin a roster seat. Stored rows always keep
+     * planIds — `subtask_seats` shape is unchanged, no migration.
      *
      * Validation is identity-only (never judgment):
      *  - each planId must be a subtask of that feature
-     *  - no cross-round duplicate planId
-     *  - no within-round duplicate planId
+     *  - each ordinal must be in range
+     *  - no cross-round duplicate subtask
+     *  - no within-round duplicate subtask
      *  - no empty round
      *
      * Re-registration: if the feature already has rounds, replace the pending
@@ -6135,7 +6492,7 @@ export class LocalApiServer {
             const body = await this._parseJsonBody(req);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
             const from = String(body?.from || '').trim();
-            const featureId = String(body?.featureId || '').trim();
+            let featureId = String(body?.featureId || '').trim();
             const roundsRaw = body?.rounds;
 
             if (!workspaceRoot) {
@@ -6148,23 +6505,24 @@ export class LocalApiServer {
                 res.end(JSON.stringify({ success: false, error: "Missing required field: from (the lead's terminal name)" }));
                 return;
             }
-            if (!featureId) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Missing required field: featureId' }));
-                return;
-            }
             if (!Array.isArray(roundsRaw) || roundsRaw.length === 0) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: 'Missing or empty required field: rounds (ordered array of subtask arrays)' }));
                 return;
             }
 
-            // Validate rounds shape: each entry must be a non-empty array of
-            // subtask entries. An entry is a bare planId string, or an object
-            // `{ planId, seat }` that pins the subtask to a roster seat —
-            // the lead's choice, recorded at registration and honoured at
-            // dispatch. Mixed entries within a round are allowed.
-            const normalisedRounds: Array<Array<{ planId: string; seat: string | null }>> = [];
+            // Validate rounds shape and collect entries. An entry is:
+            //  - an integer or numeric string — the subtask's ORDINAL in the
+            //    feature's Subtasks list (resolved below, once the feature's
+            //    subtask order is loaded);
+            //  - a bare planId string (the human escape hatch);
+            //  - an object `{ planId, seat }` or `{ ordinal, seat }` that pins
+            //    the subtask to a roster seat — the lead's choice, recorded at
+            //    registration and honoured at dispatch.
+            // Mixed entries within a round are allowed. Ordinal → planId
+            // mapping is deferred to the post-subtasks pass so the range check
+            // can name the valid range.
+            const pendingRounds: Array<Array<{ planId?: string; ordinal?: number; seat: string | null }>> = [];
             for (let i = 0; i < roundsRaw.length; i++) {
                 const r = roundsRaw[i];
                 if (!Array.isArray(r) || r.length === 0) {
@@ -6172,38 +6530,65 @@ export class LocalApiServer {
                     res.end(JSON.stringify({ success: false, error: `Round ${i + 1} is empty or not an array — every round must name at least one subtask` }));
                     return;
                 }
-                const entries: Array<{ planId: string; seat: string | null }> = [];
+                const entries: Array<{ planId?: string; ordinal?: number; seat: string | null }> = [];
                 for (const rawEntry of r) {
+                    if (typeof rawEntry === 'number') {
+                        if (!Number.isInteger(rawEntry) || rawEntry < 1) {
+                            res.writeHead(400, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} entry '${rawEntry}' is not a valid ordinal — a positive integer, the subtask's number in the feature file's Subtasks list` }));
+                            return;
+                        }
+                        entries.push({ ordinal: rawEntry, seat: null });
+                        continue;
+                    }
                     if (typeof rawEntry === 'string') {
                         if (rawEntry.trim() === '') {
                             res.writeHead(400, { 'Content-Type': 'application/json' });
                             res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains a non-string or empty planId` }));
                             return;
                         }
-                        entries.push({ planId: rawEntry.trim(), seat: null });
+                        const s = rawEntry.trim();
+                        if (/^\d+$/.test(s)) {
+                            entries.push({ ordinal: parseInt(s, 10), seat: null });
+                        } else {
+                            entries.push({ planId: s, seat: null });
+                        }
                         continue;
                     }
                     if (rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry)) {
                         const planId = typeof rawEntry.planId === 'string' ? rawEntry.planId.trim() : '';
-                        if (!planId) {
+                        const ordRaw = rawEntry.ordinal;
+                        const ordinal = (typeof ordRaw === 'number' && Number.isInteger(ordRaw) && ordRaw >= 1)
+                            ? ordRaw
+                            : (typeof ordRaw === 'string' && /^\d+$/.test(ordRaw.trim()) ? parseInt(ordRaw.trim(), 10) : undefined);
+                        if (planId && ordinal !== undefined) {
                             res.writeHead(400, { 'Content-Type': 'application/json' });
-                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains an entry with a missing or empty planId` }));
+                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} entry names both planId '${planId}' and ordinal ${ordinal} — one or the other, not both` }));
+                            return;
+                        }
+                        if (!planId && ordinal === undefined) {
+                            res.writeHead(400, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains an entry with a missing or empty planId/ordinal` }));
                             return;
                         }
                         const seat = rawEntry.seat;
                         if (seat !== undefined && seat !== null && (typeof seat !== 'string' || seat.trim() === '')) {
                             res.writeHead(400, { 'Content-Type': 'application/json' });
-                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} entry '${planId}' carries a seat that is not a non-empty string` }));
+                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} entry '${planId || ordinal}' carries a seat that is not a non-empty string` }));
                             return;
                         }
-                        entries.push({ planId, seat: seat === undefined || seat === null ? null : seat.trim() });
+                        entries.push({
+                            ...(planId ? { planId } : {}),
+                            ...(ordinal !== undefined ? { ordinal } : {}),
+                            seat: seat === undefined || seat === null ? null : seat.trim(),
+                        });
                         continue;
                     }
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains a non-string or empty planId` }));
+                    res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains an entry that is neither an ordinal, a planId, nor a {planId|ordinal, seat} object` }));
                     return;
                 }
-                normalisedRounds.push(entries);
+                pendingRounds.push(entries);
             }
 
             const db = await this._options.getKanbanDatabase?.(workspaceRoot);
@@ -6239,6 +6624,32 @@ export class LocalApiServer {
                 return;
             }
 
+            // featureId optional: derive it from the poster's held feature card
+            // (corroborated by the team's open coding_rounds rows). The board is
+            // loaded only on this path — an explicit featureId never needs it.
+            if (!featureId) {
+                const wsIdForBoard = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+                const boardForFeature: any[] = (await db.getBoard?.(wsIdForBoard)) || [];
+                // Pool = poster + roster: a feature card held by a coder seat
+                // still derives the lead's feature.
+                const held = await this._resolvePosterFeatureCard(db, from, boardForFeature, new Set([from, ...roster]));
+                if (!held.featureId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        error: held.ambiguous.length > 1
+                            ? `Cannot derive featureId — '${from}' is associated with ${held.ambiguous.length} open features: ${held.ambiguous.map(f => `'${f.title || f.planId}'`).join(', ')}. Pass featureId explicitly.`
+                            : `Missing required field: featureId — no open feature card is held by '${from}' to derive it from`,
+                    }));
+                    return;
+                }
+                featureId = held.featureId;
+                // Provenance: "which feature did a bare register land on" must be
+                // answerable — the derived id is logged with the evidence that
+                // produced it.
+                console.log(`[LocalApiServer] round/register: featureId derived for '${from}' → '${held.title || featureId}' (${featureId}, evidence: ${held.evidence})`);
+            }
+
             // Verify the feature exists and is a feature.
             const feature = await db.getPlanByPlanId(featureId);
             if (!feature || !feature.isFeature) {
@@ -6247,9 +6658,31 @@ export class LocalApiServer {
                 return;
             }
 
-            // Build the set of valid subtask planIds for this feature.
+            // The feature's subtasks in their DEFINED order (rowid — the same
+            // order the feature file's numbered Subtasks list renders). The
+            // ordinal a lead types is an index into this list.
             const subtasks: Array<{ planId: string }> = await db.getSubtasksByFeatureId(featureId);
             const validSubtaskIds = new Set(subtasks.map(s => s.planId));
+
+            // Resolve ordinals → planIds now that the subtask order is loaded.
+            // Stored rounds keep planIds (subtask_seats shape unchanged).
+            const normalisedRounds: Array<Array<{ planId: string; seat: string | null }>> = [];
+            for (let i = 0; i < pendingRounds.length; i++) {
+                const resolvedEntries: Array<{ planId: string; seat: string | null }> = [];
+                for (const entry of pendingRounds[i]) {
+                    if (entry.ordinal !== undefined) {
+                        if (entry.ordinal > subtasks.length) {
+                            res.writeHead(400, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: `Round ${i + 1} ordinal ${entry.ordinal} is out of range — feature '${feature.topic || featureId}' has ${subtasks.length} subtask(s) (valid ordinals 1-${subtasks.length})` }));
+                            return;
+                        }
+                        resolvedEntries.push({ planId: String(subtasks[entry.ordinal - 1].planId), seat: entry.seat });
+                        continue;
+                    }
+                    resolvedEntries.push({ planId: entry.planId as string, seat: entry.seat });
+                }
+                normalisedRounds.push(resolvedEntries);
+            }
 
             // Derive team_id from the poster (same derivation as resolveTeamMembersForHead).
             const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
@@ -7807,7 +8240,8 @@ export class LocalApiServer {
                             + ` ${held.featureId ? TURN_END_VERIFY_INSTRUCTION : TURN_END_VERIFY_INSTRUCTION_STANDALONE}`
                             + (isTeamMember
                                 ? ` The system preserves ${from}'s context for review and fix requests.`
-                                    + composeAcceptanceInstruction(relayHead, relayPlanId, workspaceRoot)
+                                    + composeAcceptanceInstruction(relayHead, relayPlanId, workspaceRoot,
+                                        await this._subtaskOrdinalForAccept(workspaceRoot, relayPlanId, held.featureId || undefined))
                                 : ` The system is clearing ${from} and dispatching the next card.`);
                         try {
                             // ptySendPrompt reports a dead or unknown recipient
@@ -10496,7 +10930,8 @@ export class LocalApiServer {
                     const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                         + (planId ? ` (plan ${planId})` : '')
                         + `. The system preserves ${from}'s context for review and fix requests.`
-                        + composeAcceptanceInstruction(headName, planId, workspaceRoot);
+                        + composeAcceptanceInstruction(headName, planId, workspaceRoot,
+                            await this._subtaskOrdinalForAccept(workspaceRoot, planId));
                     if (relayToHead && this._options.terminalVerb) {
                         try {
                             await this._options.terminalVerb('ptySendPrompt', {

@@ -87,7 +87,7 @@ async function runTests() {
     // 2. The member completion fragment body exists and routes completions.
     test('the member completion fragment body exists and routes completions', () => {
         const order = buildMemberCompletionFragment({ teamId: 'team-review', headName: 'lead-1' });
-        assert.ok(order.includes('node "<cliPath>" done.'),
+        assert.ok(order.includes('node "<cliPath>" submit.'),
             'the member completion fragment routes completions through the bundled CLI\'s bare done command');
         assert.ok(!/done --from/.test(order),
             'the seat supplies no --from: the CLI resolves it from SWITCHBOARD_TERMINAL');
