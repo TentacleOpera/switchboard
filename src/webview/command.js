@@ -3338,10 +3338,29 @@
             const raw = String(id || '').trim();
             if (!raw) { return null; }
             const bits = raw.split(':');
-            const family = bits[0].replace(/[-_]/g, ' ').replace(/([a-z])(\d)/gi, '$1 $2')
-                .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+            // Training suffixes are not part of a model's name to a reader.
+            // The exact id is always on the tooltip, so nothing is lost.
+            const NOISE = ['it', 'qat', 'instruct', 'chat', 'latest'];
+            const family = bits[0].replace(/[-_]/g, ' ').split(' ')
+                .filter(function (w) { return w && NOISE.indexOf(w.toLowerCase()) < 0; })
+                .join(' ')
+                .replace(/([a-z])(\d)/gi, '$1 $2')
+                .replace(/\b\w/g, function (c) { return c.toUpperCase(); })
+                // Parameter counts read as 31B, not 31b.
+                .replace(/\b(\d+)\s*([bm])\b/gi, function (_m, n, u) { return n + u.toUpperCase(); });
             const variant = bits.length > 1 ? String(bits[1]).split('-')[0].toUpperCase() : '';
             return (family + (variant ? ' ' + variant : '')).trim();
+        }
+
+        // Where the evidence GOES, from the tier's own locality. 'cloud' is said
+        // for anything off the box, because "local" next to a model that is
+        // actually a third-party API is the one label an operator would act on.
+        function placeOf(tier) {
+            const loc = String((tier && tier.locality) || '');
+            if (loc === 'loopback' || loc === 'local') { return 'local'; }
+            if (loc === 'lan' || loc === 'tailnet') { return loc; }
+            if (loc === 'internet' || loc === 'cloud') { return 'cloud'; }
+            return '';
         }
 
         async function loadModels() {
@@ -3364,18 +3383,19 @@
                 if (tier && tier.model) {
                     // Locality comes from the tier, never guessed from the URL.
                     // Omitted rather than assumed when the tier does not say.
-                    const loc = String(tier.locality || '');
-                    const where = (loc === 'local' || loc === 'tailnet') ? 'local'
-                        : (loc === 'cloud' ? 'cloud' : '');
-                    pilot = { name: prettyModel(tier.model), where: where, raw: tier.model };
+                    pilot = {
+                        name: prettyModel(tier.model),
+                        where: placeOf(tier),
+                        raw: tier.model,
+                        note: tier.costClass === 'metered' ? 'metered' : '',
+                    };
                 }
                 if (esc && esc.model) {
-                    const loc = String(esc.locality || '');
                     navigator = {
                         name: prettyModel(esc.model),
-                        where: (loc === 'internet' || loc === 'cloud') ? 'cloud'
-                            : ((loc === 'local' || loc === 'tailnet' || loc === 'loopback') ? 'local' : ''),
+                        where: placeOf(esc),
                         raw: esc.model,
+                        note: esc.costClass === 'metered' ? 'metered' : '',
                     };
                 }
                 // Say WHY it is absent. "not configured" alone sent the operator
@@ -3397,7 +3417,10 @@
                 const v = document.createElement('span');
                 if (m) {
                     v.style.cssText = 'color:var(--text-color);';
-                    v.textContent = m.name + (m.where ? ' (' + m.where + ')' : '');
+                    const bits = [];
+                    if (m.where) { bits.push(m.where); }
+                    if (m.note) { bits.push(m.note); }
+                    v.textContent = m.name + (bits.length ? ' (' + bits.join(', ') + ')' : '');
                     v.title = String(m.raw || '');
                 } else {
                     v.style.cssText = 'color:var(--text-dim);';

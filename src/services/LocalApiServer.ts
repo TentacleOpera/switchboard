@@ -1714,6 +1714,33 @@ export class LocalApiServer {
      * wsHub fan-out target for the broadcast abstraction (A2a) that A2b's
      * push-site audit routes through. No-op when no WS clients are connected.
      */
+    /**
+     * Classify an endpoint by where it actually goes. Every caller that needs to
+     * know whether evidence leaves the box asks this one function, so there is a
+     * single answer rather than a regex per call site.
+     */
+    private _deriveEndpointLocality(rawUrl: string): 'loopback' | 'lan' | 'tailnet' | 'internet' {
+        let host = '';
+        try { host = new URL(String(rawUrl || '')).hostname.toLowerCase(); } catch { host = ''; }
+        // An unparseable endpoint is treated as OFF-BOX. Guessing 'loopback' for a
+        // string we could not read would understate where the evidence goes, and
+        // that is the error that cannot be taken back.
+        if (!host) { return 'internet'; }
+        if (host === 'localhost' || host === '::1' || host.startsWith('127.')) { return 'loopback'; }
+        if (host.endsWith('.ts.net')) { return 'tailnet'; }
+        const v4 = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+        if (v4) {
+            const a = Number(v4[1]);
+            const b = Number(v4[2]);
+            // Tailscale hands out 100.64.0.0/10.
+            if (a === 100 && b >= 64 && b <= 127) { return 'tailnet'; }
+            if (a === 10) { return 'lan'; }
+            if (a === 192 && b === 168) { return 'lan'; }
+            if (a === 172 && b >= 16 && b <= 31) { return 'lan'; }
+        }
+        return 'internet';
+    }
+
     public broadcastWs(verb: string, payload?: any, surface?: string): void {
         this._wsHub?.broadcast(verb, payload, surface);
         this._onBoardEvent(verb);
@@ -15385,13 +15412,25 @@ export class LocalApiServer {
                     if (judgement && Array.isArray(judgement.tiers) && judgement.tiers.length === 0) {
                         const m = await this._resolveAgentControlModel();
                         if (m && !('error' in m)) {
-                            const local = /(^|\/\/)(127\.0\.0\.1|localhost)/.test(m.url);
+                            // Locality, cost and operator are DERIVED FROM THE
+                            // ENDPOINT, not assumed. This previously read
+                            // `local ? 'loopback' : 'tailnet'` with a hardcoded
+                            // `free` and `self`, so the moment a Google endpoint
+                            // was configured the board described a metered
+                            // third-party call as a free tailnet call it operated
+                            // itself — and the panel drew it as "(local)".
+                            const locality = this._deriveEndpointLocality(m.url);
+                            const offBox = locality === 'internet';
                             judgement.tiers = [{
                                 providerId: m.provider || 'local',
                                 role: 'classifier',
-                                locality: local ? 'loopback' : 'tailnet',
-                                operator: 'self',
-                                costClass: 'free',
+                                locality,
+                                // Who SEES THE EVIDENCE. Naming a third party
+                                // 'self' is the one field an operator would use to
+                                // decide whether a board is safe to point at a
+                                // hosted model.
+                                operator: offBox ? (m.provider || 'third-party') : 'self',
+                                costClass: offBox ? 'metered' : 'free',
                                 endpoint: m.url,
                                 model: m.model,
                                 keySet: !!m.apiKey,
