@@ -1522,11 +1522,19 @@
                 flying = !!(pd && pd.running);
             } catch { /* unknown stays dark rather than claiming WATCHING */ }
 
+            // Today's spend against each station's daily allowance.
+            let budget = null;
+            try {
+                const br = await fetch('/controller/budget');
+                const bd = await br.json();
+                if (bd && bd.success !== false) { budget = bd; }
+            } catch { /* the station simply shows no allowance */ }
+
             host.textContent = '';
             // A crew station: who it is, whether the lamp is lit, and what it is
             // doing. The model id, its locality and whether it is metered are
             // setup facts — they live on the tooltip and in config, not here.
-            const row = function (role, m, state, lit) {
+            const row = function (role, m, state, lit, spend) {
                 const el = document.createElement('div');
                 el.className = 'agent-model-row';
                 el.style.cssText = 'display:flex; gap:9px; align-items:center; padding:5px 0;';
@@ -1569,15 +1577,44 @@
                 el.appendChild(r);
                 el.appendChild(name);
                 el.appendChild(v);
+                // Usage against the daily allowance. Shown ONLY where an
+                // allowance is actually known: "12" on its own invites the
+                // operator to imagine a ceiling, and an unmetered local model
+                // has none to imagine.
+                if (spend && spend.configured && spend.budget) {
+                    const b = spend.budget;
+                    const u = document.createElement('span');
+                    const over = b.perDay !== null && spend.usedToday >= b.perDay;
+                    const near = b.perDay !== null && !over && spend.usedToday >= b.perDay * 0.8;
+                    u.style.cssText = 'font-size:9px; letter-spacing:0.1em; flex-shrink:0; '
+                        + 'font-variant-numeric:tabular-nums; color:'
+                        + (over ? 'var(--error)' : (near ? 'var(--warning)' : 'var(--text-secondary)')) + ';';
+                    if (b.perDay !== null) {
+                        u.textContent = spend.usedToday + '/' + b.perDay;
+                        u.title = b.note + ' (' + b.source + ')';
+                    } else if (b.source === 'unmetered') {
+                        u.textContent = spend.usedToday ? String(spend.usedToday) : '';
+                        u.title = b.note;
+                    } else {
+                        // Unknown allowance: say so rather than draw a bare count
+                        // that looks like it is measured against something.
+                        u.textContent = spend.usedToday + ' today';
+                        u.title = b.note;
+                    }
+                    if (u.textContent) { el.appendChild(u); }
+                }
+
                 return el;
             };
             // A station with no model is OFFLINE, not blank — and an unconfigured
             // Navigator is STANDBY, a different state from a Pilot that is
             // configured and simply not running.
             host.appendChild(row('PILOT', pilot,
-                pilot ? (flying ? 'WATCHING' : 'STOPPED') : 'OFFLINE', !!(pilot && flying)));
+                pilot ? (flying ? 'WATCHING' : 'STOPPED') : 'OFFLINE', !!(pilot && flying),
+                budget && budget.pilot));
             host.appendChild(row('NAVIGATOR', navigator,
-                navigator ? (flying ? 'READY' : 'STANDBY') : 'STANDBY', false));
+                navigator ? (flying ? 'READY' : 'STANDBY') : 'STANDBY', false,
+                budget && budget.navigator));
         }
 
         // ── Report scope: the board, or one team ──────────────────────────

@@ -1,4 +1,5 @@
 import * as http from 'http';
+import { resolveBudget, usageKey } from '../standalone/judgement/budgets';
 import * as zlib from 'zlib';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
@@ -15543,6 +15544,73 @@ export class LocalApiServer {
                 } catch (err) {
                     res.writeHead(500, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: false, error: 'controller report write failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/controller/budget' && req.method === 'GET') {
+                // What each station may spend a day, and what it has spent. The
+                // budget's SOURCE travels with it: an operator's number, a
+                // published free-tier default, self-hosted-and-unmetered, or
+                // genuinely unknown — which returns no number at all rather than
+                // a plausible one the operator would plan against.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                const store = this._options.controllerStore;
+                if (!store) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'controller store unavailable', reason: 'host did not wire controllerStore', source: 'host-options' }));
+                    return;
+                }
+                const budgetRoot = String(url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+                try {
+                    const judgement: any = await store.readJudgement(budgetRoot);
+                    let tiers: any[] = Array.isArray(judgement?.tiers) ? judgement.tiers : [];
+                    if (tiers.length === 0) {
+                        const m = await this._resolveAgentControlModel();
+                        if (m && !('error' in m)) {
+                            const locality = this._deriveEndpointLocality(m.url);
+                            tiers = [{
+                                providerId: m.provider || 'local', role: 'classifier', locality,
+                                model: m.model, source: 'agent-control-model',
+                            }];
+                        }
+                    }
+                    const stateView: any = await store.readState(budgetRoot).catch(() => null);
+                    const st = (stateView && (stateView.value ?? stateView)) || {};
+                    const today = new Date().toISOString().slice(0, 10);
+                    const mc = st.modelCalls;
+                    // Yesterday's counters are not today's usage. A stale dayKey
+                    // reads as zero spent, which is the truth for today.
+                    const byModel: Record<string, number> = (mc && mc.dayKey === today && mc.byModel) ? mc.byModel : {};
+                    const operatorBudgets = (judgement && judgement.budgets) || {};
+
+                    const station = (roleWanted: string, key: string) => {
+                        const tier = tiers.find(t => t && t.role === roleWanted)
+                            || (roleWanted === 'classifier' ? tiers[0] : undefined);
+                        if (!tier) { return { configured: false, model: null, budget: null, usedToday: 0 }; }
+                        const budget = resolveBudget({
+                            providerId: tier.providerId,
+                            model: tier.model,
+                            locality: tier.locality,
+                            operatorPerDay: typeof operatorBudgets[key] === 'number' ? operatorBudgets[key] : null,
+                        });
+                        return {
+                            configured: true,
+                            providerId: tier.providerId ?? null,
+                            model: tier.model ?? null,
+                            locality: tier.locality ?? null,
+                            budget,
+                            usedToday: byModel[usageKey(tier.providerId, tier.model)] || 0,
+                        };
+                    };
+
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: true,
+                        day: today,
+                        pilot: station('classifier', 'pilot'),
+                        navigator: station('escalation', 'navigator'),
+                    }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'budget read failed', reason: err instanceof Error ? err.message : String(err) }));
                 }
             } else if (pathname === '/controller/judgement' && req.method === 'GET') {
                 // The resolved judgement tier list (plan:

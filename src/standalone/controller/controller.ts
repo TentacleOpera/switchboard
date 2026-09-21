@@ -41,6 +41,7 @@ import {
     type EscalationRecord,
 } from '../judgement/supervisor';
 import { readTierApiKey } from '../judgement/tierKeys';
+import { usageKey } from '../judgement/budgets';
 import { callModel } from '../judgement/modelClient';
 
 /**
@@ -151,6 +152,12 @@ interface PersistedControllerState {
     quota: Record<string, QuotaEntry>;
     /** Judgement calls made on the current day — the declared global backstop. */
     judgementCalls: { dayKey: string; count: number };
+    /**
+     * Requests per model per day. The existing `judgementCalls` total cannot
+     * answer "how much of the Navigator's allowance is left" once two models
+     * are configured, because it does not say WHICH model was called.
+     */
+    modelCalls?: { dayKey: string; byModel: Record<string, number> };
     lastKnownBoardPid: number | null;
     /**
      * The previous CPU sample per seat, keyed by seat name (change 2).
@@ -174,6 +181,7 @@ function emptyState(): PersistedControllerState {
         consecutiveRestarts: 0,
         quota: {},
         judgementCalls: { dayKey: '', count: 0 },
+        modelCalls: { dayKey: '', byModel: {} },
         lastKnownBoardPid: null,
         samples: {},
     };
@@ -484,6 +492,16 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     if (state.judgementCalls.dayKey !== dayKey) {
         state.judgementCalls = { dayKey, count: 0 };
     }
+    if (!state.modelCalls || state.modelCalls.dayKey !== dayKey) {
+        state.modelCalls = { dayKey, byModel: {} };
+    }
+    // Counted where the call is MADE, not where a rule decides to make one: a
+    // call that failed still spent the allowance, and a budget that only counts
+    // successes runs out without warning.
+    const countModelCall = (providerId?: string | null, model?: string | null): void => {
+        const k = usageKey(providerId, model);
+        state.modelCalls!.byModel[k] = (state.modelCalls!.byModel[k] || 0) + 1;
+    };
     const ceiling = judgementConfig.globalCeilingPerDay;
     const ceilingReached = ceiling !== null && state.judgementCalls.count >= ceiling;
 
@@ -637,6 +655,8 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
                 // so the report stays current and proves the controller is alive.
                 verdict = prior.verdict;
             } else {
+                const pilotTier = (judgementConfig.tiers as any[])[0];
+                if (pilotTier) { countModelCall(pilotTier.providerId, pilotTier.model); }
                 verdict = await judgeBoard(ctx, judgementConfig.tiers as any[], boardFacts);
                 if (verdict) { writeLastBoardJudgement(ctx.workspaceRoot, fingerprint, verdict); }
             }
