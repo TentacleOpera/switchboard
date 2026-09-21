@@ -306,6 +306,28 @@
         }
         /* A chat transcript: one message per pass, newest at the bottom.
            There is no composer — the operator does not talk back here. */
+        .agent-poll-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+        .agent-poll-proj-label {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-dim);
+        }
+        .agent-poll-project {
+            background: var(--panel-bg2);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-family: var(--font-family);
+            font-size: 11px;
+            padding: 3px 6px;
+        }
         .agent-poll-report {
             margin-top: 10px;
             max-height: 300px;
@@ -339,8 +361,8 @@
             word-break: break-word;
         }
         .agent-poll-msg.is-problem .agent-poll-bubble {
-            border-color: #f0883e;
-            color: #f0883e;
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
         }
         .agent-poll-empty {
             font-size: 11px;
@@ -636,6 +658,11 @@
             <button type="button" class="agent-poll-btn" id="agent-poll-start">Start</button>
             <button type="button" class="agent-poll-btn" id="agent-poll-stop">Stop</button>
             <span class="agent-poll-state" id="agent-poll-state">stopped</span>
+        </div>
+        <div class="agent-poll-controls" id="agent-poll-controls">
+            <label class="agent-poll-proj-label" for="agent-poll-project">Project</label>
+            <select id="agent-poll-project" class="agent-poll-project"></select>
+            <button type="button" class="agent-poll-btn" id="agent-poll-dispatch">Dispatch highest priority</button>
         </div>
         <div class="agent-poll-report" id="agent-poll-report"></div>
         <div class="agent-control-status" id="agent-control-status">Control surface ready.</div>

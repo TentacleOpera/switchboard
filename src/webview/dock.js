@@ -1047,10 +1047,10 @@
                         const bubble = document.createElement('div');
                         bubble.className = 'agent-poll-bubble';
                         bubble.style.cssText = 'background:var(--panel-bg2); border:1px solid '
-                            + (problem ? '#f0883e' : 'var(--border-color)')
+                            + (problem ? 'var(--accent-primary)' : 'var(--border-color)')
                             + '; border-radius:12px 12px 12px 3px; padding:7px 11px; font-size:12px; '
                             + 'line-height:1.45; word-break:break-word;'
-                            + (problem ? ' color:#f0883e;' : '');
+                            + (problem ? ' color:var(--accent-primary);' : '');
                         bubble.textContent = entry.text;
 
                         msg.appendChild(meta);
@@ -1110,6 +1110,83 @@
                 void refreshState();
             });
         }
+
+        // ── Project scope + dispatch highest priority ─────────────────────
+        const projectSel = document.getElementById('agent-poll-project');
+        const dispatchBtn = document.getElementById('agent-poll-dispatch');
+
+        // `ready` order IS priority order — the board already sorts it. The
+        // highest priority card for a scope is the first one in that scope, so
+        // nothing here re-implements a ranking the board owns.
+        async function readyCards() {
+            const res = await fetch('/kanban/plans');
+            const d = await res.json();
+            const rows = (d && (d.data || d.plans || d.result)) || [];
+            return Array.isArray(rows) ? rows : [];
+        }
+
+        async function loadProjects() {
+            if (!projectSel) { return; }
+            try {
+                const rows = await readyCards();
+                const names = [];
+                for (const r of rows) {
+                    const n = String((r && (r.project || r.projectName)) || '').trim();
+                    if (n && names.indexOf(n) < 0) { names.push(n); }
+                }
+                names.sort();
+                const keep = projectSel.value;
+                projectSel.textContent = '';
+                const all = document.createElement('option');
+                all.value = '__all__';
+                all.textContent = 'All projects';
+                projectSel.appendChild(all);
+                for (const n of names) {
+                    const o = document.createElement('option');
+                    o.value = n; o.textContent = n;
+                    projectSel.appendChild(o);
+                }
+                if (keep) { projectSel.value = keep; }
+            } catch { /* leave whatever is there */ }
+        }
+
+        if (dispatchBtn) {
+            dispatchBtn.addEventListener('click', async () => {
+                const scope = projectSel ? projectSel.value : '__all__';
+                setState('finding highest priority…');
+                try {
+                    const rows = await readyCards();
+                    const inScope = rows.filter(function (r) {
+                        if (!r) { return false; }
+                        const col = String(r.kanbanColumn || r.column || '');
+                        if (col !== 'PLAN REVIEWED') { return false; }
+                        if (scope === '__all__') { return true; }
+                        return String(r.project || r.projectName || '') === scope;
+                    });
+                    if (inScope.length === 0) {
+                        setState('nothing ready' + (scope === '__all__' ? '' : ' in ' + scope));
+                        return;
+                    }
+                    const top = inScope[0];
+                    const planId = String(top.planId || top.plan_id || top.sessionId || '');
+                    const res = await fetch('/kanban/dispatch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ planId: planId })
+                    });
+                    const d = await res.json().catch(() => null);
+                    if (res.ok && d && d.success !== false) {
+                        setState('dispatched ' + planId.slice(0, 8) + ' — ' + String(top.topic || '').slice(0, 40));
+                    } else {
+                        setState('dispatch failed: ' + ((d && (d.reason || d.error)) || res.status));
+                    }
+                } catch (err) {
+                    setState('dispatch failed: ' + String(err));
+                }
+                void refreshReport();
+            });
+        }
+        void loadProjects();
         void refreshState();
         void refreshReport();
         setInterval(() => { void refreshState(); void refreshReport(); }, 30000);
