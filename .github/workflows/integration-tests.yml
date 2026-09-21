@@ -321,6 +321,16 @@ jobs:
       - name: Batch-to-a-team-head prompt contract (allocate framing, gate, cap ordering)
         run: npm run test:contract:batch-move-team-prompt
 
+      # Plan-sizing guidance sync: the ten plan-writing surfaces must carry the
+      # same split signals, and AGENTS.md/CLAUDE.md must carry the pointer to
+      # plan-authoring-protocol.md. This test sat unwired and went RED on main
+      # unnoticed for a month — the exact "green while incomplete" hole, since
+      # the shrink removed the directive text the assertions demanded and no
+      # gate ran them. It is the primary automated check for the feature-first
+      # sizing rule, so it runs here.
+      - name: Plan-sizing guidance sync across the plan-writing surfaces
+        run: npm run test:contract:prompt-split-guidance
+
       # Browser send-to-terminal dispatch parity: every browser-originated prompt
       # dispatch must thread the apiOriginated surface flag end-to-end so a browser
       # PTY terminal is reachable, the four stray _dispatchExecuteMessage sites
@@ -735,6 +745,15 @@ jobs:
       # the round-advance branch so the team is released exactly once.
       - name: lead accept advances (`accept --plan` closes the round and the system dispatches the next)
         run: npm run test:contract:lead-accept
+
+      # The lead pins a seat per subtask at registration: a round entry is a
+      # bare planId or { planId, seat }. Positional dispatch restarted at
+      # seats[0] every round, so a feature built from 1- and 2-subtask rounds
+      # could never reach a three-seat team's third seat. The gate is the
+      # one-subtask round pinned to seats[2], plus the tagged `source` that
+      # keeps a guessed seat from reading like a chosen one.
+      - name: round seat pinning (the lead's registered seat survives to dispatch, tagged)
+        run: npm run test:contract:round-seat-pinning
 
       # A team seats by its registered order with the head in slot 0, holding a
       # slot for a member that has not registered yet. Seating from the

@@ -1105,6 +1105,7 @@
     "test:contract:standing-order-fragment-store": "node --expose-gc --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-order-fragment-store-contract.test.js",
     "test:contract:minimal-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/minimal-prompt.test.js",
     "test:contract:claude-protocol-block": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/claude-protocol-block-size-contract.test.js",
+    "test:contract:prompt-split-guidance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/prompt-split-guidance-sync.test.js",
     "test:contract:skill-preconditions": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/skill-preconditions-contract.test.js",
     "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js",
     "test:contract:mission-control-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mission-control-tick-and-reports-contract.test.js",
@@ -1149,6 +1150,7 @@
     "test:contract:self-completion-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/self-reported-completion-clears-contract.test.js",
     "test:contract:bare-completion": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bare-completion-contract.test.js",
     "test:contract:lead-accept": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/lead-accept-advances-contract.test.js",
+    "test:contract:round-seat-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/round-seat-pinning-contract.test.js",
     "test:contract:team-pane-order": "node src/test/team-pane-order-contract.test.js",
     "test:contract:bulk-move-cost": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bulk-move-cost-contract.test.js",
     "test:contract:eventloop-watchdog": "node src/test/eventloop-watchdog-contract.test.js"

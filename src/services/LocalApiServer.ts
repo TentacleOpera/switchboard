@@ -6740,7 +6740,12 @@ export class LocalApiServer {
         // A round dispatched entirely on positional picks is the signature of
         // a lead that registered without pinning any seat. Legal — but worth
         // one visible line, so "the lead chose nothing" is never silent.
-        if (allPositional && results.length > 0) {
+        // A TEAM-SCOPED round (a planning or review batch) has no lead and no
+        // feature: the SYSTEM partitioned it, so "no lead-registered seat" is
+        // the only possible outcome, not a signal. Naming it `feature 'null'`
+        // would print that non-signal on every batch and train the operator to
+        // skip the line on the feature rounds where it means something.
+        if (allPositional && results.length > 0 && round.featureId) {
             console.warn(`[LocalApiServer] round ${roundId} (feature '${round.featureId}', ordinal ${round.ordinal}): every subtask was seated positionally — no lead-registered seat was honoured`);
         }
 

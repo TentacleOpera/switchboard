@@ -8612,8 +8612,13 @@ export class KanbanDatabase {
      * Corrupt JSON yields an empty list.
      */
     private _parseSubtaskSeatEntries(json: unknown): Array<{ planId: string; seat: string | null }> {
+        // Trimmed, not merely tested for trimmed length: the register route
+        // stores trimmed seat names, and the dispatcher matches a pin against
+        // the roster by exact string. A salvaged ' Coder-1 ' that passes the
+        // non-empty test but keeps its padding never matches, and the pin
+        // demotes to a positional pick — the lead's choice lost to whitespace.
         const seatOf = (v: unknown): string | null =>
-            (typeof v === 'string' && v.trim().length > 0) ? v : null;
+            (typeof v === 'string' && v.trim().length > 0) ? v.trim() : null;
         try {
             const parsed = JSON.parse(String(json ?? '[]'));
             if (Array.isArray(parsed)) {

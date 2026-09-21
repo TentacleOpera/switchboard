@@ -476,3 +476,31 @@ tests were not run this pass per dispatch directive; the Verification Plan stand
 ## Completion Summary (2026-09-20, intern implementation pass)
 
 All four changes landed on main as 4cedadad. Change A: `round/register` normalises each entry to `{planId, seat}` — bare strings get `seat: null`, objects validate `seat` as a non-empty string (400 otherwise), then roster-membership and not-the-lead checks 400 by name. Change B: `subtask_seats` stores `[{planId, seat}]`; `CodingRoundRecord` gains `subtaskSeats` with `subtaskPlanIds` derived from it; `_parseSubtaskSeatEntries` tolerates the new array, the V81 bare-string array, and the pre-V81 object (salvaging `seat`); all four readers populate both fields; no DDL. Change C: `_dispatchRoundCore` resolves each entry to a tagged `{value, source}` — `lead-registered` when the pin is still in the pool, `positional-fallback` otherwise with a demotion warning; the cursor advances only on the fallback arm; an all-positional round logs one warning; results carry `source`. Change D: all three prompt surfaces teach the pin syntax and the false "rotation" claim is gone. One deviation found and handled: `insertCodingRound` had a second caller the plan missed (`KanbanProvider._registerBatchRounds`, Mission 05 batch rounds) — it now passes `subtasks` with `seat: null`, and the batch-move contract test was updated to the new param shape. Compilation and tests were not run per dispatch directive.
+
+---
+
+## Review Findings
+
+Reviewed 2026-09-21 against `4cedadad` (implementation) plus two fixes applied in this pass.
+Changes A–D all landed as specified in `LocalApiServer.ts` (entry normalisation, identity-only
+seat validation, tagged `{value, source}` dispatch), `KanbanDatabase.ts` (`subtaskSeats` with
+`subtaskPlanIds` derived, three-shape parser, no DDL), `KanbanProvider.ts` and
+`standingOrderFragments.ts` (all three lead-facing surfaces). The plan's entire `### Automated
+Tests` subsection had been skipped, so this pass wrote `src/test/round-seat-pinning-contract.test.js`
+(15 cases, including the one-subtask-round-pinned-to-`seats[2]` regression gate) and wired it into
+`package.json` and `.github/workflows/integration-tests.yml`; two fixes were applied — the pre-V81
+seat salvage now trims (an untrimmed name never matches the roster and would silently demote the
+pin), and the all-positional warning is suppressed for featureless batch rounds where it is a
+non-signal. Verification: `round-seat-pinning`, `lead-accept` and `batch-move-team-prompt` contract
+suites pass, `npm run compile` and `compile-tests` succeed, eslint reports 0 errors, and the live
+host on :7777 confirms the new shape validation is serving and that both `control_plane` standing-order
+rows carry the pin syntax with the old "you do not choose which seat" text gone.
+
+## Deferred Findings
+
+- NIT — `src/services/LocalApiServer.ts:6680` two subtasks in one round pinned to the same seat both dispatch there, and the second `clearBeforePrompt` wipes the first's prompt; the plan sanctions the double-pin ("allowed and flagged in the dispatch result") but nothing actually flags it and no prompt surface warns the lead against it.
+- NIT — `src/services/standingOrderFragments.ts:211` the rewritten stacking guidance covers only *unpinned* rounds, so a lead now actively encouraged to pin is told nothing about pinning two subtasks of one round to one seat.
+- NIT — `src/services/teamWiring.ts` `NEW_CODING_HEAD_PROMPT` still carries "One subtask per cleared seat before rotation" and "do not stack subtasks on the same coder" — the same false rotation claim Change D deleted elsewhere. It is the NON-rounds (hand-dispatch) lead prompt, so it is out of this plan's scope, but the claim is untrue there too and `stage-marker-commit-contract.test.js:400` pins both literals.
+- NIT — `src/services/LocalApiServer.ts:6402` the register response is shape-inconsistent: `rounds[].subtasks` and `diff.added[].subtasks` are now `{planId, seat}` objects while `diff.dropped[].subtasks` and `diff.kept[].subtasks` remain bare id strings (they read `subtaskPlanIds`). The plan asked only for `added`, and no consumer reads `dropped`/`kept`, but a lead diffing the three lists sees two shapes.
+- NIT (pre-existing, unrelated) — `src/test/queue-pipeline-contract.test.js:125` "the pop takes the lowest column_order, NULLs first" fails on `main`. `dispatchNextFromQueue` is untouched by this change and the ordering logic was last modified in `2da42df4` (V81); the suite is also not wired into `.github/workflows/integration-tests.yml`.
+- NIT (pre-existing, unrelated) — `npx tsc --noEmit -p tsconfig.json` reports 4 TS2835 errors in `ClickUpSyncService.ts`, `NotionFetchService.ts` and `TaskViewerProvider.ts`. None are in files this change touches, and the gates the repo actually runs (`npm run compile` via webpack, `compile-tests` via `tsconfig.test.json`) both pass.
