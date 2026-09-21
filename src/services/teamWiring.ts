@@ -73,7 +73,7 @@ export const EXTERNAL_AGENT_PULL_INSTRUCTION =
     + 'Save the returned token — you need it for every subsequent call.\n'
     + '2. HEARTBEAT: `node "<cliPath>" api POST /agents/heartbeat \'{"seat":"<your name>","token":"<token>"}\'` every 50 seconds (≤60s).\n'
     + '3. POLL: `node "<cliPath>" api GET "/agents/inbox?seat=<your name>&token=<token>"` — returns pending dispatch items. Poll every 5-10 seconds.\n'
-    + '4. DONE: When you finish a dispatched item, report completion with the CLI — `node "<cliPath>" done` for your own work, or `node "<cliPath>" accept --plan "<planId>"` if you are a lead accepting a subtask. Do NOT POST the completion endpoints directly: they are state-changing, so the CSRF guard refuses any request without an `X-Switchboard-Client` marker, and the CLI is what sets it.\n'
+    + '4. DONE: When you finish a dispatched item, hand it back with the CLI — `node "<cliPath>" submit` for your own work (every round, fix rounds included), or `node "<cliPath>" accept <n>` if you are a lead accepting a subtask — <n> is its number in the feature file\'s Subtasks list. Do NOT POST the completion endpoints directly: they are state-changing, so the CSRF guard refuses any request without an `X-Switchboard-Client` marker, and the CLI is what sets it.\n'
     + 'The CLI resolves the host and port itself — you do not need the port and must not probe for it.';
 
 /**
@@ -482,11 +482,11 @@ export function deriveSharedMemberName(
  * import). `stage-marker-commit-contract.test.js` gates both halves.
  */
 export const TEAM_CODER_QUEUE_DONE_INSTRUCTION =
-    'When you have finished ALL parts of the dispatched plan, run node "<cliPath>" done '
-    + '(or switchboard done). '
+    'When you have finished ALL parts of the dispatched plan, run node "<cliPath>" submit '
+    + '(or switchboard submit). '
     + 'This signals completion — the system clears your activity light and notifies your lead. '
     + 'Do NOT report after finishing individual parts — only when ALL work is complete. '
-    + 'If you cannot complete it, run node "<cliPath>" done '
+    + 'If you cannot complete it, run node "<cliPath>" submit '
     + '--outcome failed with a one-line reason.';
 
 /**
@@ -1070,8 +1070,8 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'When the work is complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
-    + 'run node "<cliPath>" accept --plan "<the subtask\'s planId>" '
-    + 'against the API base named in your SWITCHBOARD STATUS line. '
+    + 'run node "<cliPath>" accept '
+    + 'against the API base named in your SWITCHBOARD STATUS line — the server resolves the card your seat holds. '
     + 'The card stays where it is. Completion is asserted, never inferred from board position. '
     + 'run node "<cliPath>" next (or switchboard next); '
     + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
@@ -1152,8 +1152,8 @@ export const CODING_TEAM_HEAD_PROMPT =
     + 'When the work is complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
-    + 'run node "<cliPath>" accept --plan "<the plan\'s planId>" '
-    + 'against the API base named in your SWITCHBOARD STATUS line. '
+    + 'run node "<cliPath>" accept '
+    + 'against the API base named in your SWITCHBOARD STATUS line — the server resolves the card your seat holds. '
     + 'The card stays where it is. Completion is asserted, never inferred from board position. '
     + 'run node "<cliPath>" next (or switchboard next); '
     + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
@@ -1204,7 +1204,7 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
             + 'and finishes it, so there is nobody waiting on a status report and ptySendPrompt to one wastes your turn.\n'
             + 'If you are a PLANNER seat: take the card you were handed and write its plan — read the code, trace the '
             + 'dependencies, name the root cause. When the plan is written, ASSERT COMPLETION TO THE SYSTEM: '
-            + 'run node "<cliPath>" accept --plan "<the card\'s planId>" (or switchboard accept --plan). Then run '
+            + 'run node "<cliPath>" accept (or switchboard accept) — the server resolves the card your seat holds. Then run '
             + 'node "<cliPath>" next (or switchboard next); if it returns a dispatched card, plan it; if it returns '
             + 'dispatched: null, report that the queue is empty and stop.\n'
             + 'If you are the RESEARCHER seat: you do WEB research, not codebase reading. Answer the open questions the '
@@ -1250,7 +1250,25 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         trigger: 'Dispatch a feature. It is the only team that accepts features, so a feature dispatch reaches it automatically.',
         acceptedKinds: ['feature'],
         acceptedKindsSource: 'default',
-        pairProgramming: 'on',
+        // OFF, deliberately. ONE SPECIAL MECHANIC PER TEAM: this team's mechanic is
+        // the lead's per-subtask REVIEW and its fan-out across seats; the Coding
+        // team's mechanic is pairing. They are different units of parallelism and
+        // a team may not have both.
+        //
+        // Pairing splits ONE card into a Complex/Risky (Band B) half for the head
+        // and a Routine (Band A) half for a cheaper seat. This team's unit is a
+        // SUBTASK PER SEAT, and its head prompt (NEW_CODING_HEAD_PROMPT) never
+        // mentions a band -- it says "your coders work the subtasks of one
+        // feature". A lead writing Band B of a card is not reviewing its seats'
+        // subtasks, which is the thing that seat exists for, and a FEATURE card
+        // has no routine half to send: it is a container, not work.
+        //
+        // It was never a decision that this team paired. `pairProgramming` landed
+        // in 438a9115 "defaulting to on: a team is a lead plus cheaper seats",
+        // and this team inherited the default without its prompt ever adopting
+        // the model. Do not re-default it: a new team property that defaults to
+        // 'on' will silently reintroduce this.
+        pairProgramming: 'off',
         prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
             + '— naming what you changed and what to review. Do not wait to be asked.\n'
