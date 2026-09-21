@@ -17,8 +17,10 @@
  *   2. manual order   (column_order, everywhere — V81 folded the STAGING-only
  *                      queue_position into it)
  *                      ASC. Cards that both lack one fall through to step 3.
- *                      Where only one has one, NULL goes FIRST (NULL = just
- *                      arrived) — see the note below.
+ *                      Where only one has one, the side NULL falls on DEPENDS ON
+ *                      THE COLUMN: outside STAGING NULL goes FIRST (just
+ *                      arrived); inside STAGING NULL goes LAST (join the end of
+ *                      a committed sequence) — see the note below.
  *   3. column_entered_at DESC  (most recently moved to column first)
  *   4. createdAt DESC          (final stable tiebreaker)
  *
@@ -43,8 +45,21 @@
  * the cards that were arranged; it does not outrank a new arrival.
  *
  * V81: `queue_position` is gone — the STAGING queue order IS `column_order`.
- * A staged card always carries one; a NULL inside STAGING is a card that just
- * arrived and sorts first, same as every other column.
+ * A staged card normally carries one, and inside STAGING a NULL sorts LAST — the
+ * one place the rule inverts. This paragraph used to end "sorts first, same as
+ * every other column", contradicting the carve-out in the function body and the
+ * writer's contract in `KanbanDatabase.appendQueuePositions` ("NULL positions
+ * ... sort last by design ... they keep working and drop to the end"). V81
+ * shipped the header, the carve-out and a fixture asserting NULLs-first in one
+ * commit, so `queue-pipeline-contract` was red from the day it landed; the
+ * comparator was right and the prose was not.
+ *
+ * Why STAGING inverts: every other column is an ARRANGEMENT, and an arrangement
+ * orders the cards that were arranged — it does not outrank a card that just
+ * landed. STAGING is a SEQUENCE somebody committed to, and it also drives the
+ * pop, so a card arriving without a position must join the END of that sequence.
+ * Folding queue_position into column_order briefly dropped this distinction and
+ * made a card dragged into STAGING the next thing dispatched.
  *
  * Eligibility (completion, feature membership, dependency blocking) is a
  * FILTER, not a sort — callers must apply it BEFORE calling this comparator.

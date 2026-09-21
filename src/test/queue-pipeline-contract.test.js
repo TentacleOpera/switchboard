@@ -25,6 +25,7 @@ require(path.join(process.cwd(), 'src', 'test', 'bootstrap', 'sandboxStateHome.j
 const { LocalApiServer, teamHasLiveWork } = require(path.join(process.cwd(), 'out', 'services', 'LocalApiServer.js'));
 const { applyStandingOrders } = require(path.join(process.cwd(), 'out', 'services', 'standingOrders.js'));
 const { resolveRoleWithDegradation } = require(path.join(process.cwd(), 'out', 'services', 'complexityScale.js'));
+const { compareByPrecedence } = require(path.join(process.cwd(), 'out', 'services', 'kanbanOrdering.js'));
 
 let failures = 0;
 async function check(name, fn) {
@@ -122,9 +123,23 @@ async function run() {
         assert.deepStrictEqual(dispatched, [], 'nothing may be dispatched from an empty queue');
     });
 
-    await check('the pop takes the lowest column_order, NULLs first', async () => {
-        // V81: column_order is the single ordering field and a NULL is a
-        // just-arrived card, which leads the column.
+    await check('the pop takes the lowest column_order, NULLs LAST inside STAGING', async () => {
+        // V81 shipped this file contradicting itself: the comparator body carved
+        // STAGING out as NULLs-LAST, while the module header and this fixture
+        // still said NULLs-first, so the case has been red since the day it
+        // landed. The comparator is the intended contract, for two reasons it
+        // records itself. (1) The carve-out names the regression that produced
+        // it: folding queue_position into column_order "made a card dragged into
+        // STAGING the next thing dispatched". (2) The WRITER agrees —
+        // `KanbanDatabase.appendQueuePositions` appends from MAX(column_order)+1
+        // and documents "NULL positions ... sort last by design ... they keep
+        // working and drop to the end". If NULL led, a positionless pre-existing
+        // staged card would outrank everything the operator just staged, and
+        // appending above the max would be pointless.
+        //
+        // The meaning: STAGING is a sequence somebody committed to, not a board
+        // arrangement. A card arriving without a position joins the END of that
+        // sequence; it never jumps the queue.
         const board = [
             card('c', 'STAGING', { columnOrder: null }),
             card('b', 'STAGING', { columnOrder: 7 }),
@@ -133,7 +148,35 @@ async function run() {
         const { server, dispatched } = makeServer(board);
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
         assert.strictEqual(out.status, 200);
-        assert.deepStrictEqual(dispatched, ['c'], 'a NULL column_order is the new arrival — it leads');
+        assert.deepStrictEqual(dispatched, ['a'],
+            'the lowest real column_order leads; a NULL joins the end of the committed sequence, it does not jump it');
+    });
+
+    await check('the STAGING NULL rule is the INVERSE of every other column', async () => {
+        // Both halves, as values, because the distinction is the whole point and
+        // a single-column test cannot see it. Outside STAGING a NULL is "just
+        // arrived / not part of this arrangement" and leads; inside STAGING it
+        // joins the end. Deleting the carve-out makes these two agree, which is
+        // exactly the regression V81's comparator comment describes.
+        const positioned = { planId: 'pos', columnOrder: 2 };
+        const unpositioned = { planId: 'none', columnOrder: null };
+
+        assert.ok(
+            compareByPrecedence(unpositioned, positioned, 'STAGING', 'manual') > 0,
+            'inside STAGING an unpositioned card must sort AFTER a positioned one'
+        );
+        assert.ok(
+            compareByPrecedence(positioned, unpositioned, 'STAGING', 'manual') < 0,
+            'inside STAGING a positioned card must sort BEFORE an unpositioned one'
+        );
+        assert.ok(
+            compareByPrecedence(unpositioned, positioned, 'PLAN REVIEWED', 'manual') < 0,
+            'outside STAGING an unpositioned card is a new arrival and must sort FIRST'
+        );
+        assert.ok(
+            compareByPrecedence(positioned, unpositioned, 'PLAN REVIEWED', 'manual') > 0,
+            'outside STAGING a positioned card must sort AFTER a new arrival'
+        );
     });
 
     await check('subtasks are excluded from the queue; an owner-stamped card is not', async () => {
