@@ -2994,6 +2994,24 @@
 
         function setState(t) { if (stateEl) { stateEl.textContent = t; } }
 
+        const reportEl = document.getElementById('agent-poll-report');
+
+        async function refreshReport() {
+            if (!reportEl) { return; }
+            try {
+                const res = await fetch('/controller/report');
+                const d = await res.json();
+                const content = d && d.report && typeof d.report.content === 'string' ? d.report.content.trim() : '';
+                if (!content) { reportEl.textContent = 'No controller report yet.'; return; }
+                // Newest wake last in the file; show the tail so the latest pass
+                // is what the operator sees without scrolling.
+                reportEl.textContent = content;
+                reportEl.scrollTop = reportEl.scrollHeight;
+            } catch {
+                reportEl.textContent = 'Report unavailable.';
+            }
+        }
+
         async function post(path) {
             try {
                 const res = await fetch(path, {
@@ -3026,6 +3044,7 @@
                     return;
                 }
                 void refreshState();
+                void refreshReport();
             });
         }
         if (stopBtn) {
@@ -3040,7 +3059,8 @@
             });
         }
         void refreshState();
-        setInterval(() => void refreshState(), 30000);
+        void refreshReport();
+        setInterval(() => { void refreshState(); void refreshReport(); }, 30000);
     })();
 
 })();

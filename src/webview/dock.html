@@ -304,6 +304,21 @@
             color: var(--text-dim);
             margin-left: 4px;
         }
+        .agent-poll-report {
+            margin-top: 6px;
+            max-height: 220px;
+            overflow-y: auto;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 6px 8px;
+            font-family: var(--font-code);
+            font-size: 10px;
+            line-height: 1.45;
+            color: var(--text-color);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
         .agent-control-config {
             padding: 8px 10px;
             border-top: 1px solid var(--border-color);
@@ -594,6 +609,7 @@
             <button type="button" class="agent-poll-btn" id="agent-poll-stop">Stop</button>
             <span class="agent-poll-state" id="agent-poll-state">stopped</span>
         </div>
+        <pre class="agent-poll-report" id="agent-poll-report">No controller report yet.</pre>
         <div class="agent-control-status" id="agent-control-status">Control surface ready.</div>
     </div>
     <div id="dock-cli-pane"></div>
