@@ -244,10 +244,13 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
         model: tier.model,
         apiKey: keyRead.key ?? null,
         system: 'You supervise a board of coding agents. Answer in ONE short line of plain prose — '
-            + 'never JSON, code fences, lists or markdown. '
-            + 'If the board looks healthy, reply exactly: nothing wrong. '
-            + 'If no seats are alive but there is owned, uncompleted work, say the agents are down. '
-            + 'Otherwise name the single most important problem in under 20 words.',
+            + 'never JSON, code fences, lists or markdown.\n'
+            + 'If something is wrong, name the single most important problem in under 20 words. '
+            + 'If no seats are alive but there is owned, uncompleted work, say the agents are down.\n'
+            + 'If nothing is wrong and nextHighestPriority is present, do NOT say "nothing wrong" — '
+            + 'instead say the board is idle and name that card by its topic, then offer to dispatch it. '
+            + 'Example: Board is idle. Next up: <topic>. Dispatch it?\n'
+            + 'If nothing is wrong and there is no next card, reply exactly: nothing wrong.',
         user: JSON.stringify(facts),
         deadlineMs: ctx.cfg.judgementDeadlineMs,
         maxTokens: 256,
@@ -498,12 +501,26 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             const done = p?.completedAt ?? p?.completed_at ?? null;
             return owner && !done;
         }).length;
+        // The next card the board would hand out. `plans` arrives in the board's
+        // own priority order, so the head of PLAN REVIEWED IS the next one — no
+        // ranking is invented here.
+        const nextUp = (plans || []).find((p: any) => {
+            const col = String(p?.kanbanColumn ?? p?.kanban_column ?? '');
+            return col === 'PLAN REVIEWED' && !(p?.isFeature ?? p?.is_feature);
+        });
         const boardFacts = {
             seatsAlive: liveSeatNames,
             seatsAliveCount: liveSeatNames.length,
             subjectsFound: subjects.length,
             cardsOwnedAndNotCompleted: ownedNotDone,
             cardsTotal: (plans || []).length,
+            nextHighestPriority: nextUp
+                ? {
+                    id: String(nextUp.planId ?? nextUp.plan_id ?? '').slice(0, 8),
+                    topic: String(nextUp.topic ?? nextUp.title ?? '').slice(0, 90),
+                    project: String(nextUp.project ?? '') || null,
+                }
+                : null,
         };
         try {
             const verdict = await judgeBoard(ctx, judgementConfig.tiers as any[], boardFacts);
