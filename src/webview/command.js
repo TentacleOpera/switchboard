@@ -3016,12 +3016,27 @@
                     // read an EMPTY body and hid every action.
                     const at = w.indexOf('### Actions');
                     if (at >= 0) {
-                        for (const raw of w.slice(at).split('\n')) {
+                        const body = w.slice(at);
+                        // The evidence block carries the card the agent is offering.
+                        // Reading it here is what lets the message own its action,
+                        // instead of the offer being rhetorical and the button
+                        // living somewhere else.
+                        let offer = null;
+                        const ev = body.match(/```\s*([\s\S]*?)```/);
+                        if (ev) {
+                            try {
+                                const facts = JSON.parse(ev[1].trim());
+                                if (facts && facts.nextHighestPriority && facts.nextHighestPriority.id) {
+                                    offer = facts.nextHighestPriority;
+                                }
+                            } catch { /* not the evidence we know */ }
+                        }
+                        for (const raw of body.split('\n')) {
                             const l = raw.trim();
                             const m = l.match(/^-\s*outcome:\s*\*\*([a-z-]+)\*\*\s*(?:—|--)?\s*(.*)$/i);
                             if (m) {
                                 const verdict = (m[2] || '').trim();
-                                lines.push({ time: time, text: verdict || m[1] });
+                                lines.push({ time: time, text: verdict || m[1], offer: offer });
                             }
                         }
                     }
@@ -3071,6 +3086,44 @@
 
                         msg.appendChild(meta);
                         msg.appendChild(bubble);
+
+                        // Only the NEWEST message carries a live offer: acting on a
+                        // stale one would dispatch a card the board has since moved
+                        // past, which is worse than no button at all.
+                        const isNewest = entry === tail[tail.length - 1];
+                        if (isNewest && entry.offer && /dispatch it\?/i.test(entry.text)) {
+                            const act = document.createElement('button');
+                            act.type = 'button';
+                            act.className = 'agent-poll-btn';
+                            act.style.cssText = 'margin: 6px 0 0 10px;';
+                            act.textContent = 'Dispatch ' + entry.offer.id;
+                            act.title = entry.offer.topic || '';
+                            act.addEventListener('click', async () => {
+                                act.disabled = true;
+                                act.textContent = 'dispatching…';
+                                try {
+                                    const r = await fetch('/kanban/dispatch', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ planId: entry.offer.id })
+                                    });
+                                    const rd = await r.json().catch(() => null);
+                                    if (r.ok && rd && rd.success !== false) {
+                                        act.textContent = 'dispatched';
+                                        setState('dispatched ' + entry.offer.id);
+                                    } else {
+                                        act.textContent = 'failed';
+                                        setState('dispatch failed: ' + ((rd && (rd.reason || rd.error)) || r.status));
+                                        act.disabled = false;
+                                    }
+                                } catch (err) {
+                                    act.textContent = 'failed';
+                                    setState('dispatch failed: ' + String(err));
+                                    act.disabled = false;
+                                }
+                            });
+                            msg.appendChild(act);
+                        }
                         reportEl.appendChild(msg);
                     }
                 }
