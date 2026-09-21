@@ -1105,208 +1105,151 @@
                     if (txt !== undefined) { el.textContent = txt; }
                     return el;
                 };
-                const SECTION = 'font-size:9px; letter-spacing:0.08em; text-transform:uppercase; '
-                    + 'color:var(--accent-primary); margin:12px 0 5px; font-weight:600;';
-                const ROW = 'display:flex; justify-content:space-between; gap:10px; '
-                    + 'font-size:12px; padding:2px 0; line-height:1.4;';
 
-                const card = mk('div', 'border:1px solid var(--accent-primary); border-radius:4px; '
-                    + 'padding:11px 13px; background:var(--panel-bg2);');
+                // ── Crew station panel, not a settings screen ─────────────────
+                // The organising idea is an annunciator: dark until something
+                // trips, then lit and legible from across the room. Plain crew
+                // language, one state word, and the detail under it. Everything
+                // an operator cannot act on (model ids, endpoints, tier wording)
+                // lives in config, not here.
+                const STENCIL = 'font-size:9px; letter-spacing:0.14em; text-transform:uppercase; '
+                    + 'color:var(--text-secondary);';
+                const card = mk('div', 'border:1px solid var(--border-color); border-radius:3px; '
+                    + 'background:linear-gradient(180deg, var(--panel-bg2), var(--panel-bg)); '
+                    + 'overflow:hidden;');
 
-                // Header — the time is the whole point of a replacing report: it is
-                // how the operator knows whether they are looking at now or at a
-                // board that stopped being reported on an hour ago.
-                const head = mk('div', 'display:flex; justify-content:flex-end; align-items:baseline; '
-                    + 'gap:8px; border-bottom:1px solid var(--border-color); padding-bottom:7px;');
-
-                // The AGE, not just the clock time. The assessment is a snapshot from
-                // the last wake and can be five minutes behind the board; a bare
-                // timestamp reads as "now" and hid exactly that.
-                let age = '';
-                let stale = false;
-                const ms = Date.parse(latest.stamp);
-                if (!isNaN(ms)) {
-                    const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
-                    age = mins < 1 ? 'just now' : mins + ' min ago';
-                    stale = mins >= 6;
-                }
-                head.appendChild(mk('span',
-                    'font-size:10px; color:' + (stale ? 'var(--accent-primary)' : 'var(--text-dim)') + ';',
-                    latest.time + (age ? ' \u00b7 ' + age : '')));
-                card.appendChild(head);
-
-                // Assessment. The stored report line carries a deterministic
-                // counts prefix so the .md artifact stands alone; here the counts
-                // are drawn as their own section, so the prefix is stripped rather
-                // than printed twice.
-                // ── MISSIONS FIRST ────────────────────────────────────────
-                // Running missions are the subject of this report, not an
-                // addition to it. Keeping work moving is the Pilot's job; board
-                // health is the background it happens against. Everything here is
-                // mechanical — counts and timestamps, no judgement — because the
-                // Pilot cannot yet judge a mission, and a section that implied it
-                // could would be the more expensive lie.
-                card.appendChild(mk('div', SECTION, 'Missions'));
+                // Missions first: they are the subject. Counts come from each
+                // mission's own subtasks, which the features list does not carry.
+                let missions = [];
+                let missionsReadable = true;
                 try {
                     const fr = await fetch('/kanban/features');
                     const fd = await fr.json();
                     const feats = (fd && Array.isArray(fd.data)) ? fd.data : [];
-                    const running = feats.filter(function (f) {
-                        if (!f) { return false; }
-                        if (f.completedAt) { return false; }
-                        return !!f.ownerSince;
-                    });
-                    if (running.length === 0) {
-                        // A claim about the board, so it is said rather than left blank.
-                        card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
-                            'No mission is running.'));
-                    } else {
-                        // Newest movement first, and capped — the operator is
-                        // looking for what moved, not an inventory.
-                        running.sort(function (a, b) {
-                            return (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0);
-                        });
-                        const shown = running.slice(0, 5);
-                        for (const f of shown) {
-                            const line = mk('div', 'padding:3px 0;');
-                            const top = mk('div', ROW);
-                            top.appendChild(mk('span', 'color:var(--text-color);',
-                                String(f.topic || f.planId || '').slice(0, 64)));
-                            top.appendChild(mk('span', 'color:var(--accent-primary); '
-                                + 'font-variant-numeric:tabular-nums; white-space:nowrap;', 'running'));
-                            line.appendChild(top);
-
-                            // Elapsed since the mission last moved. A FACT, not a
-                            // verdict: nothing here calls a mission stalled, because
-                            // the window that would justify saying so does not exist
-                            // yet and a guessed threshold is how nudge spam starts.
-                            let moved = '';
-                            const t = Date.parse(f.updatedAt);
-                            if (!isNaN(t)) {
-                                const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
-                                moved = mins < 60 ? mins + 'm' : Math.round(mins / 60) + 'h';
-                            }
-                            const bits = [];
-                            if (f.dispatchedTeamGroup) { bits.push(String(f.dispatchedTeamGroup)); }
-                            if (f.kanbanColumn) { bits.push(String(f.kanbanColumn)); }
-                            if (moved) { bits.push('moved ' + moved + ' ago'); }
-                            if (f.worktreeStatus && f.worktreeStatus !== 'none') {
-                                bits.push('worktree ' + f.worktreeStatus);
-                            }
-                            line.appendChild(mk('div', 'font-size:10px; color:var(--text-dim); margin-top:1px;',
-                                bits.join(' · ')));
-                            card.appendChild(line);
-                        }
-                        if (running.length > shown.length) {
-                            card.appendChild(mk('div', 'font-size:10px; color:var(--text-dim); padding-top:3px;',
-                                '+' + (running.length - shown.length) + ' more running'));
-                        }
+                    missions = feats.filter(function (x) {
+                        return x && !x.completedAt && x.ownerSince;
+                    }).sort(function (a, b) {
+                        return (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0);
+                    }).slice(0, 4);
+                    for (const m of missions) {
+                        try {
+                            const sr = await fetch('/kanban/plans?featureId=' + encodeURIComponent(m.planId));
+                            const sd = await sr.json();
+                            const subs = (sd && (sd.data || (sd.result || {}).data)) || [];
+                            m._total = subs.length;
+                            m._done = subs.filter(function (s) { return s && s.completedAt; }).length;
+                        } catch { m._total = 0; m._done = 0; }
                     }
-                } catch {
-                    // Unreadable is not "none running" — they are different claims.
-                    card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
-                        'Mission state unavailable.'));
+                } catch { missionsReadable = false; }
+
+                // How old this report is. A report that stopped arriving must not
+                // read as current — it is the one thing a calm panel can hide.
+                let age = '';
+                const reportMs = Date.parse(latest.stamp);
+                if (!isNaN(reportMs)) {
+                    const m = Math.max(0, Math.round((Date.now() - reportMs) / 60000));
+                    age = m < 1 ? 'just now' : (m < 60 ? m + ' min ago' : Math.round(m / 60) + 'h ago');
                 }
 
-                card.appendChild(mk('div', SECTION, 'Seats and board'));
+                const elapsed = function (iso) {
+                    const t = Date.parse(iso);
+                    if (isNaN(t)) { return ''; }
+                    const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+                    return mins < 60 ? mins + 'm' : Math.round(mins / 60) + 'h';
+                };
+
+                // ── ANNUNCIATOR ──────────────────────────────────────────────
+                // The verdict answers seats and board. It is NOT a whole-board
+                // all-clear while nothing can see a mission, so the caption says
+                // what was actually checked underneath.
                 let verdict = latest.text;
                 const shape = String(f.boardShape || '');
                 if (shape && verdict.indexOf(shape) === 0) {
                     verdict = verdict.slice(shape.length).replace(/^[^—-]*[—-]\s*/, '').trim() || latest.text;
                 }
-                card.appendChild(mk('div', 'font-size:12.5px; line-height:1.5; '
-                    + 'color:var(--text-color);', verdict));
-
-                // TEAMS is read from the LIVE fleet, not from the report snapshot.
-                // The snapshot is up to five minutes old: a wake that landed 13
-                // seconds after the Feature lead started recorded Feature alone,
-                // and the panel then showed one team while four were running.
-                // Which teams exist is a fact about now, so it is read now.
-                const inflight = f.cardsInFlightByTeam && typeof f.cardsInFlightByTeam === 'object'
-                    ? f.cardsInFlightByTeam : {};
-                let seats = f.seatsByTeam && typeof f.seatsByTeam === 'object' ? f.seatsByTeam : {};
-                let seatsSource = 'report';
-                try {
-                    const fr = await fetch('/terminals/verb/ptyListTerminals', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: '{}'
-                    });
-                    const fd = await fr.json();
-                    if (fd && Array.isArray(fd.terminals)) {
-                        const live = {};
-                        for (const t of fd.terminals) {
-                            if (!t || t.status === 'exited') { continue; }
-                            const n = String(t.friendlyName || '').trim();
-                            if (!n) { continue; }
-                            const team = n.split('-')[0] || n;
-                            (live[team] = live[team] || []).push(n);
-                        }
-                        seats = live;
-                        seatsSource = 'live';
-                    }
-                } catch { /* fall back to the snapshot, and say so below */ }
-
-                const teamNames = Object.keys(seats).concat(Object.keys(inflight)).filter(
-                    function (v, i, a) { return a.indexOf(v) === i; }).sort();
-                // The heading carries its own source. "No seats up" from a live
-                // read and "no seats up as of five minutes ago" are different
-                // claims and must not render as the same string.
-                card.appendChild(mk('div', SECTION,
-                    seatsSource === 'live' ? 'Teams' : 'Teams (from last report)'));
-                if (teamNames.length === 0) {
-                    card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
-                        'No seats up.'));
+                const clear = /^no problems found/i.test(verdict);
+                let word = clear ? (missions.length ? 'ALL CLEAR' : 'STANDBY') : 'CHECK';
+                let lamp = clear ? (missions.length ? 'var(--success)' : 'var(--text-secondary)') : 'var(--warning)';
+                let caption;
+                if (!clear) {
+                    caption = verdict;
+                } else if (!missionsReadable) {
+                    word = 'CHECK';
+                    lamp = 'var(--warning)';
+                    caption = 'Mission state could not be read.';
+                } else if (missions.length) {
+                    caption = missions.length + (missions.length === 1 ? ' mission running' : ' missions running');
                 } else {
-                    for (const t of teamNames) {
-                        const up = (seats[t] || []).length;
-                        const wip = inflight[t] || 0;
-                        const row = mk('div', ROW);
-                        row.appendChild(mk('span', 'color:var(--text-color);', t));
-                        row.appendChild(mk('span', 'color:var(--text-dim); font-variant-numeric:tabular-nums;',
-                            up + ' seat' + (up === 1 ? '' : 's') + (wip ? ' \u00b7 ' + wip + ' in flight' : '')));
-                        card.appendChild(row);
-                    }
+                    caption = 'No mission running. Nothing needs you.';
                 }
 
-                if (latest.errors.length) {
-                    card.appendChild(mk('div', SECTION, 'Errors'));
-                    for (const e of latest.errors) {
-                        card.appendChild(mk('div', 'font-size:12px; color:var(--accent-primary); '
-                            + 'padding:2px 0; line-height:1.4;', e));
+                const ann = mk('div', 'padding:16px 15px 14px; border-bottom:1px solid var(--border-color);');
+                const wordRow = mk('div', 'display:flex; align-items:center; gap:9px;');
+                const bulb = mk('span', 'width:9px; height:9px; border-radius:50%; flex-shrink:0; '
+                    + 'background:' + lamp + '; box-shadow:0 0 9px ' + lamp + ';');
+                const wordEl = mk('span', 'font-size:21px; line-height:1; letter-spacing:0.05em; '
+                    + 'font-weight:600; color:' + lamp + ';', word);
+                wordRow.appendChild(bulb);
+                wordRow.appendChild(wordEl);
+                ann.appendChild(wordRow);
+                ann.appendChild(mk('div', 'font-size:12.5px; line-height:1.45; margin-top:7px; '
+                    + 'color:var(--text-primary);', caption));
+                const checkedBits = ['Seats and board checked ' + (age || 'just now')];
+                if (f.seatsAliveCount !== undefined) {
+                    checkedBits.push(f.seatsAliveCount + (f.seatsAliveCount === 1 ? ' seat up' : ' seats up'));
+                }
+                ann.appendChild(mk('div', STENCIL + ' margin-top:8px;', checkedBits.join('  ·  ')));
+                card.appendChild(ann);
+
+                // ── MISSION STRIPS ───────────────────────────────────────────
+                if (missions.length) {
+                    const strips = mk('div', 'padding:4px 0;');
+                    for (const m of missions) {
+                        const s = mk('div', 'padding:9px 15px; border-bottom:1px solid '
+                            + 'color-mix(in srgb, var(--border-color) 55%, transparent);');
+                        s.appendChild(mk('div', 'font-size:12.5px; line-height:1.35; color:var(--text-primary);',
+                            String(m.topic || m.planId || '')));
+
+                        // A progress bar only where there is progress to show. A
+                        // bar drawn from a zero denominator is a picture of a
+                        // fact nobody has.
+                        if (m._total > 0) {
+                            const pct = Math.round((m._done / m._total) * 100);
+                            const track = mk('div', 'height:3px; border-radius:2px; margin-top:7px; '
+                                + 'background:color-mix(in srgb, var(--border-color) 80%, transparent); '
+                                + 'overflow:hidden;');
+                            track.appendChild(mk('div', 'height:100%; width:' + pct + '%; '
+                                + 'background:var(--accent-primary);'));
+                            s.appendChild(track);
+                        }
+                        const meta = [];
+                        if (m._total > 0) { meta.push(m._done + ' of ' + m._total); }
+                        if (m.dispatchedTeamGroup) { meta.push(String(m.dispatchedTeamGroup)); }
+                        const mv = elapsed(m.updatedAt);
+                        if (mv) { meta.push('moved ' + mv + ' ago'); }
+                        if (m.worktreeStatus && m.worktreeStatus !== 'none') { meta.push('worktree'); }
+                        s.appendChild(mk('div', STENCIL + ' margin-top:6px;', meta.join('  ·  ')));
+                        strips.appendChild(s);
                     }
+                    card.appendChild(strips);
                 }
 
-                // Next up, with the action on it. The offer comes from the evidence
-                // block, never from the prose, so a rephrase cannot remove it.
+                // ── NEXT UP ──────────────────────────────────────────────────
                 const offer = f.nextHighestPriority || null;
-                if (!offer || !offer.id) {
-                    // An absent section would read as "not reported yet". Nothing
-                    // ready is a finding about the board and is said out loud.
-                    card.appendChild(mk('div', SECTION, 'Next up'));
-                    card.appendChild(mk('div', 'font-size:12px; color:var(--text-dim); padding:2px 0;',
-                        'Nothing ready to dispatch.'));
-                }
+                const foot = mk('div', 'padding:11px 15px 13px;');
                 if (offer && offer.id) {
-                    card.appendChild(mk('div', SECTION, 'Next up'));
-                    card.appendChild(mk('div', 'font-size:12px; line-height:1.45; color:var(--text-color);',
-                        String(offer.topic || offer.id)));
-                    const sub = (offer.kind === 'feature' ? 'feature' : 'plan')
-                        + (offer.project ? ' · ' + offer.project : '') + ' · ' + offer.id;
-                    card.appendChild(mk('div', 'font-size:10px; color:var(--text-dim); margin-top:2px;', sub));
-
+                    foot.appendChild(mk('div', STENCIL, 'Next up'));
+                    foot.appendChild(mk('div', 'font-size:12.5px; line-height:1.4; margin-top:4px; '
+                        + 'color:var(--text-primary);', String(offer.topic || offer.id)));
                     const act = document.createElement('button');
                     act.type = 'button';
-                    // BOTH class names on purpose: the dock defines .agent-poll-btn
-                    // and the command view defines .secondary-action-btn. Each
-                    // surface styles the one it owns.
                     act.className = 'agent-poll-btn secondary-action-btn';
                     act.style.cssText = 'margin-top:9px;';
-                    act.textContent = 'Dispatch ' + (offer.kind === 'feature' ? 'feature' : 'plan');
+                    act.textContent = 'Start ' + (offer.kind === 'feature' ? 'mission' : 'plan');
                     act.title = String(offer.topic || '') + ' (' + offer.id + ')';
                     act.addEventListener('click', async () => {
                         act.disabled = true;
-                        act.textContent = 'dispatching…';
+                        act.textContent = 'starting…';
                         try {
                             const r = await fetch('/kanban/dispatch', {
                                 method: 'POST',
@@ -1315,7 +1258,7 @@
                             });
                             const rd = await r.json().catch(() => null);
                             if (r.ok && rd && rd.success !== false) {
-                                act.textContent = 'dispatched';
+                                act.textContent = 'started';
                                 setState('dispatched ' + offer.id);
                             } else {
                                 act.textContent = 'failed';
@@ -1328,7 +1271,22 @@
                             act.disabled = false;
                         }
                     });
-                    card.appendChild(act);
+                    foot.appendChild(act);
+                } else {
+                    foot.appendChild(mk('div', STENCIL, 'Next up'));
+                    foot.appendChild(mk('div', 'font-size:12px; margin-top:4px; color:var(--text-secondary);',
+                        'Nothing ready to start.'));
+                }
+                card.appendChild(foot);
+
+                if (latest.errors.length) {
+                    const errs = mk('div', 'padding:9px 15px; border-top:1px solid var(--border-color);');
+                    errs.appendChild(mk('div', STENCIL, 'Faults'));
+                    for (const e of latest.errors) {
+                        errs.appendChild(mk('div', 'font-size:12px; color:var(--warning); '
+                            + 'line-height:1.4; margin-top:3px;', e));
+                    }
+                    card.appendChild(errs);
                 }
 
                 reportEl.appendChild(card);
@@ -1458,43 +1416,63 @@
                 if (!navigator) { navMissing = 'no escalation tier declared'; }
             } catch { /* both stay null, and both say so below */ }
 
+            // Is the Pilot actually flying? A station that names a model but not
+            // whether it is running is a settings row, which is what made this
+            // read as a tool rather than a panel.
+            let flying = false;
+            try {
+                const pr = await fetch('/controller/poll/state');
+                const pd = await pr.json();
+                flying = !!(pd && pd.running);
+            } catch { /* unknown stays dark rather than claiming WATCHING */ }
+
             host.textContent = '';
-            const row = function (role, m, job) {
+            // A crew station: who it is, whether the lamp is lit, and what it is
+            // doing. The model id, its locality and whether it is metered are
+            // setup facts — they live on the tooltip and in config, not here.
+            const row = function (role, m, state, lit) {
                 const el = document.createElement('div');
                 el.className = 'agent-model-row';
-                el.style.cssText = 'display:flex; gap:8px; align-items:baseline; font-size:11px;';
+                el.style.cssText = 'display:flex; gap:9px; align-items:center; padding:5px 0;';
+
+                const bulb = document.createElement('span');
+                const colour = lit ? 'var(--accent-primary)' : 'var(--border-bright)';
+                bulb.style.cssText = 'width:6px; height:6px; border-radius:50%; flex-shrink:0; '
+                    + 'background:' + colour + (lit ? '; box-shadow:0 0 7px ' + colour : '') + ';';
+
                 const r = document.createElement('span');
                 r.className = 'agent-model-role';
-                r.style.cssText = 'font-size:9px; letter-spacing:0.08em; text-transform:uppercase; '
-                    + 'color:var(--accent-primary); min-width:62px;';
+                r.style.cssText = 'font-size:9px; letter-spacing:0.14em; text-transform:uppercase; '
+                    + 'color:var(--text-primary); min-width:70px;';
                 r.textContent = role;
+
                 const v = document.createElement('span');
+                v.style.cssText = 'font-size:9px; letter-spacing:0.14em; text-transform:uppercase; '
+                    + 'color:' + (lit ? 'var(--accent-primary)' : 'var(--text-secondary)') + ';';
+                v.textContent = state;
+                // The infrastructure is still ONE HOVER away, never gone: it is
+                // how the cloud model running the 5-minute loop was caught.
                 if (m) {
-                    v.style.cssText = 'color:var(--text-color);';
-                    const bits = [];
+                    const bits = [m.name];
                     if (m.where) { bits.push(m.where); }
                     if (m.note) { bits.push(m.note); }
-                    v.textContent = m.name + (bits.length ? ' (' + bits.join(', ') + ')' : '');
-                    v.title = String(m.raw || '');
+                    v.title = bits.join(' · ') + ' — ' + String(m.raw || '');
                 } else {
-                    v.style.cssText = 'color:var(--text-dim);';
-                    v.textContent = (role === 'Navigator') ? navMissing : 'not configured';
+                    v.title = (role === 'NAVIGATOR') ? navMissing : 'not configured';
                 }
+
+                el.appendChild(bulb);
                 el.appendChild(r);
                 el.appendChild(v);
-                if (job) {
-                    const j = document.createElement('span');
-                    j.style.cssText = 'color:var(--text-dim); font-size:10px;';
-                    j.textContent = '\u2014 ' + job;
-                    el.appendChild(j);
-                }
                 return el;
             };
-            // The roles say what each model is FOR. Two names alone left the
-            // panel looking like a settings screen, when the point is that one
-            // model keeps missions moving and the other sets them up.
-            host.appendChild(row('Pilot', pilot, 'keeps missions moving'));
-            host.appendChild(row('Navigator', navigator, 'sets missions up'));
+            // A station with no model is OFFLINE, not blank — and an unconfigured
+            // Navigator is STANDBY, a different state from a Pilot that is
+            // configured and simply not running.
+            host.appendChild(row('PILOT', pilot,
+                pilot ? (flying ? 'WATCHING' : 'STOPPED') : 'OFFLINE', !!(pilot && flying)));
+            host.appendChild(row('NAVIGATOR', navigator,
+                navigator ? (flying ? 'READY' : 'STANDBY') : 'STANDBY', false));
         }
 
         // ── Report scope: the board, or one team ──────────────────────────
