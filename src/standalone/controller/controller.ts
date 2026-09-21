@@ -1,5 +1,7 @@
 import * as child_process from 'child_process';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
     ESCALATION_LADDER,
     RUNGS_PER_ESCALATION,
@@ -235,6 +237,55 @@ function hashConfig(cfg: ControllerRuntimeConfig, matrixSource: string): string 
  * This asks the model about the board itself, on every wake, from facts that
  * survive a total collapse.
  */
+/**
+ * The board's judgement is only re-asked when the board CHANGED. An operator who
+ * leaves the board idle should not be spending a model call every five minutes to
+ * be told the same thing: if nothing moved, the previous verdict is still true.
+ * Board changes now run a pass immediately, so the interval is a backstop rather
+ * than the thing that keeps the report current.
+ *
+ * The fingerprint is order-independent, because cardsByColumn and seatsByTeam are
+ * built by iteration and their key order is not stable across passes — comparing
+ * raw JSON.stringify would call every pass a change and defeat the whole gate.
+ */
+function fingerprintFacts(facts: Record<string, unknown>): string {
+    const canonical = (v: any): any => {
+        if (Array.isArray(v)) { return v.map(canonical); }
+        if (v && typeof v === 'object') {
+            const out: Record<string, any> = {};
+            for (const k of Object.keys(v).sort()) { out[k] = canonical(v[k]); }
+            return out;
+        }
+        return v;
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(canonical(facts))).digest('hex');
+}
+
+function boardJudgementStatePath(workspaceRoot: string): string {
+    return path.join(workspaceRoot, '.switchboard', 'controller-board-judgement.json');
+}
+
+function readLastBoardJudgement(workspaceRoot: string): { fingerprint: string; verdict: string } | null {
+    try {
+        const raw = fs.readFileSync(boardJudgementStatePath(workspaceRoot), 'utf8');
+        const j = JSON.parse(raw);
+        if (j && typeof j.fingerprint === 'string' && typeof j.verdict === 'string') { return j; }
+        return null;
+    } catch {
+        // Absent OR corrupt. Both mean "no usable prior verdict", and both are
+        // answered by asking the model — the loud path, not a substituted one.
+        return null;
+    }
+}
+
+function writeLastBoardJudgement(workspaceRoot: string, fingerprint: string, verdict: string): void {
+    try {
+        const p = boardJudgementStatePath(workspaceRoot);
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, JSON.stringify({ fingerprint, verdict, at: new Date().toISOString() }, null, 2));
+    } catch { /* the gate is an optimisation; failing to persist just re-asks */ }
+}
+
 async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, unknown>): Promise<string | null> {
     const tier = (tiers || [])[0] as any;
     if (!tier || !tier.endpoint) { return null; }
@@ -578,7 +629,17 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
                 : null,
         };
         try {
-            const verdict = await judgeBoard(ctx, judgementConfig.tiers as any[], boardFacts);
+            const fingerprint = fingerprintFacts(boardFacts);
+            const prior = readLastBoardJudgement(ctx.workspaceRoot);
+            let verdict: string | null;
+            if (prior && prior.fingerprint === fingerprint) {
+                // Unchanged board: reuse, do not re-ask. The wake is still recorded,
+                // so the report stays current and proves the controller is alive.
+                verdict = prior.verdict;
+            } else {
+                verdict = await judgeBoard(ctx, judgementConfig.tiers as any[], boardFacts);
+                if (verdict) { writeLastBoardJudgement(ctx.workspaceRoot, fingerprint, verdict); }
+            }
             if (verdict) {
                 actions.push({
                     subject: 'board',
