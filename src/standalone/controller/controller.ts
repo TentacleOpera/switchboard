@@ -82,8 +82,6 @@ export interface ControllerRuntimeConfig {
     nudgeSilenceMs: number;
     /** The board's `dispatchTimeoutMs` — read for visibility, never to act. */
     dispatchTimeoutMs: number;
-    /** Mechanical restart trigger: board RSS above this. `null` = disabled. */
-    restartRssThresholdBytes: number | null;
     restartMinIntervalMs: number;
     restartMaxConsecutive: number;
     /**
@@ -119,7 +117,6 @@ export const DEFAULT_CONTROLLER_CONFIG: ControllerRuntimeConfig = {
     turnEndSilenceMs: 10 * 60_000,
     nudgeSilenceMs: 10 * 60_000,
     dispatchTimeoutMs: 4 * 60 * 60_000,
-    restartRssThresholdBytes: null,
     restartMinIntervalMs: 10 * 60_000,
     restartMaxConsecutive: 3,
     boardStartCommand: null,
@@ -416,9 +413,6 @@ function configAssumptions(cfg: ControllerRuntimeConfig): string[] {
         cfg.boardStartCommand
             ? `board restart: enabled (start invocation: \`${cfg.boardStartCommand}\`)`
             : 'board restart: disabled — no --board-start-command configured (a controller that cannot start the board must not stop it)',
-        cfg.restartRssThresholdBytes === null
-            ? 'RSS restart trigger: disabled — no --restart-rss-mb configured'
-            : `RSS restart trigger: ${Math.round(cfg.restartRssThresholdBytes / (1024 * 1024))}MB`,
         `judgement deadline=${cfg.judgementDeadlineMs}ms (covers CONNECT, not just read), max_tokens=${cfg.judgementMaxTokens}, reasoning_effort=none (source: controller config)`,
         `navigator: escalation after ${cfg.escalationStuckPasses} stuck pass(es); one digest per acting wake or unusable judgement reply; deadline=${cfg.navigatorDeadlineMs}ms, max_tokens=${cfg.navigatorMaxTokens}; quota stand-down=${Math.round(cfg.quotaStandDownMs / 60000)}m (source: controller config)`,
         `CPU sampling: USER_HZ assumed ${ASSUMED_USER_HZ} (source: controller constant — sysconf(_SC_CLK_TCK) is not reachable from Node; every CPU percentage is computed against this)`,
@@ -832,8 +826,8 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         if (action) { actions.push(action); }
     }
 
-    // 7. Mechanical restart trigger: RSS threshold or an unresponsive health
-    //    endpoint. No judgement backend is required for either.
+    // 7. Mechanical restart trigger: an unresponsive health endpoint. No
+    //    judgement backend is required.
     //
     //    Three outcomes, never two: a trigger fired; a trigger fired but the
     //    rate limit SUPPRESSED it; or nothing was wrong. Collapsing the middle
@@ -2082,14 +2076,6 @@ async function applyRemediation(
             delete ctx.state.subjects[subjectKey(subject)];
             return action;
         }
-        case 'restart-board': {
-            // Row 7 declares itself unavailable in the shipped matrix; this is a
-            // defensive arm so a misconfigured override records rather than
-            // silently restarting the board from a classification.
-            action.outcome = 'unavailable';
-            action.detail = `${diagnosis.detail}; the model-judged restart trigger is not implemented (row 7 declares itself unavailable)`;
-            return action;
-        }
     }
 }
 
@@ -2516,7 +2502,7 @@ function describeArmingState(caps: CapabilitySnapshot, stateView: ControllerApiR
 
 interface RestartDecision {
     kind: 'restart';
-    trigger: 'rss-threshold' | 'unresponsive-health';
+    trigger: 'unresponsive-health';
     reason: string;
     pid: number | null;
 }
@@ -2524,7 +2510,7 @@ interface RestartDecision {
 /** A trigger fired, and the declared rate limit held the restart back. */
 interface RestartSuppressed {
     kind: 'suppressed';
-    trigger: 'rss-threshold' | 'unresponsive-health';
+    trigger: 'unresponsive-health';
     reason: string;
     suppressionReason: string;
 }
@@ -2542,24 +2528,27 @@ interface RestartSuppressed {
  *
  * The trigger is therefore evaluated FIRST, and the rate limit is applied to
  * the trigger rather than standing in front of it.
+ *
+ * The trigger set is ONE: a board that has stopped answering `/health`. The RSS
+ * threshold is RETIRED (plan: the-board-restarts-only-when-it-stops-answering):
+ * a climbing RSS is a defect in the code, and the remedy is a fix rather than a
+ * periodic recycle of the process. This trigger is kept because a platform
+ * supervisor cannot catch the hang case — the process is still alive, so
+ * `Restart=on-failure` never fires.
  */
 function decideRestart(args: { cfg: ControllerRuntimeConfig; state: PersistedControllerState; health: any; healthRes: ControllerApiResponse | null; now: number }): RestartDecision | RestartSuppressed | null {
-    const { cfg, state, health, healthRes, now } = args;
+    const { cfg, state, healthRes, now } = args;
     if (!cfg.boardStartCommand) { return null; } // cannot restart what we cannot start.
 
     let trigger: RestartDecision['trigger'] | null = null;
     let reason = '';
-    let pid: number | null = state.lastKnownBoardPid;
+    const pid: number | null = state.lastKnownBoardPid;
     if (healthRes && healthRes.status >= 400) {
         trigger = 'unresponsive-health';
         reason = `GET /health answered ${healthRes.status}`;
     } else if (healthRes === null) {
         trigger = 'unresponsive-health';
         reason = 'GET /health did not answer';
-    } else if (cfg.restartRssThresholdBytes !== null && typeof health?.memory?.rss === 'number' && health.memory.rss >= cfg.restartRssThresholdBytes) {
-        trigger = 'rss-threshold';
-        reason = `board RSS ${Math.round(health.memory.rss / (1024 * 1024))}MB >= threshold ${Math.round(cfg.restartRssThresholdBytes / (1024 * 1024))}MB`;
-        pid = typeof health?.pid === 'number' ? health.pid : state.lastKnownBoardPid;
     }
     if (trigger === null) { return null; }
 

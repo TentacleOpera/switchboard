@@ -407,9 +407,10 @@ export function capabilityForKey(key: MatrixCapabilityKey, caps: CapabilitySnaps
 
 /**
  * Whether one escalation rung is reachable with the current capability set.
- * `restart-board` is not reached by a judgement classification in this subtask
- * (row 7 declares itself unavailable); the judgement rungs need a tier, and the
- * `supervisor` rung now needs a configured NAVIGATOR rather than a live
+ * `restart-board` is RETIRED (plan:
+ * the-board-restarts-only-when-it-stops-answering) — it is no longer a
+ * remediation, so it is no longer a rung. The judgement rungs need a tier, and
+ * the `supervisor` rung now needs a configured NAVIGATOR rather than a live
  * supervisor seat — the seat is retired, the rung is not.
  */
 export function rungReachable(rung: string, caps: CapabilitySnapshot): boolean {
@@ -426,8 +427,6 @@ export function rungReachable(rung: string, caps: CapabilitySnapshot): boolean {
             return capabilityForKey('model', caps).enabled && capabilityForKey('two-providers', caps).enabled;
         case 'supervisor':
             return capabilityForKey('model', caps).enabled && caps.navigator.configured;
-        case 'restart-board':
-            return false;
         default:
             return false;
     }

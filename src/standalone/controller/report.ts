@@ -101,7 +101,7 @@ export interface EntryAction {
 
 export interface RestartRecord {
     reason: string;
-    trigger: 'rss-threshold' | 'unresponsive-health';
+    trigger: 'unresponsive-health';
     reportEntryWrittenFirst: boolean;
     startInvocation: string | null;
     surviveBoard: boolean | null;

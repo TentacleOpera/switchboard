@@ -263,13 +263,16 @@ async function run() {
         assert.ok(!decl.includes("'supervisor'"), `the type union still declares it: ${decl}`);
     });
 
-    check('row 6 requires [\'model\'] alone, and row 7 no longer declares the retired key', () => {
+    check('row 6 requires [\'model\'] alone, and row 7 is retired outright', () => {
         const row6 = matrix.DEFAULT_MATRIX_ROWS.find(r => r.id === 'looping-undiscovered-bug');
         assert.deepStrictEqual(row6.requires, ['model'],
             `row 6 requires ${JSON.stringify(row6.requires)} — it declares a capability that no longer exists`);
         assert.ok(!/supervisor/i.test(row6.precondition), 'row 6\'s precondition still names a supervisor seat');
-        const row7 = matrix.DEFAULT_MATRIX_ROWS.find(r => r.id === 'board-level-wedge');
-        assert.ok(!row7.requires.includes('supervisor'), 'row 7 still declares the retired key');
+        // Row 7 (`board-level-wedge`) and its `restart-board` remediation are
+        // retired (plan: the-board-restarts-only-when-it-stops-answering), so
+        // the row is gone rather than merely carrying no retired key.
+        assert.strictEqual(matrix.DEFAULT_MATRIX_ROWS.find(r => r.id === 'board-level-wedge'), undefined,
+            'row 7 must be absent from the shipped matrix');
         for (const row of matrix.DEFAULT_MATRIX_ROWS) {
             for (const cap of row.requires) {
                 assert.ok(matrix.MATRIX_CAPABILITY_KEYS.includes(cap),

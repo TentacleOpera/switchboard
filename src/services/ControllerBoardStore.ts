@@ -859,7 +859,7 @@ function validateMatrixRows(rows: any[]): string | null {
  */
 const KNOWN_REMEDIATIONS = [
     'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
-    'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
+    'stand-down', 'supervisor', 'escalate-human', 'record-unknown',
     'report-to-lead', 'post-completion-on-behalf',
 ];
 // `supervisor` is RETIRED as a CAPABILITY KEY (plan:

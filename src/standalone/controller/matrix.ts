@@ -10,11 +10,17 @@ import * as path from 'path';
  * remediation and a precondition — not a function with branches. Adding a row
  * must not mean editing the controller.
  *
- * The full ten-row matrix ships here, including the judgement rows, because it
+ * The full nine-row matrix ships here, including the judgement rows, because it
  * is a STORE: a row that does not exist cannot declare itself unavailable. Rows
- * 1, 2 and 4 are mechanical; rows 3, 5, 6, 7, 8, 9 and 10 report as unavailable
+ * 1, 2 and 4 are mechanical; rows 3, 5, 6, 8, 9 and 10 report as unavailable
  * with the reason `no judgement backend configured`, which is the state a
  * modelless deployment ships in permanently.
+ *
+ * Row 7 (`board-level-wedge`) is RETIRED (plan:
+ * the-board-restarts-only-when-it-stops-answering). It never fired once, its
+ * detection is now the mission-stall pass's question, and its remediation
+ * (`restart-board`) is gone from the closed set with it: the board is restarted
+ * only when it stops answering `/health`.
  *
  * Row 8 (`unknown`) is load-bearing: without an explicit unknown outcome a
  * model is forced to name a plausible class, which is exactly the quiet wrong
@@ -37,7 +43,6 @@ export type MatrixRemediation =
     | 'stand-down'
     | 'supervisor'
     | 'escalate-human'
-    | 'restart-board'
     | 'record-unknown'
     /** Row 9 — hand the OBSERVATIONS to the subject's lead (never to the subject). */
     | 'report-to-lead'
@@ -50,9 +55,22 @@ export type MatrixRemediation =
     | 'post-completion-on-behalf';
 
 /**
+ * How many times a rung is applied before the controller advances to the next
+ * reachable one. "A seat nudged twice earns a clear; a seat cleared twice earns
+ * an escalation." Nothing jumps straight to the top rung on one weak
+ * classification at 3am.
+ */
+export const RUNGS_PER_ESCALATION = 2;
+
+/**
  * The escalation ladder, lowest rung first. `mark-complete`,
  * `record-unknown` and `post-completion-on-behalf` are terminal one-shot
  * actions and are deliberately NOT on the ladder.
+ *
+ * `restart-board` is RETIRED (plan:
+ * the-board-restarts-only-when-it-stops-answering): the top rung is now
+ * `escalate-human`, so a seat that climbs as far as the ladder goes ends by
+ * asking a person rather than by restarting the board from a classification.
  *
  * The `supervisor` RUNG survives the retirement of the supervisor SEAT
  * (plan: the-pilot-and-the-navigator-are-one-crew): it is the rung that spends a
@@ -69,16 +87,7 @@ export const ESCALATION_LADDER: readonly MatrixRemediation[] = [
     'stand-down',
     'supervisor',
     'escalate-human',
-    'restart-board',
 ];
-
-/**
- * How many times a rung is applied before the controller advances to the next
- * reachable one. "A seat nudged twice earns a clear; a seat cleared twice earns
- * an escalation." Nothing jumps straight to a board restart on one weak
- * classification at 3am.
- */
-export const RUNGS_PER_ESCALATION = 2;
 
 /**
  * What a row needs before it is reachable. A row whose precondition is unmet is
@@ -120,7 +129,7 @@ export const MATRIX_TARGETS: readonly MatrixTarget[] = ['subject', 'lead'];
  */
 export const MATRIX_REMEDIATIONS: readonly MatrixRemediation[] = [
     'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
-    'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
+    'stand-down', 'supervisor', 'escalate-human', 'record-unknown',
     'report-to-lead', 'post-completion-on-behalf',
 ];
 
@@ -249,30 +258,6 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         // filter and reported as unavailable for a reason nobody can fix.
         precondition: 'a judgement backend is configured',
         requires: ['model'],
-    },
-    {
-        id: 'board-level-wedge',
-        order: 7,
-        cause: 'Board-level wedge',
-        evidence: '>=N seats stuck, no single cause',
-        judge: 'model',
-        condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'cpu', 'rss', 'lastWrite', 'logTail'] },
-        remediation: 'restart-board',
-        // Row 7 also declared the retired `supervisor` key. It is retired
-        // wholesale by the-board-restarts-only-when-it-stops-answering;
-        // whichever of the two lands second must leave the key gone, so it is
-        // removed here too rather than left as a declaration of something that
-        // no longer exists.
-        precondition: 'a judgement backend is configured',
-        requires: ['model'],
-        // Change 10: the RESTART MECHANISM is the controller's and ships with
-        // the spine subtask; the MODEL-JUDGED trigger is not implemented here,
-        // so this row declares itself unavailable rather than silently never
-        // firing.
-        declaredUnavailable: {
-            reason: 'the model-judged board-wedge trigger is not implemented; the controller restarts the board on its mechanical RSS/unresponsive-health triggers instead',
-            source: 'matrix:board-level-wedge',
-        },
     },
     {
         id: 'unknown',

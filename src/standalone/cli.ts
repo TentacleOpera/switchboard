@@ -173,7 +173,6 @@ Options:
   --interval <min>     controller: wake cadence in minutes (default: 5)
   --id <name>          controller: this controller's identity (recorded in every entry)
   --team <id>          controller: report team id (default: controller)
-  --restart-rss-mb <N> controller: restart the board above this RSS (needs --board-start-command)
   --board-start-command <cmd>  controller: invocation that starts the board again
   --board-start-cwd <dir>      controller: cwd for that invocation
   --supervisor <seat>          controller: supervisor seat for judgement escalations
@@ -2079,7 +2078,7 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         console.log('Usage: npx switchboard controller [--once] [--interval <minutes>] [--id <name>] [--team <id>]');
         console.log('                                  [--tier <id>:<classifier>[:<locality>[:<operator>[:<cost>]]]]...');
         console.log('                                  [--supervisor <seat>] [--ceiling <N>] [--stuck-passes <N>]');
-        console.log('                                  [--judgement-deadline <ms>] [--restart-rss-mb <N>]');
+        console.log('                                  [--judgement-deadline <ms>]');
         console.log('                                  [--board-start-command <cmd>] [--board-start-cwd <dir>] [--json]');
         exitFlushed(0);
     }
@@ -2101,14 +2100,16 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         }
         config.intervalMinutes = minutes;
     }
+    // `--restart-rss-mb` is RETIRED (plan:
+    // the-board-restarts-only-when-it-stops-answering). RSS is not a restart
+    // condition: the controller restarts the board only when it stops answering
+    // `/health`, and a climbing RSS is a defect to fix rather than a reason to
+    // recycle the process. The flag may still be in an installed unit file or a
+    // saved invocation, so it is MATCHED, REPORTED and IGNORED — never an
+    // unrecognised-argument hard failure that strands those boxes.
     const rssRaw = getFlag('--restart-rss-mb');
     if (rssRaw !== undefined) {
-        const mb = Number(rssRaw);
-        if (!Number.isFinite(mb) || mb <= 0) {
-            console.error(`[switchboard] --restart-rss-mb requires a positive number of MB (got '${rssRaw}').`);
-            exitFlushed(5);
-        }
-        config.restartRssThresholdBytes = Math.round(mb * 1024 * 1024);
+        console.error('[switchboard] --restart-rss-mb is RETIRED — RSS is no longer a restart trigger. The controller restarts the board only when it stops answering /health. Nothing was written.');
     }
     const startCommand = getFlag('--board-start-command');
     if (startCommand !== undefined) { config.boardStartCommand = startCommand || null; }

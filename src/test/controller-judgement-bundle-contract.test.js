@@ -57,7 +57,7 @@ function run() {
 
     check('every judgement row still carries condition.kind === judgement', () => {
         const judged = matrix.DEFAULT_MATRIX_ROWS.filter(r => r.judge === 'model');
-        assert.ok(judged.length >= 7, `expected at least 7 model-judged rows, got ${judged.length}`);
+        assert.ok(judged.length >= 6, `expected at least 6 model-judged rows, got ${judged.length}`);
         for (const row of judged) {
             assert.strictEqual(row.condition.kind, 'judgement',
                 `row '${row.id}' is model-judged but its condition kind is '${row.condition.kind}'`);
@@ -319,7 +319,10 @@ function run() {
         // hypothesis out of context, which is why it never posted.
         const controllerSrc = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'controller', 'controller.ts'), 'utf8');
         const arm = controllerSrc.slice(controllerSrc.indexOf("case 'post-completion-on-behalf':"));
-        const armBody = arm.slice(0, arm.indexOf("case 'restart-board':"));
+        // Row 10's arm is the LAST arm of the remediation switch (the retired
+        // `restart-board` arm that used to follow it is gone), so it is bounded
+        // by the switch's own close rather than by the next case label.
+        const armBody = arm.slice(0, arm.indexOf('\n    }\n}'));
         assert.ok(/\/kanban\/queue\/done/.test(armBody), 'row 10 must post the completion, not merely record');
         assert.ok(!/ptySendPrompt/.test(armBody),
             'row 10 must NOT prompt: the agent that failed to post is the agent that ran out of context');
@@ -644,6 +647,74 @@ function run() {
         assert.ok(!/Be STRICT/.test(src), 'the retired escalation calibration must be gone');
         assert.ok(!/Healthy seats are EXPECTED in your input/.test(src),
             'tier 2 no longer exists to expect healthy seats');
+    });
+
+    // ── 20. The board restarts only when it stops answering ───────────────
+    // Plan: the-board-restarts-only-when-it-stops-answering. Row 7 and its
+    // `restart-board` remediation are retired, the RSS trigger is gone, and the
+    // one trigger left is a `/health` that stopped answering.
+
+    check('row 7 is gone and the matrix is nine rows with its orders intact', () => {
+        assert.strictEqual(matrix.DEFAULT_MATRIX_ROWS.length, 9,
+            `expected nine rows, got ${matrix.DEFAULT_MATRIX_ROWS.length}`);
+        assert.strictEqual(matrix.DEFAULT_MATRIX_ROWS.find(r => r.id === 'board-level-wedge'), undefined,
+            'board-level-wedge must be absent from the shipped matrix');
+        const orders = matrix.DEFAULT_MATRIX_ROWS.map(r => r.order);
+        assert.deepStrictEqual(orders, [1, 2, 3, 4, 5, 6, 8, 9, 10],
+            `orders were renumbered: ${JSON.stringify(orders)} — historical report entries would resolve differently`);
+    });
+
+    check("'restart-board' is absent from the union, the values array and the ladder", () => {
+        assert.ok(!matrix.MATRIX_REMEDIATIONS.includes('restart-board'),
+            'the runtime-validated values array still lists the retired verb');
+        assert.ok(!matrix.ESCALATION_LADDER.includes('restart-board'), 'the retired rung is still on the ladder');
+        const src = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'controller', 'matrix.ts'), 'utf8');
+        const decl = src.slice(src.indexOf('export type MatrixRemediation'), src.indexOf(';', src.indexOf('export type MatrixRemediation')));
+        assert.ok(!decl.includes("'restart-board'"), `the type union still declares it: ${decl}`);
+    });
+
+    check("the ladder's last rung is 'escalate-human'", () => {
+        assert.strictEqual(matrix.ESCALATION_LADDER[matrix.ESCALATION_LADDER.length - 1], 'escalate-human',
+            'a seat that climbs to the top must end by asking a person, not by restarting the board');
+    });
+
+    check('every remaining remediation has a switch arm in the controller', () => {
+        const src = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'controller', 'controller.ts'), 'utf8');
+        for (const verb of matrix.MATRIX_REMEDIATIONS) {
+            assert.ok(src.includes(`case '${verb}':`),
+                `remediation '${verb}' has no switch arm — it would load and be inert at wake time`);
+        }
+    });
+
+    check('an override naming the RETIRED restart-board fails loudly, naming the verb', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-matrix-'));
+        fs.mkdirSync(path.join(dir, '.switchboard', 'controller'), { recursive: true });
+        fs.writeFileSync(path.join(dir, '.switchboard', 'controller', 'matrix.json'), JSON.stringify([{
+            id: 'x', order: 1, cause: 'c', judge: 'model', condition: { kind: 'judgement' },
+            remediation: 'restart-board', requires: ['model'],
+        }]));
+        assert.throws(() => matrix.loadMatrix(dir), /restart-board/,
+            'an override naming the retired verb must fail loudly and name it');
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    check("'rss-threshold' and restartRssThresholdBytes are absent from the controller", () => {
+        const src = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'controller', 'controller.ts'), 'utf8');
+        assert.ok(!src.includes("'rss-threshold'"), 'the RSS trigger label must be gone');
+        assert.ok(!src.includes('restartRssThresholdBytes'), 'the RSS threshold config must be gone');
+        assert.ok(!/RSS restart trigger/.test(src), 'the RSS threshold assumption must be gone, not restated as a measurement');
+        // Paired positive: the one legitimate trigger and the restart machinery
+        // are intact.
+        assert.ok(/unresponsive-health/.test(src), 'the unresponsive-health trigger must remain');
+        assert.ok(/performBoardRestart/.test(src), 'the restart machinery must remain');
+    });
+
+    check('the RSS flag is matched, reported and ignored rather than failing', () => {
+        const src = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'cli.ts'), 'utf8');
+        assert.ok(src.includes('--restart-rss-mb'),
+            'the flag must still be matched so a saved invocation or unit file does not hard-fail');
+        assert.ok(!/requires a positive number of MB/.test(src), 'the old positive-number validation must be gone');
+        assert.ok(!/restartRssThresholdBytes/.test(src), 'the flag must not configure anything');
     });
 
     console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILED`}\n`);

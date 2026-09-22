@@ -19,6 +19,12 @@
  * against a closed set. A reply that fails that validation means THE RULE DID
  * NOT RUN — never a coerced nearest value, which is the quiet wrong answer the
  * fallback rule forbids.
+ *
+ * `board-wedge` is RETIRED (plan:
+ * the-board-restarts-only-when-it-stops-answering). Its row is gone, so its
+ * class label and its class -> row mapping go with it: a label whose row does
+ * not exist resolves to nothing. The board-level question it asked is now the
+ * mission-stall pass's, asked mechanically with no model call for detection.
  */
 
 export type JudgementClass =
@@ -28,14 +34,13 @@ export type JudgementClass =
     | 'crashed'
     | 'quota'
     | 'looping'
-    | 'board-wedge'
     /** Row 9 — no worktree write against a card that asked for an implementation. */
     | 'research-loop'
     /** Row 10 — a fix round that was finished and never posted. */
     | 'finished-unposted-round'
     | 'unknown';
 
-/** The ten labels `deriveClass` may produce. */
+/** The nine labels `deriveClass` may produce. */
 export const JUDGEMENT_CLASSES: readonly JudgementClass[] = [
     'finished-unreported',
     'idle',
@@ -43,7 +48,6 @@ export const JUDGEMENT_CLASSES: readonly JudgementClass[] = [
     'crashed',
     'quota',
     'looping',
-    'board-wedge',
     'research-loop',
     'finished-unposted-round',
     'unknown',
@@ -61,7 +65,6 @@ export const MODEL_ACTIONABLE_CLASSES: readonly JudgementClass[] = [
     'waiting-human',
     'quota',
     'looping',
-    'board-wedge',
     'research-loop',
     'finished-unposted-round',
     'unknown',
@@ -75,7 +78,6 @@ export const CLASS_TO_ROW_ID: Readonly<Record<JudgementClass, string>> = {
     'crashed': 'crashed-dead-process',
     'quota': 'out-of-quota',
     'looping': 'looping-undiscovered-bug',
-    'board-wedge': 'board-level-wedge',
     'research-loop': 'research-loop-no-write',
     'finished-unposted-round': 'fix-round-unposted',
     'unknown': 'unknown',
