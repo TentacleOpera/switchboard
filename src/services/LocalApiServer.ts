@@ -8448,9 +8448,17 @@ export class LocalApiServer {
         const releasedSeats = new Set<string>();
         for (const card of held) {
             const planId = String(card.planId || '');
+            // Read the SEAT before the clear, not after it. The clear is the
+            // write that empties the stamp, so a store whose row object is the
+            // one the board read handed back would blank the very name this
+            // release is recording — and a released seat reported as '' is
+            // indistinguishable from a seat with no name and from a release
+            // that named nobody. "Which seats did this stop release?" has to be
+            // answerable after the fact.
+            const seat = String(card.ownerSeat || '').trim();
             try {
                 const ok = await db.clearOwnerStamp?.(card.planFile, card.workspaceId || wsId);
-                if (ok) { released.push(planId); releasedSeats.add(String(card.ownerSeat).trim()); }
+                if (ok) { released.push(planId); if (seat) { releasedSeats.add(seat); } }
                 else { failed.push({ planId, reason: 'no hold to clear' }); alreadyClear.push(planId); }
             } catch (relErr) {
                 failed.push({ planId, reason: relErr instanceof Error ? relErr.message : String(relErr) });
