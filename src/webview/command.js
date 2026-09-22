@@ -2686,6 +2686,25 @@
     const agentConfigSaveBtnMobile = document.getElementById('btn-agent-config-save');
     const agentConfigStatusElMobile = document.getElementById('agent-control-config-status');
 
+    // The Navigator's own config row — the same shared controller as the
+    // Pilot's, bound to its own ids and its own role pointer. A save here writes
+    // /controller/navigator, never the Pilot's pointer.
+    const agentNavKeyElMobile = document.getElementById('agent-navigator-key');
+    const agentNavProviderRowMobile = window.SwitchboardAgentProviderRow
+        ? window.SwitchboardAgentProviderRow.create({
+            provider: document.getElementById('agent-navigator-provider'),
+            endpoint: document.getElementById('agent-navigator-endpoint'),
+            endpointLabel: document.getElementById('agent-navigator-endpoint-label'),
+            modelSelect: document.getElementById('agent-navigator-model-select'),
+            modelInput: document.getElementById('agent-navigator-model'),
+            modelLabel: document.getElementById('agent-navigator-model-label'),
+            key: agentNavKeyElMobile,
+            keyLabel: document.getElementById('agent-navigator-key-label'),
+        })
+        : null;
+    const agentNavConfigSaveBtnMobile = document.getElementById('btn-agent-navigator-config-save');
+    const agentNavConfigStatusElMobile = document.getElementById('agent-navigator-config-status');
+
     function setAgentStatusMobile(text, kind) {
         if (!agentStatusChipMobile) { return; }
         agentStatusChipMobile.textContent = text;
@@ -2724,6 +2743,9 @@
             // `cfg.keySet` written here would claim the active provider's state
             // for whichever provider is selected next.
             setAgentConfigStatusMobile(cfg.modelError || '', !!cfg.modelError);
+            // The Navigator's OWN pointer, seeded into its own row over the
+            // SAME `cfg.providers` rows map.
+            await loadAgentNavigatorConfigMobile(cfg);
             if (agentModelConfigured) {
                 // SILENT WHEN FINE — same rule as the dock. The Pilot station
                 // names the model and its state directly above; restating it
@@ -2882,6 +2904,68 @@
         }
     }
 
+    function setAgentNavConfigStatusMobile(text, isError) {
+        if (!agentNavConfigStatusElMobile) { return; }
+        agentNavConfigStatusElMobile.textContent = text || '';
+        agentNavConfigStatusElMobile.style.color = isError ? '#f85149' : 'var(--text-dim)';
+    }
+
+    /** Seed the Navigator row from its OWN pointer, over the shared rows map.
+     *  A failed read says the state could not be read — never "not configured". */
+    async function loadAgentNavigatorConfigMobile(cfg) {
+        try {
+            const res = await fetch('/controller/navigator', { credentials: 'same-origin' });
+            if (!res.ok) {
+                setAgentNavConfigStatusMobile('Navigator state could not be read (' + res.status + ').', true);
+                return;
+            }
+            const data = await res.json();
+            const nav = (data && data.navigator) || null;
+            if (agentNavProviderRowMobile && cfg) {
+                agentNavProviderRowMobile.applyConfig(cfg, nav ? { providerId: nav.providerId, source: nav.source } : null);
+            }
+            if (nav && nav.error) { setAgentNavConfigStatusMobile(nav.error, true); }
+            else if (nav && nav.reason) { setAgentNavConfigStatusMobile(nav.reason, false); }
+            else { setAgentNavConfigStatusMobile('', false); }
+        } catch (err) {
+            setAgentNavConfigStatusMobile('Navigator state could not be read: ' + (err?.message || err), true);
+        }
+    }
+
+    /** Save the Navigator's endpoint/model/key. Writes /controller/navigator —
+     *  never the Pilot's pointer, so saving one role cannot overwrite the other. */
+    async function saveAgentNavigatorConfigMobile() {
+        if (agentNavProviderRowMobile && !agentNavProviderRowMobile.selectedProviderId()) {
+            setAgentNavConfigStatusMobile('Choose a provider before saving.', true);
+            return;
+        }
+        const payload = agentNavProviderRowMobile ? agentNavProviderRowMobile.payload() : {};
+        const wantsKey = !agentNavProviderRowMobile || agentNavProviderRowMobile.needsKey();
+        if (wantsKey && agentNavKeyElMobile && agentNavKeyElMobile.value.trim()) {
+            payload.apiKey = agentNavKeyElMobile.value.trim();
+        }
+        try {
+            const res = await fetch('/controller/navigator', {
+                method: 'PUT', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) {
+                setAgentNavConfigStatusMobile('Save failed: ' + (data.error || res.status), true);
+                return;
+            }
+            if (agentNavKeyElMobile) { agentNavKeyElMobile.value = ''; }
+            // Reload FIRST, confirm LAST: the reload rewrites this line from the
+            // freshly-read state, so setting it before would wipe the save's own
+            // confirmation and read as a no-op.
+            await loadAgentControlConfigMobile();
+            setAgentNavConfigStatusMobile('Saved.', false);
+        } catch (err) {
+            setAgentNavConfigStatusMobile('Save failed: ' + (err?.message || err), true);
+        }
+    }
+
     function renderAgentEntryMobile(role, text, resolved, actions) {
         if (!agentLogElMobile) { return; }
         const entry = document.createElement('div');
@@ -2977,6 +3061,9 @@
     // + runAgentActionMobile.
     if (agentConfigSaveBtnMobile) {
         agentConfigSaveBtnMobile.addEventListener('click', () => void saveAgentControlConfigMobile());
+    }
+    if (agentNavConfigSaveBtnMobile) {
+        agentNavConfigSaveBtnMobile.addEventListener('click', () => void saveAgentNavigatorConfigMobile());
     }
 
     // Bootstrap — guarded so a Node require (unit tests) does not throw on
@@ -3572,18 +3659,20 @@
             if (!host) { return; }
             let pilot = null;
             let navigator = null;
-            let navMissing = 'not configured';
+            // Same state resolution as the dock, and the same strings: two
+            // surfaces drawing different words for one model is the divergence
+            // CLAUDE.md records. `navReadable` keeps "the host did not answer"
+            // distinct from "there is genuinely no Navigator".
+            let navMissing = 'no Navigator model configured';
+            let navReadable = false;
             try {
                 const r = await fetch('/controller/judgement');
                 const d = await r.json();
                 const j = (d && d.judgement) || {};
                 const tiers = j.tiers || [];
-                // Pilot is the classifier tier, Navigator the escalation tier.
-                // `supervisorSeat` is a SEAT NAME, not a model, so it is not what
-                // names the Navigator — reading it here would have labelled the
-                // chain's cloud model with a terminal's name.
-                const tier = tiers.filter(function (t) { return t && t.role === 'classifier'; })[0] || tiers[0];
-                const esc = tiers.filter(function (t) { return t && t.role === 'escalation'; })[0];
+                // Pilot is the classifier tier. `supervisorSeat` is a SEAT NAME,
+                // not a model, so it names nothing here.
+                const tier = tiers.filter(function (t) { return t && t.role === 'classifier'; })[0];
                 if (tier && tier.model) {
                     // Locality comes from the tier, never guessed from the URL.
                     // Omitted rather than assumed when the tier does not say.
@@ -3594,19 +3683,28 @@
                         note: tier.costClass === 'metered' ? 'metered' : '',
                     };
                 }
-                if (esc && esc.model) {
-                    navigator = {
-                        name: prettyModel(esc.model),
-                        where: placeOf(esc),
-                        raw: esc.model,
-                        note: esc.costClass === 'metered' ? 'metered' : '',
-                    };
+            } catch { /* the Pilot stays null, and says so below */ }
+
+            // The Navigator is NOT a judgement tier — its own model slot, read
+            // from its own route (plan: the-navigator-is-its-own-model-slot).
+            try {
+                const nr = await fetch('/controller/navigator');
+                if (nr.ok) {
+                    const nd = await nr.json();
+                    const nav = (nd && nd.navigator) || null;
+                    navReadable = true;
+                    if (nav && nav.model) {
+                        navigator = {
+                            name: prettyModel(nav.model),
+                            where: placeOf(nav),
+                            raw: nav.model,
+                            note: nav.costClass === 'metered' ? 'metered' : '',
+                        };
+                    } else if (nav && nav.reason) {
+                        navMissing = nav.reason;
+                    }
                 }
-                // Say WHY it is absent. "not configured" alone sent the operator
-                // looking for a missing API key when the real state is that no
-                // escalation tier is declared at all — a key would not help.
-                if (!navigator) { navMissing = 'no escalation tier declared'; }
-            } catch { /* both stay null, and both say so below */ }
+            } catch { /* navReadable stays false — an unanswered read is not "unset" */ }
 
             // Is the Pilot actually flying? A station that names a model but not
             // whether it is running is a settings row, which is what made this
@@ -3635,7 +3733,7 @@
             // doing, and — for the Pilot — the switch that arms it. The model id,
             // its locality and whether it is metered are setup facts; they live
             // on the tooltip and in config.
-            const station = function (role, jet, m, state, lit, spend, control) {
+            const station = function (role, jet, m, state, lit, spend, control, detail) {
                 const el = document.createElement('div');
                 el.className = 'crew-station ' + (lit ? 'is-lit' : 'is-dark');
 
@@ -3668,8 +3766,13 @@
                     if (m.note) { where.push(m.note); }
                     name.textContent = m.name + (where.length ? ' · ' + where.join(', ') : '');
                     name.title = String(m.raw || '');
+                } else if (role === 'NAVIGATOR') {
+                    // Same two strings as the dock. A read that never ANSWERED
+                    // says so rather than claiming the Navigator is unset.
+                    name.textContent = navReadable ? navMissing : 'Navigator state could not be read';
+                    name.title = navReadable ? navMissing : 'GET /controller/navigator did not answer.';
                 } else {
-                    name.textContent = (role === 'NAVIGATOR') ? navMissing : 'not configured';
+                    name.textContent = 'not configured';
                 }
                 el.appendChild(name);
 
@@ -3698,6 +3801,14 @@
                         u.title = b.note;
                     }
                     if (u.textContent) { el.appendChild(u); }
+                }
+
+                // A station's own operating detail, where it has one.
+                if (detail) {
+                    const dv = document.createElement('div');
+                    dv.className = 'crew-readout';
+                    dv.textContent = detail;
+                    el.appendChild(dv);
                 }
 
                 if (control) { el.appendChild(control); }
@@ -3729,15 +3840,36 @@
                 if (stopBtn) { stopBtn.hidden = true; stopBtn.className = 'crew-switch'; }
             }
 
-            // A station with no model is OFFLINE, not blank — and an unconfigured
-            // Navigator is STANDBY, a different state from a Pilot that is
-            // configured and simply not running.
+            // The Navigator's Configure control: opens the NAVIGATOR config
+            // block, its own role pointer — never the Pilot's. A new button each
+            // paint, because the stations are rebuilt on every repaint.
+            const navControlMobile = document.createElement('button');
+            navControlMobile.type = 'button';
+            navControlMobile.className = 'crew-switch';
+            navControlMobile.textContent = navigator ? 'Configure' : 'Configure Navigator';
+            navControlMobile.addEventListener('click', () => {
+                const wrap = document.getElementById('agent-navigator-config-wrap');
+                if (!wrap) { return; }
+                wrap.open = true;
+                if (typeof wrap.scrollIntoView === 'function') {
+                    wrap.scrollIntoView({ block: 'nearest' });
+                }
+            });
+
+            // A station with no model is OFFLINE, not blank — and the SAME words
+            // the dock uses for the Navigator, so the two surfaces cannot draw
+            // different states for one model. A Navigator whose state could not
+            // be READ is UNKNOWN, not OFFLINE: OFFLINE is a claim about the
+            // board, and the board did not answer.
             stations.appendChild(station('PILOT', 'lead', pilot,
                 pilot ? (flying ? 'WATCHING' : 'STOPPED') : 'OFFLINE', !!(pilot && flying),
                 budget && budget.pilot, control));
+            // The Navigator is CONFIGURATION ONLY at this stage: nothing on the
+            // board calls it yet. Same string as the dock.
             stations.appendChild(station('NAVIGATOR', 'planner', navigator,
-                navigator ? (flying ? 'READY' : 'STANDBY') : 'STANDBY', false,
-                budget && budget.navigator, null));
+                navigator ? (flying ? 'STANDBY' : 'STOPPED') : (navReadable ? 'OFFLINE' : 'UNKNOWN'), false,
+                budget && budget.navigator, navControlMobile,
+                navigator ? 'configured · not yet called by the board' : ''));
             host.textContent = '';
             host.appendChild(stations);
         }

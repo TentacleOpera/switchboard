@@ -630,12 +630,20 @@ function run() {
             'a loud seat must be reportable');
     });
 
-    check('the two tiers are calibrated in opposite directions', () => {
+    // ── 19. The Pilot is the ONLY judge ───────────────────────────────────
+    // The escalation rung is retired (plan: the-navigator-is-its-own-model-slot):
+    // the Navigator has its own model slot and a different job, so there is no
+    // second opinion behind the classifier. The opposite-calibration pair this
+    // case used to pin is therefore gone, and the classifier's prompt must not
+    // promise a filter that does not exist.
+    check('the Pilot prompt is calibrated as the sole judge', () => {
         const src = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'controller', 'controller.ts'), 'utf8');
-        assert.ok(/Be STRICT/.test(src), 'the escalation tier must be told to be strict');
-        assert.ok(/Be PERMISSIVE/.test(src), 'the classifier tier must be told to be permissive');
-        assert.ok(/Healthy seats are EXPECTED in your input/.test(src),
-            'tier 2 must expect healthy seats, or tier 1\'s permissiveness becomes tier 2\'s false positives');
+        assert.ok(/You are the ONLY judge/.test(src), 'the Pilot must be told it is the only judge');
+        assert.ok(!/A later stage filters you/.test(src),
+            'no later stage exists — a permissive instruction justified by a filter that cannot be installed must be gone');
+        assert.ok(!/Be STRICT/.test(src), 'the retired escalation calibration must be gone');
+        assert.ok(!/Healthy seats are EXPECTED in your input/.test(src),
+            'tier 2 no longer exists to expect healthy seats');
     });
 
     console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILED`}\n`);

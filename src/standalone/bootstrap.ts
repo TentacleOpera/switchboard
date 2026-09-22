@@ -4411,7 +4411,17 @@ Each plan file must include:
         for (const t of list) {
             const providerId = String(t?.providerId || '').trim();
             if (!providerId) { errors.push('a tier entry has no providerId'); continue; }
-            const role = t?.role === 'escalation' ? 'escalation' : (t?.role === 'classifier' ? 'classifier' : null);
+            // ONE ROLE. `escalation` was the Pilot/Navigator split under earlier
+            // names and is RETIRED — the Navigator has its own model slot now and
+            // is not a judgement tier. A config still naming it FAILS LOUDLY here
+            // rather than being coerced to `classifier`: silently accepting it
+            // would put a model the operator meant for a different job onto the
+            // 5-minute loop, which is the routing fallback CLAUDE.md forbids.
+            if (t?.role === 'escalation') {
+                errors.push(`tier '${providerId}' declares role 'escalation', which has been retired — the Navigator is a separately configured model slot (/controller/navigator), not a judgement tier. Declare role 'classifier' or remove the tier.`);
+                continue;
+            }
+            const role = t?.role === 'classifier' ? 'classifier' : null;
             if (!role) { errors.push(`tier '${providerId}' has an unknown role '${t?.role}'`); continue; }
             const locality = ['loopback', 'lan', 'tailnet', 'internet'].includes(t?.locality) ? t.locality : 'internet';
             const costClass = t?.costClass === 'metered' ? 'metered' : 'free';

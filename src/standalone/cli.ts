@@ -2077,7 +2077,7 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
 
     if (argv.includes('--help') || argv.includes('-h')) {
         console.log('Usage: npx switchboard controller [--once] [--interval <minutes>] [--id <name>] [--team <id>]');
-        console.log('                                  [--tier <id>:<classifier|escalation>[:<locality>[:<operator>[:<cost>]]]]...');
+        console.log('                                  [--tier <id>:<classifier>[:<locality>[:<operator>[:<cost>]]]]...');
         console.log('                                  [--supervisor <seat>] [--ceiling <N>] [--stuck-passes <N>]');
         console.log('                                  [--judgement-deadline <ms>] [--restart-rss-mb <N>]');
         console.log('                                  [--board-start-command <cmd>] [--board-start-cwd <dir>] [--json]');
@@ -2144,7 +2144,7 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         }
         for (const raw of tierFlags) {
             const [providerId, role, locality, operator, costClass] = raw.split(':');
-            if (!providerId || !role) { console.error(`[switchboard] --tier expects <providerId>:<classifier|escalation>[:<locality>[:<operator>[:<cost>]]] (got '${raw}').`); exitFlushed(5); }
+            if (!providerId || !role) { console.error(`[switchboard] --tier expects <providerId>:<classifier>[:<locality>[:<operator>[:<cost>]]] (got '${raw}'). The 'escalation' role was retired — the Navigator is configured separately, via PUT /controller/navigator.`); exitFlushed(5); }
             next.tiers.push({
                 providerId,
                 role,

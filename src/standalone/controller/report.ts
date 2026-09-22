@@ -80,6 +80,12 @@ export interface EntryAction {
     /** The card's `last_action`, so a prior `timed out` verdict is visible. */
     priorVerdict?: string | null;
     judgement?: JudgementTrace;
+    /**
+     * The model that produced a board-level verdict. The board check has no
+     * judgement trace of its own, and with two models on the board "the model
+     * said" is not answerable without naming which one.
+     */
+    judgedBy?: { providerId: string; model: string } | null;
 }
 
 export interface RestartRecord {
@@ -160,6 +166,9 @@ function actionBlock(a: EntryAction): string {
         lines.push(`- dispatch timeout: ${fmtMs(a.dispatchTimeoutRemainingMs)} remaining before \`_runDispatchTimeoutSweep\` may abandon this card`);
     }
     if (a.priorVerdict) { lines.push(`- prior verdict (\`last_action\`): \`${a.priorVerdict}\``); }
+    if (a.judgedBy) {
+        lines.push(`- judged by: \`${a.judgedBy.providerId || 'unset'}\`${a.judgedBy.model ? ` (${a.judgedBy.model})` : ''}`);
+    }
     if (a.judgement) {
         const j = a.judgement;
         lines.push(`- judgement: flags=${j.flags && j.flags.length > 0 ? j.flags.map(f => `\`${f}\``).join(', ') : '(none)'} -> class=${j.class === null ? 'not-run' : `\`${j.class}\``}`);

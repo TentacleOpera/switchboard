@@ -394,6 +394,12 @@ export class ControllerBoardStore {
         // standing-controller, change 11): a tier naming a provider that has no
         // `agentControlProviders` row is REFUSED with a reason here, not dropped
         // silently at 3am when the controller tries to resolve it.
+        //
+        // ROLE is validated here too (plan: the-navigator-is-its-own-model-slot).
+        // `escalation` is retired — the Navigator is its own model slot, not a
+        // judgement tier. A save naming it is REFUSED with a reason rather than
+        // stored and silently dropped at resolve time, which would read as a
+        // configured tier that never runs.
         const cfg = (value && typeof value === 'object') ? value as { tiers?: unknown; supervisorSeat?: unknown; globalCeilingPerDay?: unknown } : {};
         const list = Array.isArray(cfg.tiers) ? cfg.tiers : [];
         if (list.length) {
@@ -404,9 +410,15 @@ export class ControllerBoardStore {
                 return { success: false, reason: `agentControlProviders unreadable: ${e instanceof Error ? e.message : String(e)}` };
             }
             for (let i = 0; i < list.length; i++) {
-                const t = (list[i] && typeof list[i] === 'object') ? list[i] as { providerId?: unknown } : {};
+                const t = (list[i] && typeof list[i] === 'object') ? list[i] as { providerId?: unknown; role?: unknown } : {};
                 const providerId = String(t.providerId || '').trim();
                 if (!providerId) { return { success: false, reason: `tier ${i} has no providerId` }; }
+                if (t.role === 'escalation') {
+                    return { success: false, reason: `tier '${providerId}' declares role 'escalation', which has been retired — the Navigator is a separately configured model slot (/controller/navigator), not a judgement tier. Declare role 'classifier' or remove the tier.` };
+                }
+                if (t.role !== 'classifier') {
+                    return { success: false, reason: `tier '${providerId}' has an unknown role '${String(t.role)}'` };
+                }
                 if (!Object.prototype.hasOwnProperty.call(rows, providerId)) {
                     return { success: false, reason: `tier '${providerId}' names no configured provider — there is no '${providerId}' row in agentControlProviders` };
                 }

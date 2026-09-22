@@ -49,11 +49,19 @@ export interface GlobalConfig {
          *
          *   agentControlProviders  — the rows: one record per provider id, each
          *                            owning its own endpoint/model.
-         *   agentControlProvider   — a pointer at the active row.
+         *   agentControlProvider   — a pointer at the row the PILOT runs.
+         *   agentControlNavigatorProvider — a pointer at the row the NAVIGATOR
+         *                            runs. A SECOND role pointer over the SAME
+         *                            rows map, so selecting a provider for one
+         *                            job does not deselect it for the other.
          *
-         * The active endpoint/model are DERIVED by looking the pointer up. They
+         * The active endpoint/model are DERIVED by looking a pointer up. They
          * are deliberately not also stored flat: the same fact in two places is
          * two facts that can disagree, with no rule for which wins.
+         *
+         * Neither pointer is a fallback for the other. An unset Navigator is
+         * unset — it must never quietly resolve to the Pilot's row, and an unset
+         * Pilot must never resolve to the Navigator's.
          *
          * A model name is only meaningful to the provider it was chosen for
          * ('gemma-4-31b-it' on Google vs 'google/gemma-4-31b-it:free' on
@@ -69,6 +77,7 @@ export interface GlobalConfig {
          * there was no install to migrate. Do not reintroduce them as a fallback.
          */
         agentControlProvider?: string;
+        agentControlNavigatorProvider?: string;
         agentControlProviders?: Record<string, { endpoint?: string; model?: string }>;
     };
 }
@@ -115,7 +124,7 @@ export const LOCAL_AGENT_MACHINE: AgentMachine = {
 
 /** Agent-config keys that are stored machine-globally (cross-workspace, cross-IDE). */
 export type AgentGlobalKey = 'startupCommands' | 'visibleAgents' | 'customAgents'
-    | 'agentControlProvider' | 'agentControlProviders';
+    | 'agentControlProvider' | 'agentControlNavigatorProvider' | 'agentControlProviders';
 
 /**
  * A single scheduled job. `source` picks the prompt preset; `target` picks the

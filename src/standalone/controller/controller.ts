@@ -294,9 +294,42 @@ function writeLastBoardJudgement(workspaceRoot: string, fingerprint: string, ver
     } catch { /* the gate is an optimisation; failing to persist just re-asks */ }
 }
 
-async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, unknown>): Promise<string | null> {
-    const tier = (tiers || [])[0] as any;
-    if (!tier || !tier.endpoint) { return null; }
+/**
+ * The PILOT — the classifier tier — selected EXPLICITLY, never by position.
+ *
+ * Reading the tier list's FIRST ELEMENT used to spell "the Pilot". Once a
+ * second model exists that stops being safe: "the first tier" is a position,
+ * not a role, and a list whose head is something else would put the wrong model
+ * on the 5-minute loop AND charge its calls to the wrong budget. There is
+ * deliberately no fallback to the head of the list — a verdict written by an
+ * unknown model is the quiet wrong answer, not a near miss.
+ */
+function selectClassifierTier(tiers: any[] | undefined): any | null {
+    return (tiers || []).find(t => t && t.role === 'classifier') || null;
+}
+
+/** The outcome of one board-level check, with the model that produced it. */
+interface BoardJudgement {
+    /** The model's one-line verdict, or null when the check could not run. */
+    verdict: string | null;
+    /** The classifier that answered, so the report names its own author. */
+    tier: { providerId: string; model: string } | null;
+    /** Set when the check could NOT run, so a skipped check is never silent. */
+    reason: string | null;
+}
+
+async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, unknown>): Promise<BoardJudgement> {
+    const tier = selectClassifierTier(tiers);
+    // A deployment with no classifier has nothing to ask — and it must SAY so.
+    // Falling back to whatever tier happens to be first would be the
+    // expensive-model-on-the-cheap-job bug this feature exists to stop.
+    if (!tier) {
+        return { verdict: null, tier: null, reason: 'no classifier tier configured — the board-level check did not run' };
+    }
+    if (!tier.endpoint) {
+        return { verdict: null, tier: null, reason: `classifier tier '${tier.providerId || 'unset'}' has no endpoint — the board-level check did not run` };
+    }
+    const judgedBy = { providerId: String(tier.providerId || ''), model: String(tier.model || '') };
     const keyRead = tier.keySet ? await readTierApiKey(ctx.workspaceRoot, tier.providerId) : { key: null as string | null };
     const res = await callModel({
         endpoint: tier.endpoint,
@@ -325,19 +358,19 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
         deadlineMs: ctx.cfg.judgementDeadlineMs,
         maxTokens: 256,
     });
-    if (!res.ok) { return `board check failed: ${res.error || `status ${res.status}`}`; }
+    if (!res.ok) { return { verdict: `board check failed: ${res.error || `status ${res.status}`}`, tier: judgedBy, reason: null }; }
     const line = String(res.content || '')
         .replace(/^```[a-zA-Z]*\s*/, '').replace(/```$/, '')
         .split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
-    if (!line) { return `board check returned nothing (finish: ${res.doneReason || 'unknown'})`; }
+    if (!line) { return { verdict: `board check returned nothing (finish: ${res.doneReason || 'unknown'})`, tier: judgedBy, reason: null }; }
     // No counts prefix. Per-column totals are noise in a report — "374 plan
     // reviewed" tells the operator nothing they can act on. cardsByColumn and
     // cardsInFlightByTeam stay in the facts so the model still JUDGES the whole
     // board; they are simply not recited back.
     // "nothing wrong" is the model's clean verdict; say it in words the operator
     // reads as a finding rather than echoing the sentinel.
-    if (/^nothing wrong/i.test(line)) { return 'No problems found.'; }
-    return line.slice(0, 280);
+    if (/^nothing wrong/i.test(line)) { return { verdict: 'No problems found.', tier: judgedBy, reason: null }; }
+    return { verdict: line.slice(0, 280), tier: judgedBy, reason: null };
 }
 
 
@@ -650,14 +683,24 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             const fingerprint = fingerprintFacts(boardFacts);
             const prior = readLastBoardJudgement(ctx.workspaceRoot);
             let verdict: string | null;
+            // Which model wrote this verdict. Recorded on the action entry so the
+            // report names the author of its own finding — with two models on the
+            // board, "the model said" is no longer answerable without it.
+            let judgedBy: { providerId: string; model: string } | null = null;
             if (prior && prior.fingerprint === fingerprint) {
                 // Unchanged board: reuse, do not re-ask. The wake is still recorded,
                 // so the report stays current and proves the controller is alive.
                 verdict = prior.verdict;
             } else {
-                const pilotTier = (judgementConfig.tiers as any[])[0];
+                // The PILOT explicitly, not the head of the list: the usage counter feeds the
+                // budget readout, and a miscount would attribute the Pilot's calls
+                // to the Navigator's ceiling.
+                const pilotTier = selectClassifierTier(judgementConfig.tiers as any[]);
                 if (pilotTier) { countModelCall(pilotTier.providerId, pilotTier.model); }
-                verdict = await judgeBoard(ctx, judgementConfig.tiers as any[], boardFacts);
+                const judged = await judgeBoard(ctx, judgementConfig.tiers as any[], boardFacts);
+                verdict = judged.verdict;
+                judgedBy = judged.tier;
+                if (judged.reason) { errors.push(judged.reason); }
                 if (verdict) { writeLastBoardJudgement(ctx.workspaceRoot, fingerprint, verdict); }
             }
             if (verdict) {
@@ -679,6 +722,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
                     ownerSinceReStamped: false,
                     dispatchTimeoutRemainingMs: null,
                     priorVerdict: null,
+                    judgedBy,
                 } as any);
             }
         } catch (e) {
@@ -1175,7 +1219,7 @@ async function diagnoseJudgement(subject: Subject, rows: MatrixRow[], ctx: Diagn
     const outcome = await walkJudgementChain({
         tiers: ctx.judgementCtx.tiers,
         escalationPermitted: judgementRows.length > 0,
-        buildPrompt: (tier, askReason) => buildClassificationPrompt(subject, ctx, evidence, fields, askReason, observations, priors, tier.role),
+        buildPrompt: (_tier, askReason) => buildClassificationPrompt(subject, ctx, evidence, fields, askReason, observations, priors),
         readKey: (providerId) => readTierApiKey(ctx.workspaceRoot, providerId),
         deadlineMs: ctx.cfg.judgementDeadlineMs,
         maxTokens: ctx.cfg.judgementMaxTokens,
@@ -1212,7 +1256,7 @@ async function diagnoseJudgement(subject: Subject, rows: MatrixRow[], ctx: Diagn
     }
     // A tier that observed nothing worth reporting is an ANSWER, not a failure,
     // and it must not fall through to row 8 and spend an escalation on a
-    // healthy seat. Tier 1 is deliberately permissive; this is the one outcome
+    // healthy seat. The sole judge said it saw nothing; this is the one outcome
     // that says "and even so, nothing".
     if (outcome.answered && derived === null) {
         return null;
@@ -1270,7 +1314,6 @@ function buildClassificationPrompt(
     askReason: boolean,
     observations: SeatObservations,
     priors: MechanicalPriors,
-    tierRole: string,
 ): { system: string; user: string } {
     const seat = ctx.seatByName.get(subject.seat);
     const lastDataAt = seat && typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
@@ -1314,13 +1357,16 @@ function buildClassificationPrompt(
         '',
         'Report observations ONLY, never a conclusion: "stuck", "stalled", "looping", "overthinking", "wedged", "blocked" and "broken" are rejected and your whole reply is discarded.',
         'If nothing about this seat is worth reporting, reply with FLAGS: no-concern.',
-        // Change 4 — the tiers calibrate in OPPOSITE directions, and saying so
-        // in the prompt IS the mechanism rather than a note about it. Tuning
-        // both the same way discards the structure: tier 1 exists to be noisy
-        // and tier 2 exists to be the gate in front of expensive tokens.
-        tierRole === 'escalation'
-            ? 'You are the second opinion in front of an expensive agent. Be STRICT: your default answer is no-concern. Healthy seats are EXPECTED in your input, because the stage below you is deliberately permissive — their presence is normal and is not an error for you to correct.'
-            : 'Be PERMISSIVE: flag on any doubt. A later stage filters you. Over-reporting a healthy seat is an accepted outcome; missing a stalled one leaves a wedged seat until the next wake.',
+        // ONE JUDGE, CALIBRATED AS ONE (plan: the-navigator-is-its-own-model-slot).
+        // The chain used to calibrate two tiers in opposite directions: a
+        // permissive classifier whose quiet pass was handed to a strict
+        // escalation tier. That rung is retired — the Navigator is a separately
+        // configured model with a different job, not a second opinion on yours.
+        // So this prompt must not promise a filter that does not exist: "a later
+        // stage filters you" was a licence to over-report on the strength of a
+        // gate nobody can install, and it was already untrue on the live board.
+        'You are the ONLY judge of this seat — nothing reviews your reply after you, so report what you actually see.',
+        'Flag on genuine doubt: over-reporting a healthy seat costs one nudge, but missing a stalled one leaves it wedged until the next wake.',
         askReason
             ? 'Put a one-line REASON: line before the FLAGS: line.'
             : 'Reply with the SEAT:/FLAGS: line only.',

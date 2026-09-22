@@ -2,20 +2,25 @@ import { parseFlagsReply, type JudgementFlag } from './flags';
 import { callModel, isEmptyLengthStop, type ModelCallResult } from './modelClient';
 
 /**
- * The ordered judgement chain (plan:
+ * The judgement chain (plan:
  * judgement-tiers-the-supervisor-seat-and-reroute, change 7).
  *
  * Judgement is an ordered list of backends, not one model. Tiers are ordered by
- * ROLE AND COST, never by locality: any tier may be local or remote, free or
- * paid, and any PREFIX of the list is a valid deployment — including a single
- * cloud tier with no local model, and a supervisor-only deployment with no
- * classifier at all.
+ * COST, never by locality: any tier may be local or remote, free or paid.
  *
- * The walk stops at the first tier that returns usable OBSERVATIONS; a tier
- * that observes nothing (`no-concern` alone), declines, or fails validation is
- * escalated to the next tier. `no-concern` is a valid terminal answer only from
- * the LAST configured tier — which is what keeps row 8 load-bearing rather than
- * a shrug.
+ * ONE ROLE REMAINS — `classifier`, the Pilot. The `escalation` rung was the
+ * Pilot/Navigator split under earlier names: tier 1 was told to over-report
+ * because "a later stage filters you", tier 2 was told to be the strict gate in
+ * front of an expensive agent. The Navigator now has its OWN model slot and a
+ * different job entirely (organizing work, not adjudicating the Pilot), so
+ * nothing the product can create fills a second rung. A role that cannot be
+ * occupied is not configuration, it is a trap — the walk below no longer
+ * escalates, and `bootstrap.ts` refuses a declared `escalation` tier loudly
+ * rather than coercing it.
+ *
+ * The walk stops at the first tier that returns usable OBSERVATIONS. `no-concern`
+ * alone is a terminal answer: with one rung every tier is last, which is what
+ * keeps row 8 load-bearing rather than a shrug.
  *
  * A tier returns flags, never a class (change 4). The controller derives the
  * class from the flags mechanically, so nothing here has to know what any
@@ -26,7 +31,7 @@ import { callModel, isEmptyLengthStop, type ModelCallResult } from './modelClien
  * the same for all of them.
  */
 
-export type TierRole = 'classifier' | 'escalation';
+export type TierRole = 'classifier';
 export type TierLocality = 'loopback' | 'lan' | 'tailnet' | 'internet';
 export type TierCostClass = 'free' | 'metered';
 
@@ -107,11 +112,12 @@ export async function walkJudgementChain(args: WalkArgs): Promise<JudgementOutco
 
     for (let i = 0; i < args.tiers.length; i++) {
         const tier = args.tiers[i];
-        const isLast = i === args.tiers.length - 1;
-        // Tier 1 (a classifier below an escalation tier) asks for the flags
-        // alone. Tier 2 asks for REASON: before FLAGS: — the ambiguous cases
-        // live there, and reasoning before committing is worth the decode.
-        const askReason = tier.role === 'escalation' || i > 0;
+        // The first tier asks for the flags alone; anything below it (an
+        // operator may still declare a longer list) asks for REASON: before
+        // FLAGS: — the ambiguous cases live there, and reasoning before
+        // committing is worth the decode. Role no longer keys this: there is
+        // one role, and the position in the list is what says who is first.
+        const askReason = i > 0;
         const attemptBase = {
             providerId: tier.providerId,
             role: tier.role,
@@ -172,15 +178,12 @@ export async function walkJudgementChain(args: WalkArgs): Promise<JudgementOutco
             attempts.push({ ...attemptBase, outcome: 'invalid', error: parsed.error, latencyMs: result.latencyMs, doneReason: result.doneReason });
             continue;
         }
-        // `no-concern` alone is "I saw nothing worth reporting". From a tier
-        // that has a tier above it, that is escalated rather than taken as the
-        // answer — tier 1 is deliberately permissive, and a quiet tier 1 is the
-        // case tier 2 exists to double-check.
+        // `no-concern` alone is "I saw nothing worth reporting", and it is a
+        // TERMINAL answer. It used to be escalated when a tier sat above it —
+        // the permissive tier 1 handing a quiet pass to the strict tier 2. That
+        // rung is retired: there is no second opinion to defer to, and a walk
+        // that continued here would be escalating to a tier nothing can declare.
         const observedNothing = parsed.flags.length === 1 && parsed.flags[0] === 'no-concern';
-        if (observedNothing && !isLast) {
-            attempts.push({ ...attemptBase, outcome: 'unknown', latencyMs: result.latencyMs, doneReason: result.doneReason });
-            continue;
-        }
         attempts.push({ ...attemptBase, outcome: observedNothing ? 'unknown' : 'answered', latencyMs: result.latencyMs, doneReason: result.doneReason });
         return { flags: parsed.flags, answered: true, reason: parsed.reason, answeredBy: tier, attempts };
     }

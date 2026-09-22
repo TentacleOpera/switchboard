@@ -897,14 +897,28 @@ function initOverflowMenus() {
             }
         }
 
-        /** Seed the row from GET /agent/control/config. */
-        function applyConfig(cfg) {
+        /**
+         * Seed the row from GET /agent/control/config.
+         *
+         * `pointer` is how a SECOND role row (the Navigator) reads its OWN
+         * pointer while sharing the same rows map: pass `{ providerId, source }`
+         * from `/controller/navigator` and the row seeds from that instead of
+         * the config's active pointer, which is the Pilot's. Absent → the
+         * config's own active pointer. The rows map itself is shared either way,
+         * so switching provider still recalls that provider's saved endpoint,
+         * model and key without retyping anything.
+         */
+        function applyConfig(cfg, pointer) {
             fillProviders();
             // `providerSource: 'unset'` is rendered AS unset. It is not inferred
             // from the endpoint and not defaulted to a provider the operator
             // never picked — the server keeps those two states distinct
-            // precisely so this row can show which one it is.
-            const providerId = cfg.providerSource === 'unset' ? '' : (cfg.provider || '');
+            // precisely so this row can show which one it is. A role pointer is
+            // read the same way: `source === 'unset'` means nobody chose one, and
+            // it must not fall back to the other role's provider.
+            const providerId = pointer
+                ? (pointer.source === 'unset' ? '' : (pointer.providerId || ''))
+                : (cfg.providerSource === 'unset' ? '' : (cfg.provider || ''));
             savedRows = (cfg && cfg.providers) || {};
             if (els.provider) { els.provider.value = providerId; }
             loadProviderRecord(providerId);

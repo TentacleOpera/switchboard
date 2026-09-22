@@ -13039,13 +13039,25 @@ export class LocalApiServer {
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * The ACTIVE provider row: the pointer (`agents.agentControlProvider`)
-     * looked up in the rows (`agents.agentControlProviders`). Each provider owns
-     * its own endpoint/model, so switching the pointer recalls that provider's
-     * values rather than reusing a name the new provider never coined.
+     * A ROLE's active provider row: that role's pointer looked up in the SHARED
+     * rows (`agents.agentControlProviders`). Each provider owns its own
+     * endpoint/model, so switching a pointer recalls that provider's values
+     * rather than reusing a name the new provider never coined.
+     *
+     * Two roles, two pointers, ONE rows map:
+     *   `pilot`     → `agents.agentControlProvider`   (the board's judgement model)
+     *   `navigator` → `agents.agentControlNavigatorProvider` (the model that
+     *                 organizes work)
+     *
+     * Neither pointer is a fallback for the other. An unset Navigator is unset;
+     * it must never resolve to the Pilot's row, and vice versa — a second slot
+     * that quietly borrowed the first one's model is the bug this exists to fix.
      *
      * The result is TAGGED with `source`, so "this row is configured" is never
-     * indistinguishable from "this was migrated" or "nothing is set".
+     * indistinguishable from "nothing is set", from "a pointer names a provider
+     * that has no row", or from a corrupt config. The tag NAMES THE POINTER that
+     * answered (`row:pilot` / `row:navigator`) — "which store answered?" must
+     * stay answerable once two pointers read the same map.
      *
      * There is NO flat-key fallback and no migration. The pre-normalisation
      * `agentControlEndpoint`/`agentControlModel` keys existed for ONE DAY in
@@ -13054,27 +13066,37 @@ export class LocalApiServer {
      * tree. Per CLAUDE.md, unreleased state takes a clean break. A row is the
      * only shape this reads; do not reintroduce a flat read.
      */
-    private async _resolveAgentControlRow(): Promise<{
+    private async _resolveAgentControlRow(role: 'pilot' | 'navigator' = 'pilot'): Promise<{
         providerId: string; endpoint: string; model: string;
-        source: 'row' | 'unset';
+        source: 'row:pilot' | 'row:navigator' | 'row-missing' | 'unset';
     } | { error: string }> {
+        const pointerKey = role === 'navigator' ? 'agentControlNavigatorProvider' : 'agentControlProvider';
         let providerId = '';
         let rows: Record<string, { endpoint?: string; model?: string }> = {};
         try {
-            providerId = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlProvider') || '').trim();
+            providerId = String(await GlobalIntegrationConfigService.getAgentConfig<string>(pointerKey) || '').trim();
             rows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, { endpoint?: string; model?: string }>>('agentControlProviders')) || {};
         } catch (err) {
-            console.error('[LocalApiServer] agent-control: config unreadable:', err);
-            return { error: 'Agent-control config could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
+            console.error(`[LocalApiServer] agent-control: ${role} config unreadable:`, err);
+            return { error: `Agent-control config could not be read (config may be corrupt). Fix the config; the ${role} model is not being treated as unconfigured.` };
         }
 
-        const row = providerId ? rows[providerId] : undefined;
-        if (row && (row.endpoint || row.model)) {
+        if (!providerId) { return { providerId, endpoint: '', model: '', source: 'unset' }; }
+
+        const row = rows[providerId];
+        if (!row) {
+            // The pointer names a provider the rows map does not hold. That is a
+            // DIFFERENT state from "nobody chose a provider", and it must say so:
+            // a pointer that names nothing is a broken reference, not an unset
+            // slot, and an operator fixing it needs to know which one it is.
+            return { providerId, endpoint: '', model: '', source: 'row-missing' };
+        }
+        if (row.endpoint || row.model) {
             return {
                 providerId,
                 endpoint: String(row.endpoint || '').trim(),
                 model: String(row.model || '').trim(),
-                source: 'row',
+                source: role === 'navigator' ? 'row:navigator' : 'row:pilot',
             };
         }
 
@@ -13090,12 +13112,12 @@ export class LocalApiServer {
      * config is unreadable or holds a non-URL value — three outcomes, never
      * collapsed (a corrupt file is not an unconfigured one).
      */
-    private async _resolveAgentControlEndpoint(): Promise<{ url: string } | { error: string } | null> {
-        const row = await this._resolveAgentControlRow();
+    private async _resolveAgentControlEndpoint(role: 'pilot' | 'navigator' = 'pilot'): Promise<{ url: string } | { error: string } | null> {
+        const row = await this._resolveAgentControlRow(role);
         if ('error' in row) { return row; }
         if (!row.endpoint) { return null; }
         if (!/^https?:\/\//i.test(row.endpoint)) {
-            return { error: `Configured agent-control endpoint "${row.endpoint}" is not an http(s) URL.` };
+            return { error: `Configured ${role} agent-control endpoint "${row.endpoint}" is not an http(s) URL.` };
         }
         return { url: row.endpoint };
     }
@@ -13131,6 +13153,45 @@ export class LocalApiServer {
     }
 
     /**
+     * Store or clear one provider's API key. Shared by both role writers
+     * (`/agent/control/config` for the Pilot, `/controller/navigator` for the
+     * Navigator) so a credential is written by exactly one code path.
+     *
+     * Returns a refusal to send verbatim — never a silent no-op. A key with no
+     * provider to authenticate to is refused rather than parked under a sentinel
+     * slot that looks stored, reports keySet, and is read by nothing.
+     */
+    private async _writeAgentControlApiKey(providerId: string, apiKey: string): Promise<
+        { ok: true } | { ok: false; status: number; error: string; seam?: string }
+    > {
+        const secretsStore = this._options.encryptedSecretsStore;
+        if (!secretsStore || typeof secretsStore.store !== 'function' || typeof secretsStore.delete !== 'function') {
+            // Report the unwired seam — never pretend the key was stored.
+            return {
+                ok: false,
+                status: 503,
+                error: 'Cannot store the API key: this host\'s encryptedSecretsStore seam is not wired for writing.',
+                seam: 'encryptedSecretsStore',
+            };
+        }
+        if (!providerId) {
+            return {
+                ok: false,
+                status: 400,
+                error: 'Cannot store an API key without a provider: send `provider` with the key, or select one first.',
+            };
+        }
+        // Scoped to the provider it belongs to: each provider issues its own
+        // credential, and a shared slot would make switching provider silently
+        // present the wrong one.
+        const keyName = `switchboard.agentControl.apiKey.${providerId}`;
+        const trimmed = apiKey.trim();
+        if (trimmed) { await secretsStore.store(keyName, trimmed); }
+        else { await secretsStore.delete(keyName); }
+        return { ok: true };
+    }
+
+    /**
      * The configured provider id ('google' | 'openai' | 'local' | 'custom'),
      * TAGGED with where it came from. An unset provider is reported as such
      * rather than substituted: "nobody chose a provider" and "somebody chose
@@ -13154,10 +13215,10 @@ export class LocalApiServer {
      * kept distinct: endpoint-without-model and endpoint-without-key are each
      * reported, never collapsed into "unconfigured" or silently defaulted.
      */
-    private async _resolveAgentControlModel(): Promise<{
+    private async _resolveAgentControlModel(role: 'pilot' | 'navigator' = 'pilot'): Promise<{
         url: string; model: string; apiKey: string; keySource: 'secrets-store' | 'env'; provider: string;
     } | { error: string } | null> {
-        const endpoint = await this._resolveAgentControlEndpoint();
+        const endpoint = await this._resolveAgentControlEndpoint(role);
         if (endpoint === null) { return null; }
         if ('error' in endpoint) { return endpoint; }
 
@@ -13166,7 +13227,7 @@ export class LocalApiServer {
         // Unset means unset — a wrong model that answers is worse than none, so
         // endpoint-without-model is an error reported beside the model field,
         // not a guess at a default.
-        const row = await this._resolveAgentControlRow();
+        const row = await this._resolveAgentControlRow(role);
         if ('error' in row) { return row; }
         const modelName = row.model;
         const provider = { value: row.providerId };
@@ -13174,7 +13235,7 @@ export class LocalApiServer {
         // that provider ALONE. Every other provider keeps the hard error: a
         // wrong model that answers is worse than no model at all.
         if (!modelName && provider.value !== 'local') {
-            return { error: `Model endpoint ${endpoint.url} is configured but no model is set for provider '${row.providerId || 'unset'}'.` };
+            return { error: `The ${role} model endpoint ${endpoint.url} is configured but no model is set for provider '${row.providerId || 'unset'}'.` };
         }
 
         const key = await this._resolveAgentControlApiKey(row.providerId);
@@ -13187,7 +13248,7 @@ export class LocalApiServer {
             // `modelConfigured` once, and every call 401'd behind a UI claiming
             // it was configured. An endpoint with no key is a misconfiguration,
             // and it says so.
-            return { error: `Model endpoint ${endpoint.url} is configured but no API key is set for provider '${row.providerId || 'unset'}' (switchboard.agentControl.apiKey.${row.providerId || '<provider>'} or SWITCHBOARD_AGENT_API_KEY).` };
+            return { error: `The ${role} model endpoint ${endpoint.url} is configured but no API key is set for provider '${row.providerId || 'unset'}' (switchboard.agentControl.apiKey.${row.providerId || '<provider>'} or SWITCHBOARD_AGENT_API_KEY).` };
         }
         return { url: endpoint.url, model: modelName, apiKey: provider.value === 'local' ? '' : key.apiKey, keySource: key.keySource, provider: provider.value };
     }
@@ -13197,6 +13258,156 @@ export class LocalApiServer {
         m: { url: string; model: string; apiKey: string; keySource: string; provider?: string } | { error: string } | null
     ): { url: string; model: string; apiKey: string; keySource: string; provider?: string } | null {
         return m && !('error' in m) ? m : null;
+    }
+
+    /**
+     * The NAVIGATOR slot as one view object, for `GET /controller/navigator`.
+     *
+     * Locality, cost and operator are DERIVED from the endpoint, never
+     * hardcoded: `operator` is the one field an operator uses to decide whether
+     * the board is safe to point at a hosted model, and naming a third party
+     * 'self' is exactly the quiet wrong answer the fallback rule forbids. An
+     * off-box endpoint is `metered` and its operator is the provider that will
+     * see the evidence.
+     *
+     * The three failure states stay DISTINCT — unset, a pointer naming a
+     * provider with no row, and an unreadable config — because an operator
+     * fixing this needs to know which one it is, and "not configured" must not
+     * answer for all three. Key VALUES are never included; `keySet` is all a
+     * client learns.
+     */
+    private _navigatorView(
+        row: { providerId: string; endpoint: string; model: string; source: string } | { error: string },
+        key: { apiKey: string } | { error: string },
+    ): Record<string, unknown> {
+        if ('error' in row) {
+            return {
+                providerId: null, endpoint: null, model: null, keySet: false,
+                locality: null, costClass: null, operator: null,
+                source: 'unreadable', error: row.error,
+            };
+        }
+        if (row.source === 'unset') {
+            return {
+                providerId: row.providerId || null, endpoint: null, model: null, keySet: false,
+                locality: null, costClass: null, operator: null,
+                source: 'unset', reason: 'no Navigator model configured',
+            };
+        }
+        if (row.source === 'row-missing') {
+            return {
+                providerId: row.providerId, endpoint: null, model: null, keySet: false,
+                locality: null, costClass: null, operator: null,
+                source: 'row-missing',
+                reason: `the Navigator names provider '${row.providerId}', which has no row in agentControlProviders`,
+            };
+        }
+        const locality = this._deriveEndpointLocality(row.endpoint);
+        const offBox = locality === 'internet';
+        return {
+            providerId: row.providerId,
+            endpoint: row.endpoint || null,
+            model: row.model || null,
+            keySet: !('error' in key) && !!key.apiKey,
+            locality,
+            costClass: offBox ? 'metered' : 'free',
+            operator: offBox ? row.providerId : 'self',
+            source: row.source,
+        };
+    }
+
+    /**
+     * GET /controller/navigator — the Navigator's OWN model slot, resolved from
+     * its own pointer over the shared provider rows.
+     *
+     * This is deliberately NOT a judgement tier and never appears in
+     * `judgement.tiers`: anything in that list is walked by
+     * `walkJudgementChain` and asked to double-check the Pilot, which is not
+     * what the Navigator is for. It is a separately pointed model.
+     *
+     * Response: `{ success, navigator: { providerId, endpoint, model, keySet,
+     * locality, costClass, operator, source } }`. Key values are never returned.
+     */
+    private async _handleControllerNavigator(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        // The same envelope as its sibling `/controller/judgement` — NOT the
+        // `{ success, data }` wrapper the agent-control read uses — so the two
+        // controller routes a client reads together agree on their shape.
+        if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+        try {
+            const row = await this._resolveAgentControlRow('navigator');
+            const providerId = 'error' in row ? '' : row.providerId;
+            const key = providerId ? await this._resolveAgentControlApiKey(providerId) : { apiKey: '' };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, navigator: this._navigatorView(row, key) }));
+        } catch (err) {
+            console.error('[LocalApiServer] controller navigator read error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'navigator read failed' }));
+        }
+    }
+
+    /**
+     * PUT /controller/navigator — the surface-side setter for the Navigator
+     * slot. Auth-gated like its siblings.
+     *
+     * Body: { provider?: string, endpoint?: string, model?: string, apiKey?: string }
+     *   apiKey absent → stored key unchanged
+     *   apiKey ''     → stored key deleted (explicit clear)
+     *   apiKey <v>    → written to the encrypted secrets store, per provider
+     *
+     * It writes the NAVIGATOR pointer and — when the body carries endpoint/model
+     * for that provider — that provider's row, RE-READING the rows map inside
+     * this handler rather than caching it across an await. Two writers
+     * (`/agent/control/config` and this one) share one map, so a read-modify-write
+     * spanning an await can lose the other's row. The Pilot's pointer is never
+     * touched: one role's pointer must not be read when the other's is unset.
+     */
+    private async _handleControllerNavigatorWrite(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const currentPointer = String(
+                await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlNavigatorProvider') || ''
+            ).trim();
+            const targetProvider = typeof body?.provider === 'string' && body.provider.trim()
+                ? body.provider.trim()
+                : currentPointer;
+            if (typeof body?.apiKey === 'string') {
+                const wrote = await this._writeAgentControlApiKey(targetProvider, body.apiKey);
+                if (!wrote.ok) {
+                    res.writeHead(wrote.status, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        error: wrote.error,
+                        ...(wrote.seam ? { seam: wrote.seam } : {}),
+                    }));
+                    return;
+                }
+            }
+            if (typeof body?.provider === 'string') {
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlNavigatorProvider', targetProvider);
+            }
+            if (typeof body?.endpoint === 'string' || typeof body?.model === 'string') {
+                const rows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, { endpoint?: string; model?: string }>>('agentControlProviders')) || {};
+                const existing = rows[targetProvider] || {};
+                rows[targetProvider] = {
+                    endpoint: typeof body?.endpoint === 'string' ? body.endpoint.trim() : (existing.endpoint || ''),
+                    model: typeof body?.model === 'string' ? body.model.trim() : (existing.model || ''),
+                };
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlProviders', rows);
+            }
+            const row = await this._resolveAgentControlRow('navigator');
+            const key = await this._resolveAgentControlApiKey(targetProvider);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, navigator: this._navigatorView(row, key) }));
+        } catch (err) {
+            console.error('[LocalApiServer] controller navigator write error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'navigator write failed' }));
+        }
     }
 
     /**
@@ -13308,36 +13519,16 @@ export class LocalApiServer {
                 ? body.provider.trim()
                 : (await this._resolveAgentControlProvider()).value;
             if (typeof body?.apiKey === 'string') {
-                const secretsStore = this._options.encryptedSecretsStore;
-                if (!secretsStore || typeof secretsStore.store !== 'function' || typeof secretsStore.delete !== 'function') {
-                    // Report the unwired seam — never pretend the key was stored.
-                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                const wrote = await this._writeAgentControlApiKey(targetProvider, body.apiKey);
+                if (!wrote.ok) {
+                    res.writeHead(wrote.status, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
                         success: false,
-                        error: 'Cannot store the API key: this host\'s encryptedSecretsStore seam is not wired for writing.',
-                        seam: 'encryptedSecretsStore',
+                        error: wrote.error,
+                        ...(wrote.seam ? { seam: wrote.seam } : {}),
                     }));
                     return;
                 }
-                const trimmed = body.apiKey.trim();
-                // A key has no meaning without the provider it authenticates to.
-                // Refuse rather than park it under a sentinel slot: a key stored
-                // at '…apiKey.unset' looks stored, reports keySet, and is read by
-                // nothing.
-                if (!targetProvider) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({
-                        success: false,
-                        error: 'Cannot store an API key without a provider: send `provider` with the key, or select one first.',
-                    }));
-                    return;
-                }
-                // Scoped to the provider it belongs to: each provider issues its
-                // own credential, and a shared slot would make switching provider
-                // silently present the wrong one.
-                const keyName = `switchboard.agentControl.apiKey.${targetProvider}`;
-                if (trimmed) { await secretsStore.store(keyName, trimmed); }
-                else { await secretsStore.delete(keyName); }
             }
             if (typeof body?.provider === 'string') {
                 await GlobalIntegrationConfigService.setAgentConfig('agentControlProvider', targetProvider);
@@ -15687,12 +15878,51 @@ export class LocalApiServer {
                         };
                     };
 
+                    // The Navigator's spend readout comes from its OWN pointer,
+                    // NOT from the retired escalation tier. The Navigator is not
+                    // a judgement tier and never appears in `judgement.tiers`;
+                    // resolving it as one left this station dark and its budget
+                    // unreadable forever once the pointer moved, which is the only
+                    // place an operator can see a metered model's spend.
+                    //
+                    // The three failure states stay distinct: an unreadable
+                    // config, a pointer naming a provider with no row, and a
+                    // genuinely unset slot each say which one they are.
+                    const navRow = await this._resolveAgentControlRow('navigator');
+                    const navigatorStation = (() => {
+                        if ('error' in navRow) {
+                            return { configured: false, model: null, budget: null, usedToday: 0, source: 'unreadable', reason: navRow.error };
+                        }
+                        if (navRow.source === 'unset') {
+                            return { configured: false, model: null, budget: null, usedToday: 0, source: navRow.source, reason: 'no Navigator model configured' };
+                        }
+                        if (navRow.source === 'row-missing') {
+                            return { configured: false, model: null, budget: null, usedToday: 0, source: navRow.source, reason: `the Navigator names provider '${navRow.providerId}', which has no row in agentControlProviders` };
+                        }
+                        const locality = this._deriveEndpointLocality(navRow.endpoint);
+                        const budget = resolveBudget({
+                            providerId: navRow.providerId,
+                            model: navRow.model,
+                            locality,
+                            operatorPerDay: typeof operatorBudgets['navigator'] === 'number' ? operatorBudgets['navigator'] : null,
+                        });
+                        return {
+                            configured: true,
+                            providerId: navRow.providerId,
+                            model: navRow.model || null,
+                            locality,
+                            budget,
+                            usedToday: byModel[usageKey(navRow.providerId, navRow.model)] || 0,
+                            source: navRow.source,
+                        };
+                    })();
+
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
                         success: true,
                         day: today,
                         pilot: station('classifier', 'pilot'),
-                        navigator: station('escalation', 'navigator'),
+                        navigator: navigatorStation,
                     }));
                 } catch (err) {
                     res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -15725,8 +15955,14 @@ export class LocalApiServer {
                     // When no tier is declared, derive one from the configured model.
                     // Tagged `agent-control-model` so a derived tier is never mistaken
                     // for one the operator declared.
+                    //
+                    // The PILOT's pointer, explicitly. The Navigator has its own
+                    // pointer now, and deriving a second tier from it would
+                    // reintroduce exactly the escalation rung this plan retires —
+                    // a metered cloud model walked on every quiet pass to
+                    // double-check a question it was never meant to be asked.
                     if (judgement && Array.isArray(judgement.tiers) && judgement.tiers.length === 0) {
-                        const m = await this._resolveAgentControlModel();
+                        const m = await this._resolveAgentControlModel('pilot');
                         if (m && !('error' in m)) {
                             // Locality, cost and operator are DERIVED FROM THE
                             // ENDPOINT, not assumed. This previously read
@@ -15782,6 +16018,13 @@ export class LocalApiServer {
                     res.writeHead(500, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: false, error: 'controller judgement write failed', reason: err instanceof Error ? err.message : String(err) }));
                 }
+            } else if (pathname === '/controller/navigator' && req.method === 'GET') {
+                // The Navigator's own model slot (plan: the-navigator-is-its-own-
+                // model-slot). Its own pointer over the shared provider rows —
+                // never a judgement tier, and never the Pilot's row.
+                await this._handleControllerNavigator(req, res);
+            } else if (pathname === '/controller/navigator' && req.method === 'PUT') {
+                await this._handleControllerNavigatorWrite(req, res);
             } else if (pathname === '/controller/quota' && req.method === 'GET') {
                 if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
                 const store = this._options.controllerStore;

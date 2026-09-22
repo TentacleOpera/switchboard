@@ -1100,9 +1100,16 @@
              not via a repurposed startup command or an env var. The key field
              is write-only — it renders set/unset and never echoes the value.
              Which of these fields applies to which provider is decided by the
-             shared controller in sharedUtils.js, not here and not in dock.js. -->
-        <details class="agent-control-config-wrap">
-            <summary class="agent-control-config-toggle">Model config</summary>
+             shared controller in sharedUtils.js, not here and not in dock.js.
+
+             TWO BLOCKS, TWO ROLE POINTERS. The Pilot block posts
+             /agent/control/config (the board's judgement model); the Navigator
+             block posts /controller/navigator (the model that organizes work).
+             They read and write DISJOINT pointers over a SHARED provider rows
+             map, so saving one never clears the other's fields. The Navigator
+             is NOT the model the Pilot escalates to — it has a different job. -->
+        <details class="agent-control-config-wrap" id="agent-pilot-config-wrap">
+            <summary class="agent-control-config-toggle">Pilot model</summary>
         <div class="agent-control-config">
             <label for="agent-control-provider">Provider</label>
             <select id="agent-control-provider"></select>
@@ -1115,6 +1122,22 @@
             <input type="password" id="agent-control-key" placeholder="(unset)" autocomplete="off" />
             <button type="button" class="agent-control-config-save" id="agent-control-config-save">Save config</button>
             <div class="agent-control-config-status" id="agent-control-config-status"></div>
+        </div>
+        </details>
+        <details class="agent-control-config-wrap" id="agent-navigator-config-wrap">
+            <summary class="agent-control-config-toggle">Navigator model</summary>
+        <div class="agent-control-config">
+            <label for="agent-navigator-provider">Provider</label>
+            <select id="agent-navigator-provider"></select>
+            <label for="agent-navigator-endpoint" id="agent-navigator-endpoint-label">Server URL</label>
+            <input type="text" id="agent-navigator-endpoint" placeholder="http://… (unset)" />
+            <label for="agent-navigator-model-select" id="agent-navigator-model-label">Model</label>
+            <select id="agent-navigator-model-select"></select>
+            <input type="text" id="agent-navigator-model" placeholder="model name" />
+            <label for="agent-navigator-key" id="agent-navigator-key-label">API key</label>
+            <input type="password" id="agent-navigator-key" placeholder="(unset)" autocomplete="off" />
+            <button type="button" class="agent-control-config-save" id="agent-navigator-config-save">Save config</button>
+            <div class="agent-control-config-status" id="agent-navigator-config-status"></div>
         </div>
         </details>
         </div>
