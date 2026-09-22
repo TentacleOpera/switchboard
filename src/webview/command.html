@@ -28,9 +28,11 @@
             font-display: swap;
         }
         :root {
-            --bg-color: #0d0d0d;
-            --panel-bg: #000000;
-            --panel-bg2: #050505;
+            /* The site's green-black field (--background #101414), shared with
+               the dock so the Agent panel is one instrument on both surfaces. */
+            --bg-color: #101414;
+            --panel-bg: #0b0f0f;
+            --panel-bg2: #141818;
             --border-color: #333333;
             --border-bright: #444444;
             --text-primary: #e0e0e0;
@@ -50,6 +52,346 @@
             --success: #3ef06d;
             --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
             --font-code: Menlo, Consolas, monospace;
+            /* Instrument chrome, from the site's outline tokens. */
+            --panel-line: #1d2323;
+            --panel-edge: #363a3a;
+            --term-grid: rgba(0, 229, 255, 0.03);
+            --term-grid-size: 32px;
+        }
+
+        /* Setup lives at the FOOT of the pane, below the readout, and is never
+           squeezed out of view — it holds the model config, which is the only
+           way to fix an unconfigured station. Only the readout flexes. */
+        .agent-setup-foot {
+            margin-top: auto;
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .agent-pane-body {
+            display: flex;
+            flex-direction: column;
+            gap: 9px;
+            width: 100%;
+            height: 100%;
+            min-height: 0;
+        }
+        /* ── AGENT PANEL SKIN ────────────────────────────────────────────────
+           Byte-for-byte the block in dock.html. The panel is one instrument on
+           two surfaces; forking the skin is how they end up two. */
+        /* ── CREW ────────────────────────────────────────────────────────────
+           Two stations flying one mission, side by side, because that is what
+           this product is: two models and a board between them, not one
+           orchestrator driving agents. Each station is an annunciator tile —
+           DARK until its circuit closes. That idea was already named in the
+           code and then drawn as a 9px grey dot beside ordinary text; here the
+           tile itself is the lamp.
+
+           No typeface does any of this work. `correct-font-role-assignment`
+           confines monospace to content where columns align, so the panel is
+           Hanken like the rest of the UI, and the instrument reads as one
+           through form, colour and lamp state. --font-code appears exactly
+           once below, on stacked numerics, which is the allowlist's own case. */
+        .agent-models {
+            display: flex;
+            gap: 8px;
+            align-items: stretch;
+        }
+        .crew-station {
+            flex: 1 1 0;
+            min-width: 0;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            padding: 9px 10px 10px;
+            background: linear-gradient(180deg, var(--panel-bg2), var(--panel-bg));
+            border: 1px solid var(--panel-line);
+            border-radius: 2px;
+        }
+        /* Corner brackets — the track-box the fleet scope draws around every
+           contact. Two corners, not four: enough to read as a bracket without
+           turning a 200px tile into a picture frame. */
+        .crew-station::before,
+        .crew-station::after {
+            content: '';
+            position: absolute;
+            width: 7px;
+            height: 7px;
+            border: 1px solid var(--panel-edge);
+            pointer-events: none;
+        }
+        .crew-station::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+        .crew-station::after  { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+        .crew-station.is-lit { border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); }
+        .crew-station.is-lit::before,
+        .crew-station.is-lit::after { border-color: var(--accent-primary); }
+        .crew-head { display: flex; align-items: center; gap: 6px; }
+        /* The role's own aircraft — the same pixel jet the scope tags its
+           contacts with, and the same file the board rail uses. */
+        .crew-jet {
+            width: 15px;
+            height: 15px;
+            flex-shrink: 0;
+            image-rendering: pixelated;
+            opacity: 0.3;
+        }
+        .crew-station.is-lit .crew-jet { opacity: 1; }
+        .crew-role {
+            font-size: 9px;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        /* The state word IS the lamp. An annunciator does not put a dot beside
+           a label; the legend lights up. */
+        .crew-state {
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 1;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+        }
+        .crew-station.is-lit .crew-state {
+            color: var(--accent-primary);
+            text-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+        }
+        .crew-model {
+            font-size: 11px;
+            line-height: 1.3;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .crew-station.is-dark .crew-model { color: var(--text-dim); }
+        /* A measure, not a sentence — and the one place on this panel where
+           monospace earns itself: used/limit is a stacked numeric. */
+        .crew-readout {
+            font-family: var(--font-code);
+            font-size: 10px;
+            letter-spacing: 0.04em;
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .crew-readout.is-near { color: var(--warning); }
+        .crew-readout.is-over { color: var(--error); }
+        /* The arm switch lives IN the station it arms. It used to sit three
+           blocks down, past a config disclosure — which is the only reason the
+           annunciator had to carry a caption telling you where the button was. */
+        .crew-switch {
+            margin-top: auto;
+            align-self: flex-start;
+            background: var(--bg-color);
+            border: 1px solid var(--panel-edge);
+            border-radius: 2px;
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 9px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            padding: 4px 9px;
+            cursor: pointer;
+        }
+        .crew-switch:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+        .crew-switch[disabled] { opacity: 0.45; cursor: not-allowed; }
+        /* Transient only: what the last control did. Steady state belongs to the
+           station, so this line is empty most of the time. */
+        .agent-poll {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 12px;
+        }
+        /* ── READOUT ─────────────────────────────────────────────────────────
+           IT SCROLLS. It did not, and the pane above it is overflow:hidden, so
+           picking a team rendered a 6,388px card into a 711px box: roughly
+           5,700px of it was unreachable, and what did render painted over the
+           channel bar and the status line. On the phone the same clip cut the
+           panel's one primary action, "Start mission", in half. */
+        .agent-poll-report {
+            /* Sized to its own content, shrinking (and scrolling) only when the
+               content is taller than the pane. `flex: 1 1 auto` forced it to the
+               full height whatever it held, which is where the 380px of dead
+               space under a short readout came from. */
+            flex: 0 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding-right: 2px;
+        }
+        /* ── CHANNELS ────────────────────────────────────────────────────────
+           Above the readout they scope, not stranded at the foot of the pane
+           beneath 380px of dead space. They select a SOURCE — the controller's
+           board report, or one team's own seat reports — so they are channels,
+           not a filter over one feed. */
+        .agent-report-teams {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--panel-line);
+        }
+        .agent-channel-btn {
+            background: transparent;
+            border: 1px solid var(--panel-line);
+            border-radius: 2px;
+            color: var(--text-dim);
+            font-family: var(--font-family);
+            font-size: 9px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            padding: 4px 8px;
+            cursor: pointer;
+        }
+        .agent-channel-btn:hover { color: var(--text-primary); border-color: var(--panel-edge); }
+        .agent-channel-btn.is-active {
+            color: var(--accent-primary);
+            border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
+            background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+        }
+
+        /* ── ANNUNCIATOR ─────────────────────────────────────────────────────
+           The verdict, on the scope's own field: the grid the dock already
+           defines for the terminal viewport, and a scanline over it. The panel
+           used a plain rounded rect with a 1px grey border, which is the
+           default shape of every dark admin tool. */
+        .ann {
+            position: relative;
+            padding: 15px 14px 13px;
+            border: 1px solid var(--panel-line);
+            border-radius: 2px;
+            background-color: var(--panel-bg);
+            background-image:
+                repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px),
+                linear-gradient(var(--term-grid) 1px, transparent 1px),
+                linear-gradient(90deg, var(--term-grid) 1px, transparent 1px);
+            background-size: auto, var(--term-grid-size) var(--term-grid-size),
+                             var(--term-grid-size) var(--term-grid-size);
+            overflow: hidden;
+        }
+        .ann::before,
+        .ann::after {
+            content: '';
+            position: absolute;
+            width: 9px;
+            height: 9px;
+            border: 1px solid var(--panel-edge);
+            pointer-events: none;
+        }
+        .ann::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+        .ann::after  { top: -1px; right: -1px; border-left: 0; border-bottom: 0; }
+        .ann-word {
+            font-size: 23px;
+            font-weight: 600;
+            line-height: 1;
+            letter-spacing: 0.07em;
+        }
+        .ann-caption {
+            font-size: 12.5px;
+            line-height: 1.45;
+            margin-top: 8px;
+            color: var(--text-primary);
+        }
+        /* Engraved sub-label: small caps, wide tracking, dim. The panel's own
+           convention, now with a token behind its colour. */
+        .stencil {
+            font-size: 9px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        /* ── SYSTEMS CHECK ───────────────────────────────────────────────────
+           The pre-flight list, read one line at a time: a lamp, the system, and
+           the single fact that decides it. */
+        .sys-row {
+            display: flex;
+            align-items: baseline;
+            gap: 9px;
+            padding: 6px 2px;
+            border-bottom: 1px solid color-mix(in srgb, var(--panel-line) 70%, transparent);
+        }
+        .sys-lamp {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            position: relative;
+            top: -2px;
+        }
+        .sys-name { min-width: 74px; flex-shrink: 0; }
+        .sys-fact { font-size: 12px; line-height: 1.4; }
+
+        /* ── MISSION STRIPS ──────────────────────────────────────────────────
+           What the crew is flying. */
+        .mission-strip {
+            padding: 10px 2px;
+            border-bottom: 1px solid color-mix(in srgb, var(--panel-line) 70%, transparent);
+        }
+        .mission-name { font-size: 12.5px; line-height: 1.35; color: var(--text-primary); }
+        .mission-track {
+            height: 3px;
+            border-radius: 2px;
+            margin-top: 7px;
+            background: var(--panel-line);
+            overflow: hidden;
+        }
+        .mission-fill { height: 100%; background: var(--accent-primary); }
+
+        /* ── SEAT REPORTS ────────────────────────────────────────────────────
+           The scoped channel was an undesigned dump: 400-word entries at full
+           body size, no state, no clamp. A seat's word is a report — it has a
+           sender, a kind and a time. */
+        .seat-report {
+            padding: 9px 2px;
+            border-bottom: 1px solid color-mix(in srgb, var(--panel-line) 70%, transparent);
+        }
+        .seat-head {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+        .seat-from { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .seat-kind {
+            flex-shrink: 0;
+            border: 1px solid currentColor;
+            border-radius: 2px;
+            padding: 1px 5px;
+            font-size: 8px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+        .seat-when { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+        .seat-body {
+            font-size: 12px;
+            line-height: 1.45;
+            color: var(--text-primary);
+            word-break: break-word;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 4;
+        }
+        .seat-report.is-open .seat-body { -webkit-line-clamp: unset; }
+        .seat-more {
+            background: none;
+            border: 0;
+            padding: 3px 0 0;
+            cursor: pointer;
+            font-family: var(--font-family);
+            font-size: 9px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--accent-primary);
         }
 
         body.cyber-theme-enabled { }
@@ -1057,18 +1399,26 @@
 
                 <!-- 5. Agent View (Control Surface — no terminal, phone-safe) -->
                 <section class="cmd-view-pane" id="view-agent">
-                    <div style="display:flex; flex-direction:column; gap:8px; width:100%; height:100%; min-height:0;">
-                        <!-- Who is flying. Pilot is the controller's own judgement
-                             model; Navigator is the supervisor it escalates to. -->
-                        <div id="agent-models" style="display:flex; flex-direction:column; gap:3px;"></div>
-                        <div id="agent-status-chip" class="status-chip hidden"></div>
-                        <div id="agent-quick-actions" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
-                        
-                        <!-- The surface's own config: endpoint, model and key
-                             set HERE — the phone is the surface this feature is
-                             meant to reach, so it cannot depend on a CLI or an
-                             env var. The key field is write-only. -->
-                        <details style="border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg);">
+                    <!-- ORDER IS THE DESIGN, and it matches dock.html exactly:
+                         crew, then what the last control did, then the channel
+                         being watched, then the readout — the only part that
+                         scrolls. Setup is demoted to the foot; it used to sit
+                         between the Pilot station and the switch that arms it. -->
+                    <div class="agent-pane-body">
+                        <!-- Two stations flying one mission. The arm switch is
+                             rendered INTO the Pilot station by command.js. -->
+                        <div class="agent-models" id="agent-models"></div>
+                        <div class="agent-poll" id="agent-poll">
+                            <button type="button" class="secondary-action-btn" id="agent-poll-start" hidden>Arm watch</button>
+                            <button type="button" class="secondary-action-btn" id="agent-poll-stop" hidden>Stop watch</button>
+                            <span class="agent-poll-state" id="agent-poll-state"></span>
+                        </div>
+                        <div class="agent-report-teams" id="agent-report-teams"></div>
+                        <div class="agent-poll-report" id="agent-poll-report"></div>
+                        <div class="agent-setup-foot">
+                            <div id="agent-status-chip" class="status-chip hidden"></div>
+                            <div id="agent-quick-actions" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
+                            <details style="border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg);">
                         <summary style="cursor:pointer; list-style:none; font-size:10px; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim); padding:7px 10px; user-select:none;">Model config</summary>
                         <div style="display:flex; flex-direction:column; gap:5px; padding:6px;">
                             <label for="agent-control-provider" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Provider</label>
@@ -1089,13 +1439,7 @@
                             <div id="agent-control-config-status" style="font-size:10px; color:var(--text-dim);"></div>
                         </div>
                         </details>
-                        <div class="agent-poll" id="agent-poll" style="display:flex; align-items:center; gap:6px; margin-top:8px; padding-top:8px; border-top:1px solid var(--border-color);">
-                            <button type="button" class="secondary-action-btn" id="agent-poll-start">Start</button>
-                            <button type="button" class="secondary-action-btn" id="agent-poll-stop">Stop</button>
-                            <span id="agent-poll-state" style="font-size:10px; color:var(--text-dim); margin-left:4px;">stopped</span>
                         </div>
-                        <div id="agent-poll-report" style="margin-top:10px; flex:1 1 auto; min-height:0; display:flex; flex-direction:column; gap:8px;"></div>
-                        <div id="agent-report-teams" style="display:flex; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-color); flex-wrap:wrap;"></div>
                     </div>
                 </section>
 

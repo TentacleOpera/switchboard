@@ -314,7 +314,11 @@
                 setAgentConfigStatus('', false);
             }
             if (agentModelConfigured) {
-                setAgentStatus('Model configured (' + (cfg.modelName || '') + '). Mechanical actions always available.', 'model');
+                // SILENT WHEN FINE. The Pilot station names the model and its
+                // state a few pixels above; restating it here spent the whole
+                // footer on a non-event, and on the phone drew it as a green
+                // success chip. The failure case below still speaks.
+                setAgentStatus('', '');
             } else {
                 setAgentStatus('No usable model. The controller runs its mechanical rows only; the mechanical actions stay available.', '');
             }
@@ -992,13 +996,25 @@
                 const rows = (d && Array.isArray(d.data)) ? d.data.slice() : [];
                 reportEl.textContent = '';
                 const card = document.createElement('div');
-                card.style.cssText = 'border:1px solid var(--accent-primary); border-radius:4px; '
-                    + 'padding:11px 13px; background:var(--panel-bg2);';
+
+                // Name the SOURCE at the top of the channel. These are the team's
+                // own seats talking, not a filter over the controller's report,
+                // and a reader who cannot tell the two apart reads one as the
+                // other. It also gives the empty case somewhere to hang.
+                const src = document.createElement('div');
+                src.className = 'stencil';
+                src.style.cssText = 'padding:10px 2px 8px;';
+                src.textContent = rows.length
+                    ? teamId.replace(/^team_/, '') + ' \u00b7 ' + rows.length
+                        + (rows.length === 1 ? ' seat report' : ' seat reports')
+                    : teamId.replace(/^team_/, '') + ' \u00b7 seat reports';
+                card.appendChild(src);
+
                 if (rows.length === 0) {
                     // An empty tab is a claim about the team, and it needs a source.
                     const e = document.createElement('div');
-                    e.style.cssText = 'font-size:12px; color:var(--text-dim);';
-                    e.textContent = 'No reports from ' + teamId + ' yet.';
+                    e.style.cssText = 'font-size:12px; color:var(--text-secondary); padding:2px;';
+                    e.textContent = 'No seat on ' + teamId + ' has reported yet.';
                     card.appendChild(e);
                 } else {
                     // Newest first: a team's latest word is what is being looked for.
@@ -1015,20 +1031,64 @@
                         }
                         const text = body.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
                         const row = document.createElement('div');
-                        row.style.cssText = 'padding:6px 0; border-top:1px solid var(--border-color);';
+                        row.className = 'seat-report';
+
                         const h = document.createElement('div');
-                        h.style.cssText = 'font-size:9px; letter-spacing:0.06em; text-transform:uppercase; '
-                            + 'color:var(--accent-primary); margin-bottom:3px;';
-                        let when = meta.created || '';
-                        try { when = new Date(meta.created).toLocaleString(); } catch { /* keep raw */ }
-                        h.textContent = (meta.from || 'unknown seat') + ' \u00b7 ' + (meta.kind || 'report')
-                            + (when ? ' \u00b7 ' + when : '');
+                        h.className = 'seat-head';
+                        const from = document.createElement('span');
+                        from.className = 'stencil seat-from';
+                        from.textContent = meta.from || 'unknown seat';
+                        // The kind is a STATE, so it takes a state colour \u2014 the
+                        // brand accent is never one. `blocked` and `finished`
+                        // reading identically is the thing worth seeing here.
+                        const kind = String(meta.kind || 'report').toLowerCase();
+                        const chip = document.createElement('span');
+                        chip.className = 'seat-kind';
+                        chip.textContent = kind;
+                        chip.style.color = /block|fail|error/.test(kind) ? 'var(--error)'
+                            : (/finish|done|complete/.test(kind) ? 'var(--success)'
+                                : (/question|ask|wait/.test(kind) ? 'var(--warning)'
+                                    : 'var(--text-secondary)'));
+                        const when = document.createElement('span');
+                        when.className = 'stencil seat-when';
+                        // Relative, because "how long ago" is the question asked of
+                        // a seat report. The absolute stamp stays on the tooltip.
+                        const ts = Date.parse(meta.created);
+                        if (!isNaN(ts)) {
+                            const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+                            when.textContent = mins < 1 ? 'now'
+                                : (mins < 60 ? mins + 'm' : (mins < 1440 ? Math.round(mins / 60) + 'h'
+                                    : Math.round(mins / 1440) + 'd'));
+                            try { when.title = new Date(ts).toLocaleString(); } catch { /* keep raw */ }
+                        }
+                        h.appendChild(from);
+                        h.appendChild(chip);
+                        h.appendChild(when);
+
                         const t = document.createElement('div');
-                        t.style.cssText = 'font-size:12px; line-height:1.45; color:var(--text-color); '
-                            + 'word-break:break-word;';
+                        t.className = 'seat-body';
                         t.textContent = text || '(empty report)';
                         row.appendChild(h);
                         row.appendChild(t);
+
+                        // CLAMPED. A seat's report runs to 400 words; twelve of
+                        // them unclamped is the 6,388px card that overflowed a
+                        // 711px box. Four lines is enough to know whether this is
+                        // the one you wanted, and the rest is one click away.
+                        const more = document.createElement('button');
+                        more.type = 'button';
+                        more.className = 'seat-more';
+                        more.textContent = 'Show more';
+                        more.hidden = true;
+                        more.addEventListener('click', () => {
+                            const open = row.classList.toggle('is-open');
+                            more.textContent = open ? 'Show less' : 'Show more';
+                        });
+                        row.appendChild(more);
+                        // Only offer the control where there is something hidden.
+                        requestAnimationFrame(() => {
+                            if (t.scrollHeight > t.clientHeight + 2) { more.hidden = false; }
+                        });
                         card.appendChild(row);
                     }
                 }
@@ -1112,11 +1172,10 @@
                 // language, one state word, and the detail under it. Everything
                 // an operator cannot act on (model ids, endpoints, tier wording)
                 // lives in config, not here.
-                const STENCIL = 'font-size:9px; letter-spacing:0.14em; text-transform:uppercase; '
-                    + 'color:var(--text-secondary);';
-                const card = mk('div', 'border:1px solid var(--border-color); border-radius:3px; '
-                    + 'background:linear-gradient(180deg, var(--panel-bg2), var(--panel-bg)); '
-                    + 'overflow:hidden;');
+                // Classes, not cssText: the skin lives in dock.html beside the
+                // crew stations, so the annunciator and the stations cannot drift
+                // into two different instruments.
+                const card = mk('div', '');
 
                 // Missions first: they are the subject. A MISSION is the board's
                 // own long-horizon entity (name, goal, team, worktree allowance,
@@ -1191,22 +1250,24 @@
                     caption = 'No mission running. Nothing needs you.';
                 }
 
-                const ann = mk('div', 'padding:16px 15px 14px; border-bottom:1px solid var(--border-color);');
-                const wordRow = mk('div', 'display:flex; align-items:center; gap:9px;');
-                const bulb = mk('span', 'width:9px; height:9px; border-radius:50%; flex-shrink:0; '
-                    + 'background:' + lamp + '; box-shadow:0 0 9px ' + lamp + ';');
-                const wordEl = mk('span', 'font-size:21px; line-height:1; letter-spacing:0.05em; '
-                    + 'font-weight:600; color:' + lamp + ';', word);
-                wordRow.appendChild(bulb);
-                wordRow.appendChild(wordEl);
-                ann.appendChild(wordRow);
-                ann.appendChild(mk('div', 'font-size:12.5px; line-height:1.45; margin-top:7px; '
-                    + 'color:var(--text-primary);', caption));
+                // The legend IS the lamp — no dot beside a word. Lit in the
+                // state's own colour, on the scope field.
+                const ann = mk('div', '');
+                ann.className = 'ann';
+                const wordEl = mk('div', 'color:' + lamp
+                    + '; text-shadow:0 0 16px color-mix(in srgb, ' + lamp + ' 45%, transparent);', word);
+                wordEl.className = 'ann-word';
+                ann.appendChild(wordEl);
+                const capEl = mk('div', '', caption);
+                capEl.className = 'ann-caption';
+                ann.appendChild(capEl);
                 const checkedBits = ['Seats and board checked ' + (age || 'just now')];
                 if (f.seatsAliveCount !== undefined) {
                     checkedBits.push(f.seatsAliveCount + (f.seatsAliveCount === 1 ? ' seat up' : ' seats up'));
                 }
-                ann.appendChild(mk('div', STENCIL + ' margin-top:8px;', checkedBits.join('  ·  ')));
+                const stampEl = mk('div', 'margin-top:9px;', checkedBits.join('  ·  '));
+                stampEl.className = 'stencil';
+                ann.appendChild(stampEl);
                 card.appendChild(ann);
 
                 // ── SYSTEMS CHECK ────────────────────────────────────────────
@@ -1215,35 +1276,30 @@
                 // that decides it. A row that cannot be read says so rather than
                 // reporting a system as good.
                 if (!missions.length) {
-                    const sys = mk('div', 'padding:4px 0 2px;');
+                    const sys = mk('div', 'padding-top:6px;');
                     const line = function (label, ok, detail) {
-                        const el = mk('div', 'display:flex; align-items:baseline; gap:9px; '
-                            + 'padding:5px 15px;');
+                        const el = mk('div', '');
+                        el.className = 'sys-row';
                         const colour = ok === null ? 'var(--warning)'
-                            : (ok ? 'var(--success)' : 'var(--border-bright)');
-                        el.appendChild(mk('span', 'width:5px; height:5px; border-radius:50%; '
-                            + 'flex-shrink:0; position:relative; top:-2px; background:' + colour
-                            + (ok ? '; box-shadow:0 0 6px ' + colour : '') + ';'));
-                        el.appendChild(mk('span', 'font-size:9px; letter-spacing:0.14em; '
-                            + 'text-transform:uppercase; color:var(--text-secondary); '
-                            + 'min-width:74px; flex-shrink:0;', label));
-                        el.appendChild(mk('div', 'font-size:12px; line-height:1.4; color:'
-                            + (ok === false ? 'var(--text-secondary)' : 'var(--text-primary)') + ';', detail));
+                            : (ok ? 'var(--success)' : 'var(--panel-edge)');
+                        const lamp = mk('span', 'background:' + colour
+                            + (ok ? '; box-shadow:0 0 6px ' + colour : '') + ';');
+                        lamp.className = 'sys-lamp';
+                        el.appendChild(lamp);
+                        const name = mk('span', '', label);
+                        name.className = 'stencil sys-name';
+                        el.appendChild(name);
+                        const fact = mk('div', 'color:'
+                            + (ok === false ? 'var(--text-secondary)' : 'var(--text-primary)') + ';', detail);
+                        fact.className = 'sys-fact';
+                        el.appendChild(fact);
                         sys.appendChild(el);
                     };
 
-                    // Pilot: is the watch actually armed. A configured model that is
-                    // not running is not a green system.
-                    let armed = null;
-                    try {
-                        const pr = await fetch('/controller/poll/state');
-                        const pd = await pr.json();
-                        armed = !!(pd && pd.running);
-                    } catch { armed = null; }
-                    line('Pilot', armed === null ? null : armed,
-                        armed === null ? 'Watch state could not be read.'
-                            : (armed ? 'Watching the board every 5 minutes.'
-                                : 'Not watching. Press Start to arm the watch.'));
+                    // NO PILOT ROW. The Pilot station above is the lamp, and it
+                    // carries the switch — a checklist line repeating it was the
+                    // third of four places this panel said the same thing, and the
+                    // only one of the four that could not act on it.
 
                     // Teams: seats are what actually do the work.
                     const teams = (f.seatsByTeam && typeof f.seatsByTeam === 'object')
@@ -1292,23 +1348,24 @@
 
                 // ── MISSION STRIPS ───────────────────────────────────────────
                 if (missions.length) {
-                    const strips = mk('div', 'padding:4px 0;');
+                    const strips = mk('div', 'padding-top:6px;');
                     for (const m of missions) {
-                        const s = mk('div', 'padding:9px 15px; border-bottom:1px solid '
-                            + 'color-mix(in srgb, var(--border-color) 55%, transparent);');
-                        s.appendChild(mk('div', 'font-size:12.5px; line-height:1.35; color:var(--text-primary);',
-                            String(m.name || m.id || '')));
+                        const s = mk('div', '');
+                        s.className = 'mission-strip';
+                        const nameEl = mk('div', '', String(m.name || m.id || ''));
+                        nameEl.className = 'mission-name';
+                        s.appendChild(nameEl);
 
                         // A progress bar only where there is progress to show. A
                         // bar drawn from a zero denominator is a picture of a
                         // fact nobody has.
                         if (m.cardsTotal > 0) {
                             const pct = Math.round((m.cardsDone / m.cardsTotal) * 100);
-                            const track = mk('div', 'height:3px; border-radius:2px; margin-top:7px; '
-                                + 'background:color-mix(in srgb, var(--border-color) 80%, transparent); '
-                                + 'overflow:hidden;');
-                            track.appendChild(mk('div', 'height:100%; width:' + pct + '%; '
-                                + 'background:var(--accent-primary);'));
+                            const track = mk('div', '');
+                            track.className = 'mission-track';
+                            const fill = mk('div', 'width:' + pct + '%;');
+                            fill.className = 'mission-fill';
+                            track.appendChild(fill);
                             s.appendChild(track);
                         }
                         // Long horizon is the point: how much work, how far in,
@@ -1324,7 +1381,9 @@
                         if (mv) { meta.push('moved ' + mv + ' ago'); }
                         if (m.maxExtraWorktrees) { meta.push(m.maxExtraWorktrees + ' worktrees'); }
                         if (m.paused) { meta.push('PAUSED'); }
-                        s.appendChild(mk('div', STENCIL + ' margin-top:6px;', meta.join('  ·  ')));
+                        const metaEl = mk('div', 'margin-top:7px;', meta.join('  ·  '));
+                        metaEl.className = 'stencil';
+                        s.appendChild(metaEl);
                         strips.appendChild(s);
                     }
                     card.appendChild(strips);
@@ -1332,15 +1391,20 @@
 
                 // ── NEXT UP ──────────────────────────────────────────────────
                 const offer = f.nextHighestPriority || null;
-                const foot = mk('div', 'padding:11px 15px 13px;');
+                const foot = mk('div', 'padding:12px 2px 14px;');
+                const footLabel = function (txt) {
+                    const el = mk('div', '', txt);
+                    el.className = 'stencil';
+                    return el;
+                };
                 if (offer && offer.id) {
-                    foot.appendChild(mk('div', STENCIL, 'Next up'));
-                    foot.appendChild(mk('div', 'font-size:12.5px; line-height:1.4; margin-top:4px; '
+                    foot.appendChild(footLabel('Next up'));
+                    foot.appendChild(mk('div', 'font-size:12.5px; line-height:1.4; margin-top:5px; '
                         + 'color:var(--text-primary);', String(offer.topic || offer.id)));
                     const act = document.createElement('button');
                     act.type = 'button';
                     act.className = 'agent-poll-btn secondary-action-btn';
-                    act.style.cssText = 'margin-top:9px;';
+                    act.style.cssText = 'margin-top:10px;';
                     act.textContent = 'Start ' + (offer.kind === 'feature' ? 'mission' : 'plan');
                     act.title = String(offer.topic || '') + ' (' + offer.id + ')';
                     act.addEventListener('click', async () => {
@@ -1369,15 +1433,15 @@
                     });
                     foot.appendChild(act);
                 } else {
-                    foot.appendChild(mk('div', STENCIL, 'Next up'));
-                    foot.appendChild(mk('div', 'font-size:12px; margin-top:4px; color:var(--text-secondary);',
+                    foot.appendChild(footLabel('Next up'));
+                    foot.appendChild(mk('div', 'font-size:12px; margin-top:5px; color:var(--text-secondary);',
                         'Nothing ready to start.'));
                 }
                 card.appendChild(foot);
 
                 if (latest.errors.length) {
-                    const errs = mk('div', 'padding:9px 15px; border-top:1px solid var(--border-color);');
-                    errs.appendChild(mk('div', STENCIL, 'Faults'));
+                    const errs = mk('div', 'padding:10px 2px; border-top:1px solid var(--panel-line);');
+                    errs.appendChild(footLabel('Faults'));
                     for (const e of latest.errors) {
                         errs.appendChild(mk('div', 'font-size:12px; color:var(--warning); '
                             + 'line-height:1.4; margin-top:3px;', e));
@@ -1403,25 +1467,37 @@
             } catch (err) { return { ok: false, status: 0, data: { error: String(err) } }; }
         }
 
+        // WHETHER the watch is armed is the Pilot station's job — it is the
+        // lamp. This line carries only what the station has no room for: the
+        // cadence, when it last ran, and the last error. It used to restate
+        // "stopped" beside a row that already said STOPPED, beside a checklist
+        // that said "Not watching", beside a chip naming the same model: one
+        // fact, four times, and none of them where the switch was.
         async function refreshState() {
             try {
                 const res = await fetch('/controller/poll/state');
                 const d = await res.json();
-                if (!d || d.running !== true) { setState('stopped'); return; }
+                if (!d || d.running !== true) { setState(''); return; }
                 const mins = Math.round((d.intervalMs || 0) / 60000);
-                const last = d.lastRunAt ? ' — last run ' + new Date(d.lastRunAt).toLocaleTimeString() : '';
-                setState('polling every ' + mins + ' min' + last + (d.lastError ? ' (last error: ' + d.lastError + ')' : ''));
-            } catch { setState('state unavailable'); }
+                const last = d.lastRunAt ? ' · last run ' + new Date(d.lastRunAt).toLocaleTimeString() : '';
+                setState('Every ' + mins + ' min' + last + (d.lastError ? ' · last error: ' + d.lastError : ''));
+            } catch { setState('Watch state unavailable.'); }
         }
 
         if (startBtn) {
             startBtn.addEventListener('click', async () => {
-                setState('starting…');
+                setState('arming…');
                 const r = await post('/controller/poll/start');
                 if (!r.ok || !r.data || r.data.success === false) {
-                    setState('start failed: ' + ((r.data && (r.data.reason || r.data.error)) || r.status));
+                    setState('arm failed: ' + ((r.data && (r.data.reason || r.data.error)) || r.status));
                     return;
                 }
+                // The STATION has to be repainted, not just the state line.
+                // loadModels ran once at init and nothing ever re-called it, so
+                // arming the watch left PILOT reading STOPPED with a dark lamp
+                // until the surface was reloaded — the panel's most prominent
+                // element was the one guaranteed to be out of date.
+                void loadModels();
                 void refreshState();
                 void refreshReport();
             });
@@ -1434,6 +1510,7 @@
                     setState('stop failed: ' + ((r.data && (r.data.reason || r.data.error)) || r.status));
                     return;
                 }
+                void loadModels();
                 void refreshState();
             });
         }
@@ -1530,91 +1607,120 @@
                 if (bd && bd.success !== false) { budget = bd; }
             } catch { /* the station simply shows no allowance */ }
 
-            host.textContent = '';
-            // A crew station: who it is, whether the lamp is lit, and what it is
-            // doing. The model id, its locality and whether it is metered are
-            // setup facts — they live on the tooltip and in config, not here.
-            const row = function (role, m, state, lit, spend) {
+            // Build first, swap last: clearing the host detaches the arm switch
+            // (it is a real wired button, moved in here rather than duplicated),
+            // so a throw between clear and append would take the control with it.
+            const stations = document.createDocumentFragment();
+
+            // A crew station: who it is, whether its lamp is lit, what it is
+            // doing, and — for the Pilot — the switch that arms it. The model id,
+            // its locality and whether it is metered are setup facts; they live
+            // on the tooltip and in config.
+            const station = function (role, jet, m, state, lit, spend, control) {
                 const el = document.createElement('div');
-                el.className = 'agent-model-row';
-                el.style.cssText = 'display:flex; gap:9px; align-items:center; padding:5px 0;';
+                el.className = 'crew-station ' + (lit ? 'is-lit' : 'is-dark');
 
-                const bulb = document.createElement('span');
-                const colour = lit ? 'var(--accent-primary)' : 'var(--border-bright)';
-                bulb.style.cssText = 'width:6px; height:6px; border-radius:50%; flex-shrink:0; '
-                    + 'background:' + colour + (lit ? '; box-shadow:0 0 7px ' + colour : '') + ';';
-
+                const head = document.createElement('div');
+                head.className = 'crew-head';
+                // The role's own aircraft — the same file the board rail draws,
+                // so two surfaces cannot end up with different art for one role.
+                const img = document.createElement('img');
+                img.className = 'crew-jet';
+                img.src = '/static/icons/team-' + jet + '.svg';
+                img.alt = '';
                 const r = document.createElement('span');
-                r.className = 'agent-model-role';
-                r.style.cssText = 'font-size:9px; letter-spacing:0.14em; text-transform:uppercase; '
-                    + 'color:var(--text-primary); min-width:70px;';
+                r.className = 'crew-role';
                 r.textContent = role;
+                head.appendChild(img);
+                head.appendChild(r);
+                el.appendChild(head);
 
-                // WHICH MODEL IS FLYING STAYS ON THE PANEL. Demoting it to a
-                // tooltip was a redesign decision nobody asked for, and the name
-                // is what makes this a crew station rather than a status light.
-                const name = document.createElement('span');
-                name.style.cssText = 'font-size:11px; flex:1; min-width:0; overflow:hidden; '
-                    + 'text-overflow:ellipsis; white-space:nowrap; color:'
-                    + (m ? 'var(--text-primary)' : 'var(--text-secondary)') + ';';
+                // The legend IS the lamp.
+                const v = document.createElement('div');
+                v.className = 'crew-state';
+                v.textContent = state;
+                el.appendChild(v);
+
+                const name = document.createElement('div');
+                name.className = 'crew-model';
                 if (m) {
                     const where = [];
                     if (m.where) { where.push(m.where); }
                     if (m.note) { where.push(m.note); }
-                    name.textContent = m.name + (where.length ? ' (' + where.join(', ') + ')' : '');
+                    name.textContent = m.name + (where.length ? ' · ' + where.join(', ') : '');
                     name.title = String(m.raw || '');
                 } else {
                     name.textContent = (role === 'NAVIGATOR') ? navMissing : 'not configured';
                 }
-
-                const v = document.createElement('span');
-                v.style.cssText = 'font-size:9px; letter-spacing:0.14em; text-transform:uppercase; '
-                    + 'flex-shrink:0; color:'
-                    + (lit ? 'var(--accent-primary)' : 'var(--text-secondary)') + ';';
-                v.textContent = state;
-
-                el.appendChild(bulb);
-                el.appendChild(r);
                 el.appendChild(name);
-                el.appendChild(v);
+
                 // Usage against the daily allowance. Shown ONLY where an
                 // allowance is actually known: "12" on its own invites the
-                // operator to imagine a ceiling, and an unmetered local model
-                // has none to imagine.
+                // operator to imagine a ceiling, and an unmetered local model has
+                // none to imagine.
                 if (spend && spend.configured && spend.budget) {
                     const b = spend.budget;
-                    const u = document.createElement('span');
-                    const over = b.perDay !== null && spend.usedToday >= b.perDay;
-                    const near = b.perDay !== null && !over && spend.usedToday >= b.perDay * 0.8;
-                    u.style.cssText = 'font-size:9px; letter-spacing:0.1em; flex-shrink:0; '
-                        + 'font-variant-numeric:tabular-nums; color:'
-                        + (over ? 'var(--error)' : (near ? 'var(--warning)' : 'var(--text-secondary)')) + ';';
+                    const u = document.createElement('div');
+                    u.className = 'crew-readout';
                     if (b.perDay !== null) {
-                        u.textContent = spend.usedToday + '/' + b.perDay;
+                        const over = spend.usedToday >= b.perDay;
+                        const near = !over && spend.usedToday >= b.perDay * 0.8;
+                        u.classList.add(over ? 'is-over' : (near ? 'is-near' : 'is-normal'));
+                        u.textContent = spend.usedToday + ' / ' + b.perDay + ' today';
                         u.title = b.note + ' (' + b.source + ')';
                     } else if (b.source === 'unmetered') {
-                        u.textContent = spend.usedToday ? String(spend.usedToday) : '';
+                        // No ceiling to count against, so none is drawn.
+                        u.textContent = spend.usedToday ? spend.usedToday + ' calls today' : 'unmetered';
                         u.title = b.note;
                     } else {
                         // Unknown allowance: say so rather than draw a bare count
                         // that looks like it is measured against something.
-                        u.textContent = spend.usedToday + ' today';
+                        u.textContent = spend.usedToday + ' today · no known ceiling';
                         u.title = b.note;
                     }
                     if (u.textContent) { el.appendChild(u); }
                 }
 
+                if (control) { el.appendChild(control); }
                 return el;
             };
+
+            // The arm switch, moved into the station it arms. These are the
+            // buttons wired at the top of this IIFE — moved, never re-created, so
+            // the handlers come with them and there is one code path for arming.
+            let control = null;
+            if (pilot) {
+                control = flying ? stopBtn : startBtn;
+                if (control) {
+                    control.hidden = false;
+                    control.className = 'crew-switch';
+                    control.textContent = flying ? 'Stop watch' : 'Arm watch';
+                }
+                const idle = flying ? startBtn : stopBtn;
+                // Strip the surface's own button class on the way out as well as
+                // hiding it. `[hidden]` is only a UA `display:none`, so the
+                // command surface's `.secondary-action-btn { display: ... }` beat
+                // it and the idle switch stayed on screen as a second, orphaned
+                // button under the crew bar.
+                if (idle) { idle.hidden = true; idle.className = 'crew-switch'; }
+            } else {
+                // Nothing to arm. Both switches stay hidden rather than offering
+                // a control that cannot do anything.
+                if (startBtn) { startBtn.hidden = true; startBtn.className = 'crew-switch'; }
+                if (stopBtn) { stopBtn.hidden = true; stopBtn.className = 'crew-switch'; }
+            }
+
             // A station with no model is OFFLINE, not blank — and an unconfigured
             // Navigator is STANDBY, a different state from a Pilot that is
             // configured and simply not running.
-            host.appendChild(row('PILOT', pilot,
+            stations.appendChild(station('PILOT', 'lead', pilot,
                 pilot ? (flying ? 'WATCHING' : 'STOPPED') : 'OFFLINE', !!(pilot && flying),
-                budget && budget.pilot));
-            host.appendChild(row('NAVIGATOR', navigator,
+                budget && budget.pilot, control));
+            stations.appendChild(station('NAVIGATOR', 'planner', navigator,
                 navigator ? (flying ? 'READY' : 'STANDBY') : 'STANDBY', false,
-                budget && budget.navigator));
+                budget && budget.navigator, null));
+            host.textContent = '';
+            host.appendChild(stations);
         }
 
         // ── Report scope: the board, or one team ──────────────────────────
@@ -1641,16 +1747,17 @@
             for (const t of TEAM_TABS) {
                 const b = document.createElement('button');
                 b.type = 'button';
-                // Both class names: each surface styles the one it owns.
-                b.className = 'agent-poll-btn secondary-action-btn';
+                // ONE class. The skin is shared between the two surfaces now, so
+                // carrying each surface's own button class alongside it just let
+                // the bigger one win — on the phone the channels rendered as
+                // full-size action buttons and wrapped to two rows.
+                b.className = 'agent-channel-btn';
                 b.textContent = t.label;
                 // The real team id in the tooltip. "Missions" is this product's
                 // word for the Feature team, and hiding that mapping entirely
                 // would make an empty tab impossible to explain.
                 b.title = t.id || 'The controller\'s report on the whole board';
-                if (selectedTeam === t.id) {
-                    b.style.cssText = 'border-color:var(--accent-primary); color:var(--accent-primary);';
-                }
+                if (selectedTeam === t.id) { b.classList.add('is-active'); }
                 b.addEventListener('click', () => {
                     selectedTeam = t.id;
                     paintTeamTabs();
@@ -1686,8 +1793,10 @@
         setInterval(() => { void pollFreshness(); }, 4000);
         // The age in the header has to keep counting up even when no new report
         // has landed, otherwise "2 min ago" stays on screen indefinitely and the
-        // staleness marker never trips.
-        setInterval(() => { void refreshState(); void refreshReport(); }, 30000);
+        // staleness marker never trips. loadModels rides along: the stations
+        // carry the armed state and today's spend, both of which go stale on
+        // their own, and nothing else repaints them.
+        setInterval(() => { void loadModels(); void refreshState(); void refreshReport(); }, 30000);
     })();
 
 })();
