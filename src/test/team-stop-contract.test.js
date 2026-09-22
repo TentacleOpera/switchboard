@@ -82,10 +82,12 @@ function makeServer(opts = {}) {
         clearOwnerStamp: async (planFile) => {
             calls.push(`release:${planFile}`);
             const row = board.find(p => p && p.planFile === planFile);
-            if (!row) { return false; }
-            row.ownerSeat = '';
-            row.ownerSince = null;
-            return true;
+            // Returns true only on a REAL transition, like the store does: a
+            // second clear of the same card finds nothing to clear.
+            if (!row || !row.ownerSeat) { return false; }
+            const ok = opts.clearResult ? opts.clearResult(planFile) : true;
+            if (ok) { row.ownerSeat = ''; row.ownerSince = null; }
+            return ok;
         },
         pauseMissionsForTeam: async (teamId) => {
             calls.push(`pause:${teamId}`);
@@ -242,6 +244,26 @@ async function run() {
             'the seat that did not close must be named, with the host\'s own reason');
         assert.deepStrictEqual(out.body.paused, ['mission-a'], 'the pause is still reported as done');
         assert.deepStrictEqual(out.body.released, ['card-a'], 'the release is still reported as done');
+    });
+
+    await check('a hold another request already cleared is not a failure', async () => {
+        const board = [card('card-a', { ownerSeat: 'Coder 1' })];
+        const { server } = makeServer({
+            groups: [group('team_Coding', 'Coding', ['Coding', 'Coder 1'], 'def-coding')],
+            board,
+            live: ['Coding', 'Coder 1'],
+            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
+            // A duplicate stop raced this one and got there first.
+            clearResult: () => false,
+        });
+
+        const out = await postStop(server, { teamId: 'def-coding' });
+        assert.strictEqual(out.body.status, 'stopped',
+            'a hold another request already cleared is the desired end state, not a partial stop');
+        assert.deepStrictEqual(out.body.alreadyClear, ['card-a']);
+        assert.deepStrictEqual(out.body.released, []);
+        assert.deepStrictEqual(out.body.failed, [{ planId: 'card-a', reason: 'no hold to clear' }],
+            'the release shape is unchanged — the distinction rides its own field');
     });
 
     await check('a seat that exited before the close is alreadyGone, not a failure', async () => {

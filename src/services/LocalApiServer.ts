@@ -8159,14 +8159,22 @@ export class LocalApiServer {
 
                 // 2. RELEASE the cards the team's seats hold.
                 const { seats, resolved: rosterResolved } = await this._resolveTeamSeatNames(workspaceRoot, head);
-                const { released, failed, releasedSeats } = await this._releaseHeldCardsForSeats(db, wsId, seats);
+                const { released, failed, releasedSeats, alreadyClear } = await this._releaseHeldCardsForSeats(db, wsId, seats);
 
                 // 3. CLOSE the seats.
                 const { closed, alreadyGone, closeFailed } = await this._closeTeamSeats(workspaceRoot, seats);
 
                 // Derived from what each step DID. An unresolved roster or an
                 // unavailable pause write is a partial stop, not a quiet one.
-                const status = (failed.length > 0 || closeFailed.length > 0 || !rosterResolved || !!pauseUnavailable)
+                //
+                // A hold that was ALREADY clear is not a failure: a duplicate
+                // stop (two clicks, two overlapping requests) finds nothing to
+                // clear and the other request's clear is the desired end state.
+                // It rides `failed` for the release route's sake, so it is
+                // discounted here rather than allowed to make a complete stop
+                // read as partial.
+                const releaseFailures = failed.length - alreadyClear.length;
+                const status = (releaseFailures > 0 || closeFailed.length > 0 || !rosterResolved || !!pauseUnavailable)
                     ? 'partial' : 'stopped';
                 console.log(`[LocalApiServer] team/stop '${teamId}' (head '${head}'): status ${status}, paused ${paused.length}, released ${released.length}, closed ${closed.length}, already gone ${alreadyGone.length}, close failures ${closeFailed.length}${rosterResolved ? '' : ', roster UNRESOLVED — head only'}${pauseUnavailable ? `, pause unavailable: ${pauseUnavailable}` : ''}`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -8182,6 +8190,7 @@ export class LocalApiServer {
                     released,
                     failed,
                     releasedSeats,
+                    alreadyClear,
                     closed,
                     alreadyGone,
                     closeFailed,
@@ -8289,7 +8298,7 @@ export class LocalApiServer {
             }
 
             res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: `Unknown mission route: ${pathname}` }));
+            res.end(JSON.stringify({ success: false, error: `Unknown board route: ${pathname}` }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanMissionRoute error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -8412,12 +8421,19 @@ export class LocalApiServer {
      * Releases the HOLD ONLY. A cleared hold means "this seat is not working
      * this card", NOT "this work is done": the card is never marked finished
      * and never moved, because cards move on start, never on finish.
+     *
+     * `alreadyClear` names the cards whose clear found nothing to clear — a
+     * concurrent release got there first, or a duplicate stop raced this one.
+     * They ride `failed` because that is the shape `/kanban/team/release` has
+     * always answered with, but "the hold was already gone" is the desired end
+     * state, not a failure, so a caller that reports a status must be able to
+     * tell the two apart without reading the reason string.
      */
     private async _releaseHeldCardsForSeats(
         db: any,
         wsId: string,
         seats: string[]
-    ): Promise<{ released: string[]; failed: Array<{ planId: string; reason: string }>; releasedSeats: string[] }> {
+    ): Promise<{ released: string[]; failed: Array<{ planId: string; reason: string }>; releasedSeats: string[]; alreadyClear: string[] }> {
         const seatSet = new Set<string>();
         for (const seat of seats) { if (seat) { seatSet.add(String(seat).trim()); } }
         const board: any[] = (await db.getBoard?.(wsId)) || [];
@@ -8428,18 +8444,19 @@ export class LocalApiServer {
         );
         const released: string[] = [];
         const failed: Array<{ planId: string; reason: string }> = [];
+        const alreadyClear: string[] = [];
         const releasedSeats = new Set<string>();
         for (const card of held) {
             const planId = String(card.planId || '');
             try {
                 const ok = await db.clearOwnerStamp?.(card.planFile, card.workspaceId || wsId);
                 if (ok) { released.push(planId); releasedSeats.add(String(card.ownerSeat).trim()); }
-                else { failed.push({ planId, reason: 'no hold to clear' }); }
+                else { failed.push({ planId, reason: 'no hold to clear' }); alreadyClear.push(planId); }
             } catch (relErr) {
                 failed.push({ planId, reason: relErr instanceof Error ? relErr.message : String(relErr) });
             }
         }
-        return { released, failed, releasedSeats: [...releasedSeats] };
+        return { released, failed, releasedSeats: [...releasedSeats], alreadyClear };
     }
 
     /**
