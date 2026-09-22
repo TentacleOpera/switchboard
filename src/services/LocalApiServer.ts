@@ -1,5 +1,10 @@
 import * as http from 'http';
 import { resolveBudget, usageKey } from '../standalone/judgement/budgets';
+import { callModel } from '../standalone/judgement/modelClient';
+import {
+    applyProposal, applyOutcomeMessage, navigatorOutcomeMessage, proposeColdBoard, proposeMission,
+    type NavigatorPlanRow, type NavigatorPorts,
+} from '../standalone/controller/navigator';
 import * as zlib from 'zlib';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
@@ -13411,6 +13416,215 @@ export class LocalApiServer {
     }
 
     /**
+     * The ports the Navigator capability runs against, built from the board and
+     * the Navigator's own slot. The capability itself makes no board call and no
+     * model call: every read and write arrives here, so "which store answered"
+     * stays a property of this host rather than of the capability.
+     *
+     * The two mission verbs are the ONLY writes exposed. `team` and
+     * `maxExtraWorktrees` are not among the parameters `createMission` is called
+     * with, deliberately: they belong to the parameters subtask, and a value
+     * written here would be indistinguishable from an operator's choice.
+     */
+    private async _navigatorPorts(db: any, workspaceRoot: string): Promise<NavigatorPorts> {
+        if (typeof db.isMissionMember !== 'function') {
+            throw new Error('this host\'s kanban database cannot answer isMissionMember, so the candidate filter cannot run — refusing rather than treating every card as eligible');
+        }
+        const wsId = await this._wsId(db);
+        return {
+            listPlans: async () => await this._resolveBoard(db),
+            isMissionMember: async (planId: string) => await db.isMissionMember(planId),
+            readPlanBody: async (row: NavigatorPlanRow) => await this._readNavigatorPlanBody(row, workspaceRoot),
+            navigatorModel: async () => {
+                const row = await this._resolveAgentControlRow('navigator');
+                if ('error' in row) { return { error: row.error }; }
+                const key = row.providerId ? await this._resolveAgentControlApiKey(row.providerId) : { apiKey: '' };
+                if ('error' in key) { return { error: key.error }; }
+                return {
+                    providerId: row.providerId,
+                    endpoint: row.endpoint,
+                    model: row.model,
+                    apiKey: key.apiKey || null,
+                    source: row.source,
+                };
+            },
+            callModel: (req) => callModel(req),
+            createMission: async (input) => {
+                // Exactly three fields. No team, no worktree allowance, no
+                // ordering — see the note above.
+                const mission = await db.createMission({ name: input.name, goal: input.goal, type: input.type, workspaceId: wsId });
+                const missionId = String(mission?.id || '').trim();
+                if (!missionId) { return { error: 'the board created a mission without an id' }; }
+                return { missionId };
+            },
+            claimIntoMission: async ({ missionId, planId, kind }) => {
+                const claim = await db.claimIntoMission(missionId, planId, kind, { by: 'navigator/propose' });
+                return {
+                    planId,
+                    claimed: !!claim?.claimed,
+                    ...(claim?.transferredFrom ? { transferredFrom: String(claim.transferredFrom) } : {}),
+                    ...(claim?.error ? { reason: String(claim.error) } : {}),
+                };
+            },
+            recordProvenance: async (entry) => await this._recordNavigatorProvenance(workspaceRoot, entry),
+        };
+    }
+
+    /**
+     * The plan's own text, for the candidate set only. A plan whose file is gone
+     * is NOT an empty plan — the absence travels as a stated note rather than as
+     * a blank body the model would read as "this card says nothing".
+     */
+    private async _readNavigatorPlanBody(row: NavigatorPlanRow, workspaceRoot: string): Promise<string> {
+        const raw = String(row?.planFile || '').trim();
+        if (!raw) { return ''; }
+        const abs = path.isAbsolute(raw) ? raw : path.resolve(workspaceRoot, raw);
+        try {
+            return await fs.readFile(abs, 'utf8');
+        } catch (err) {
+            return `(the plan file could not be read: ${abs} — ${err instanceof Error ? err.message : String(err)})`;
+        }
+    }
+
+    /**
+     * Record what the Navigator did, in the controller's report — the model that
+     * proposed it, the operator's stated subject, the mission id, and each id's
+     * claim outcome. A `## Wake` section with no `### Actions` heading, so the
+     * panel's "latest report" walk (which looks for that heading) is not
+     * hijacked by an apply. A failure to record is REPORTED, never swallowed:
+     * an audit line that silently did not happen is the fallback rule's failure
+     * mode applied to the audit trail itself.
+     */
+    private async _recordNavigatorProvenance(
+        workspaceRoot: string,
+        entry: { modelId: string; subject: string; missionId: string; outcome: string; approvedCount: number; claims: Array<{ planId: string; claimed: boolean; transferredFrom?: string; reason?: string }> },
+    ): Promise<{ written: boolean; reason?: string }> {
+        const store = this._options.controllerStore;
+        if (!store) { return { written: false, reason: 'this host wired no controller report store' }; }
+        const claimed = entry.claims.filter(c => c.claimed).length;
+        const lines = [
+            '### Navigator — mission proposed and applied',
+            '',
+            `- model: ${entry.modelId ? `\`${entry.modelId}\`` : '(not recorded)'}`,
+            `- subject: ${entry.subject ? `"${entry.subject}"` : '(cold board — no subject given)'}`,
+            `- mission: \`${entry.missionId}\``,
+            `- outcome: **${entry.outcome}** — ${claimed} of ${entry.approvedCount} card(s) claimed`,
+            '',
+            '| plan | claim |',
+            '|---|---|',
+            ...entry.claims.map(c => `| \`${c.planId}\` | ${c.claimed ? (c.transferredFrom ? `claimed (transferred from \`${c.transferredFrom}\`)` : 'claimed') : `refused — ${c.reason || 'no reason given'}`} |`),
+        ];
+        try {
+            const result = await store.writeReport(workspaceRoot, {
+                from: 'navigator',
+                kind: 'mission-applied',
+                body: lines.join('\n'),
+            });
+            return result?.success ? { written: true } : { written: false, reason: String(result?.error || 'the report write did not report success') };
+        } catch (err) {
+            return { written: false, reason: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
+    /**
+     * POST /controller/navigator/propose — the two-question conversation.
+     *
+     * Body: `{ subject, goal?, cold? }`. `cold: true` is the operator explicitly
+     * asking "what is worth doing" with no subject, and it is the ONLY way to
+     * reach the capped cold-board pass: an empty subject with no `cold` flag is a
+     * 400, not a silent fallback into a different pass that reads the whole board.
+     *
+     * Response: `{ success, kind, message, ...outcome }`. `success` is about the
+     * REQUEST; `kind` is about the pass, and the four non-proposal kinds —
+     * `no-candidates`, `invalid-reply`, `unconfigured`, `error` — are four
+     * distinct states with four distinct strings.
+     */
+    private async _handleControllerNavigatorPropose(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+        let body: any;
+        try { body = await this._parseJsonBody(req); } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'invalid JSON body' }));
+            return;
+        }
+        const subject = String(body?.subject || '').trim();
+        const goal = String(body?.goal || '').trim();
+        const cold = body?.cold === true;
+        if (!cold && !subject) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'subject is required — send { cold: true } to ask the Navigator to look at the whole board instead' }));
+            return;
+        }
+        try {
+            const db = await this._requireReadableStore(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const ports = await this._navigatorPorts(db, workspaceRoot);
+            const outcome = cold ? await proposeColdBoard(ports) : await proposeMission({ subject, goal }, ports);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                kind: outcome.kind,
+                message: navigatorOutcomeMessage(outcome),
+                subject,
+                outcome,
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] navigator propose error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'navigator propose failed' }));
+        }
+    }
+
+    /**
+     * POST /controller/navigator/apply — create the mission the operator approved.
+     *
+     * Body: `{ missionName, goal, planIds, subject?, modelId? }`. The approved
+     * ids are passed straight through: this step re-checks nothing itself, and
+     * `claimIntoMission` is the arbiter of a card another mission or a seat took
+     * between propose and apply. Its result is reported per id — a partially
+     * applied mission says which ids did not land and is never presented as
+     * complete.
+     */
+    private async _handleControllerNavigatorApply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+        let body: any;
+        try { body = await this._parseJsonBody(req); } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'invalid JSON body' }));
+            return;
+        }
+        const planIds = Array.isArray(body?.planIds) ? body.planIds.map((x: unknown) => String(x || '').trim()).filter(Boolean) : [];
+        if (planIds.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'planIds must be a non-empty array of approved card ids' }));
+            return;
+        }
+        try {
+            const db = await this._requireReadableStore(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const ports = await this._navigatorPorts(db, workspaceRoot);
+            const outcome = await applyProposal({
+                missionName: String(body?.missionName || '').trim(),
+                goal: String(body?.goal || '').trim(),
+                planIds,
+                subject: String(body?.subject || '').trim(),
+                modelId: String(body?.modelId || '').trim(),
+            }, ports);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                kind: outcome.kind,
+                message: applyOutcomeMessage(outcome),
+                outcome,
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] navigator apply error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'navigator apply failed' }));
+        }
+    }
+
+    /**
      * GET /agent/control/config — report whether the model endpoint is
      * configured and available, the configured endpoint/model values (so the
      * config row can render current state), whether a key is set (never the
@@ -16055,6 +16269,12 @@ export class LocalApiServer {
                 await this._handleControllerNavigator(req, res);
             } else if (pathname === '/controller/navigator' && req.method === 'PUT') {
                 await this._handleControllerNavigatorWrite(req, res);
+            } else if (pathname === '/controller/navigator/propose' && req.method === 'POST') {
+                // The two-question conversation (plan: the-navigator-groups-ready-
+                // plans-into-missions). Subject and goal in; a validated proposal out.
+                await this._handleControllerNavigatorPropose(req, res);
+            } else if (pathname === '/controller/navigator/apply' && req.method === 'POST') {
+                await this._handleControllerNavigatorApply(req, res);
             } else if (pathname === '/controller/quota' && req.method === 'GET') {
                 if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
                 const store = this._options.controllerStore;
