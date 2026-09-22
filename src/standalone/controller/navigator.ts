@@ -1544,3 +1544,553 @@ export function startOutcomeMessage(outcome: StartOutcome): string {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  The outside-prerequisite pass
+//  (plan: a-prerequisite-outside-the-feature-is-the-navigators-problem)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * What became of ONE prerequisite a feature's prose named outside itself.
+ *
+ * Five states, kept distinct because they are five different situations for the
+ * operator and the plan forbids any two rendering alike:
+ *
+ *  - `complete` — the card exists and has asserted completion. No edge is
+ *    needed (there is nothing to gate) and nothing is dispatched. The authoring
+ *    breach is recorded anyway.
+ *  - `exists-unfinished` — the card exists and is unfinished. The edge is
+ *    written AND the card is dispatched. The edge is the durable record; the
+ *    dispatch is the intervention, and it is the half that works for a lead
+ *    driving by hand — such a lead never pops, so it never reads an edge.
+ *  - `absent` — no card on the board matches the reference exactly. A feature
+ *    depends on work nobody has written.
+ *  - `unresolved` — the reference matched more than one card, or matched one
+ *    card that the prose attributes to no single subtask. Reported, never
+ *    guessed: an approximate match writes an edge onto the wrong card and holds
+ *    real work out of every pop.
+ *  - `cycle` — the edge would close a loop through a card outside the feature.
+ *    Refused; nothing is written.
+ */
+export type OutsidePrerequisiteKind = 'complete' | 'exists-unfinished' | 'absent' | 'unresolved' | 'cycle';
+
+/** One prerequisite reference, and everything that happened to it. */
+export interface PrerequisiteResolution {
+    /** The reference exactly as the prose wrote it. */
+    named: string;
+    /** The subtask the prose attributes it to; `''` when the prose names none. */
+    dependentId: string;
+    dependentTitle: string;
+    /** The matched card; `''` for `absent` and `unresolved`. */
+    prerequisiteId: string;
+    prerequisiteTitle: string;
+    prerequisiteColumn: string;
+    outcome: OutsidePrerequisiteKind;
+    reason: string;
+    /** The ids an exact match returned, when it returned more than one. */
+    candidates: string[];
+    edgeWritten: boolean;
+    edgeError: string;
+    dispatched: boolean;
+    dispatchOutcome: 'delivered' | 'already-in-flight' | 'failed' | 'not-attempted';
+    dispatchError: string;
+}
+
+/**
+ * One report entry. ONE per outside prerequisite found, so "how many authoring
+ * breaches were recorded" is a count of entries and not a count inside an
+ * aggregate — a breach absorbed into a summary line is a breach nobody sees.
+ * A feature with no outside prerequisite produces exactly one entry, tagged
+ * `none-found`, so an empty report is a CLAIM with a source rather than a
+ * silence that reads the same as a pass that never ran.
+ */
+export interface PrerequisiteProvenance {
+    featureId: string;
+    featureTitle: string;
+    at: string;
+    modelId: string;
+    authorSource: string;
+    named: string;
+    dependentId: string;
+    dependentTitle: string;
+    prerequisiteId: string;
+    prerequisiteTitle: string;
+    prerequisiteColumn: string;
+    outcome: OutsidePrerequisiteKind | 'none-found';
+    reason: string;
+    candidates: string[];
+    edgeWritten: boolean;
+    edgeError: string;
+    dispatched: boolean;
+    dispatchOutcome: string;
+    dispatchError: string;
+    /** The feature named a prerequisite outside itself — true for every found reference. */
+    authoringBreach: boolean;
+}
+
+export type OutsidePrerequisiteOutcome =
+    | {
+        /** `partial` when an edge write or a dispatch failed — never presented as resolved. */
+        kind: 'resolved' | 'partial' | 'none-found';
+        featureId: string;
+        featureTitle: string;
+        at: string;
+        modelId: string;
+        authorSource: string;
+        resolutions: PrerequisiteResolution[];
+        recorded: RecordResult[];
+    }
+    | { kind: 'not-found'; featureId: string }
+    | { kind: 'error'; featureId: string; reason: string };
+
+/**
+ * The ports the outside-prerequisite pass needs.
+ *
+ * `listPlans` is the match universe — the same `GET /kanban/plans` read every
+ * other Navigator pass makes, so "which board did the match look at" has one
+ * answer. `readSubtasks` is `GET /kanban/plans?featureId=` (unfiltered by the
+ * dormant window), because the set a prerequisite must be OUTSIDE of cannot be
+ * a windowed view of it.
+ */
+export interface NavigatorPrerequisitePorts {
+    listPlans(): Promise<NavigatorPlanRow[]>;
+    navigatorModel(): Promise<NavigatorModelSlot | { error: string }>;
+    readFeature(featureId: string): Promise<NavigatorPlanRow | null>;
+    readSubtasks(featureId: string): Promise<NavigatorPlanRow[]>;
+    readPlanBody(row: NavigatorPlanRow): Promise<string>;
+    /** `GET /kanban/dependencies` over a set of ids, as a planId → predecessors map. */
+    readDependencies(planIds: string[]): Promise<Record<string, string[]>>;
+    /** `POST /kanban/dependencies` — a SET-write per plan id, with the map fingerprint. */
+    writeDependencies(input: { planId: string; dependsOn: string[]; mapFingerprint: string }): Promise<{ ok: boolean; error?: string; cycle?: string[] }>;
+    /** `POST /kanban/dispatch` for one card, with no seat pinned — the board routes it. */
+    dispatchCard(input: { planId: string }): Promise<{ status: number; payload: any }>;
+    recordPrerequisiteProvenance(entry: PrerequisiteProvenance): Promise<RecordResult>;
+    now?(): string;
+}
+
+/** The section of a feature file this pass reads. The prose is an INPUT, never the store. */
+const DEPENDENCIES_HEADING = /^##\s+Dependencies\b/i;
+const NEXT_SECTION_HEADING = /^##\s+\S/;
+
+function baseName(p: string): string {
+    const s = String(p || '').replace(/\\/g, '/');
+    const i = s.lastIndexOf('/');
+    return i >= 0 ? s.slice(i + 1) : s;
+}
+
+/**
+ * The comparison key for a name. Case, punctuation, spacing and a trailing
+ * `.md` are formatting, not identity: `the-board-restarts-only-when-it-stops-
+ * answering`, its title and its filename are ONE name. Nothing else is folded —
+ * a near-miss title normalises to a different key and does NOT match, which is
+ * the whole point of matching exactly rather than approximately.
+ */
+function normalizeName(s: string): string {
+    return String(s || '')
+        .toLowerCase()
+        .replace(/['’]/g, '')
+        .replace(/\.md$/, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
+/** The `## Dependencies` / `## Dependencies & sequencing` section, verbatim, headings excluded. */
+function dependenciesSection(body: string): string {
+    const lines = String(body || '').split(/\r?\n/);
+    const out: string[] = [];
+    let inside = false;
+    for (const line of lines) {
+        if (DEPENDENCIES_HEADING.test(line.trim())) { inside = true; continue; }
+        if (!inside) { continue; }
+        if (NEXT_SECTION_HEADING.test(line.trim())) { break; }
+        out.push(line);
+    }
+    return out.join('\n');
+}
+
+/**
+ * The section as STATEMENTS — a bullet, a numbered item or a table row each
+ * stands alone; a paragraph block is one statement. Attribution is per
+ * statement, because "the subtask named beside this prerequisite" is a fact
+ * about one sentence, not about the whole section.
+ */
+function sectionStatements(section: string): string[] {
+    const statements: string[] = [];
+    let current: string[] = [];
+    let inItem = false;
+    const flush = () => { if (current.length) { statements.push(current.join(' ').trim()); } current = []; inItem = false; };
+    for (const raw of String(section || '').split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) { flush(); continue; }
+        if (/^#{1,6}\s/.test(line)) { flush(); continue; }
+        const isItem = line.startsWith('|') || /^([-*+]|\d+[.)])\s/.test(line);
+        if (isItem && inItem) { flush(); }
+        current.push(line);
+        inItem = inItem || isItem;
+    }
+    flush();
+    return statements.filter(Boolean);
+}
+
+function codeSpans(text: string): string[] {
+    const out: string[] = [];
+    const re = /`([^`]+)`/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) { out.push(m[1]); }
+    return out;
+}
+
+/** The ids an exact name match returned, in board order. */
+function matchCardsByName(index: Map<string, NavigatorPlanRow[]>, named: string): NavigatorPlanRow[] {
+    const key = normalizeName(named);
+    return key ? (index.get(key) || []) : [];
+}
+
+function isPlanLikeRef(named: string, index: Map<string, NavigatorPlanRow[]>): boolean {
+    if (/\.md$/i.test(String(named || '').trim())) { return true; }
+    const key = normalizeName(named);
+    return !!key && index.has(key);
+}
+
+/**
+ * Walk the live edges from `prerequisiteId` and report whether the proposed
+ * `dependentId -> prerequisiteId` edge would close a loop through the UNION of
+ * the feature's edges and the new one — not the new edge in isolation, because
+ * a loop closed through a card the parameters pass never examined is still a
+ * loop, and it makes every card in it permanently undispatchable.
+ *
+ * The cycle detector is `findCycle`, the same function the parameters pass
+ * sorts against — one implementation, not two that can disagree.
+ */
+async function unionCycle(
+    proposed: { planId: string; dependsOn: string[] },
+    seedIds: string[],
+    readDeps: (planIds: string[]) => Promise<Record<string, string[]>>,
+): Promise<string[]> {
+    const edges = new Map<string, string[]>();
+    const nodes = new Set<string>(seedIds.map(str).filter(Boolean));
+    nodes.add(proposed.planId);
+    let frontier = Array.from(nodes);
+    while (frontier.length) {
+        const read = await readDeps(frontier);
+        const next: string[] = [];
+        for (const id of frontier) {
+            const list = dedupe(((read || {})[id] || []).map(str).filter(Boolean));
+            edges.set(id, list);
+            for (const dep of list) {
+                if (nodes.has(dep)) { continue; }
+                nodes.add(dep);
+                next.push(dep);
+            }
+        }
+        frontier = next;
+    }
+    edges.set(proposed.planId, dedupe([...(edges.get(proposed.planId) || []), ...proposed.dependsOn]));
+    return findCycle(Array.from(nodes), edges);
+}
+
+/**
+ * Resolve the prerequisites a feature's prose names OUTSIDE its own subtask set.
+ *
+ * The queue's gate (`isDependencyReady`) gates the queue POP, and a lead driving
+ * a feature by hand never pops — so an edge alone would sit in
+ * `plan_dependencies` unread by the very caller that was blocked. The
+ * intervention is therefore the DISPATCH: a board action that needs no
+ * cooperation from the lead, no prompt into it, and works whether the lead pops,
+ * polls, or is not a pty seat at all. The edge is written as well, as the durable
+ * record and the gate for queue-driven callers, and neither half substitutes for
+ * the other.
+ *
+ * Fences, each a bug if broken:
+ *  - **Nothing is sent to the lead.** Not a question, not a notice. The lead
+ *    discovers the prerequisite moving because it is moving.
+ *  - **A match is exact or it is reported.** A title that resolves to two cards,
+ *    or to a card the prose attributes to no single subtask, is `unresolved` and
+ *    writes nothing. An approximate match holds unrelated work out of every pop.
+ *  - **The prose is read, never authored.** No plan file is written, renamed or
+ *    retitled by this pass.
+ *  - **The breach is recorded even when resolved.** A feature carrying an
+ *    outside prerequisite was mis-authored, and a silent fix means the pattern
+ *    recurs.
+ */
+export async function resolveOutsidePrerequisites(
+    args: { featureId: string },
+    ports: NavigatorPrerequisitePorts,
+): Promise<OutsidePrerequisiteOutcome> {
+    const featureId = str(args.featureId);
+    if (!featureId) { return { kind: 'not-found', featureId }; }
+
+    // The Navigator is the AUTHOR OF RECORD. No model call is made — recognition
+    // is mechanical — and an unset slot is tagged rather than silently blank.
+    const slot = await ports.navigatorModel();
+    const modelId = 'error' in slot ? '' : modelIdOf(slot);
+    const authorSource = 'error' in slot ? `navigator-slot-unreadable: ${slot.error}`
+        : (slot.endpoint ? `navigator-slot: ${slot.source}` : `navigator-slot-unset: ${slot.source}`);
+
+    let feature: NavigatorPlanRow | null;
+    let subtasks: NavigatorPlanRow[];
+    let board: NavigatorPlanRow[];
+    let featureBody: string;
+    try {
+        feature = await ports.readFeature(featureId);
+        if (!feature) { return { kind: 'not-found', featureId }; }
+        subtasks = (await ports.readSubtasks(featureId)) || [];
+        board = (await ports.listPlans()) || [];
+        featureBody = await ports.readPlanBody(feature);
+    } catch (err) {
+        // A board read that failed is NOT a feature with no prerequisites. The
+        // two must never render the same string.
+        return { kind: 'error', featureId, reason: `the board could not be read: ${err instanceof Error ? err.message : String(err)}` };
+    }
+
+    const featureTitle = str(feature.topic) || featureId;
+    const subtaskIds = new Set<string>();
+    const subtaskTitles: Array<{ norm: string; row: NavigatorPlanRow; id: string; title: string }> = [];
+    for (const s of subtasks) {
+        const id = str(s.planId) || str(s.id);
+        if (!id) { continue; }
+        subtaskIds.add(id);
+        const title = str(s.topic) || id;
+        subtaskTitles.push({ norm: normalizeName(title), row: s, id, title });
+    }
+
+    // The match universe: every card that is NOT this feature and NOT one of its
+    // own subtasks. A card inside the feature is internal sequencing, not an
+    // outside prerequisite.
+    const index = new Map<string, NavigatorPlanRow[]>();
+    const addKey = (key: string, row: NavigatorPlanRow, id: string) => {
+        if (!key) { return; }
+        const list = index.get(key) || [];
+        if (!list.some(r => (str(r.planId) || str(r.id)) === id)) { list.push(row); }
+        index.set(key, list);
+    };
+    for (const row of board) {
+        if (!row) { continue; }
+        const id = str(row.planId) || str(row.id);
+        if (!id || id === featureId || subtaskIds.has(id)) { continue; }
+        if (str(row.featureId) === featureId || str(row.feature_id) === featureId) { continue; }
+        addKey(normalizeName(baseName(str(row.planFile))), row, id);
+        addKey(normalizeName(str(row.topic)), row, id);
+    }
+    const featureKeys = new Set([normalizeName(baseName(str(feature.planFile))), normalizeName(featureTitle)].filter(Boolean));
+
+    const section = dependenciesSection(featureBody);
+    const seen = new Set<string>();
+    const pending: Array<{ named: string; dependent: { id: string; title: string } | null }> = [];
+    for (const statement of sectionStatements(section)) {
+        const statementNorm = normalizeName(statement);
+        const named = subtaskTitles.filter(t => t.norm && statementNorm.includes(t.norm));
+        const dependent = named.length === 1 ? { id: named[0].id, title: named[0].title } : null;
+        for (const ref of codeSpans(statement)) {
+            const trimmed = String(ref || '').trim();
+            if (!trimmed) { continue; }
+            const key = normalizeName(trimmed);
+            if (!key || featureKeys.has(key)) { continue; }
+            if (!isPlanLikeRef(trimmed, index)) { continue; }
+            const dedupeKey = `${dependent ? dependent.id : ''}\u0000${key}`;
+            if (seen.has(dedupeKey)) { continue; }
+            seen.add(dedupeKey);
+            pending.push({ named: trimmed, dependent });
+        }
+    }
+
+    const at = ports.now ? ports.now() : new Date().toISOString();
+    const base = { featureId, featureTitle, at, modelId, authorSource };
+    const record = async (entry: PrerequisiteProvenance): Promise<RecordResult> => {
+        try {
+            return await ports.recordPrerequisiteProvenance(entry);
+        } catch (err) {
+            return { written: false, reason: err instanceof Error ? err.message : String(err) };
+        }
+    };
+
+    if (pending.length === 0) {
+        // An empty list is a CLAIM, and it needs a source: this entry is what
+        // makes "none found" distinguishable from "the pass never ran".
+        const entry: PrerequisiteProvenance = {
+            ...base, named: '', dependentId: '', dependentTitle: '', prerequisiteId: '',
+            prerequisiteTitle: '', prerequisiteColumn: '', outcome: 'none-found',
+            reason: 'the feature\'s Dependencies & sequencing section names no prerequisite outside its own subtask set',
+            candidates: [], edgeWritten: false, edgeError: '', dispatched: false,
+            dispatchOutcome: 'not-attempted', dispatchError: '', authoringBreach: false,
+        };
+        return { kind: 'none-found', ...base, resolutions: [], recorded: [await record(entry)] };
+    }
+
+    // The union the cycle check runs over: the feature's own subtasks, plus every
+    // card a reference resolved to, plus the dependents.
+    const seedIds = new Set<string>(subtaskIds);
+    for (const p of pending) { if (p.dependent) { seedIds.add(p.dependent.id); } }
+
+    const resolutions: PrerequisiteResolution[] = [];
+    const recorded: RecordResult[] = [];
+    // `partial` unless EVERY prerequisite reached a terminal, actionable outcome.
+    // An `absent` or `unresolved` reference is a finding rather than a failure,
+    // but it is still work this pass did not do, and presenting that as
+    // `resolved` is the same quiet-wrong-answer the outcome states exist to
+    // prevent.
+    let allResolved = true;
+
+    for (const p of pending) {
+        const matches = matchCardsByName(index, p.named);
+        const resolution: PrerequisiteResolution = {
+            named: p.named,
+            dependentId: p.dependent ? p.dependent.id : '',
+            dependentTitle: p.dependent ? p.dependent.title : '',
+            prerequisiteId: '', prerequisiteTitle: '', prerequisiteColumn: '',
+            outcome: 'unresolved', reason: '', candidates: [],
+            edgeWritten: false, edgeError: '', dispatched: false,
+            dispatchOutcome: 'not-attempted', dispatchError: '',
+        };
+
+        if (matches.length === 0) {
+            resolution.outcome = 'absent';
+            resolution.reason = `no card on the board is named '${p.named}' — a feature depends on work nobody has written`;
+        } else if (matches.length > 1) {
+            resolution.outcome = 'unresolved';
+            resolution.candidates = matches.map(r => str(r.planId) || str(r.id));
+            resolution.reason = `'${p.named}' matches ${matches.length} cards (${resolution.candidates.join(', ')}) — an approximate match would write an edge onto the wrong one, so nothing was written`;
+        } else if (!p.dependent) {
+            resolution.outcome = 'unresolved';
+            resolution.candidates = [str(matches[0].planId) || str(matches[0].id)];
+            resolution.reason = `'${p.named}' resolves to one card, but the prose names no single subtask that depends on it — nothing was written`;
+        } else {
+            const card = matches[0];
+            const prerequisiteId = str(card.planId) || str(card.id);
+            resolution.prerequisiteId = prerequisiteId;
+            resolution.prerequisiteTitle = str(card.topic) || prerequisiteId;
+            resolution.prerequisiteColumn = str(card.kanbanColumn) || str(card.kanban_column);
+            seedIds.add(prerequisiteId);
+
+            const completedAt = card.completedAt ?? card.completed_at ?? null;
+            if (str(completedAt)) {
+                resolution.outcome = 'complete';
+                resolution.reason = `'${resolution.prerequisiteTitle}' has asserted completion — there is nothing to gate`;
+            } else {
+                resolution.outcome = 'exists-unfinished';
+                const cycle = await unionCycle(
+                    { planId: p.dependent.id, dependsOn: [prerequisiteId] },
+                    Array.from(seedIds),
+                    ports.readDependencies,
+                );
+                if (cycle.length > 0) {
+                    resolution.outcome = 'cycle';
+                    resolution.reason = `the edge would close a cycle across the union (${cycle.join(' -> ')}) — nothing was written`;
+                } else {
+                    // SET-write, so the existing edges are carried through rather
+                    // than dropped: this pass adds one prerequisite, it does not
+                    // replace what the plans already state.
+                    const existing = await ports.readDependencies([p.dependent.id]);
+                    const merged = dedupe([
+                        ...((existing || {})[p.dependent.id] || []).map(str).filter(d => d && d !== p.dependent!.id),
+                        prerequisiteId,
+                    ]);
+                    const written = await ports.writeDependencies({
+                        planId: p.dependent.id,
+                        dependsOn: merged,
+                        mapFingerprint: memberFingerprint(p.dependent.id, Array.from(subtaskIds)),
+                    });
+                    resolution.edgeWritten = !!written.ok;
+                    if (!written.ok) {
+                        resolution.edgeError = written.error || 'the board refused the dependency write';
+                    }
+                    // The dispatch is the intervention and does not depend on the
+                    // edge landing: the record and the act are separate halves.
+                    try {
+                        const res = await ports.dispatchCard({ planId: prerequisiteId });
+                        const payload = res?.payload || {};
+                        const errText = str(payload.error);
+                        if (payload.success !== false && res.status < 400) {
+                            resolution.dispatched = true;
+                            resolution.dispatchOutcome = 'delivered';
+                        } else if (res.status === 409 || /already|in flight|owned/i.test(errText)) {
+                            resolution.dispatched = true;
+                            resolution.dispatchOutcome = 'already-in-flight';
+                        } else {
+                            resolution.dispatchError = errText || `the dispatch answered ${res.status}`;
+                            resolution.dispatchOutcome = 'failed';
+                        }
+                    } catch (err) {
+                        resolution.dispatchError = err instanceof Error ? err.message : String(err);
+                        resolution.dispatchOutcome = 'failed';
+                    }
+                }
+            }
+        }
+
+        // "Fully resolved" is a positive claim: the card was already complete, or
+        // the edge landed AND the prerequisite was actually put in flight. Every
+        // other state is work this pass did not finish.
+        const done = resolution.outcome === 'complete'
+            || (resolution.outcome === 'exists-unfinished' && resolution.edgeWritten && resolution.dispatchOutcome !== 'failed');
+        if (!done) { allResolved = false; }
+
+        resolutions.push(resolution);
+        recorded.push(await record({
+            ...base,
+            named: resolution.named,
+            dependentId: resolution.dependentId,
+            dependentTitle: resolution.dependentTitle,
+            prerequisiteId: resolution.prerequisiteId,
+            prerequisiteTitle: resolution.prerequisiteTitle,
+            prerequisiteColumn: resolution.prerequisiteColumn,
+            outcome: resolution.outcome,
+            reason: resolution.reason,
+            candidates: resolution.candidates,
+            edgeWritten: resolution.edgeWritten,
+            edgeError: resolution.edgeError,
+            dispatched: resolution.dispatched,
+            dispatchOutcome: resolution.dispatchOutcome,
+            dispatchError: resolution.dispatchError,
+            // A feature carrying an outside prerequisite was mis-authored, and
+            // every resolution records that — including one already complete.
+            authoringBreach: true,
+        }));
+    }
+
+    return { kind: allResolved ? 'resolved' : 'partial', ...base, resolutions, recorded };
+}
+
+/** One string per state, so an unresolved prerequisite never reads like a resolution. */
+export function outsidePrerequisiteMessage(outcome: OutsidePrerequisiteOutcome): string {
+    switch (outcome.kind) {
+        case 'resolved':
+        case 'partial': {
+            const bits: string[] = [];
+            bits.push(`${outcome.resolutions.length} prerequisite(s) named outside '${outcome.featureTitle}'.`);
+            for (const r of outcome.resolutions) {
+                const who = r.dependentTitle ? `for '${r.dependentTitle}'` : 'for no named subtask';
+                switch (r.outcome) {
+                    case 'complete':
+                        bits.push(`'${r.named}' ${who}: already complete — no edge, nothing dispatched.`);
+                        break;
+                    case 'exists-unfinished':
+                        bits.push(`'${r.named}' ${who}: ${r.edgeWritten ? 'edge written' : `edge NOT written (${r.edgeError})`}, ${r.dispatched ? `dispatched (${r.dispatchOutcome})` : `not dispatched${r.dispatchError ? ` (${r.dispatchError})` : ''}`}.`);
+                        break;
+                    case 'absent':
+                        bits.push(`'${r.named}' ${who}: ABSENT — no card on the board is named that.`);
+                        break;
+                    case 'unresolved':
+                        bits.push(`'${r.named}' ${who}: UNRESOLVED — ${r.reason}`);
+                        break;
+                    case 'cycle':
+                        bits.push(`'${r.named}' ${who}: CYCLE refused — ${r.reason}`);
+                        break;
+                }
+            }
+            // Every one of them is a breach, resolved or not — a silent fix means
+            // the authoring rule is never enforced and the pattern recurs.
+            bits.push(`All ${outcome.resolutions.length} recorded as authoring breaches.`);
+            if (outcome.kind === 'partial') { bits.push('At least one prerequisite was only PARTLY resolved.'); }
+            const unwritten = outcome.recorded.filter(r => !r.written).length;
+            if (unwritten) { bits.push(`${unwritten} report entry(ies) were not written.`); }
+            return bits.join(' ');
+        }
+        case 'none-found':
+            return `No prerequisite outside '${outcome.featureTitle}' is named in its Dependencies & sequencing section.`;
+        case 'not-found':
+            return `No feature '${outcome.featureId}' on this board.`;
+        case 'error':
+            return `The outside-prerequisite pass failed: ${outcome.reason}`;
+    }
+}
+

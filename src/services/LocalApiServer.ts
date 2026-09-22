@@ -3,9 +3,11 @@ import { resolveBudget, usageKey } from '../standalone/judgement/budgets';
 import { callModel } from '../standalone/judgement/modelClient';
 import {
     applyProposal, applyOutcomeMessage, navigatorOutcomeMessage, proposeColdBoard, proposeMission, proposeParameters,
-    parameterOutcomeMessage, startMission, startOutcomeMessage, MISSION_PARAMETERS_CONFIG_KEY,
+    parameterOutcomeMessage, startMission, startOutcomeMessage, resolveOutsidePrerequisites, outsidePrerequisiteMessage,
+    MISSION_PARAMETERS_CONFIG_KEY,
     type LiveTeam, type MissionRow, type NavigatorParameterPorts, type NavigatorPlanRow, type NavigatorPorts,
-    type NavigatorStartPorts, type ParameterProvenance, type ParameterRecord, type StartProvenance, type UnavailableTeam,
+    type NavigatorPrerequisitePorts, type NavigatorStartPorts, type ParameterProvenance, type ParameterRecord,
+    type PrerequisiteProvenance, type StartProvenance, type UnavailableTeam,
 } from '../standalone/controller/navigator';
 import * as zlib from 'zlib';
 import * as fs from 'fs/promises';
@@ -14271,6 +14273,156 @@ export class LocalApiServer {
     }
 
     /**
+     * The ports the OUTSIDE-PREREQUISITE pass runs against (plan:
+     * a-prerequisite-outside-the-feature-is-the-navigators-problem).
+     *
+     * `readSubtasks` reaches `getSubtasksByFeatureId` — the same read
+     * `GET /kanban/plans?featureId=` serves — because the set a prerequisite
+     * must be OUTSIDE of cannot be a windowed view of it. `readFeature` and
+     * `readDependencies` reach the union store, so a card that has left the hot
+     * window is still resolved rather than read as absent.
+     *
+     * `writeDependencies` is the SAME store and the same method the parameters
+     * pass writes through, and the same one the queue's `isDependencyReady`
+     * reads: a cycle is refused inside `setPlanDependencies` (all or nothing) as
+     * well as by the capability's own union check, so a cycle cannot land by
+     * either path. `dispatchCard` reaches `performKanbanDispatch` with no seat
+     * pinned — the prerequisite is not a mission member, so the board's own
+     * routing decides where it runs.
+     */
+    private async _navigatorPrerequisitePorts(db: any, workspaceRoot: string): Promise<NavigatorPrerequisitePorts> {
+        const base = await this._navigatorPorts(db, workspaceRoot);
+        return {
+            listPlans: base.listPlans,
+            navigatorModel: base.navigatorModel,
+            readPlanBody: base.readPlanBody,
+            readFeature: async (featureId: string) => {
+                const row = await db.getPlanByPlanId?.(featureId);
+                return row ? row as NavigatorPlanRow : null;
+            },
+            readSubtasks: async (featureId: string) => (await db.getSubtasksByFeatureId?.(featureId)) || [],
+            readDependencies: async (planIds: string[]) => {
+                const out: Record<string, string[]> = {};
+                for (const planId of planIds) {
+                    const deps = await db.getPlanDependencies(planId);
+                    out[planId] = Array.isArray(deps) ? deps.map((d: unknown) => String(d)) : [];
+                }
+                return out;
+            },
+            writeDependencies: async ({ planId, dependsOn, mapFingerprint }) => {
+                const ok = await db.setPlanDependencies(planId, dependsOn);
+                if (ok && mapFingerprint) { await db.setMapFingerprint?.(planId, mapFingerprint); }
+                if (!ok) {
+                    const cycle = typeof db.findDependencyCycle === 'function'
+                        ? await this._firstCycle(db, planId, dependsOn)
+                        : null;
+                    return { ok: false, error: 'the board refused the dependency write', ...(cycle ? { cycle } : {}) };
+                }
+                return { ok: true };
+            },
+            dispatchCard: async ({ planId }) => await this.performKanbanDispatch(workspaceRoot, planId, undefined),
+            recordPrerequisiteProvenance: async (entry) => await this._recordNavigatorPrerequisite(workspaceRoot, entry),
+        };
+    }
+
+    /**
+     * Record ONE outside-prerequisite resolution in the controller's report.
+     *
+     * One entry per prerequisite, not one aggregate: "how many authoring
+     * breaches were recorded" is then a count of entries, and a breach absorbed
+     * into a summary line is a breach nobody sees. A feature with no outside
+     * prerequisite gets one `none-found` entry, so an empty report is a claim
+     * with a source rather than a silence that reads like a pass that never ran.
+     */
+    private async _recordNavigatorPrerequisite(workspaceRoot: string, entry: PrerequisiteProvenance): Promise<{ written: boolean; reason?: string }> {
+        const store = this._options.controllerStore;
+        if (!store) { return { written: false, reason: 'this host wired no controller report store' }; }
+        const lines = entry.outcome === 'none-found'
+            ? [
+                '### Navigator — outside prerequisites',
+                '',
+                `- feature: \`${entry.featureId}\` (${entry.featureTitle})`,
+                `- at: ${entry.at}`,
+                '- none found: the feature\'s Dependencies & sequencing section names no prerequisite outside its own subtask set.',
+            ]
+            : [
+                '### Navigator — outside prerequisite',
+                '',
+                `- feature: \`${entry.featureId}\` (${entry.featureTitle})`,
+                `- at: ${entry.at}`,
+                `- author of record: ${entry.modelId ? `\`${entry.modelId}\`` : '(no Navigator configured)'} (${entry.authorSource})`,
+                `- named: \`${entry.named}\``,
+                `- depends from: ${entry.dependentId ? `\`${entry.dependentId}\` (${entry.dependentTitle})` : '(no single subtask named it)'}`,
+                `- resolves to: ${entry.prerequisiteId ? `\`${entry.prerequisiteId}\` (${entry.prerequisiteTitle}, column ${entry.prerequisiteColumn || 'unknown'})` : '(nothing)'}`,
+                ...(entry.candidates.length ? [`- candidates: ${entry.candidates.map(c => `\`${c}\``).join(', ')}`] : []),
+                `- outcome: **${entry.outcome}** — ${entry.reason}`,
+                `- edge written: ${entry.edgeWritten}${entry.edgeError ? ` (refused — ${entry.edgeError})` : ''}`,
+                `- dispatched: ${entry.dispatched ? entry.dispatchOutcome : `no${entry.dispatchError ? ` — ${entry.dispatchError}` : ''}`}`,
+                '',
+                '**Authoring breach.** This feature named a prerequisite outside its own subtask set, which the authoring rule forbids.',
+            ];
+        try {
+            const result = await store.writeReport(workspaceRoot, {
+                from: 'navigator',
+                kind: entry.outcome === 'none-found' ? 'outside-prerequisites-none' : 'outside-prerequisite',
+                body: lines.join('\n'),
+            });
+            return result?.success ? { written: true } : { written: false, reason: String(result?.error || 'the report write did not report success') };
+        } catch (err) {
+            return { written: false, reason: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
+    /**
+     * POST /controller/navigator/prerequisites — resolve the prerequisites a
+     * feature names OUTSIDE its own subtask set.
+     *
+     * Body: `{ featureId }`. Detection is mechanical: the feature file's
+     * `## Dependencies & sequencing` section is READ (never written), every
+     * reference that resolves to exactly one card outside the feature gets the
+     * `plan_dependencies` edge written AND the prerequisite dispatched — the
+     * edge is the durable record, the dispatch is the intervention that reaches
+     * a lead driving by hand and therefore never popping. An exact match that
+     * finds two cards, or a card no single subtask is named beside, is
+     * `unresolved` and writes nothing.
+     */
+    private async _handleControllerNavigatorPrerequisites(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+        let body: any;
+        try { body = await this._parseJsonBody(req); } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'invalid JSON body' }));
+            return;
+        }
+        const featureId = String(body?.featureId || '').trim();
+        if (!featureId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'featureId is required' }));
+            return;
+        }
+        try {
+            const db = await this._requireReadableStore(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const ports = await this._navigatorPrerequisitePorts(db, workspaceRoot);
+            const outcome = await resolveOutsidePrerequisites({ featureId }, ports);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                kind: outcome.kind,
+                message: outsidePrerequisiteMessage(outcome),
+                featureId,
+                outcome,
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] navigator prerequisites error:', err);
+            const reason = err instanceof Error ? err.message : String(err);
+            const outcome = { kind: 'error' as const, featureId, reason };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, kind: outcome.kind, message: outsidePrerequisiteMessage(outcome), featureId, outcome }));
+        }
+    }
+
+    /**
      * GET /agent/control/config — report whether the model endpoint is
      * configured and available, the configured endpoint/model values (so the
      * config row can render current state), whether a key is set (never the
@@ -16929,6 +17081,11 @@ export class LocalApiServer {
                 // The start pass (plan: the-navigator-starts-the-mission-it-set-up):
                 // stage in dependency order, mark ready, dispatch exactly one card.
                 await this._handleControllerNavigatorStart(req, res);
+            } else if (pathname === '/controller/navigator/prerequisites' && req.method === 'POST') {
+                // The outside-prerequisite pass (plan: a-prerequisite-outside-the-
+                // feature-is-the-navigators-problem): write the edge AND dispatch
+                // the prerequisite, so a lead that never pops is still unblocked.
+                await this._handleControllerNavigatorPrerequisites(req, res);
             } else if (pathname === '/controller/quota' && req.method === 'GET') {
                 if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
                 const store = this._options.controllerStore;
