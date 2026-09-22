@@ -535,7 +535,7 @@ function configAssumptions(cfg: ControllerRuntimeConfig): string[] {
             : 'board restart: disabled — no --board-start-command configured (a controller that cannot start the board must not stop it)',
         `judgement deadline=${cfg.judgementDeadlineMs}ms (covers CONNECT, not just read), max_tokens=${cfg.judgementMaxTokens}, reasoning_effort=none (source: controller config)`,
         `navigator: escalation after ${cfg.escalationStuckPasses} stuck pass(es); one digest per acting wake or unusable judgement reply; deadline=${cfg.navigatorDeadlineMs}ms, max_tokens=${cfg.navigatorMaxTokens}; quota stand-down=${Math.round(cfg.quotaStandDownMs / 60000)}m (source: controller config)`,
-        `second-order actions: at most one Navigator ask per subject per ${cfg.secondOrderWakes} wake(s), daily cap ${cfg.secondOrderDailyCap} ask(s); the closed set is ${SECOND_ORDER_ACTIONS.join(' | ')} (source: controller config + matrix.SECOND_ORDER_ACTIONS)`,
+        `second-order actions: at most one Navigator ask per subject per ${cfg.secondOrderWakes} wake(s), daily cap ${cfg.secondOrderDailyCap} ask(s); the closed set is ${SECOND_ORDER_ACTIONS.join(' | ')}; triggered by a failed verification OR by a disagreement in the end-of-wake review — one path, one set of bounds (source: controller config + matrix.SECOND_ORDER_ACTIONS)`,
         `CPU sampling: USER_HZ assumed ${ASSUMED_USER_HZ} (source: controller constant — sysconf(_SC_CLK_TCK) is not reachable from Node; every CPU percentage is computed against this)`,
     ];
 }
@@ -981,6 +981,17 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     // nothing this wake, and a Navigator is configured to be asked. Collected
     // here and asked AFTER the loop, so the whole wake's Pilot work is known.
     const secondOrderCandidates: SecondOrderCandidate[] = [];
+    // ── What the Navigator's REVIEW of this wake may dispute ──────────────
+    // (plan: the-navigator-can-intervene-when-the-pilot-is-wrong.)
+    //
+    // The review covers the ACTIONS this wake reports: the Pilot remediations it
+    // took, and the actions it is verifying. Nothing else is disputable, which
+    // is what keeps "an action from an earlier wake" and "a correction of a
+    // correction" out by construction rather than by a model's restraint.
+    const subjectByKey = new Map<string, Subject>();
+    const pilotActionByKey = new Map<string, { action: string; diagnosis: Diagnosis }>();
+    const verifiedByKey = new Map<string, { trace: VerificationTrace; navigatorCaused: boolean }>();
+    const secondOrderActed = new Set<string>();
 
     for (const subject of subjects) {
         // A `timed out` card is a PRIOR VERDICT, not a blank and not a fresh
@@ -1025,6 +1036,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         // matches — and a rate needs the PREVIOUS wake to have sampled too.
         diagnoseCtx.observations = observeSeat(subject, diagnoseCtx);
         const key = subjectKey(subject);
+        subjectByKey.set(key, subject);
         const st = state.subjects[key];
         // VERIFY the previous wake's action, mechanically, and CONSUME the
         // pending record so a verdict is produced exactly once. The signal is
@@ -1048,7 +1060,10 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         if (!diagnosis) {
             // Nothing fires for this subject. A pending verification resolves as
             // SUCCESS and is the whole finding for it this wake.
-            if (verification) { actions.push(verificationAction(subject, verification)); }
+            if (verification) {
+                actions.push(verificationAction(subject, verification));
+                verifiedByKey.set(key, { trace: verification, navigatorCaused: pending?.secondOrder === true });
+            }
             continue;
         }
         const action = await applyDiagnosis(subject, diagnosis, {
@@ -1064,6 +1079,13 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             if (verification) { action.verification = verification; }
             actions.push(action);
             pilotActed.add(key);
+            // The Pilot ACTED on this subject this wake — record what it did, so
+            // the Navigator's review can dispute it and the controller can map
+            // the disputed card back to the subject it was taken on.
+            pilotActionByKey.set(key, { action: String(action.rung), diagnosis });
+            if (verification) {
+                verifiedByKey.set(key, { trace: verification, navigatorCaused: pending?.secondOrder === true });
+            }
             continue;
         }
         // The Pilot applied NOTHING this wake — its ladder is exhausted, or a
@@ -1081,10 +1103,15 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             if (verification.result === 'success' || navigator.configured) {
                 actions.push(verificationAction(subject, verification));
             }
+            // Recorded whether or not it is reported, because the REVIEW may
+            // dispute this action even when the verification says it worked —
+            // that is the wrong-but-effective case, and it is invisible anywhere
+            // else.
+            verifiedByKey.set(key, { trace: verification, navigatorCaused: pending?.secondOrder === true });
         }
         const acted = state.subjects[key];
         if (verification?.result === 'failed' && acted && acted.stoppedBySecondOrder !== true) {
-            secondOrderCandidates.push({ subject, diagnosis, verification });
+            secondOrderCandidates.push({ subject, diagnosis, verification, trigger: 'verification' });
         }
     }
 
@@ -1111,13 +1138,18 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     //     report prints every wake, while a configured-but-unreachable one is
     //     reported on the subject's own entry. The two never read alike.
     if (navigator.configured) {
-        for (const candidate of secondOrderCandidates) {
-            // The entry is pushed into `actions` by `runSecondOrder` itself, so
-            // it is present before any pre-effect report is written.
-            await runSecondOrder(candidate, {
-                ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, readLogFresh,
-            });
-        }
+        const ran = await runSecondOrderCandidates(secondOrderCandidates, {
+            ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, readLogFresh,
+        });
+        // A subject whose correction actually acted is "already corrected this
+        // wake": a disagreement about it in the review below is refused, so one
+        // subject receives ONE correction, never two.
+        secondOrderCandidates.forEach((candidate, i) => {
+            const so = ran[i]?.secondOrder;
+            if (so && so.action !== null && (so.result === 'applied' || so.result === 'recorded')) {
+                secondOrderActed.add(subjectKey(candidate.subject));
+            }
+        });
     }
 
     // 7. Mechanical restart trigger: an unresponsive health endpoint. No
@@ -1160,14 +1192,16 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, readLogFresh, health, decision: restartDecision });
     }
 
-    // 7b. The end-of-wake DIGEST — one Navigator call, after every action is
-    //     applied, so it describes a settled wake.
+    // 7b. The end-of-wake REVIEW — one Navigator call, after every Pilot action
+    //     is applied, so it describes a settled wake and reviews what the Pilot
+    //     DID (plan: the-navigator-can-intervene-when-the-pilot-is-wrong).
     //
     //     Two triggers, and only two: the wake took at least one action, or the
     //     Pilot produced a judgement reply it could not use. A wake where the
     //     Pilot answered normally and found nothing makes NO call — the failure
     //     mode this bounds is a per-action call, which drifts back toward
-    //     calling on the cadence.
+    //     calling on the cadence. It REVIEWS ACTIONS, NEVER SILENCE: the retired
+    //     escalation tier's defect — paying on quiet — is not reintroduced.
     //
     //     Mission observations do NOT trigger it. A mission entry is a READING
     //     the watch takes on every wake, not something the wake DID, and the
@@ -1182,12 +1216,36 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     //     written its own report — that wake is over.
     const digestTriggering = actions.filter(a => a.kind !== 'mission');
     if ((!restart || restart.rateLimited) && (digestTriggering.length > 0 || unusableJudgement.length > 0)) {
-        const digest = await composeNavigatorDigest(
+        // What the review may dispute: the Pilot remediations taken this wake,
+        // and the actions under verification this wake. Nothing else.
+        const disputable: Array<{ card: string; ruleId: string; action: string; verification: 'success' | 'failed' | null }> = [];
+        for (const [key, pilot] of pilotActionByKey) {
+            const subject = subjectByKey.get(key);
+            if (!subject || !subject.planId) { continue; }
+            const v = verifiedByKey.get(key);
+            disputable.push({ card: subject.planId, ruleId: pilot.diagnosis.row.id, action: pilot.action, verification: v ? (v.trace.result === 'success' ? 'success' : 'failed') : null });
+        }
+        for (const [key, v] of verifiedByKey) {
+            if (pilotActionByKey.has(key)) { continue; }
+            const subject = subjectByKey.get(key);
+            if (!subject || !subject.planId) { continue; }
+            disputable.push({ card: subject.planId, ruleId: v.trace.ruleId, action: v.trace.of, verification: v.trace.result === 'success' ? 'success' : 'failed' });
+        }
+        const review = await composeNavigatorDigest(
             { ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, readLogFresh },
             actions,
             unusableJudgement,
+            disputable,
         );
-        actions.push(digest);
+        actions.push(review.action);
+        if (review.review) {
+            await applyDigestReview(review.review, review.action, {
+                ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, readLogFresh,
+            }, {
+                subjectByKey, pilotActions: pilotActionByKey, verifications: verifiedByKey, secondOrderActed,
+                matrixRows: matrix.rows,
+            });
+        }
     }
 
     // 8. Compose and write the report to the BOARD (never the controller's disk).
@@ -3769,24 +3827,236 @@ async function askNavigatorModel(
 }
 
 /**
- * The end-of-wake digest (plan: the-pilot-and-the-navigator-are-one-crew).
+ * The end-of-wake digest (plan: the-pilot-and-the-navigator-are-one-crew),
+ * which since `the-navigator-can-intervene-when-the-pilot-is-wrong` is the
+ * channel through which the Navigator reviews what the Pilot DID.
  *
  * ONE call per acting wake, and one per wake where the Pilot could not read the
  * board — never one per action. It carries what the wake DID and which seats
  * the Pilot could not read, so the Navigator is told what its partner is doing
  * rather than being parachuted in later with no history.
  *
- * The channel is INERT. The reply is recorded in the report and read by nothing:
- * no remediation arm, no ladder computation and no gate consults it. Acting
- * authority arrives separately, on its own trigger and under its own bounds
- * (`the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it`). Keeping the
- * always-on channel separate from the acting one is the point.
+ * **The reply may now name ONE correction.** The `the-pilot-and-the-navigator-
+ * are-one-crew` constraint read "No remediation, ladder or gate reads it. It
+ * has no verbs." That is SUPERSEDED, deliberately and with its reason stated:
+ * the justification was cost, and the premise does not hold — the Navigator is
+ * a cloud model on a free daily allowance well above this board's usage, and
+ * sparseness belongs on REMEDIATION, not on observation. Every other path by
+ * which the Navigator reaches the board fires on the Pilot's ABSENCE; without
+ * this one, a Pilot that classifies confidently and wrongly is unreviewable.
+ *
+ * The bounds are unchanged and they are the line: the same closed set, the same
+ * precondition checks, the same per-subject rate and daily cap, the same
+ * attribution. Only the TRIGGER is new. A correction is ONE move — the
+ * Navigator may not correct a correction — and a review that agrees, is unsure,
+ * or names something out of scope is still recorded, so silence is never the
+ * only way "no correction" is expressed.
  */
+/**
+ * One correction named in the digest's reply (plan:
+ * the-navigator-can-intervene-when-the-pilot-is-wrong).
+ */
+interface DigestCorrection {
+    /** The card the Navigator disputed, as it wrote it. */
+    card: string;
+    /** The action name it wrote, verbatim. */
+    rawAction: string;
+    /** The name validated against the closed set, or null when it is outside it. */
+    action: SecondOrderAction | null;
+    /** The Navigator's one-line reason. */
+    reason: string;
+}
+
+/**
+ * The digest reply, split into the reading and any correction it named.
+ *
+ * The reply is still prose and is still recorded as it always was — the ONLY
+ * machine-read part is a line beginning `CORRECT:`. That is deliberate: an
+ * observation channel that gains authority must not also gain a new reply
+ * shape that every existing reader has to understand.
+ */
+interface DigestReview {
+    /** The reply's prose, with any `CORRECT:` lines removed — recorded as before. */
+    prose: string;
+    corrections: DigestCorrection[];
+}
+
+/**
+ * Parse the digest's reply for an OPTIONAL correction line.
+ *
+ * A `CORRECT:` line whose action name is outside the closed set parses to
+ * `action: null` and applies NOTHING — it is never coerced to the nearest name,
+ * the same contract the second-order reply and row 3's classification follow.
+ * Anything that is not a `CORRECT:` line is prose and is left alone.
+ */
+function parseDigestReview(reply: string): DigestReview {
+    const prose: string[] = [];
+    const corrections: DigestCorrection[] = [];
+    for (const line of String(reply || '').split('\n')) {
+        const m = /^\s*CORRECT\s*:\s*(.+)$/i.exec(line);
+        if (!m) { prose.push(line); continue; }
+        const parts = /^(\S+)\s+(\S+)(?:\s*(?:[—–-]+|:)\s*(.*))?$/.exec(m[1].trim());
+        if (!parts) {
+            corrections.push({ card: '', rawAction: '', action: null, reason: m[1].trim() });
+            continue;
+        }
+        corrections.push({
+            card: parts[1],
+            rawAction: parts[2],
+            action: parseSecondOrderAction(parts[2]),
+            reason: (parts[3] || '').trim(),
+        });
+    }
+    return { prose: prose.join('\n').trim(), corrections };
+}
+
+/**
+ * What resolving a disagreement needs from the wake — all of it already read
+ * this wake, so the correction path consults no second source.
+ */
+interface DigestCorrectionRefs {
+    subjectByKey: Map<string, Subject>;
+    /** The Pilot actions taken THIS wake, keyed by subject key. */
+    pilotActions: Map<string, { action: string; diagnosis: Diagnosis }>;
+    /** The actions UNDER VERIFICATION this wake, and whether the Navigator caused them. */
+    verifications: Map<string, { trace: VerificationTrace; navigatorCaused: boolean }>;
+    /** Subjects a second-order correction already acted on this wake. */
+    secondOrderActed: Set<string>;
+    matrixRows: MatrixRow[];
+}
+
+/**
+ * A row for an action whose rule is no longer in the matrix (the operator
+ * edited `matrix.json` between wakes). It exists so the correction path has a
+ * `ruleId` and a cause to record; its `remediation` is never read on the
+ * disagreement path, which renders no ladder rung.
+ */
+function syntheticRow(ruleId: string, action: string): MatrixRow {
+    return {
+        id: ruleId,
+        order: 0,
+        cause: `the Pilot's \`${action}\``,
+        evidence: 'recorded on the wake the action was applied',
+        judge: 'model',
+        condition: { kind: 'judgement' },
+        remediation: 'record-unknown',
+        precondition: '',
+        requires: [],
+    };
+}
+
+/**
+ * Resolve ONE disagreement to a correction candidate, or refuse it with its
+ * reason. Every refusal is a stated finding, never a silent skip.
+ *
+ * The disputable set is exactly what the digest REVIEWED: the Pilot actions
+ * taken this wake, and the actions under verification this wake. That is what
+ * makes the wrong-but-effective case reachable — the Pilot respawns a healthy
+ * seat, the row stops firing, verification reports SUCCESS, and the only place
+ * the error is visible is the review of the action that was just verified.
+ */
+function resolveDigestCorrection(
+    c: DigestCorrection,
+    refs: DigestCorrectionRefs,
+): { candidate: SecondOrderCandidate | null; refusal: string | null } {
+    const key = `card:${c.card}`;
+    const subject = refs.subjectByKey.get(key);
+    if (!subject) {
+        return { candidate: null, refusal: `no card \`${c.card}\` was part of this wake — the review covers the actions TAKEN this wake and the ones under verification this wake, so an action from an earlier wake is out of scope` };
+    }
+    if (refs.secondOrderActed.has(key)) {
+        return { candidate: null, refusal: 'this subject was already corrected this wake — a disagreement is ONE move, and its correction has already been applied' };
+    }
+    const pilot = refs.pilotActions.get(key);
+    if (pilot) {
+        return {
+            candidate: {
+                subject, trigger: 'disagreement', diagnosis: pilot.diagnosis, verification: null,
+                disputed: { action: pilot.action, reason: c.reason },
+            },
+            refusal: null,
+        };
+    }
+    const verified = refs.verifications.get(key);
+    if (verified) {
+        // A correction of a correction is refused: the disputed action was the
+        // Navigator's own, and its review is out of scope for itself.
+        if (verified.navigatorCaused) {
+            return { candidate: null, refusal: 'the disputed action was the Navigator\'s OWN second-order correction — a correction may not correct a correction' };
+        }
+        const v = verified.trace;
+        const row = refs.matrixRows.find(r => r.id === v.ruleId) || syntheticRow(v.ruleId, v.of);
+        return {
+            candidate: {
+                subject, trigger: 'disagreement', verification: null,
+                disputed: { action: v.of, reason: c.reason },
+                diagnosis: {
+                    row,
+                    evidence: v.detail,
+                    evidenceWindow: `the verification of \`${v.of}\` on this subject, from the action applied on a previous wake`,
+                    detail: `the Pilot's \`${v.of}\` was applied on a previous wake and ${v.result === 'success' ? 'the row no longer fires for this subject' : 'the row fired again on this subject'}`,
+                    priorVerdict: subject.lastAction,
+                },
+            },
+            refusal: null,
+        };
+    }
+    return { candidate: null, refusal: `no Pilot action was taken on card \`${c.card}\` this wake and none is under verification — a disagreement reviews ACTIONS, never silence` };
+}
+
+/**
+ * Turn one digest review into at most one correction, and record the
+ * disposition on the digest entry either way.
+ *
+ * A review that agrees, is unsure, names an unknown action, names more than one
+ * correction, or names something out of scope is STILL a finding: silence must
+ * not be the only way "no correction" is expressed (plan:
+ * the-navigator-can-intervene-when-the-pilot-is-wrong).
+ */
+async function applyDigestReview(
+    review: DigestReview,
+    digest: EntryAction,
+    ctx: ApplyContext,
+    refs: DigestCorrectionRefs,
+): Promise<void> {
+    const note = (s: string): void => { digest.detail = `${digest.detail} ${s}`; };
+    if (review.corrections.length === 0) {
+        note('— it named no correction, so the Pilot\'s actions stand.');
+        return;
+    }
+    if (review.corrections.length > 1) {
+        note(`— it named ${review.corrections.length} corrections (${review.corrections.map(x => `\`${x.card} ${x.rawAction}\``).join(', ')}); MORE THAN ONE is ambiguous, so NOTHING is applied and none is coerced to a choice.`);
+        return;
+    }
+    const c = review.corrections[0];
+    if (c.action === null) {
+        note(`— it named a correction on card \`${c.card}\` whose action \`${c.rawAction}\` is OUTSIDE the closed set (${SECOND_ORDER_ACTIONS.join(', ')}); the reply is DISCARDED and NOTHING is applied, never coerced to a nearest name.`);
+        return;
+    }
+    const resolved = resolveDigestCorrection(c, refs);
+    if (!resolved.candidate) {
+        note(`— it disputed card \`${c.card}\`, naming \`${c.action}\`, and the correction was REFUSED — ${resolved.refusal}. Nothing was applied.`);
+        return;
+    }
+    note(`— it disputed card \`${c.card}\`, naming \`${c.action}\`${c.reason ? ` (its reason: ${c.reason})` : ''}; the correction follows, under the same validation and bounds as a verification-driven one.`);
+    const ran = await runSecondOrderCandidates([resolved.candidate], ctx);
+    // Only a correction that actually ACTED makes the subject already-corrected;
+    // a suppressed or discarded one did nothing, so a later disagreement about
+    // the same subject is not blocked by a move that never happened.
+    for (const entry of ran) {
+        const so = entry.secondOrder;
+        if (so && so.action !== null && (so.result === 'applied' || so.result === 'recorded')) {
+            refs.secondOrderActed.add(`card:${c.card}`);
+        }
+    }
+}
+
 async function composeNavigatorDigest(
     ctx: ApplyContext,
     actions: EntryAction[],
     unusable: UnusableJudgementReply[],
-): Promise<EntryAction> {
+    disputable: Array<{ card: string; ruleId: string; action: string; verification: 'success' | 'failed' | null }>,
+): Promise<{ action: EntryAction; review: DigestReview | null }> {
     const navigator = ctx.judgementCtx.navigator;
     const action: EntryAction = {
         subject: 'wake',
@@ -3804,6 +4074,7 @@ async function composeNavigatorDigest(
                 remediation: a.rung,
                 outcome: a.outcome,
             })),
+            disputable,
             unusableJudgementReplies: unusable,
         }, null, 2)),
         evidenceWindow: `this wake's ${actions.length} action(s) + ${unusable.length} unusable judgement reply(ies)`,
@@ -3817,15 +4088,32 @@ async function composeNavigatorDigest(
     if (!navigator.configured) {
         action.outcome = 'unavailable';
         action.detail = `the digest was not delivered: no Navigator model is configured (${navigator.reason})`;
-        return action;
+        return { action, review: null };
     }
     const system = [
         'You are the Navigator on a board of coding agents. The Pilot — the model that watches the',
         'board every few minutes — has just finished a wake and is telling you what it did.',
-        'You are being kept informed. You do NOT act: nothing you write is executed, and your reply is',
-        'recorded in the controller\'s report for the operator to read.',
+        '',
+        'You are reviewing the ACTIONS it took. Where you judge one WRONG you may say so, and choose',
+        'what to do about it from a CLOSED SET. You cannot name a team, a seat, a card, a column or a',
+        'command: the controller resolves the subject\'s own team and feature from the board and refuses',
+        'any action whose precondition the subject does not meet.',
+        '',
         'Reply with a few short lines: what you make of this wake, and anything the Pilot may have',
-        'missed. If the wake is unremarkable, say so in one line.',
+        'missed. If you agree with every action, or you are unsure, say so — your reading is recorded',
+        'either way, and silence is not the only way "no correction" is expressed.',
+        '',
+        'If you judge that ONE of the actions listed under "Actions you may dispute" was WRONG, add',
+        'exactly one line, on its own line, in this exact form:',
+        '  CORRECT: <card-id> <action-name> — <one-line reason>',
+        'where <action-name> is one of these five words and nothing else:',
+        ...SECOND_ORDER_ACTIONS.map(a => {
+            const spec = secondOrderSpec(a);
+            return `  - ${a}${spec.boardVerb === 'none' ? ' — cease acting on this subject altogether and record that you have' : ` — ${spec.boardVerb}`}`;
+        }),
+        'A line naming anything else, naming a card not listed, or more than one CORRECT line applies',
+        'NOTHING — it is recorded as discarded and never coerced to the nearest name.',
+        'Do not add a CORRECT line to agree: only add one where you judge the action wrong.',
     ].join('\n');
     const user = redact([
         `Actions this wake: ${actions.length}`,
@@ -3838,6 +4126,11 @@ async function composeNavigatorDigest(
             detail: a.detail ?? null,
         })), null, 2),
         '',
+        `Actions you may dispute: ${disputable.length}`,
+        disputable.length
+            ? disputable.map(d => `  - card \`${d.card}\` — rule \`${d.ruleId}\`, action \`${d.action}\`${d.verification ? ` (under verification: ${d.verification})` : ''}`).join('\n')
+            : '  (none — the Pilot took no action this wake, so there is nothing to review)',
+        '',
         `Seats the Pilot could NOT read this wake: ${unusable.length}`,
         unusable.length
             ? JSON.stringify(unusable, null, 2)
@@ -3848,10 +4141,11 @@ async function composeNavigatorDigest(
     if (!answer.answered) {
         action.outcome = 'failed';
         action.detail = `the digest was not delivered: the Navigator '${modelId}' did not answer (${answer.error})`;
-        return action;
+        return { action, review: null };
     }
-    action.detail = `the Navigator '${modelId}' was told what this wake did and answered — ${answer.reply}`;
-    return action;
+    const review = parseDigestReview(answer.reply);
+    action.detail = `the Navigator '${modelId}' reviewed this wake's ${disputable.length} disputable action(s) and answered — ${review.prose || '(no prose; only a correction was named)'}`;
+    return { action, review };
 }
 
 // ── The second-order axis ────────────────────────────────────────────────
@@ -3887,9 +4181,23 @@ const FEATURE_RESET_COLUMN = 'PLAN REVIEWED';
 /** A subject whose previous action was verified failed and whose Pilot is spent. */
 interface SecondOrderCandidate {
     subject: Subject;
-    /** The diagnosis that re-fired — its evidence is what the Navigator is sent. */
+    /**
+     * WHICH TRIGGER produced this correction (plan:
+     * the-navigator-can-intervene-when-the-pilot-is-wrong).
+     *
+     * `verification` — the Pilot's remediation was applied and the row re-fired,
+     * so the Pilot's own ladder did not fix it.
+     * `disagreement` — the Navigator's review of the wake judged a Pilot action
+     * WRONG. The two are different facts and both run the SAME validation,
+     * preconditions, re-check, bounds and recording.
+     */
+    trigger: 'verification' | 'disagreement';
+    /** The diagnosis the correction rests on — its evidence is what the Navigator is sent. */
     diagnosis: Diagnosis;
-    verification: VerificationTrace;
+    /** The failed verification, for the `verification` trigger; null for a disagreement. */
+    verification: VerificationTrace | null;
+    /** For a `disagreement`: the Pilot action the Navigator disputed, and its stated reason. */
+    disputed?: { action: string; reason: string };
 }
 
 /**
@@ -3949,6 +4257,7 @@ function parseSecondOrderAction(reply: string): SecondOrderAction | null {
  * all.
  */
 function buildSecondOrderPrompt(args: {
+    trigger: 'verification' | 'disagreement';
     seat: string;
     planId: string;
     title: string;
@@ -3956,17 +4265,30 @@ function buildSecondOrderPrompt(args: {
     cause: string;
     evidence: string;
     evidenceWindow: string;
-    failedAction: string;
+    /** The action that did not work (verification), or the disputed action. */
+    disputedAction: string;
+    /** The Navigator's own stated reason for the disagreement, verbatim. */
+    disputedReason: string | null;
     stuckPasses: number;
     ladderRung: string;
     priorVerdict: string | null;
     priorSecondOrder: SecondOrderAction | null;
     secondOrderCount: number;
 }): { system: string; user: string } {
+    const premise = args.trigger === 'disagreement'
+        ? [
+            'acted on ONE subject, and your own review of that wake judged what it did WRONG.',
+            'The action was applied. You are deciding what to do about an action you have already',
+            'disputed — not re-reading the wake.',
+        ]
+        : [
+            'has applied every rung of its escalation ladder to ONE subject and',
+            'the same condition still fires. Pressing that subject harder has been tried and did not work.',
+        ];
     const system = [
         'You are the Navigator on a board of coding agents. The Pilot — the model that watches the',
-        'board every few minutes — has applied every rung of its escalation ladder to ONE subject and',
-        'the same condition still fires. Pressing that subject harder has been tried and did not work.',
+        'board every few minutes —',
+        ...premise,
         '',
         'You choose exactly ONE action from this CLOSED SET, and reply with the action NAME ALONE —',
         'one of these five words, nothing else, no punctuation, no explanation:',
@@ -3987,13 +4309,17 @@ function buildSecondOrderPrompt(args: {
     ].join('\n');
     const user = [
         `Subject: seat '${args.seat}' on card '${args.planId}' "${args.title}"`,
-        `Rule that keeps firing: \`${args.ruleId}\` — ${args.cause}`,
-        `The action that did not work: \`${args.failedAction}\` (applied on a previous wake; the row fired again)`,
+        args.trigger === 'disagreement'
+            ? `The Pilot's action you disputed: \`${args.disputedAction}\` (rule \`${args.ruleId}\` — ${args.cause})`
+            : `Rule that keeps firing: \`${args.ruleId}\` — ${args.cause}`,
+        args.trigger === 'disagreement'
+            ? `Your stated reason for disputing it: ${args.disputedReason || '(none recorded)'}`
+            : `The action that did not work: \`${args.disputedAction}\` (applied on a previous wake; the row fired again)`,
         `Ladder rung reached: ${args.ladderRung}`,
         `Consecutive passes this subject has been stuck: ${args.stuckPasses}`,
         `Prior verdict (last_action): ${args.priorVerdict || '(none recorded)'}`,
         args.priorSecondOrder
-            ? `A second-order action was already applied to this subject: \`${args.priorSecondOrder}\` (${args.secondOrderCount} applied so far) — and the row still fires`
+            ? `A second-order action was already applied to this subject: \`${args.priorSecondOrder}\` (${args.secondOrderCount} applied so far)`
             : 'No second-order action has been applied to this subject yet',
         '',
         `Evidence window: ${args.evidenceWindow}`,
@@ -4079,10 +4405,19 @@ async function secondOrderPrecondition(action: SecondOrderAction, subject: Subje
  * The plan's race: the seat may start moving between the verification read and
  * the action. The check re-reads the card from the board — a FRESH read, not
  * the snapshot the diagnosis rested on, which cannot have changed — and refuses
- * if the card is gone, completed, re-stamped, or the seat has started producing
- * work. Aborting is a recorded outcome with its reason, never a silent skip.
+ * if the card is gone, completed or re-stamped. Aborting is a recorded outcome
+ * with its reason, never a silent skip.
+ *
+ * **The "seat started producing work" clause is the FAILURE trigger's.** It
+ * means "the row stopped firing because the seat resumed" — the situation the
+ * remediation was chosen against. For a disagreement the decision rests on an
+ * action ALREADY TAKEN, and a seat producing work is that action's normal
+ * outcome, not a change: refusing on it would make the wrong-but-effective case
+ * permanently unactionable, which is the case this plan exists to reach. The
+ * double-dispatch guard is not lost — `redispatch`'s own precondition still
+ * checks `seatIsProducingWork` for both triggers.
  */
-async function recheckSecondOrderTrigger(subject: Subject, ctx: ApplyContext): Promise<{ ok: boolean; reason: string }> {
+async function recheckSecondOrderTrigger(subject: Subject, ctx: ApplyContext, trigger: 'verification' | 'disagreement'): Promise<{ ok: boolean; reason: string }> {
     const plans = await readPlans(ctx.apiRequest, ctx.port, ctx.workspaceRoot);
     const fresh = plans.find(p => String(p?.planId ?? p?.plan_id ?? '') === subject.planId);
     if (!fresh) {
@@ -4096,7 +4431,7 @@ async function recheckSecondOrderTrigger(subject: Subject, ctx: ApplyContext): P
     if (String(ownerSince || '') !== subject.ownerSince) {
         return { ok: false, reason: `the card's owner stamp changed (${subject.ownerSince} -> ${ownerSince === null ? 'NULL' : String(ownerSince)}) between the diagnosis and the action, so the situation the decision rested on no longer holds` };
     }
-    if (await seatIsProducingWork(subject, ctx)) {
+    if (trigger === 'verification' && await seatIsProducingWork(subject, ctx)) {
         return { ok: false, reason: `seat '${subject.seat}' started producing work between the diagnosis and the action` };
     }
     return { ok: true, reason: '' };
@@ -4244,18 +4579,23 @@ async function writeSecondOrderPreEffectEntry(ctx: ApplyContext, note: string): 
  *      own evidence the record is written BEFORE the effect.
  */
 async function runSecondOrder(candidate: SecondOrderCandidate, ctx: ApplyContext): Promise<EntryAction> {
-    const { subject, diagnosis } = candidate;
+    const { subject, diagnosis, trigger } = candidate;
     const key = subjectKey(subject);
     const st = ctx.state.subjects[key];
     const navigator = ctx.judgementCtx.navigator;
     const modelId = navigator.model ? `${navigator.providerId || 'unset'} (${navigator.model})` : String(navigator.providerId || 'unset');
+    // The action under review: the remediation that did not take (verification),
+    // or the Pilot action the Navigator disputed (disagreement).
+    const disputedAction = candidate.verification ? candidate.verification.of : (candidate.disputed?.action || 'an action the Navigator disputed');
     const action: EntryAction = {
         subject: subject.planId || subject.seat,
         kind: 'card',
         planId: subject.planId,
         seat: subject.seat,
         ruleId: 'second-order-action',
-        cause: 'Second-order action — the Pilot\'s ladder did not fix it',
+        cause: trigger === 'disagreement'
+            ? 'Second-order action — the Navigator disagreed with the Pilot\'s action'
+            : 'Second-order action — the Pilot\'s ladder did not fix it',
         rung: 'none',
         ladderIndex: null,
         command: null,
@@ -4267,7 +4607,10 @@ async function runSecondOrder(candidate: SecondOrderCandidate, ctx: ApplyContext
         ownerSinceReStamped: false,
         dispatchTimeoutRemainingMs: null,
         priorVerdict: subject.lastAction,
-        secondOrder: { action: null, modelId, reason: '', result: 'recorded' },
+        secondOrder: {
+            action: null, modelId, reason: '', result: 'recorded', trigger,
+            ...(trigger === 'disagreement' ? { disputedAction } : {}),
+        },
     };
     const trace: SecondOrderTrace = action.secondOrder!;
     // Pushed into the wake's actions BEFORE anything can be written, so the
@@ -4304,6 +4647,7 @@ async function runSecondOrder(candidate: SecondOrderCandidate, ctx: ApplyContext
     ctx.state.secondOrderCalls.count += 1;
 
     const prompt = buildSecondOrderPrompt({
+        trigger,
         seat: subject.seat,
         planId: subject.planId,
         title: subject.title,
@@ -4311,7 +4655,8 @@ async function runSecondOrder(candidate: SecondOrderCandidate, ctx: ApplyContext
         cause: diagnosis.row.cause,
         evidence: diagnosis.evidence,
         evidenceWindow: diagnosis.evidenceWindow,
-        failedAction: candidate.verification.of,
+        disputedAction,
+        disputedReason: candidate.disputed?.reason ?? null,
         stuckPasses: st ? st.stuckPasses : 1,
         ladderRung: diagnosis.row.remediation,
         priorVerdict: subject.lastAction,
@@ -4350,7 +4695,7 @@ async function runSecondOrder(candidate: SecondOrderCandidate, ctx: ApplyContext
     }
 
     // ── Re-check the triggering condition immediately before acting. ─────
-    const recheck = await recheckSecondOrderTrigger(subject, ctx);
+    const recheck = await recheckSecondOrderTrigger(subject, ctx, trigger);
     if (!recheck.ok) {
         trace.result = 'aborted';
         action.outcome = 'refused';
@@ -4398,6 +4743,25 @@ async function runSecondOrder(candidate: SecondOrderCandidate, ctx: ApplyContext
         st.pending = { action: chosen, ruleId: diagnosis.row.id, at: ctx.now(), secondOrder: true };
     }
     return action;
+}
+
+/**
+ * THE one entry point to the correction path, for BOTH triggers.
+ *
+ * Failure-driven and disagreement-driven corrections converge here so there is
+ * exactly ONE call site of `runSecondOrder` — and therefore one implementation
+ * of the validation, the precondition check, the immediately-before re-check,
+ * the bounds and the recording. Two call sites would be two paths free to drift
+ * (plan: the-navigator-can-intervene-when-the-pilot-is-wrong).
+ */
+async function runSecondOrderCandidates(candidates: SecondOrderCandidate[], ctx: ApplyContext): Promise<EntryAction[]> {
+    const ran: EntryAction[] = [];
+    for (const candidate of candidates) {
+        // `runSecondOrder` pushes its own entry into `ctx.actions`, so it is
+        // present before any pre-effect report is written.
+        ran.push(await runSecondOrder(candidate, ctx));
+    }
+    return ran;
 }
 
 /** The smallest thing that answers row 3's "record the question verbatim". */

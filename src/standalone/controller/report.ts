@@ -95,6 +95,22 @@ export interface VerificationTrace {
 export interface SecondOrderTrace {
     /** The Navigator's chosen action, or null when nothing was chosen. */
     action: SecondOrderAction | null;
+    /**
+     * WHICH TRIGGER produced the correction (plan:
+     * the-navigator-can-intervene-when-the-pilot-is-wrong).
+     *
+     * `verification` — the Pilot's remediation was applied and the row re-fired.
+     * `disagreement` — the Pilot acted and the Navigator's review of the wake
+     * judged that action wrong. Both run the same validation, preconditions,
+     * re-check, bounds and recording; only the trigger differs, so "why did this
+     * happen" is answerable without inference.
+     */
+    trigger?: 'verification' | 'disagreement';
+    /**
+     * For a `disagreement` trigger: the Pilot action the Navigator disputed.
+     * Recorded so a correction names the thing it is correcting.
+     */
+    disputedAction?: string;
     /** `providerId (model)` — which model answered, or was asked and did not. */
     modelId: string;
     /** The Navigator's stated reason, or its raw reply when it named nothing. */
@@ -309,6 +325,12 @@ function actionBlock(a: EntryAction): string {
     if (a.secondOrder) {
         const s = a.secondOrder;
         lines.push(`- second-order action: ${s.action === null ? '(none chosen)' : `\`${s.action}\``} — **${s.result}**`);
+        // WHICH TRIGGER, named. "The Navigator corrected the Pilot's action" and
+        // "the Navigator corrected a remediation that did not take" are different
+        // facts, and both produce this entry.
+        if (s.trigger) {
+            lines.push(`  - trigger: \`${s.trigger}\`${s.trigger === 'disagreement' && s.disputedAction ? ` — the Navigator disputed the Pilot's \`${s.disputedAction}\`` : ''}`);
+        }
         // The model is named only where one was actually consulted: a suppressed
         // ask never reached a model, and "chosen by" for it would attribute a
         // decision nobody made.
