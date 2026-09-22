@@ -731,7 +731,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         const diagnosis = await diagnose(subject, matrix.rows, diagnoseCtx);
         if (!diagnosis) { continue; }
         const action = await applyDiagnosis(subject, diagnosis, {
-            ...ctx, caps, state, actions, seatByName, judgementCtx, leadBySeat,
+            ...ctx, caps, state, actions, seatByName, judgementCtx, leadBySeat, finishedByPlan,
         });
         if (action) { actions.push(action); }
     }
@@ -1548,6 +1548,13 @@ interface ApplyContext extends PassContext {
     judgementCtx: JudgementRuntimeContext;
     /** Seat -> its lead, with the store that answered (change 3). */
     leadBySeat?: Map<string, { seat: string | null; source: string; reason?: string }>;
+    /**
+     * The wake's turn-end `finished` reads, keyed by plan id. The same map the
+     * rows were selected against, so the report a remediation writes names the
+     * prior `finished` the diagnosis actually rested on — never a second read
+     * that could disagree with it.
+     */
+    finishedByPlan: Map<string, number[]>;
 }
 
 /**
@@ -1830,32 +1837,54 @@ async function applyRemediation(
             action.ownerSinceReStamped = false;
             return action;
         }
-        case 'ask-completion-post': {
-            // Row 10 — ask the CODER to post the completion it never posted.
+        case 'post-completion-on-behalf': {
+            // Row 10 — POST the completion the coder never posted, attributed to
+            // the controller. Supersedes the prompt-the-coder remedy (and its
+            // stuck>1 escalation to the lead), which completed nothing: the
+            // agent being prompted is by hypothesis out of context, which is why
+            // it did not post, so a prompt could not fix it. There is no ladder
+            // here — the post happens on the FIRST detection. A wrong completion
+            // costs one lead redispatch; a missing one stalls every dependent
+            // card.
             //
-            // A prompt, never an auto-complete. Row 1 may mark a card complete
-            // because the coder ASSERTED `finished` and the board is only
-            // recording an assertion that already exists. Here nobody has
-            // asserted anything, so completing the card would be the controller
-            // inventing a claim about work it cannot verify — and a wrong
-            // completion is materially worse than a late one.
-            const st = ctx.state.subjects[subjectKey(subject)];
-            const stuck = st ? st.stuckPasses : 1;
-            // First wake: the coder. Only once the same state survives a later
-            // wake does it reach the lead — the operator's own escalation
-            // order, and the reason `target` exists.
-            const escalate = stuck > 1;
-            const lead = escalate ? resolveTarget(subject, { ...diagnosis.row, target: 'lead' }, ctx) : null;
-            const addressee = escalate && lead?.seat ? lead.seat : subject.seat;
-            const data = escalate && lead?.seat
-                ? `[switchboard:controller] ${subject.seat} appears to have finished a fix round on ${subject.planId || 'a card'}${subject.title ? ` "${subject.title}"` : ''} and has still posted no completion for this round after being asked. Nothing has been completed on its behalf.`
-                : `[switchboard:controller] You appear to have finished this round of ${subject.planId || 'your card'}${subject.title ? ` "${subject.title}"` : ''} and no completion is posted for it. You posted one on an earlier round; this round has writes but no post. If the work is done, post your completion now. If it is not, say what is left.`;
-            action.command = `switchboard verb ptySendPrompt '{"name":"${addressee}"}' --json`;
-            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptySendPrompt', ctx.workspaceRoot, { name: addressee, data, machineOrigin: true });
+            // State repair, not the Pilot doing the coder's job. The work exists
+            // — row 10's evidence is a prior `finished` before owner_since, a
+            // worktree write this round, and the seat at rest — and what is
+            // missing is the RECORD of it. The post is BARE: `submit` carries no
+            // summary by design, so the controller's post is the identical call a
+            // coder would have made, with nothing invented and no judgement
+            // exercised. The lead still reads the diff; that is the correctness
+            // gate and it always was.
+            //
+            // `from` names the seat whose work it is; `postedBy` names the actor
+            // that posted it. Keeping the two distinct is what preserves "how
+            // often do agents fail to post" as a measurable number — a post
+            // indistinguishable from the coder's own would hide the very defect
+            // this repairs. That is also why the equivalent command below is the
+            // raw `api` route rather than `submit`: the CLI deliberately offers
+            // no `--posted-by`, and a pasted command that silently dropped the
+            // attribution would reproduce a different call than the one made.
+            const finishedAt = latestFinished(ctx.finishedByPlan, subject.planId);
+            const writeLine = diagnosis.evidence.split('\n').find(l => l.includes('last worktree write:'))?.trim()
+                ?? 'worktree write not established';
+            const evidenceNote = `${finishedAt === undefined ? 'no prior finished turn-end on record' : `prior finished turn-end at ${new Date(finishedAt).toISOString()}`}; ${writeLine}`;
+            action.command = `switchboard api POST /kanban/queue/done '{"from":"${subject.seat}","planId":"${subject.planId}","outcome":"finished","postedBy":"${ctx.controllerId}"}' --json`;
+            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/kanban/queue/done', ctx.workspaceRoot, { from: subject.seat, planId: subject.planId, outcome: 'finished', postedBy: ctx.controllerId });
             const json = safeJson(res);
-            action.outcome = json?.success === false ? 'failed' : 'applied';
-            action.detail = `${diagnosis.detail}; asked ${escalate ? `lead '${addressee}'` : `coder '${addressee}'`} to post the completion (pass ${stuck}); no card was completed`;
+            const applied = json?.success === true;
+            // The board answers "already complete" / "duplicate" with a SUCCESS
+            // and no work left to do: the coder (or a lead) got there first. That
+            // is the post landing, not a refusal — reporting it as a failure
+            // would re-fire this row on the next wake against a released card.
+            const gotThereFirst = applied && (json?.reason === 'duplicate' || json?.reason === 'already complete');
+            action.outcome = applied ? 'applied' : 'failed';
+            action.detail = applied
+                ? `${diagnosis.detail}; completion posted on behalf of '${subject.seat}' by controller '${ctx.controllerId}' (${evidenceNote})${gotThereFirst ? ' — the card was already released, someone posted for it first' : ''}`
+                : `${diagnosis.detail}; post-completion-on-behalf refused (${json?.error || res?.status || 'no response'}) — the card is left for the next wake`;
+            // Completing a card is not an ownership change — owner_since is
+            // untouched, exactly as `mark-complete` leaves it.
             action.ownerSinceReStamped = false;
+            delete ctx.state.subjects[subjectKey(subject)];
             return action;
         }
         case 'restart-board': {

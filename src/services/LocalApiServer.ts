@@ -646,6 +646,14 @@ interface LocalApiServerOptions {
          * never suppressed. Absent/true = deliver as before.
          */
         liveDelivery?: boolean;
+        /**
+         * The actor that POSTED the completion, when it was not the seat itself
+         * (the controller's row-10 repair posts on a coder's behalf). Absent for
+         * every ordinary completion. The host records it on the durable
+         * `turn_end` event, so the board's history can state who posted rather
+         * than only whose work it was.
+         */
+        postedBy?: string;
     }) => void;
     /**
      * Notify the operator of a non-fatal event that needs human attention —
@@ -5003,8 +5011,9 @@ export class LocalApiServer {
      * just finished a card tells the board, which clears that seat's context
      * and pops the next card. No head, no clock, no review hop.
      *
-     * Body: `{ workspaceRoot?, from, outcome?, planId? }`.
-     * - `from` — the reporting seat's terminal name.
+     * Body: `{ workspaceRoot?, from, outcome?, planId?, postedBy? }`.
+     * - `from` — the reporting seat's terminal name, and the seat whose WORK
+     *   this is.
      * - `outcome` — `'finished'` (default) or `'failed'`. Accepted and
      *   forwarded; subtask 2 owns the `failed` branch (re-stage before the
      *   pop). Degraded behaviour with subtask 2 absent: a `failed` report
@@ -5012,7 +5021,15 @@ export class LocalApiServer {
      *   its coding column (not re-staged, not moved). Safe (the card stays
      *   coded) but not retried until subtask 2 lands.
      * - `planId` — when given, MUST match the card the seat holds. A seat
-     *   cannot release another seat's card.
+     *   cannot release another seat's card. A named card that already carries
+     *   `completed_at` is a 200 no-op with `reason: "already complete"` — the
+     *   coder (or a lead) got there first, which is not an error.
+     * - `postedBy` — the actor that POSTED, when it is not the seat itself
+     *   (the controller's row-10 repair posts on a coder's behalf). Absent
+     *   means the seat posted for its own work, which is every existing caller.
+     *   It is deliberately NOT offered by the CLI's `submit`: a
+     *   controller-posted completion must never read as the coder's own, or
+     *   "how often do agents fail to post" stops being measurable.
      *
      * Contract (mirrors `POST /phone-a-friend/done`'s 200-no-op shape):
      * - No active card for `from` (none with `ownerSeat === from` and
@@ -5064,8 +5081,12 @@ export class LocalApiServer {
             const rawOutcome = typeof body?.outcome === 'string' ? body.outcome.trim().toLowerCase() : '';
             const outcome: 'finished' | 'failed' = rawOutcome === 'failed' ? 'failed' : 'finished';
             const planId = typeof body?.planId === 'string' && body.planId.trim() ? body.planId.trim() : undefined;
+            // Who POSTED, when it is not the seat itself (the controller's
+            // row-10 repair). Absent — every existing caller, including the
+            // CLI's `submit` — means the seat posted for its own work.
+            const postedBy = typeof body?.postedBy === 'string' && body.postedBy.trim() ? body.postedBy.trim() : undefined;
 
-            const result = await this._runQueueDone(workspaceRoot, from, outcome, planId);
+            const result = await this._runQueueDone(workspaceRoot, from, outcome, planId, postedBy);
             res.writeHead(result.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result.payload));
         } catch (err: any) {
@@ -8204,6 +8225,7 @@ export class LocalApiServer {
         from: string;
         outcome?: 'finished' | 'failed';
         planId?: string;
+        postedBy?: string;
     }): Promise<{ status: number; payload: any }> {
         const workspaceRoot = String(args?.workspaceRoot || '').trim();
         const from = String(args?.from || '').trim();
@@ -8212,7 +8234,8 @@ export class LocalApiServer {
         }
         const outcome: 'finished' | 'failed' = args?.outcome === 'failed' ? 'failed' : 'finished';
         const planId = typeof args?.planId === 'string' && args.planId.trim() ? args.planId.trim() : undefined;
-        return this._runQueueDone(workspaceRoot, from, outcome, planId);
+        const postedBy = typeof args?.postedBy === 'string' && args.postedBy.trim() ? args.postedBy.trim() : undefined;
+        return this._runQueueDone(workspaceRoot, from, outcome, planId, postedBy);
     }
 
     /**
@@ -8226,13 +8249,21 @@ export class LocalApiServer {
         workspaceRoot: string,
         from: string,
         outcome: 'finished' | 'failed',
-        planId: string | undefined
+        planId: string | undefined,
+        postedBy?: string
     ): Promise<{ status: number; payload: any }> {
+        // Who POSTED this completion, when it is not the seat whose work it is.
+        // Normalized to `undefined` unless it is a genuine attribution, so every
+        // downstream reader can ask one question ("was this posted on someone's
+        // behalf?") instead of comparing two strings at each site. Absent is the
+        // seat posting for itself — every caller before the controller's row-10
+        // repair, including the CLI's `submit`.
+        const postedOnBehalf = postedBy && postedBy !== from ? postedBy : undefined;
         const fail = (status: number, error: string, extra?: Record<string, unknown>): { status: number; payload: any } =>
             ({ status, payload: { success: false, error, ...(extra || {}) } });
         const dup = (dispatched: any): { status: number; payload: any } => ({
             status: 200,
-            payload: { success: true, dispatched, reason: 'duplicate', cleared: false, popped: false }
+            payload: { success: true, dispatched, reason: 'duplicate', cleared: false, popped: false, ...(postedOnBehalf ? { postedBy: postedOnBehalf } : {}) }
         });
 
         return new Promise((resolve) => {
@@ -8272,16 +8303,55 @@ export class LocalApiServer {
                     let held: any;
                     if (planId) {
                         held = candidates.find((p: any) => p.planId === planId);
-                        // planId named a card the seat does not hold. The
-                        // filter is owner_seat === from, so another
-                        // seat's card never enters candidates — a missing
-                        // match means the seat holds OTHER cards but not
-                        // this one, which is a mismatch (refused), NOT a
-                        // duplicate (silent no-op). Distinguishing the two is
-                        // the guard's job now that planId drives selection.
-                        if (!held && candidates.length > 0) {
-                            resolve(fail(400, `planId mismatch: seat '${from}' does not hold '${planId}' (holds '${candidates[0].planId}'). A seat cannot release another seat's card.`));
-                            return;
+                        // planId named a card that is not in the seat's live
+                        // candidates, and there are two different reasons for
+                        // that, calling for opposite answers:
+                        //
+                        //   - the card already carries `completed_at` — somebody
+                        //     posted for it (the coder, a lead, or the
+                        //     controller's row-10 repair). A second post is a
+                        //     NO-OP and must report SUCCESS, not an error: a
+                        //     coder that wakes after the controller posted on its
+                        //     behalf has done nothing wrong, and a 4xx here
+                        //     strands it. The idempotency lives here, at the
+                        //     board, so every caller gets it.
+                        //   - the card is live but held by somebody else — a
+                        //     genuine mismatch, refused (unchanged). The filter
+                        //     is owner_seat === from, so another seat's card
+                        //     never enters candidates; a missing match means the
+                        //     seat holds OTHER cards but not this one.
+                        //
+                        // The completed_at read is best-effort and is the ONLY
+                        // thing that earns the "already complete" answer: an
+                        // unreadable card falls through to the existing
+                        // behaviour rather than claiming a state we did not
+                        // observe.
+                        if (!held) {
+                            let alreadyComplete = false;
+                            if (typeof db.getPlanByPlanId === 'function') {
+                                try {
+                                    const named = await db.getPlanByPlanId(planId);
+                                    alreadyComplete = !!(named && named.completedAt);
+                                } catch { /* not established — fall through */ }
+                            }
+                            if (alreadyComplete) {
+                                resolve({
+                                    status: 200,
+                                    payload: {
+                                        success: true,
+                                        planId,
+                                        reason: 'already complete',
+                                        cleared: false,
+                                        popped: false,
+                                        ...(postedOnBehalf ? { postedBy: postedOnBehalf } : {}),
+                                    },
+                                });
+                                return;
+                            }
+                            if (candidates.length > 0) {
+                                resolve(fail(400, `planId mismatch: seat '${from}' does not hold '${planId}' (holds '${candidates[0].planId}'). A seat cannot release another seat's card.`));
+                                return;
+                            }
                         }
                     } else {
                         held = candidates[0];
@@ -8441,7 +8511,7 @@ export class LocalApiServer {
                         }
                         if (this._options.onTurnEndNotify) {
                             try {
-                                const body = composeCompletedTurnEndBody(held, from, held.planFile, Date.now());
+                                const body = composeCompletedTurnEndBody(held, from, held.planFile, Date.now(), postedOnBehalf);
                                 // liveDelivery: the relay below owns the lead's
                                 // notification when it fires, so the host writes the
                                 // Mission Control report mirror and skips the live
@@ -8457,6 +8527,12 @@ export class LocalApiServer {
                                             body,
                                             // The relay's RESULT, not its recipient's existence.
                                             liveDelivery: !relayDelivered,
+                                            // Who posted, when it was not the seat. Carried
+                                            // so the host's durable `turn_end` plan_events
+                                            // row records the actor as a FIELD and not only
+                                            // inside the prose — "a controller posted this"
+                                            // must be answerable from the board's history.
+                                            ...(postedOnBehalf ? { postedBy: postedOnBehalf } : {}),
                                         });
                                     } catch (e) {
                                         console.warn('[LocalApiServer] onTurnEndNotify callback failed:', e);
@@ -8535,6 +8611,13 @@ export class LocalApiServer {
                         const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                             + (relayPlanId ? ` (plan ${relayPlanId})` : '')
                             + `${composeCompletionEvidence(held, Date.now())}.`
+                            // Attribution, in the lead's OWN notice. The lead is
+                            // the reader that must know whether anyone claimed
+                            // the work was done: a controller-posted completion
+                            // that read as the coder's own would hide the defect
+                            // (agents that never post) this repair exists to
+                            // measure.
+                            + (postedOnBehalf ? ` The completion was posted by '${postedOnBehalf}' on behalf of '${from}'.` : '')
                             // A standalone plan (no featureId) has no next subtask,
                             // so it takes the notice form without the register-and-
                             // dispatch tail. Selected on the SAME held record the
@@ -8853,6 +8936,9 @@ export class LocalApiServer {
                         cleared,
                         outcome,
                         escalated,
+                        // Echoed so a caller that posted on someone's behalf can
+                        // assert the attribution landed rather than assume it.
+                        ...(postedOnBehalf ? { postedBy: postedOnBehalf } : {}),
                         dispatched: popPayload.dispatched ?? null,
                         reason: popPayload.reason ?? (popFailed ? nextReason : undefined),
                         // Which mission's queue the pop was scoped to, when it

@@ -3499,16 +3499,27 @@ export function composeCompletionEvidence(
     return `${topicClause}${parenthetical}`;
 }
 
+/**
+ * `postedBy` names the actor that POSTED the completion, when it was not the
+ * seat itself — the controller's row-10 repair, which posts on a coder's behalf.
+ * Absent for every ordinary completion. It is stated in the body because this
+ * body IS the durable record (the host writes it into the `turn_end`
+ * plan_events row) and the lead's notice: a controller-posted completion that
+ * read as the coder's own would hide "how often do agents fail to post", which
+ * is the only measure of whether the defect is getting better.
+ */
 export function composeCompletedTurnEndBody(
     record: Pick<KanbanPlanRecord, 'topic' | 'kanbanColumn' | 'featureId' | 'ownerSince'>,
     seatName: string,
     planFile: string,
-    nowMs: number
+    nowMs: number,
+    postedBy?: string
 ): string {
     const safePlanFile = String(planFile || '').replace(/[\r\n]+/g, ' ').trim();
     const evidence = composeCompletionEvidence(record, nowMs);
     const header = `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${safePlanFile}'${evidence}.`;
+    const attribution = postedBy ? ` The completion was posted by '${postedBy}' on behalf of '${seatName}'.` : '';
 
-    return `${header}\n${record?.featureId ? TURN_END_VERIFY_INSTRUCTION : TURN_END_VERIFY_INSTRUCTION_STANDALONE}`;
+    return `${header}${attribution}\n${record?.featureId ? TURN_END_VERIFY_INSTRUCTION : TURN_END_VERIFY_INSTRUCTION_STANDALONE}`;
 }
 

@@ -300,6 +300,13 @@ export async function recordTurnEndEvent(db: any, info: {
     outcome: 'completed' | 'blocked' | 'stalled';
     body: string;
     workspaceId?: string;
+    /**
+     * The actor that POSTED the completion, when it was not the seat itself —
+     * the controller's row-10 repair. Recorded as a FIELD beside the message so
+     * "was this posted on someone's behalf?" is answerable from the board's
+     * history without parsing prose. Absent for every ordinary turn-end.
+     */
+    postedBy?: string;
 }): Promise<void> {
     if (!db || typeof db.appendPlanEventByPlanId !== 'function') return;
     const action = info.outcome === 'completed' ? 'finished' : 'blocked';
@@ -321,7 +328,7 @@ export async function recordTurnEndEvent(db: any, info: {
         await db.appendPlanEventByPlanId(resolvedPlanId, {
             eventType: 'turn_end',
             action,
-            payload: JSON.stringify({ message: info.body }),
+            payload: JSON.stringify({ message: info.body, ...(info.postedBy ? { postedBy: info.postedBy } : {}) }),
             ...(info.workspaceId ? { workspaceId: info.workspaceId } : {}),
         });
     } catch (err) {

@@ -848,7 +848,7 @@ function validateMatrixRows(rows: any[]): string | null {
 const KNOWN_REMEDIATIONS = [
     'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
     'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
-    'report-to-lead', 'ask-completion-post',
+    'report-to-lead', 'post-completion-on-behalf',
 ];
 const KNOWN_CAPABILITIES = ['mechanical', 'model', 'supervisor', 'two-providers'];
 /**

@@ -506,6 +506,61 @@ async function run() {
             'the refusal must state the seat does not hold that card');
     });
 
+    await check('a planId naming an already-completed card is a 200 no-op, not a refusal', async () => {
+        // The second post of a completion. The controller posts on a coder's
+        // behalf; the coder wakes and submits the same card. The card carries
+        // `completed_at`, so it is excluded from the live candidates — and
+        // WITHOUT this arm the seat still holding another live card would be
+        // told "you do not hold that plan", a 4xx that strands a coder which did
+        // nothing wrong. The idempotency is implemented ONCE here so every
+        // caller gets it.
+        const done = card('done-x', 'CODE REVIEWED', {
+            ownerSince: null, ownerSeat: '', completedAt: '2026-08-30T01:00:00Z',
+            planFile: '/tmp/done-x.md', workspaceId: 'ws1',
+        });
+        const mine = card('mine', 'CODER CODED', {
+            ownerSince: '2026-08-30T00:00:00Z', ownerSeat: 'seat-1',
+            planFile: '/tmp/mine.md', workspaceId: 'ws1',
+        });
+        const board = [done, mine, card('next', 'STAGING', { columnOrder: 1 })];
+        const { server } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['seat-1'],
+            db: {
+                clearOwnerStamp: async () => true,
+                getPlanByPlanId: async (planId) => board.find(p => p.planId === planId),
+            },
+        });
+        const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'seat-1', planId: 'done-x' });
+        assert.strictEqual(out.status, 200,
+            'a card somebody already posted for must answer 200 — a 4xx here strands the seat');
+        assert.strictEqual(out.payload.reason, 'already complete',
+            'the no-op must SAY it was already complete rather than reading as a generic duplicate');
+        assert.strictEqual(out.payload.success, true);
+    });
+
+    await check('a completed card that cannot be read is NOT reported as already complete', async () => {
+        // The read is the only thing that earns the "already complete" answer.
+        // An unreadable card falls through to the existing mismatch refusal, so
+        // "we could not tell" never renders as "somebody already did it".
+        const mine = card('mine', 'CODER CODED', {
+            ownerSince: '2026-08-30T00:00:00Z', ownerSeat: 'seat-1',
+            planFile: '/tmp/mine.md', workspaceId: 'ws1',
+        });
+        const board = [mine, card('next', 'STAGING', { columnOrder: 1 })];
+        const { server } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['seat-1'],
+            db: {
+                clearOwnerStamp: async () => true,
+                getPlanByPlanId: async () => { throw new Error('db down'); },
+            },
+        });
+        const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'seat-1', planId: 'ghost' });
+        assert.strictEqual(out.status, 400, 'an unreadable card keeps the existing refusal');
+        assert.notStrictEqual(out.payload.reason, 'already complete');
+    });
+
     await check('teamHasLiveWork is advisory — a live-stamped roster card counts, nothing gates on it', async () => {
         // The advisory read answers "does any roster seat currently have a
         // card out for work?" — owner_since set + owner_seat on the roster.

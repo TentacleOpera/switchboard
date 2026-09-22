@@ -337,6 +337,55 @@ async function run() {
             `relay must carry the verify instruction, got: ${body}`);
     });
 
+    // ── A controller-posted completion is never the coder's own ───────────
+
+    await check('a post made on the seat\'s behalf is ATTRIBUTED to the poster, in all three records', async () => {
+        // The controller's row-10 repair posts the completion the coder never
+        // posted. `from` stays the seat whose WORK it is; `postedBy` names the
+        // actor that posted it. If the two collapsed, a controller-posted
+        // completion would read as a coder's own and "how often do agents fail
+        // to post" — the only measure of the defect — would be destroyed by its
+        // own remedy. Asserted at all three readers: the lead's notice, the
+        // durable turn-end info the host writes into plan_events, and the HTTP
+        // response the poster reads back.
+        const { server, calls } = makeServer(boardHeldBy('Coder 1'), {
+            groups: [group('Coding', ['Coder 1'])],
+            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
+        });
+        const out = await server.reportQueueDone({
+            workspaceRoot: WS, from: 'Coder 1', planId: 'held', postedBy: 'controller:pi:1234',
+        });
+        assert.strictEqual(out.status, 200, `expected 200, got ${out.status}: ${out.payload.error || ''}`);
+        assert.strictEqual(out.payload.postedBy, 'controller:pi:1234',
+            'the response must echo the attribution so the poster can assert it landed');
+        const sent = relays(calls);
+        assert.strictEqual(sent.length, 1, 'the ordinary route still runs — one relay to the lead');
+        assert.ok(/posted by 'controller:pi:1234' on behalf of 'Coder 1'/.test(sent[0].payload.data),
+            `the lead's notice must state who posted, got: ${sent[0].payload.data}`);
+        assert.ok(/Coder 1 reports its dispatched task complete/.test(sent[0].payload.data),
+            'the seat whose work it is must still be named as the worker');
+        const notice = turnEnd(calls);
+        assert.strictEqual(notice.postedBy, 'controller:pi:1234',
+            'the turn-end info must carry the actor as a FIELD, not only inside the prose — it is what the host records in plan_events');
+        assert.ok(/posted by 'controller:pi:1234' on behalf of 'Coder 1'/.test(notice.body || ''),
+            'the durable body must state the attribution too');
+    });
+
+    await check('a seat posting for itself carries NO attribution (paired negative)', async () => {
+        const { server, calls } = makeServer(boardHeldBy('Coder 1'), {
+            groups: [group('Coding', ['Coder 1'])],
+            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
+        });
+        const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1' });
+        assert.strictEqual(out.status, 200);
+        assert.strictEqual('postedBy' in out.payload, false,
+            'an ordinary submit must not invent a poster');
+        assert.ok(!/posted by/.test(relays(calls)[0].payload.data),
+            'an ordinary completion must not claim anyone posted on the seat\'s behalf');
+        assert.strictEqual('postedBy' in (turnEnd(calls) || {}), false,
+            'no attribution field on an ordinary turn-end record');
+    });
+
     await check('a delivered relay suppresses the turn-end LIVE send, not the report mirror', async () => {
         const { server, calls } = makeServer(boardHeldBy('Coder 1'), {
             groups: [group('Coding', ['Coder 1'])],

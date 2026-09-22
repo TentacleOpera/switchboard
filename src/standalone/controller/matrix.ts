@@ -41,13 +41,18 @@ export type MatrixRemediation =
     | 'record-unknown'
     /** Row 9 — hand the OBSERVATIONS to the subject's lead (never to the subject). */
     | 'report-to-lead'
-    /** Row 10 — ask the coder to post the completion it never posted. */
-    | 'ask-completion-post';
+    /**
+     * Row 10 — POST the completion the coder never posted, attributed to the
+     * controller. State repair, not a takeover: the work exists (row 10's own
+     * evidence is a worktree write this round) and what is missing is the
+     * RECORD of it. The lead still reads the diff.
+     */
+    | 'post-completion-on-behalf';
 
 /**
- * The escalation ladder, lowest rung first. `mark-complete` and
- * `record-unknown` are terminal one-shot actions and are deliberately NOT on
- * the ladder.
+ * The escalation ladder, lowest rung first. `mark-complete`,
+ * `record-unknown` and `post-completion-on-behalf` are terminal one-shot
+ * actions and are deliberately NOT on the ladder.
  */
 export const ESCALATION_LADDER: readonly MatrixRemediation[] = [
     'nudge',
@@ -102,7 +107,7 @@ export const MATRIX_TARGETS: readonly MatrixTarget[] = ['subject', 'lead'];
 export const MATRIX_REMEDIATIONS: readonly MatrixRemediation[] = [
     'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
     'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
-    'report-to-lead', 'ask-completion-post',
+    'report-to-lead', 'post-completion-on-behalf',
 ];
 
 /** The condition kinds the controller's evaluator knows. */
@@ -297,19 +302,25 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         // which is not "no evidence" but "this seat posted a completion for
         // this very card on an EARLIER round and has not on this one".
         //
-        // The remediation is a prompt, never an auto-complete: row 1 may
-        // complete a card because the coder ASSERTED finished, and the board is
-        // only recording an assertion that exists. Here nobody has asserted
-        // anything, so completing it would be the controller inventing a claim
-        // about work it cannot verify. A wrong completion is materially worse
-        // than a late one.
+        // The remediation POSTS the completion on the coder's behalf. The
+        // superseded remedy — prompt the coder, then the lead, and complete
+        // nothing — is gone, and its verb is retired from the closed set, so an
+        // operator's saved override naming it is refused by name at load time
+        // rather than silently coerced or dropped. The agent being prompted was
+        // by hypothesis out of context, which is why it did not post, so a
+        // prompt could not fix it. The old objection — "a wrong completion is materially
+        // worse than a late one" — runs the opposite way here: a wrong
+        // completion costs one lead redispatch (completion routes the card into
+        // review and the lead reads the diff regardless), while a missing one
+        // stalls every dependent card behind it. It is state repair, not a
+        // takeover: the work exists on disk and only the RECORD is missing.
         id: 'fix-round-unposted',
         order: 10,
         cause: 'Fix round finished, completion never posted',
         evidence: 'a prior `finished` before owner_since, none after; worktree written this round; seat at rest',
         judge: 'model',
         condition: { kind: 'judgement', fields: ['seat', 'card', 'column', 'silence', 'ownerSince', 'lastAction', 'cpu', 'rss', 'lastWrite', 'rounds', 'logTail'] },
-        remediation: 'ask-completion-post',
+        remediation: 'post-completion-on-behalf',
         target: 'subject',
         precondition: 'a judgement backend is configured',
         requires: ['model'],

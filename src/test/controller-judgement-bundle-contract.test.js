@@ -308,17 +308,26 @@ function run() {
         assert.notStrictEqual(flags.deriveClass(['tail-summary', 'tail-abandoned'], PRIORS_FIX_ROUND), 'finished-unposted-round');
     });
 
-    check('row 10 never completes a card — its remediation carries no completion verb', () => {
+    check('row 10 POSTS the completion on the coder\'s behalf — never a prompt', () => {
         const row = matrix.DEFAULT_MATRIX_ROWS.find(r => r.id === 'fix-round-unposted');
         assert.ok(row, 'row 10 must exist');
-        assert.notStrictEqual(row.remediation, 'mark-complete');
-        assert.strictEqual(row.remediation, 'ask-completion-post');
-        // Paired with the positive: the row must ACT, not merely record.
+        assert.notStrictEqual(row.remediation, 'mark-complete',
+            'row 10 posts the seat-paced completion, not the board\'s COMPLETED column move');
+        assert.strictEqual(row.remediation, 'post-completion-on-behalf');
+        // Paired with the positive: the row must ACT, not merely record — and it
+        // must act by POSTING, because the agent it used to prompt is by
+        // hypothesis out of context, which is why it never posted.
         const controllerSrc = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'controller', 'controller.ts'), 'utf8');
-        const arm = controllerSrc.slice(controllerSrc.indexOf("case 'ask-completion-post':"));
+        const arm = controllerSrc.slice(controllerSrc.indexOf("case 'post-completion-on-behalf':"));
         const armBody = arm.slice(0, arm.indexOf("case 'restart-board':"));
-        assert.ok(/ptySendPrompt/.test(armBody), 'row 10 must send a prompt, not merely record');
-        assert.ok(!/completePlan/.test(armBody), 'row 10 must never reach a completion verb');
+        assert.ok(/\/kanban\/queue\/done/.test(armBody), 'row 10 must post the completion, not merely record');
+        assert.ok(!/ptySendPrompt/.test(armBody),
+            'row 10 must NOT prompt: the agent that failed to post is the agent that ran out of context');
+        // Attribution is mandatory and is NOT the `from` field: `from` names the
+        // seat whose work it is, `postedBy` names the controller that posted it.
+        // Without it the post is indistinguishable from a coder's own and "how
+        // often do agents fail to post" stops being measurable.
+        assert.ok(/postedBy/.test(armBody), 'row 10 must attribute the post to the controller, not impersonate the seat');
     });
 
     // ── 10. Target indirection ────────────────────────────────────────────
@@ -344,10 +353,28 @@ function run() {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
+    check('an override naming the RETIRED ask-completion-post fails loudly, naming the verb', () => {
+        // An operator's saved matrix.json is the case this guards: the verb is
+        // gone from the closed set, so the load must refuse and NAME it. A
+        // silent coercion to the new verb would leave a row doing something its
+        // author did not write; a silent drop would leave the row doing nothing
+        // at 3am.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-matrix-'));
+        fs.mkdirSync(path.join(dir, '.switchboard', 'controller'), { recursive: true });
+        fs.writeFileSync(path.join(dir, '.switchboard', 'controller', 'matrix.json'), JSON.stringify([{
+            id: 'fix-round-unposted', order: 10, cause: 'c', judge: 'model',
+            condition: { kind: 'judgement' }, remediation: 'ask-completion-post',
+            requires: ['model'], target: 'subject',
+        }]));
+        assert.throws(() => matrix.loadMatrix(dir), /ask-completion-post/,
+            'a retired remediation must be refused BY NAME at load time');
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
     check('row 9 degrades to recording, never to nudging the subject', () => {
         const controllerSrc = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'controller', 'controller.ts'), 'utf8');
         const arm = controllerSrc.slice(controllerSrc.indexOf("case 'report-to-lead':"));
-        const armBody = arm.slice(0, arm.indexOf("case 'ask-completion-post':"));
+        const armBody = arm.slice(0, arm.indexOf("case 'post-completion-on-behalf':"));
         const noLeadBranch = armBody.slice(armBody.indexOf('if (!target.seat)'), armBody.indexOf('const data ='));
         assert.ok(/'recorded'/.test(noLeadBranch), 'with no lead, the outcome must be recorded');
         assert.ok(!/ptySendPrompt/.test(noLeadBranch), 'with no lead, nothing may be sent to the subject');
@@ -532,9 +559,15 @@ function run() {
 
     check('the new remediations are terminal — not on the escalation ladder', () => {
         // On the ladder they would climb: a research loop would earn a clear
-        // and then a board restart from one observation.
+        // and then a board restart from one observation. Row 10 is a one-shot
+        // action too — the post happens on the FIRST detection, with no
+        // coder-then-lead ladder behind it.
         assert.ok(!matrix.ESCALATION_LADDER.includes('report-to-lead'));
-        assert.ok(!matrix.ESCALATION_LADDER.includes('ask-completion-post'));
+        assert.ok(!matrix.ESCALATION_LADDER.includes('post-completion-on-behalf'));
+        // Paired positive: it is reachable — declared in the closed set, so a
+        // `matrix.json` override naming it loads and the controller's switch
+        // answers it, rather than the row being silently inert at 3am.
+        assert.ok(matrix.MATRIX_REMEDIATIONS.includes('post-completion-on-behalf'));
     });
 
     // ── 17. The board's mirrored vocabulary matches the controller's ──────

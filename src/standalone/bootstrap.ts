@@ -4497,7 +4497,16 @@ Each plan file must include:
             // accumulation that 190 files became cannot recur. Same
             // outcome→action mapping as the extension host twin.
             void (async () => {
-                await recordTurnEndEvent(db, { planFile: planFile, outcome: info.outcome, body: message });
+                await recordTurnEndEvent(db, {
+                    planFile: planFile,
+                    outcome: info.outcome,
+                    body: message,
+                    // Present only when the completion was posted on the seat's
+                    // behalf (the controller's row-10 repair). Recorded as a
+                    // field, so the board's history distinguishes a
+                    // controller-posted completion from a coder's own.
+                    ...(info.postedBy ? { postedBy: info.postedBy } : {}),
+                });
             })().catch(err => { log(opts, `turn-end plan_events record threw: ${err}`); });
             // Live-delivery suppression. Placed AFTER the plan_events record and
             // BEFORE every recipient-resolution step, because the record and the

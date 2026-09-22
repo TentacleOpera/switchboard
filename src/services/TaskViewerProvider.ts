@@ -2500,7 +2500,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * malformed parent chain), skip. Derived entirely from the pty stream — no
      * hooks, no tokens, no agent-side obligation.
      */
-    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean; bareDelivery?: boolean }): void {
+    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean; bareDelivery?: boolean; postedBy?: string }): void {
         // Hops turn-end trigger: completed outcome only (coalesced 2s debounce evaluation pass + feed)
         if (info.outcome === 'completed') {
             try {
@@ -2544,7 +2544,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // state). The guard skips live delivery, not the durable record.
             void (async () => {
                 const reportDb = await this._getKanbanDb(info.workspaceRoot);
-                await recordTurnEndEvent(reportDb, { planFile: planFile, outcome: info.outcome, body: message });
+                await recordTurnEndEvent(reportDb, {
+                    planFile: planFile,
+                    outcome: info.outcome,
+                    body: message,
+                    // Present only when the completion was posted on the seat's
+                    // behalf (the controller's row-10 repair). Recorded as a
+                    // field so a controller-posted completion is distinguishable
+                    // from a coder's own in the board's history.
+                    ...(info.postedBy ? { postedBy: info.postedBy } : {}),
+                });
             })().catch(err => { console.warn('[TaskViewerProvider] turn-end plan_events record threw:', err); });
             // Live-delivery suppression. Placed AFTER the plan_events record and
             // BEFORE every recipient-resolution step, because the record and the
