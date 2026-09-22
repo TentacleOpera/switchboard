@@ -735,9 +735,14 @@ async function run() {
         assert.strictEqual(fleetOrders.filter(o => o.id === 'global-queue-done:global').length, 1);
         assert.strictEqual(fleetOrders[0].scope, 'global');
         const rendered = applyStandingOrders('task', 'Unrelated Planner', fleetOrders, new Set(), []);
-        assert.ok(rendered.includes(' done.'),
+        // The verb is `submit` (ddeb9c79 renamed it; `done` survives only as a
+        // loud stderr-noticing alias), so the assertion names the verb the
+        // fragment actually renders. Asserting the retired word made this case
+        // red for a day and, worse, made the `--from` guard below vacuous — a
+        // `submit --from` regression would not have matched it.
+        assert.ok(rendered.includes('submit.'),
             'global completion order must render for every terminal');
-        assert.ok(!/done --from/.test(rendered),
+        assert.ok(!/submit --from/.test(rendered),
             'the seat supplies no --from: the CLI resolves it from SWITCHBOARD_TERMINAL');
         // The fragments carry a `<cliPath>` token because they are module
         // constants with byte-identical webview mirrors. renderStandaloneOrdersBlock
@@ -746,7 +751,7 @@ async function run() {
         // completion signal is lost silently.
         assert.ok(!rendered.includes('<cliPath>'),
             'the <cliPath> token must be substituted at the standing-orders emission seam');
-        assert.ok(/run "[^"]+" done\./.test(rendered),
+        assert.ok(/run "[^"]+" submit\./.test(rendered),
             'the rendered order must name a concrete quoted CLI path — the token is substituted with the platform binary (e.g. dist/<platform>/switchboard) or cli.js, never left as <cliPath>');
     });
 

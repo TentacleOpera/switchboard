@@ -15839,14 +15839,28 @@ export class LocalApiServer {
                 try {
                     const judgement: any = await store.readJudgement(budgetRoot);
                     let tiers: any[] = Array.isArray(judgement?.tiers) ? judgement.tiers : [];
+                    // WHY there is no tier, when there is none. A reason rather
+                    // than an empty list: "the Pilot's endpoint is configured but
+                    // unusable" and "no Pilot model is configured at all" are
+                    // different states, and the station below must not answer for
+                    // both with one blank.
+                    //
+                    // Derivation matches `/controller/judgement` exactly — same
+                    // condition, same PILOT pointer — so the tier the controller
+                    // walks and the station the panel draws are the same fact.
+                    let pilotAbsent: { source: string; reason: string } | null = null;
                     if (tiers.length === 0) {
-                        const m = await this._resolveAgentControlModel();
+                        const m = await this._resolveAgentControlModel('pilot');
                         if (m && !('error' in m)) {
                             const locality = this._deriveEndpointLocality(m.url);
                             tiers = [{
                                 providerId: m.provider || 'local', role: 'classifier', locality,
                                 model: m.model, source: 'agent-control-model',
                             }];
+                        } else if (m && 'error' in m) {
+                            pilotAbsent = { source: 'agent-control-model', reason: m.error };
+                        } else {
+                            pilotAbsent = { source: 'unset', reason: 'no Pilot model configured' };
                         }
                     }
                     const stateView: any = await store.readState(budgetRoot).catch(() => null);
@@ -15858,25 +15872,41 @@ export class LocalApiServer {
                     const byModel: Record<string, number> = (mc && mc.dayKey === today && mc.byModel) ? mc.byModel : {};
                     const operatorBudgets = (judgement && judgement.budgets) || {};
 
-                    const station = (roleWanted: string, key: string) => {
-                        const tier = tiers.find(t => t && t.role === roleWanted)
-                            || (roleWanted === 'classifier' ? tiers[0] : undefined);
-                        if (!tier) { return { configured: false, model: null, budget: null, usedToday: 0 }; }
-                        const budget = resolveBudget({
-                            providerId: tier.providerId,
-                            model: tier.model,
-                            locality: tier.locality,
-                            operatorPerDay: typeof operatorBudgets[key] === 'number' ? operatorBudgets[key] : null,
-                        });
-                        return {
+                    // The PILOT station, selected by ROLE — never by position.
+                    // `classifier` IS the Pilot, and a tier whose role does not
+                    // match is not it: presenting one as `configured: true` with a
+                    // budget would hand the operator a real-looking reading for a
+                    // model nobody pointed at the job. There is deliberately no
+                    // fallback to the head of the tier list.
+                    //
+                    // The absent states stay distinct, exactly as the Navigator's
+                    // do below: a Pilot the resolver could not use (a corrupt
+                    // config, a bad endpoint, a missing key), a judgement chain
+                    // that names no classifier, and a genuinely unset Pilot each
+                    // say which one they are. `source` travels with the reading.
+                    const pilotTier = tiers.find(t => t && t.role === 'classifier');
+                    const pilotStation: any = pilotTier
+                        ? {
                             configured: true,
-                            providerId: tier.providerId ?? null,
-                            model: tier.model ?? null,
-                            locality: tier.locality ?? null,
-                            budget,
-                            usedToday: byModel[usageKey(tier.providerId, tier.model)] || 0,
+                            providerId: pilotTier.providerId ?? null,
+                            model: pilotTier.model ?? null,
+                            locality: pilotTier.locality ?? null,
+                            budget: resolveBudget({
+                                providerId: pilotTier.providerId,
+                                model: pilotTier.model,
+                                locality: pilotTier.locality,
+                                operatorPerDay: typeof operatorBudgets['pilot'] === 'number' ? operatorBudgets['pilot'] : null,
+                            }),
+                            usedToday: byModel[usageKey(pilotTier.providerId, pilotTier.model)] || 0,
+                            source: pilotTier.source || 'controller.judgement',
+                        }
+                        : {
+                            configured: false, model: null, budget: null, usedToday: 0,
+                            source: tiers.length > 0 ? 'controller.judgement' : (pilotAbsent ? pilotAbsent.source : 'unset'),
+                            reason: tiers.length > 0
+                                ? 'no classifier tier configured — the judgement chain names no Pilot'
+                                : (pilotAbsent ? pilotAbsent.reason : 'no Pilot model configured'),
                         };
-                    };
 
                     // The Navigator's spend readout comes from its OWN pointer,
                     // NOT from the retired escalation tier. The Navigator is not
@@ -15921,7 +15951,7 @@ export class LocalApiServer {
                     res.end(JSON.stringify({
                         success: true,
                         day: today,
-                        pilot: station('classifier', 'pilot'),
+                        pilot: pilotStation,
                         navigator: navigatorStation,
                     }));
                 } catch (err) {

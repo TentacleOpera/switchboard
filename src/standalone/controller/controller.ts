@@ -817,7 +817,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         };
         log(`restart suppressed: ${restartDecision.suppressionReason}`);
     } else {
-        restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, health, decision: restartDecision });
+        restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, health, decision: restartDecision });
     }
 
     // 8. Compose and write the report to the BOARD (never the controller's disk).
