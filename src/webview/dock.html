@@ -193,13 +193,17 @@
             display: none;
             flex: 1 1 auto;
             flex-direction: column;
-            gap: 9px;
+            /* NO GAPS, NO OUTER MARGIN. This was five bordered boxes floating
+               on a flat field with 9px between them, which is card layout — it
+               reads as a website sidebar because it was built like one. A panel
+               is ONE continuous fascia: sections butt against each other and are
+               divided by a scribed line, never by whitespace, and the instruments
+               are recessed INTO the face rather than sitting on top of it.
+               Each section carries its own gutter instead. */
+            gap: 0;
             background: var(--bg-color);
             overflow: hidden;
-            /* A GUTTER. The pane had none, so the crew lamps were half-clipped by
-               the left window edge and the station states ran flush into the right
-               one, while every other block sat inset. */
-            padding: 10px 12px;
+            padding: 0;
         }
         #dock-agent-pane.is-visible { display: flex; }
         .agent-control-log {
@@ -268,6 +272,9 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
+            padding: 11px 12px 0;
+            border-top: 1px solid #050707;
+            box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel-edge) 45%, transparent);
         }
         .agent-control-quickactions {
             display: flex;
@@ -310,6 +317,23 @@
             outline: none;
             box-sizing: border-box;
         }
+        /* A machined division — a cut into the face with the light catching its
+           lower lip. Sections are separated by this and by nothing else. */
+        .sect {
+            position: relative;
+            padding: 11px 12px;
+            flex: 0 0 auto;
+        }
+        .sect::after {
+            content: '';
+            position: absolute;
+            left: 0; right: 0; bottom: 0;
+            height: 2px;
+            background: linear-gradient(
+                #050707 0 1px,
+                color-mix(in srgb, var(--panel-edge) 55%, transparent) 1px 2px);
+            pointer-events: none;
+        }
         /* ── CREW ────────────────────────────────────────────────────────────
            Two stations flying one mission, side by side, because that is what
            this product is: two models and a board between them, not one
@@ -325,8 +349,11 @@
            once below, on stacked numerics, which is the allowlist's own case. */
         .agent-models {
             display: flex;
-            gap: 8px;
+            gap: 1px;
             align-items: stretch;
+            /* One scribe between the two wells, not an 8px gutter. They are two
+               stations on one panel, not two cards in a list. */
+            background: #050707;
         }
         .crew-station {
             flex: 1 1 0;
@@ -335,28 +362,23 @@
             display: flex;
             flex-direction: column;
             gap: 4px;
-            padding: 9px 10px 9px;
-            background: linear-gradient(180deg, var(--panel-bg2), var(--panel-bg));
-            border: 1px solid var(--panel-line);
+            padding: 9px 11px 10px;
+            /* RECESSED, not raised. A 1px outline on a lighter fill made each
+               station a card sitting on the page; an inset shadow with a lit
+               bottom lip makes it a well cut into the fascia. */
+            background: #080b0b;
+            border: 0;
             border-radius: 2px;
+            box-shadow:
+                inset 0 2px 4px rgba(0, 0, 0, 0.85),
+                inset 0 -1px 0 color-mix(in srgb, var(--panel-edge) 50%, transparent);
         }
-        /* Corner brackets — the track-box the fleet scope draws around every
-           contact. Two corners, not four: enough to read as a bracket without
-           turning a 200px tile into a picture frame. */
-        .crew-station::before,
-        .crew-station::after {
-            content: '';
-            position: absolute;
-            width: 7px;
-            height: 7px;
-            border: 1px solid var(--panel-edge);
-            pointer-events: none;
+        .crew-station.is-lit {
+            box-shadow:
+                inset 0 2px 4px rgba(0, 0, 0, 0.85),
+                inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 40%, transparent),
+                inset 0 -1px 0 color-mix(in srgb, var(--accent-primary) 55%, transparent);
         }
-        .crew-station::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
-        .crew-station::after  { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
-        .crew-station.is-lit { border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); }
-        .crew-station.is-lit::before,
-        .crew-station.is-lit::after { border-color: var(--accent-primary); }
         .crew-head {
             display: flex;
             align-items: center;
@@ -498,6 +520,7 @@
            channel bar and the status line. On the phone the same clip cut the
            panel's one primary action, "Start mission", in half. */
         .agent-poll-report {
+            padding: 0 12px;
             /* Sized to its own content, shrinking (and scrolling) only when the
                content is taller than the pane. `flex: 1 1 auto` forced it to the
                full height whatever it held, which is where the 380px of dead
@@ -506,7 +529,6 @@
             min-height: 0;
             overflow-y: auto;
             overscroll-behavior: contain;
-            padding-right: 2px;
         }
         /* ── CHANNELS ────────────────────────────────────────────────────────
            Above the readout they scope, not stranded at the foot of the pane
@@ -517,7 +539,6 @@
             display: flex;
             gap: 14px;
             flex-wrap: wrap;
-            border-bottom: 1px solid var(--panel-line);
         }
         .agent-channel-btn {
             background: transparent;
@@ -553,10 +574,14 @@
            default shape of every dark admin tool. */
         .ann {
             position: relative;
+            margin: 11px 0;
             padding: 15px 14px 13px;
-            border: 1px solid var(--panel-line);
+            border: 0;
             border-radius: 2px;
-            background-color: var(--panel-bg);
+            box-shadow:
+                inset 0 2px 5px rgba(0, 0, 0, 0.9),
+                inset 0 -1px 0 color-mix(in srgb, var(--panel-edge) 45%, transparent);
+            background-color: #060909;
             background-image:
                 repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px),
                 linear-gradient(var(--term-grid) 1px, transparent 1px),
@@ -671,12 +696,22 @@
         }
         .seat-report.is-open .seat-body { -webkit-line-clamp: unset; }
         .next-up {
-            margin-top: 10px;
-            padding: 12px 12px 13px;
-            border: 1px solid var(--panel-line);
-            border-left: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+            margin-top: 11px;
+            padding: 12px 12px 14px 13px;
+            border: 0;
+            border-left: 2px solid color-mix(in srgb, var(--accent-primary) 50%, transparent);
+            background: linear-gradient(90deg,
+                color-mix(in srgb, var(--accent-primary) 5%, transparent), transparent 60%);
+        }
+        /* The board's middle level, named on the card it belongs to. */
+        .next-up-kind {
+            margin-left: 7px;
+            padding: 1px 5px;
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
             border-radius: 2px;
-            background: var(--panel-bg);
+            font-size: 8px;
+            letter-spacing: 0.12em;
+            color: var(--accent-primary);
         }
         .next-up-topic {
             font-size: 12.5px;
@@ -712,7 +747,13 @@
             text-transform: uppercase;
             color: var(--accent-primary);
         }
-        .agent-control-config-wrap { border: 1px solid var(--border-color); border-radius: 4px; }
+        .agent-control-config-wrap {
+            border: 0;
+            border-top: 1px solid #050707;
+            box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel-edge) 35%, transparent);
+            margin: 0 -12px;
+        }
+        .agent-control-config-toggle { padding-left: 12px; padding-right: 12px; }
         .agent-control-config-toggle {
             cursor: pointer;
             list-style: none;
@@ -761,7 +802,7 @@
             padding: 8px 2px;
         }
         .agent-control-config {
-            padding: 8px 10px;
+            padding: 8px 12px 12px;
             border-top: 1px solid var(--border-color);
             background: var(--panel-bg);
             display: flex;
@@ -810,7 +851,7 @@
            and repeating it there is what made the phone draw a green success
            chip for a non-event. */
         .agent-control-status {
-            margin: 0 -12px -10px;
+            margin: 0;
             padding: 5px 12px;
             font-size: 10px;
             color: var(--text-dim);
@@ -1040,13 +1081,17 @@
         <!-- Two stations flying one mission. Pilot is the controller's own
              judgement model; Navigator is the one it escalates to. The arm
              switch is rendered INTO the Pilot station by dock.js. -->
-        <div class="agent-models" id="agent-models"></div>
-        <div class="agent-poll" id="agent-poll">
-            <button type="button" class="agent-poll-btn" id="agent-poll-start" hidden>Arm watch</button>
-            <button type="button" class="agent-poll-btn" id="agent-poll-stop" hidden>Stop watch</button>
-            <span class="agent-poll-state" id="agent-poll-state"></span>
+        <div class="sect">
+            <div class="agent-models" id="agent-models"></div>
+            <div class="agent-poll" id="agent-poll">
+                <button type="button" class="agent-poll-btn" id="agent-poll-start" hidden>Arm watch</button>
+                <button type="button" class="agent-poll-btn" id="agent-poll-stop" hidden>Stop watch</button>
+                <span class="agent-poll-state" id="agent-poll-state"></span>
+            </div>
         </div>
-        <div class="agent-report-teams" id="agent-report-teams"></div>
+        <div class="sect" style="padding-bottom:0;">
+            <div class="agent-report-teams" id="agent-report-teams"></div>
+        </div>
         <div class="agent-poll-report" id="agent-poll-report"></div>
         <div class="agent-setup-foot">
         <div class="agent-control-quickactions" id="agent-control-quickactions"></div>

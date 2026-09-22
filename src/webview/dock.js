@@ -1246,21 +1246,32 @@
                     lamp = 'var(--warning)';
                     caption = 'Mission state could not be read.';
                 } else if (missions.length) {
+                    // A mission's scale is its FEATURES and its CARDS. Reporting
+                    // only cards hides what a mission is actually made of.
                     const t = mSummary ? mSummary.cardsTotal : 0;
                     const dn = mSummary ? mSummary.cardsDone : 0;
-                    caption = missions.length + (missions.length === 1 ? ' mission' : ' missions')
-                        + (t ? ' \u00b7 ' + dn + ' of ' + t + ' cards done' : '');
+                    const fc = missions.reduce(function (a, m) { return a + (m.featureCount || 0); }, 0);
+                    const bits = [missions.length + (missions.length === 1 ? ' mission' : ' missions')];
+                    if (fc) { bits.push(fc + (fc === 1 ? ' feature' : ' features')); }
+                    if (t) { bits.push(dn + ' of ' + t + ' cards done'); }
+                    caption = bits.join(' \u00b7 ');
                 } else if (loose && (loose.inFlightFeatures || loose.parkedFeatures)) {
-                    // No mission. Work being HELD and work merely left part-done are
-                    // different claims and are said separately — reporting parked
-                    // work as in flight said 39 features were running on a board
-                    // where nothing was.
+                    // NO MISSION IS NOT NO WORK. Features outside a mission are
+                    // still features being worked, and saying only "no mission"
+                    // reads as "nothing is happening" on a board carrying 39 of
+                    // them. Held work and part-done work stay separate claims:
+                    // reporting parked work as in flight once said 39 features
+                    // were running on a board where nothing was.
                     word = 'STANDBY';
                     caption = loose.inFlightFeatures
-                        ? 'No mission set up, but work is in flight.'
-                        : 'No mission set up. Nothing is in flight.';
+                        ? 'No mission set up. ' + loose.inFlightFeatures
+                            + (loose.inFlightFeatures === 1 ? ' feature is' : ' features are')
+                            + ' in flight outside one.'
+                        : 'No mission set up. ' + loose.parkedFeatures
+                            + (loose.parkedFeatures === 1 ? ' feature is' : ' features are')
+                            + ' part-done and parked; nothing is in flight.';
                 } else {
-                    caption = 'No mission running. Nothing needs you.';
+                    caption = 'No mission running, and no feature in flight.';
                 }
 
                 // The legend IS the lamp — no dot beside a word. Lit in the
@@ -1330,26 +1341,33 @@
                                 + (teams.length ? ' · ' + teams.join(', ') : '')
                             : 'No seats up. Start a team before a mission can run.');
 
-                    // Board: is there anything ready to be flown.
+                    // ── THREE LEVELS, THREE ROWS ─────────────────────────
+                    // MISSION -> FEATURES (+ loose plans) -> CARDS. The panel
+                    // collapsed the middle one: features were reported under a
+                    // generic "Work" label while the row named "Missions" read
+                    // "None set up", so a board carrying 39 part-done features
+                    // reported as a board with nothing on it.
+
+                    // PLANS: cards waiting to be handed out. This row was called
+                    // "Board", which named the surface rather than the thing being
+                    // counted and left the panel with no word for a plan at all.
                     const cols = (f.cardsByColumn && typeof f.cardsByColumn === 'object') ? f.cardsByColumn : null;
                     if (cols) {
                         const ready = cols['PLAN REVIEWED'] || 0;
                         const created = cols['CREATED'] || 0;
-                        line('Board', ready > 0,
+                        line('Plans', ready > 0,
                             ready > 0
-                                ? ready + ' plans ready'
-                                    + (created ? ' · ' + created + ' awaiting review' : '')
+                                ? ready + ' reviewed and ready'
+                                    + (created ? ' \u00b7 ' + created + ' awaiting review' : '')
                                 : 'Nothing plan-reviewed. Nothing is ready to start.');
                     } else {
-                        line('Board', null, 'Column counts were not reported this pass.');
+                        line('Plans', null, 'Column counts were not reported this pass.');
                     }
 
-                    // Missions: the thing this panel exists for.
-                    line('Missions', false, 'None set up.');
-
-                    // Work already under way but unattended. This is the number that
-                    // says how long-horizon this board is.
-                    if (loose && (loose.parkedFeatures || loose.inFlightFeatures)) {
+                    // FEATURES: a feature holds subtask plans. It is NOT a mission.
+                    if (!missionsReadable) {
+                        line('Features', null, 'Feature and mission state could not be read.');
+                    } else if (loose && (loose.parkedFeatures || loose.inFlightFeatures)) {
                         const bits = [];
                         if (loose.inFlightFeatures) {
                             bits.push(loose.inFlightFeatures + ' in flight');
@@ -1358,10 +1376,18 @@
                             bits.push(loose.parkedFeatures + ' part-done and parked, '
                                 + loose.parkedCardsDone + ' of ' + loose.parkedCards + ' cards finished');
                         }
-                        line('Work', !!loose.inFlightFeatures, bits.join(' · '));
-                    } else if (!missionsReadable) {
-                        line('Work', null, 'Mission state could not be read.');
+                        line('Features', !!loose.inFlightFeatures, bits.join(' \u00b7 '));
+                    } else {
+                        line('Features', false, 'None in flight.');
                     }
+
+                    // MISSIONS: the board's own long-horizon entity — a name, a
+                    // goal, a team, a worktree allowance and member features. Only
+                    // the Navigator sets one up, which is why this row carries no
+                    // action: nothing on this panel can start a mission.
+                    line('Missions', false, missionsReadable
+                        ? 'None set up. A mission groups features under one goal.'
+                        : 'Mission state could not be read.');
                     card.appendChild(sys);
                 }
 
@@ -1418,14 +1444,28 @@
                     return el;
                 };
                 if (offer && offer.id) {
-                    foot.appendChild(footLabel('Next up'));
+                    const label = footLabel('Next up');
+                    const kind = offer.kind === 'feature' ? 'feature' : 'plan';
+                    const kindChip = mk('span', '', kind);
+                    kindChip.className = 'next-up-kind';
+                    kindChip.title = kind === 'feature'
+                        ? 'A feature holds subtask plans. It is not a mission.'
+                        : 'A single plan card.';
+                    label.appendChild(kindChip);
+                    foot.appendChild(label);
                     const topic = mk('div', '', String(offer.topic || offer.id));
                     topic.className = 'next-up-topic';
                     foot.appendChild(topic);
                     const act = document.createElement('button');
                     act.type = 'button';
                     act.className = 'next-up-go';
-                    act.textContent = 'Start ' + (offer.kind === 'feature' ? 'mission' : 'plan');
+                    // NAME THE THING. `kind` is only ever 'feature' or 'plan'
+                    // (controller.ts: `isFeature ? 'feature' : 'plan'`) — there is
+                    // no mission kind, nothing on this panel can start a mission,
+                    // and the Navigator is what sets one up. Calling a feature a
+                    // mission here made the board's middle level invisible and
+                    // promised an action the button does not perform.
+                    act.textContent = 'Start ' + (offer.kind === 'feature' ? 'feature' : 'plan');
                     act.title = String(offer.topic || '') + ' (' + offer.id + ')';
                     act.addEventListener('click', async () => {
                         act.disabled = true;
