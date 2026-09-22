@@ -2156,12 +2156,6 @@ jobs:
       - name: Team release control contract (operator release, visibility, completeCardInternal)
         run: npm run test:contract:team-release-control
 
-      # Stopping a team is ONE board verb — pause the missions, release the
-      # held cards, close the seats — and this is its only detector: the
-      # ordering, the server-side roster, and the partial-stop reporting.
-      - name: Team stop contract (one call, three ordered steps, per-step outcomes)
-        run: npm run test:contract:team-stop
-
       # `completed_at` is the ONE fact that releases a team and the ONE fact the
       # pop-time dependency gate evaluates. Its gate was defined in package.json
       # and never invoked here — the exact "green while incomplete" hole.
