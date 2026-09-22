@@ -8058,14 +8058,6 @@ export class LocalApiServer {
                 return;
             }
 
-            // Stopping a TEAM mid-flight pauses the missions it holds rather than
-            // releasing them (Mission 07). The operator's team-stop gesture is a
-            // client fan-out over `ptyCloseTerminal`, which knows nothing about
-            // missions, so the pause is one server call the client makes before it
-            // closes the seats. A mission with no undelivered member is left alone
-            // and reported in `skipped` — a fully delivered mission stops and
-            // releases exactly as it does today, and so does a team with no
-            // mission at all.
             // RELEASE HELD CARDS. The terminals panel has posted here since it was
             // written; the route never existed, so the button returned 404 and looked
             // inert. It is the operator's manual escape when a seat holds a card it is
@@ -8077,6 +8069,10 @@ export class LocalApiServer {
             // done" — a false completion would advance nothing but would mark unfinished
             // work finished, which is worse than the stuck hold. It does not move the
             // card either: cards move on start, never on finish.
+            //
+            // The roster is the SERVER's, and the clear itself lives in
+            // `_releaseHeldCardsForSeats` — the one implementation this route shares
+            // with step 2 of `/kanban/team/stop`, so the two can never diverge.
             if (pathname === '/kanban/team/release' && req.method === 'POST') {
                 const body = await this._parseJsonBody(req);
                 const from = String(body?.from || '').trim();
@@ -8087,34 +8083,109 @@ export class LocalApiServer {
                 }
                 // Scope to the poster's own team. A release must never reach another
                 // team's seats; the roster resolver is the same one the queue uses.
-                let roster: string[] = [];
-                if (this._options.resolveTeamMembers) {
-                    try { roster = (await this._options.resolveTeamMembers(workspaceRoot, from)) || []; }
-                    catch { roster = []; }
-                }
-                const seats = new Set<string>([from, ...roster.filter(Boolean)]);
-                const board: any[] = (await db.getBoard?.(wsId)) || [];
-                const held = board.filter((p: any) =>
-                    p && !p.completedAt
-                    && typeof p.ownerSeat === 'string'
-                    && seats.has(p.ownerSeat.trim())
-                );
-                const released: string[] = [];
-                const failed: Array<{ planId: string; reason: string }> = [];
-                const releasedSeats = new Set<string>();
-                for (const card of held) {
-                    const planId = String(card.planId || '');
-                    try {
-                        const ok = await db.clearOwnerStamp?.(card.planFile, card.workspaceId || wsId);
-                        if (ok) { released.push(planId); releasedSeats.add(String(card.ownerSeat).trim()); }
-                        else { failed.push({ planId, reason: 'no hold to clear' }); }
-                    } catch (relErr) {
-                        failed.push({ planId, reason: relErr instanceof Error ? relErr.message : String(relErr) });
-                    }
-                }
-                console.log(`[LocalApiServer] team/release from '${from}': released ${released.length}, failed ${failed.length}, seats ${[...releasedSeats].join(', ') || 'none'}`);
+                const { seats } = await this._resolveTeamSeatNames(workspaceRoot, from);
+                const { released, failed, releasedSeats } = await this._releaseHeldCardsForSeats(db, wsId, seats);
+                console.log(`[LocalApiServer] team/release from '${from}': released ${released.length}, failed ${failed.length}, seats ${releasedSeats.join(', ') || 'none'}`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, released, failed, releasedSeats: [...releasedSeats] }));
+                res.end(JSON.stringify({ success: true, released, failed, releasedSeats }));
+                return;
+            }
+
+            // STOP A TEAM IN ONE CALL. Pausing the missions a team holds, releasing
+            // the cards its seats hold and closing its seats is ONE operation the board
+            // owns — the operator's team-stop gesture used to be a client fan-out over
+            // `ptyCloseTerminal`, which knows nothing about missions.
+            //
+            // Three consequences of the client owning it, all fixed by this route: a
+            // tab that died midway left a half-stopped team (missions paused, seats
+            // still running); the roster the client fanned out over was the tab's idea
+            // of the team, not the one `resolveTeamMembers` gives; and no non-browser
+            // caller could stop a team at all, because there was nothing to call.
+            //
+            // THE ORDER IS LOAD-BEARING. Pause first, or the queue re-dispatches into
+            // seats that are about to be closed. Release before closing, or the cards
+            // keep an owner stamp naming a terminal that no longer exists. Closing
+            // first is the sequence that produces orphans.
+            //
+            // PER-STEP OUTCOMES. A partial stop reports as partial: `status` is
+            // derived from what each step actually did, so "started" is never
+            // "succeeded". The seats are closed; their cards are RELEASED, never
+            // completed — the same semantics `/kanban/team/release` has always had.
+            if (pathname === '/kanban/team/stop' && req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const teamId = String(body?.teamId || '').trim();
+                if (!teamId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Missing required field: teamId' }));
+                    return;
+                }
+                // The roster is the SERVER's. The caller names the team by its
+                // definition id (what `missions.team` holds), or by the live group id
+                // for a legacy row written before the definitionId stamp — and that is
+                // all it names. A caller-supplied seat list is ignored, because a team
+                // that spawned with fewer seats than its definition declares, or a
+                // renamed seat, would be missed by it.
+                const { groups, source } = await this._readRegisteredTeamGroups(workspaceRoot);
+                if (source === 'read-failed') {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'This host could not read its registered teams' }));
+                    return;
+                }
+                const group = groups.find((g: any) => g && (
+                    String(g.definitionId || '') === teamId || String(g.id || '') === teamId
+                )) || null;
+                const head = group ? (teamHeadName(group) || rosterOfGroup(group)[0] || '') : '';
+                if (!head) {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `No live team found for '${teamId}'` }));
+                    return;
+                }
+
+                // 1. PAUSE the missions the team holds.
+                let paused: string[] = [];
+                let pauseSkipped: Array<{ missionId: string; reason: string }> = [];
+                let pauseUnavailable: string | undefined;
+                if (typeof db.pauseMissionsForTeam === 'function') {
+                    try {
+                        const p = await db.pauseMissionsForTeam(teamId, wsId);
+                        paused = Array.isArray(p?.paused) ? p.paused : [];
+                        pauseSkipped = Array.isArray(p?.skipped) ? p.skipped : [];
+                    } catch (pauseErr) {
+                        pauseUnavailable = pauseErr instanceof Error ? pauseErr.message : String(pauseErr);
+                    }
+                } else {
+                    pauseUnavailable = 'this host\'s kanban database cannot pause missions';
+                }
+
+                // 2. RELEASE the cards the team's seats hold.
+                const { seats, resolved: rosterResolved } = await this._resolveTeamSeatNames(workspaceRoot, head);
+                const { released, failed, releasedSeats } = await this._releaseHeldCardsForSeats(db, wsId, seats);
+
+                // 3. CLOSE the seats.
+                const { closed, alreadyGone, closeFailed } = await this._closeTeamSeats(workspaceRoot, seats);
+
+                // Derived from what each step DID. An unresolved roster or an
+                // unavailable pause write is a partial stop, not a quiet one.
+                const status = (failed.length > 0 || closeFailed.length > 0 || !rosterResolved || !!pauseUnavailable)
+                    ? 'partial' : 'stopped';
+                console.log(`[LocalApiServer] team/stop '${teamId}' (head '${head}'): status ${status}, paused ${paused.length}, released ${released.length}, closed ${closed.length}, already gone ${alreadyGone.length}, close failures ${closeFailed.length}${rosterResolved ? '' : ', roster UNRESOLVED — head only'}${pauseUnavailable ? `, pause unavailable: ${pauseUnavailable}` : ''}`);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    teamId,
+                    head,
+                    status,
+                    rosterResolved,
+                    paused,
+                    pauseSkipped,
+                    ...(pauseUnavailable ? { pauseUnavailable } : {}),
+                    released,
+                    failed,
+                    releasedSeats,
+                    closed,
+                    alreadyGone,
+                    closeFailed,
+                }));
                 return;
             }
 
@@ -8224,6 +8295,151 @@ export class LocalApiServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanMissionRoute failed' }));
         }
+    }
+
+    /**
+     * Close a team's seats — step 3 of `/kanban/team/stop`.
+     *
+     * `ptyCloseTerminal` answers `success:false` for BOTH "that seat already
+     * exited" and "this host cannot close anything at all", so a bare false is
+     * not an outcome. Liveness is read first, and a refused close is re-checked
+     * against liveness before it is called a failure — a seat that exited
+     * between the resolution and the close is `alreadyGone`, not a failure.
+     *
+     * A liveness read that FAILED is not "everything is gone": `readLive`
+     * answers `null` for an unreadable fleet, and a seat whose close was
+     * refused then stays `closeFailed` (the loud direction) rather than being
+     * quietly reported as already gone.
+     */
+    private async _closeTeamSeats(
+        workspaceRoot: string,
+        seats: string[]
+    ): Promise<{ closed: string[]; alreadyGone: string[]; closeFailed: Array<{ seat: string; reason: string }> }> {
+        const closed: string[] = [];
+        const alreadyGone: string[] = [];
+        const closeFailed: Array<{ seat: string; reason: string }> = [];
+        const terminalVerb = this._options.terminalVerb;
+        if (!terminalVerb) {
+            for (const seat of seats) { closeFailed.push({ seat, reason: 'this host cannot close terminals' }); }
+            return { closed, alreadyGone, closeFailed };
+        }
+        let live: Set<string> | null = null;
+        let read = false;
+        const readLive = async (): Promise<Set<string> | null> => {
+            if (read) { return live; }
+            read = true;
+            try {
+                const listed = await terminalVerb('ptyListTerminals', {}, workspaceRoot);
+                // A FAILED read is not an empty fleet: reporting one as the
+                // other would call every seat already gone. `terminals` is the
+                // RENDERED list, so a hidden seat rides the sibling
+                // `hiddenTerminals` key — and a hidden seat is still a seat
+                // that has to be closed.
+                if (!listed || listed.success === false || !Array.isArray(listed.terminals)) {
+                    console.warn('[LocalApiServer] team/stop: the fleet could not be read while closing seats:', listed?.error || 'no terminal list returned');
+                    live = null;
+                    return live;
+                }
+                const names = new Set<string>();
+                const rows = [...listed.terminals, ...(Array.isArray(listed.hiddenTerminals) ? listed.hiddenTerminals : [])];
+                for (const t of rows) {
+                    if (t && t.friendlyName && t.status !== 'exited') { names.add(String(t.friendlyName)); }
+                }
+                live = names;
+            } catch (err) {
+                console.warn('[LocalApiServer] team/stop: the fleet could not be read while closing seats:', err);
+                live = null;
+            }
+            return live;
+        };
+        for (const seat of seats) {
+            const before = await readLive();
+            if (before && !before.has(seat)) { alreadyGone.push(seat); continue; }
+            let res: any = null;
+            try {
+                res = await terminalVerb('ptyCloseTerminal', { name: seat }, workspaceRoot);
+            } catch (err) {
+                closeFailed.push({ seat, reason: err instanceof Error ? err.message : String(err) });
+                continue;
+            }
+            if (res && res.success === false) {
+                // Force a fresh read: the seat may have exited between the read
+                // above and this call, and that is `alreadyGone`, not a failure.
+                read = false;
+                live = null;
+                const after = await readLive();
+                if (after && !after.has(seat)) { alreadyGone.push(seat); continue; }
+                closeFailed.push({ seat, reason: res.error || 'close refused' });
+                continue;
+            }
+            closed.push(seat);
+        }
+        return { closed, alreadyGone, closeFailed };
+    }
+
+    /**
+     * The seats a team's release and stop both act on: the head plus the roster
+     * `resolveTeamMembers` returns — the SAME resolver the queue uses, so a team
+     * that spawned with fewer seats than its definition declares, or a renamed
+     * seat, is never missed.
+     *
+     * `resolved: false` means the roster could NOT be read (the seam is unwired
+     * or it threw). That is not a one-seat team: the caller reports it as a
+     * partial stop rather than letting the head alone pass for the whole roster.
+     */
+    private async _resolveTeamSeatNames(
+        workspaceRoot: string,
+        head: string
+    ): Promise<{ seats: string[]; resolved: boolean }> {
+        const seats = new Set<string>([head]);
+        if (!this._options.resolveTeamMembers) { return { seats: [...seats], resolved: false }; }
+        try {
+            const roster = await this._options.resolveTeamMembers(workspaceRoot, head);
+            if (roster === null || roster === undefined) { return { seats: [...seats], resolved: false }; }
+            for (const seat of roster) { if (seat) { seats.add(String(seat)); } }
+            return { seats: [...seats], resolved: true };
+        } catch (err) {
+            console.warn(`[LocalApiServer] team seat resolution failed for '${head}':`, err);
+            return { seats: [...seats], resolved: false };
+        }
+    }
+
+    /**
+     * Clear the owner stamps of every card a team's seats hold — the ONE
+     * implementation behind `/kanban/team/release` and step 2 of
+     * `/kanban/team/stop`, so the two can never diverge.
+     *
+     * Releases the HOLD ONLY. A cleared hold means "this seat is not working
+     * this card", NOT "this work is done": the card is never marked finished
+     * and never moved, because cards move on start, never on finish.
+     */
+    private async _releaseHeldCardsForSeats(
+        db: any,
+        wsId: string,
+        seats: string[]
+    ): Promise<{ released: string[]; failed: Array<{ planId: string; reason: string }>; releasedSeats: string[] }> {
+        const seatSet = new Set<string>();
+        for (const seat of seats) { if (seat) { seatSet.add(String(seat).trim()); } }
+        const board: any[] = (await db.getBoard?.(wsId)) || [];
+        const held = board.filter((p: any) =>
+            p && !p.completedAt
+            && typeof p.ownerSeat === 'string'
+            && seatSet.has(p.ownerSeat.trim())
+        );
+        const released: string[] = [];
+        const failed: Array<{ planId: string; reason: string }> = [];
+        const releasedSeats = new Set<string>();
+        for (const card of held) {
+            const planId = String(card.planId || '');
+            try {
+                const ok = await db.clearOwnerStamp?.(card.planFile, card.workspaceId || wsId);
+                if (ok) { released.push(planId); releasedSeats.add(String(card.ownerSeat).trim()); }
+                else { failed.push({ planId, reason: 'no hold to clear' }); }
+            } catch (relErr) {
+                failed.push({ planId, reason: relErr instanceof Error ? relErr.message : String(relErr) });
+            }
+        }
+        return { released, failed, releasedSeats: [...releasedSeats] };
     }
 
     /**
@@ -17508,7 +17724,12 @@ export class LocalApiServer {
                 await this._handleGetDispatchWriteSets(req, res);
             } else if (pathname === '/dispatch/writesets' && req.method === 'POST') {
                 await this._handlePostDispatchWriteSets(req, res);
-            } else if (pathname.startsWith('/kanban/mission') && (req.method === 'GET' || req.method === 'POST')) {
+            } else if ((pathname.startsWith('/kanban/mission') || pathname.startsWith('/kanban/team/')) && (req.method === 'GET' || req.method === 'POST')) {
+                // `/kanban/team/*` rides the mission handler because the team's
+                // missions are what a team stop and a team release act on. Without
+                // the prefix here those routes are UNREACHABLE — the handler's arms
+                // exist but no request ever arrives, which is how the shipped
+                // `team/release` button came to 404 into an apparently inert one.
                 await this._handleKanbanMissionRoute(pathname, req, res);
             } else if (pathname === '/kanban/task/complete' && req.method === 'POST') {
                 await this._handleKanbanTaskComplete(req, res);

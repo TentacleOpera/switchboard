@@ -487,21 +487,25 @@ function stripComments(src) {
         );
     });
 
-    // ─── 7. Source-text: closeTeam calls tmuxKillSessionGroup after the fan-out ─
-    await test('closeTeam() calls tmuxKillSessionGroup for the group after the per-member fan-out', () => {
+    // ─── 7. Source-text: closeTeam stops the team, then kills its tmux group ─
+    await test('closeTeam() calls tmuxKillSessionGroup for the group after the seats are closed', () => {
         const src = fs.readFileSync(TERMINALS_JS_FILE, 'utf8');
         // Locate the closeTeam function body.
         const closeTeamMatch = src.match(/async function closeTeam\(\)\s*\{([\s\S]*?)\n    \}/);
         assert.ok(closeTeamMatch, 'could not locate closeTeam()');
         const body = closeTeamMatch[1];
-        // The per-member fan-out (ptyCloseTerminal) must come before the tmuxKillSessionGroup call.
-        const fanOutIdx = body.indexOf('ptyCloseTerminal');
+        // The seats are closed by the BOARD now — one `POST /kanban/team/stop`
+        // that pauses the missions, releases the held cards and closes the
+        // seats. The client no longer fans out over ptyCloseTerminal itself.
+        const stopIdx = body.indexOf('/kanban/team/stop');
         const killIdx = body.indexOf('tmuxKillSessionGroup');
-        assert.ok(fanOutIdx >= 0, 'closeTeam must fan out ptyCloseTerminal to members');
+        assert.ok(stopIdx >= 0, 'closeTeam must stop the team through the one board route');
+        assert.ok(!body.includes('ptyCloseTerminal'),
+            'the client-side fan-out must be gone — the board owns closing the seats');
         assert.ok(killIdx >= 0, 'closeTeam must call tmuxKillSessionGroup for the team group');
         assert.ok(
-            killIdx > fanOutIdx,
-            'tmuxKillSessionGroup must come AFTER the per-member fan-out, not before it'
+            killIdx > stopIdx,
+            'tmuxKillSessionGroup must come AFTER the seats are closed, not before it'
         );
     });
 

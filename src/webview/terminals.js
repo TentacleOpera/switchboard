@@ -11590,7 +11590,28 @@
         reportFanOutResults(results, 'Cleared');
     }
 
-    /** CLOSE TEAM — end every member's process immediately, no confirmation. */
+    /** CLOSE TEAM — end every member's process immediately, no confirmation.
+     *
+     *  ONE server call: `POST /kanban/team/stop` pauses the team's missions,
+     *  releases the cards its seats hold, and closes the seats — in that order,
+     *  as one operation the board owns. This used to be a client fan-out over
+     *  `ptyCloseTerminal` after a separate pause call, which meant a tab that
+     *  died midway left a half-stopped team (missions paused, seats still
+     *  running), the roster fanned out over was the tab's idea of the team, and
+     *  no non-browser caller could stop a team at all. The board resolves the
+     *  roster with the same resolver the queue uses, so the seats closed are the
+     *  board's team, not this tab's.
+     *
+     *  STOPPING A TEAM MID-FLIGHT PAUSES ITS MISSION (Mission 07). A team
+     *  closed with members undelivered used to leave its mission wedged — the
+     *  seats are gone, nothing is in flight, and a mission with no in-flight
+     *  member is indistinguishable from one that never started. So the pause is
+     *  written BEFORE the seats die, server-side, in the same call: the mission
+     *  keeps its members, its queue order and its hold, and a resumed mission
+     *  continues from the next undelivered member. A team with no mission, or
+     *  whose mission is fully delivered, is reported in `pauseSkipped` and stops
+     *  exactly as it did before.
+     */
     async function closeTeam() {
         const snap = getScopedTeamSnapshot();
         if (!snap) { return; }
@@ -11599,31 +11620,32 @@
             return t && t.status !== 'exited';
         });
         if (liveMembers.length === 0) { showPaneToast('No live members to close'); return; }
-        // STOPPING A TEAM MID-FLIGHT PAUSES ITS MISSION (Mission 07). A team
-        // closed with members undelivered used to leave its mission wedged — the
-        // seats are gone, nothing is in flight, and a mission with no in-flight
-        // member is indistinguishable from one that never started. So the pause
-        // is written BEFORE the seats die, server-side, in one call: the mission
-        // keeps its members, its queue order and its hold, and a resumed mission
-        // continues from the next undelivered member. A team with no mission, or
-        // whose mission is fully delivered, is reported in `skipped` and stops
-        // exactly as it did before. Best-effort by design: an operator close must
-        // never be blocked by a pause write, and the pause is idempotent.
-        if (snap.definitionId) {
-            try {
-                await fetch('/kanban/mission/pause-team', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ teamId: snap.definitionId })
-                });
-            } catch { /* best-effort — the close must not be blocked by the pause */ }
-        }
-        const results = await teamFanOut(liveMembers, async (name) => {
-            await fetch('/terminals/verb/ptyCloseTerminal', {
+        let data = null;
+        try {
+            const res = await fetch('/kanban/team/stop', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name })
+                // The definition id is what a mission records as its team; a
+                // legacy group with no definitionId falls back to its own group
+                // id, which the route also accepts.
+                body: JSON.stringify({ teamId: snap.definitionId || snap.id })
             });
+            data = await res.json().catch(() => null);
+            if (!res.ok || !data || data.success === false) {
+                showPaneToast(`Stop failed: ${(data && data.error) || `HTTP ${res.status}`}`);
+                return;
+            }
+        } catch (err) {
+            showPaneToast(`Stop failed: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+        }
+        // Tear down exactly the seats the BOARD reports as stopped. A seat it did
+        // not close keeps its pane, because it is still there.
+        const stopped = [
+            ...(Array.isArray(data.closed) ? data.closed : []),
+            ...(Array.isArray(data.alreadyGone) ? data.alreadyGone : [])
+        ];
+        for (const name of stopped) {
             viewport.destroyTerminalView(name);
             for (let i = 0; i < paneAssignments.length; i++) {
                 if (paneAssignments[i] === name) { paneAssignments[i] = null; }
@@ -11632,13 +11654,13 @@
             dismissStartupCurtain(name);
             terminalBadges.delete(name);
             terminalReplayGaps.delete(name);
-        });
+        }
         saveLayoutSettings();
         await fetchTerminalList();
-        // Kill the team's tmux session GROUP by session ID after the per-member
-        // fan-out. The fan-out's ptyCloseTerminal kills each seat's VIEW session
-        // (via the Go host's fleet.close()); the BASE session and any seatless
-        // views remain. The `tmuxKillSessionGroup` verb enumerates the group's
+        // Kill the team's tmux session GROUP by session ID after the seats are
+        // closed. Closing a seat kills its VIEW session (via the Go host's
+        // fleet.close()); the BASE session and any seatless views remain. The
+        // `tmuxKillSessionGroup` verb enumerates the group's
         // members by `$N` session ID and kills each one — session IDs are
         // stable even after the base is gone (the group name can outlive the
         // founding session). Operator action only — the plan's invariant.
@@ -11650,19 +11672,34 @@
                 body: JSON.stringify({ group: tmuxGroup })
             });
         } catch { /* best-effort — the session may already be gone */ }
-        const ok = results.filter(r => r.ok).length;
-        const total = results.length;
+        // Render the PER-STEP result. A partial stop must read as partial: the
+        // operator has to know which seat did not close, and which held card did
+        // not release. An empty list is never reported as if it were the whole
+        // answer — each step's outcome is named.
+        const closeFailed = Array.isArray(data.closeFailed) ? data.closeFailed : [];
+        const releaseFailedCount = Array.isArray(data.failed) ? data.failed.length : 0;
+        const releasedCount = Array.isArray(data.released) ? data.released.length : 0;
+        const stoppedCount = stopped.length;
+        const total = stoppedCount + closeFailed.length;
         const teamDefId = snap.definitionId;
-        showPaneToast(
-            `Closed ${ok} of ${total} member${total === 1 ? '' : 's'}`,
-            () => {
-                if (teamDefId) {
-                    startTeam({ id: teamDefId }, undefined);
-                } else {
-                    showPaneToast('Team definition not found — cannot restart');
-                }
+        const restart = () => {
+            if (teamDefId) {
+                startTeam({ id: teamDefId }, undefined);
+            } else {
+                showPaneToast('Team definition not found — cannot restart');
             }
-        );
+        };
+        const summary = closeFailed.length > 0
+            ? `Closed ${stoppedCount} of ${total}`
+            : `Closed ${stoppedCount} member${stoppedCount === 1 ? '' : 's'}`;
+        const details = [];
+        if (releasedCount > 0) { details.push(`released ${releasedCount} card${releasedCount === 1 ? '' : 's'}`); }
+        if (closeFailed.length > 0) {
+            const failedNames = closeFailed.map(f => (f && f.seat) || '').filter(Boolean).join(', ');
+            details.push(`${failedNames} did not close`);
+        }
+        if (releaseFailedCount > 0) { details.push(`${releaseFailedCount} card${releaseFailedCount === 1 ? '' : 's'} did not release`); }
+        showPaneToast(details.length > 0 ? `${summary} — ${details.join(', ')}` : summary, restart);
     }
 
     /**

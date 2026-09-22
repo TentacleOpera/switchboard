@@ -134,11 +134,21 @@ async function main() {
         // move), scoped to the poster's own team via `resolveTeamMembers`.
         const armStart = localApiServer.indexOf("pathname === '/kanban/team/release'");
         assert.ok(armStart > 0, 'team/release route must exist — the shipped button has POSTed it since the panel was written (reinstated 8b8c5366)');
-        const armEnd = localApiServer.indexOf("pathname === '/kanban/", armStart + 1);
-        const arm = localApiServer.slice(armStart, armEnd > armStart ? armEnd : armStart + 4000);
-        assert.ok(arm.includes('clearOwnerStamp'), 'team/release must release the hold via clearOwnerStamp');
-        assert.ok(!/\bcompleted_at\b|\breleased_at\b/.test(arm), 'team/release must not write completed_at or released_at — it releases the hold, it does not complete the work');
-        assert.ok(arm.includes('resolveTeamMembers'), 'team/release must scope the release to the poster\'s own team');
+        // The hold clear and the roster scope now live in the two helpers the
+        // release route SHARES with `/kanban/team/stop` — one implementation of
+        // each, not a copy per route. The invariants are asserted where the work
+        // actually happens.
+        const releaseStart = localApiServer.indexOf('private async _releaseHeldCardsForSeats(');
+        assert.ok(releaseStart > 0, 'the one release implementation must exist');
+        const releaseEnd = localApiServer.indexOf('\n    /**', releaseStart);
+        const releaseBody = localApiServer.slice(releaseStart, releaseEnd === -1 ? releaseStart + 4000 : releaseEnd);
+        assert.ok(releaseBody.includes('clearOwnerStamp'), 'team/release must release the hold via clearOwnerStamp');
+        assert.ok(!/\bcompleted_at\b|\breleased_at\b/.test(releaseBody), 'team/release must not write completed_at or released_at — it releases the hold, it does not complete the work');
+        const seatsStart = localApiServer.indexOf('private async _resolveTeamSeatNames(');
+        assert.ok(seatsStart > 0, 'the one team-seat resolver must exist');
+        const seatsEnd = localApiServer.indexOf('\n    /**', seatsStart);
+        const seatsBody = localApiServer.slice(seatsStart, seatsEnd === -1 ? seatsStart + 4000 : seatsEnd);
+        assert.ok(seatsBody.includes('resolveTeamMembers'), 'team/release must scope the release to the poster\'s own team');
         assert.strictEqual(/\breleaseCardInternal\b/.test(localApiServer), false, 'releaseCardInternal must be deleted');
         // `releasedAt` (the record field) is gone outright. `released_at`
         // (the SQL column) survives ONLY inside historical migration bodies —

@@ -341,18 +341,33 @@ async function run() {
             `the delivered skip must say why, got '${deliveredSkip.reason}'`);
     });
 
-    await check('the operator stop path carries the pause write', () => {
+    await check('the operator stop path is ONE server call, and the route carries the pause', () => {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.js'), 'utf8');
         const i = src.indexOf('async function closeTeam()');
         assert.notStrictEqual(i, -1, 'closeTeam must exist — it is the operator gesture that stops a team');
         const body = src.slice(i, src.indexOf('\n    }', i));
-        assert.ok(/\/kanban\/mission\/pause-team/.test(body),
-            'stopping a team must pause its mission before the seats die, or the mission is wedged with no way back');
-        assert.ok(/snap\.definitionId/.test(body), 'the pause names the team by its definition id');
+        assert.ok(/\/kanban\/team\/stop/.test(body),
+            'stopping a team must be ONE board call — the board owns pause + release + close as one operation');
+        assert.ok(!/ptyCloseTerminal/.test(body),
+            'the client-side fan-out must be gone: two implementations of one operation are free to diverge');
+        assert.ok(/snap\.definitionId/.test(body), 'the stop names the team by its definition id');
 
         const api = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
         assert.ok(/'\/kanban\/mission\/pause-team'/.test(api), 'the route must exist');
         assert.ok(/pauseMissionsForTeam/.test(api), 'the route must reach the one helper that writes the pause');
+
+        // The pause is step 1 of the stop route, and it runs BEFORE the seats
+        // die — otherwise a mission is wedged with no way back.
+        const routeStart = api.indexOf("pathname === '/kanban/team/stop'");
+        assert.ok(routeStart > 0, 'the stop route must exist');
+        const routeEnd = api.indexOf("pathname === '/kanban/", routeStart + 1);
+        const route = api.slice(routeStart, routeEnd > routeStart ? routeEnd : routeStart + 6000);
+        const pauseIdx = route.indexOf('pauseMissionsForTeam');
+        const releaseIdx = route.indexOf('_releaseHeldCardsForSeats');
+        const closeIdx = route.indexOf('_closeTeamSeats');
+        assert.ok(pauseIdx > 0 && releaseIdx > 0 && closeIdx > 0, 'all three steps must run in the route');
+        assert.ok(pauseIdx < releaseIdx && releaseIdx < closeIdx,
+            'the order is load-bearing: pause, then release, then close — closing first produces orphans');
     });
 
     await check('the card pause control rides the existing mission verb', () => {

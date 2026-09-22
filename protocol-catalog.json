@@ -14,7 +14,7 @@
       "TaskViewer": 108,
       "Setup": 112
     },
-    "apiEndpointCount": 178,
+    "apiEndpointCount": 179,
     "manualReviewCount": 7
   },
   "providers": {
@@ -29128,6 +29128,11 @@
     },
     {
       "path": "/kanban/team/release",
+      "method": "POST",
+      "prefix": false
+    },
+    {
+      "path": "/kanban/team/stop",
       "method": "POST",
       "prefix": false
     },
