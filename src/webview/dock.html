@@ -845,6 +845,42 @@
             color: var(--text-dim);
         }
         .agent-control-config-status.is-error { color: #f85149; }
+        /* ── The Navigator's mission conversation ─────────────────────────
+           Two fields, a Propose button, a list of checkboxes and an Apply
+           button. Deliberately NOT a form: the whole point of the feature is
+           that the operator states a subject and a goal and is done. */
+        .agent-nav-actions {
+            display: flex;
+            gap: 6px;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+        .agent-nav-coldbtn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-dim);
+            font-family: var(--font-family);
+            font-size: 11px;
+            padding: 4px 10px;
+            cursor: pointer;
+        }
+        .agent-nav-coldbtn:hover { color: var(--text-primary); border-color: var(--accent-dim); }
+        .agent-nav-proposal { display: flex; flex-direction: column; gap: 4px; }
+        .agent-nav-head { font-size: 11px; color: var(--text-primary); }
+        .agent-nav-goal { font-size: 10px; color: var(--text-secondary); }
+        .agent-nav-note { font-size: 10px; color: var(--warning); }
+        .agent-nav-row {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .agent-nav-row input { width: auto; }
+        .agent-nav-row .agent-nav-topic { color: var(--text-primary); }
+        .agent-nav-row .agent-nav-col { font-size: 10px; color: var(--text-dim); }
+        .agent-nav-group { border-top: 1px dashed var(--border-color); padding-top: 6px; }
         /* The footer spans the pane's gutter — a status bar that stops 12px
            short of the window edge reads as a stray row, not as chrome. Empty
            and silent when the model is fine: the Pilot station already names it,
@@ -1095,6 +1131,28 @@
         <div class="agent-poll-report" id="agent-poll-report"></div>
         <div class="agent-setup-foot">
         <div class="agent-control-quickactions" id="agent-control-quickactions"></div>
+
+        <!-- The Navigator's two-question conversation. Subject and goal, then
+             up to ten EXISTING cards it proposes; the operator unchecks what
+             does not belong and applies. It writes a MISSION through
+             /kanban/mission/create + /kanban/mission/member/add, never a
+             feature — the mission strips above read the same store, so a new
+             mission shows up there with no second renderer. -->
+        <details class="agent-control-config-wrap" id="agent-navigator-mission-wrap">
+            <summary class="agent-control-config-toggle">Start a mission</summary>
+        <div class="agent-control-config">
+            <label for="agent-navigator-subject">Subject</label>
+            <input type="text" id="agent-navigator-subject" placeholder="what the mission is about" />
+            <label for="agent-navigator-goal">Goal</label>
+            <input type="text" id="agent-navigator-goal" placeholder="one sentence — what it is for" />
+            <div class="agent-nav-actions">
+                <button type="button" class="agent-nav-coldbtn" id="agent-navigator-cold">Look at the whole board</button>
+                <button type="button" class="agent-control-config-save" id="agent-navigator-propose">Propose cards</button>
+            </div>
+            <div class="agent-control-config-status" id="agent-navigator-mission-status"></div>
+            <div class="agent-nav-proposal" id="agent-navigator-mission-proposal"></div>
+        </div>
+        </details>
 
         <!-- The surface's own config: provider, model and key are set HERE,
              not via a repurposed startup command or an env var. The key field

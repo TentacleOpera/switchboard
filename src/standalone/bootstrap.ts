@@ -4396,15 +4396,25 @@ Each plan file must include:
     const resolveJudgementConfig = async (root: string): Promise<any> => {
         const raw = await controllerBoardStore.readJudgementConfig(root);
         if (raw.source === 'unreadable') {
-            return { tiers: [], supervisorSeat: null, globalCeilingPerDay: null, source: raw.source, unavailable: { reason: raw.reason || 'judgement config unreadable', source: raw.source } };
+            return { tiers: [], globalCeilingPerDay: null, source: raw.source, unavailable: { reason: raw.reason || 'judgement config unreadable', source: raw.source } };
         }
         const cfg = (raw.value && typeof raw.value === 'object') ? raw.value : {};
+        // `supervisorSeat` is RETIRED (plan: the-pilot-and-the-navigator-are-one-crew).
+        // The seat it named is gone — the escalation target is the Navigator, a
+        // model slot — so this read no longer carries it and the controller has
+        // no field to route on. A value still sitting in an operator's config is
+        // NOT ignored silently: it produces a stated retirement notice naming
+        // the Navigator as its replacement, because a setting that is read but
+        // does nothing is a setting that lies.
+        if (typeof cfg.supervisorSeat === 'string' && cfg.supervisorSeat.trim()) {
+            console.warn(`[bootstrap] controller config declares supervisorSeat='${cfg.supervisorSeat.trim()}', which is RETIRED — the supervisor seat no longer exists and nothing routes to it. The Navigator (PUT /controller/navigator) is the escalation target for the rows that used to wake a supervisor. Remove the field to clear this notice.`);
+        }
         const errors: string[] = [];
         let rows: Record<string, { endpoint?: string; model?: string }> = {};
         try {
             rows = (await GlobalIntegrationConfigService.getAgentConfig<Record<string, { endpoint?: string; model?: string }>>('agentControlProviders')) || {};
         } catch (e) {
-            return { tiers: [], supervisorSeat: null, globalCeilingPerDay: null, source: raw.source, unavailable: { reason: `agentControlProviders unreadable: ${e instanceof Error ? e.message : String(e)}`, source: 'agentControlProviders' } };
+            return { tiers: [], globalCeilingPerDay: null, source: raw.source, unavailable: { reason: `agentControlProviders unreadable: ${e instanceof Error ? e.message : String(e)}`, source: 'agentControlProviders' } };
         }
         const tiers: any[] = [];
         const list = Array.isArray(cfg.tiers) ? cfg.tiers : [];
@@ -4449,7 +4459,6 @@ Each plan file must include:
         const ceiling = Number.isFinite(ceilingRaw) && ceilingRaw > 0 ? ceilingRaw : null;
         return {
             tiers,
-            supervisorSeat: typeof cfg.supervisorSeat === 'string' && cfg.supervisorSeat.trim() ? cfg.supervisorSeat.trim() : null,
             globalCeilingPerDay: ceiling,
             source: raw.source,
             ...(errors.length ? { errors } : {}),

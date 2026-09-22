@@ -64,11 +64,30 @@ export interface SupervisorProbe {
     source: string;
 }
 
-/** The supervisor SEAT — an agent that can act. Distinct from the platform probe. */
-export interface SupervisorSeatProbe {
+/**
+ * The NAVIGATOR's model slot, as `GET /controller/navigator` reports it
+ * (plan: the-pilot-and-the-navigator-are-one-crew).
+ *
+ * This replaces the supervisor-SEAT probe. The supervisor was an agent in a pty
+ * whose liveness had to be read from the fleet; the Navigator is a model
+ * pointer, so "present" is not a fleet question at all. What is left is what an
+ * operator needs: is a Navigator configured, what model answers for it, and —
+ * when it is not configured — which of the three not-configured states this is.
+ *
+ * The three failure states stay DISTINCT. `unset` (nobody chose a provider),
+ * `row-missing` (the pointer names a provider with no row) and `unreadable`
+ * (the config could not be read) are three different fixes, and a single
+ * "not configured" would answer for all three — the fallback rule.
+ */
+export interface NavigatorProbe {
     configured: boolean;
-    seat: string | null;
-    present: boolean;
+    providerId: string | null;
+    model: string | null;
+    endpoint: string | null;
+    locality: string | null;
+    costClass: string | null;
+    operator: string | null;
+    /** `row:navigator` | `unset` | `row-missing` | `unreadable` — never collapsed. */
     source: string;
     reason: string;
 }
@@ -92,7 +111,7 @@ export interface ProviderProbe {
 export interface CapabilitySnapshot {
     model: ModelProbe;
     supervisor: SupervisorProbe;
-    supervisorSeat: SupervisorSeatProbe;
+    navigator: NavigatorProbe;
     surviveBoard: SurviveBoardProbe;
     providers: ProviderProbe;
 }
@@ -103,8 +122,13 @@ export interface CapabilityContext {
     apiRequest: ControllerApiRequest;
     /** The resolved judgement tiers — endpoints/models/keySet resolved board-side. */
     tiers: TierDeclaration[];
-    /** The configured supervisor seat name, or null. */
-    supervisorSeat: string | null;
+    /**
+     * The Navigator's slot, already read this wake from
+     * `GET /controller/navigator`. Provided rather than read here so the
+     * capability block the report prints and the escalation gate that spends
+     * the call can never be reading two different answers.
+     */
+    navigator?: NavigatorProbe | null;
     /** A fleet list already read this wake; avoids a second round-trip. */
     fleet?: any[];
     /** Injectable for tests; defaults to the real filesystem/env. */
@@ -193,22 +217,80 @@ function probeSupervisor(ctx: CapabilityContext): SupervisorProbe {
     return { outcome: 'absent', detail: `no supervisor concept on platform '${platform}'`, source: `platform:${platform}` };
 }
 
-async function probeSupervisorSeat(ctx: CapabilityContext, fleet: any[] | null): Promise<SupervisorSeatProbe> {
-    const seat = ctx.supervisorSeat && ctx.supervisorSeat.trim() ? ctx.supervisorSeat.trim() : null;
-    if (!seat) {
-        return { configured: false, seat: null, present: false, source: 'controller.judgement:supervisorSeat', reason: 'no supervisor seat configured' };
+/**
+ * The Navigator's slot, read from `GET /controller/navigator`
+ * (plan: the-pilot-and-the-navigator-are-one-crew).
+ *
+ * This is a BOARD READ, not a model call: it resolves the Navigator's own
+ * pointer over the shared provider rows and reports the endpoint, the model and
+ * the key-set flag. Key VALUES never cross this route.
+ *
+ * The four states are kept apart rather than collapsed into a boolean. An
+ * operator fixing an escalation that is not reaching anybody needs to know
+ * whether nobody chose a provider, whether the pointer names a provider with no
+ * row, or whether the config could not be read at all — and a Navigator whose
+ * endpoint is set but whose model is missing is NOT configured: a request with
+ * no model name against a hosted endpoint is a 400 dressed as a call.
+ */
+export async function readNavigatorSlot(
+    ctx: Pick<CapabilityContext, 'apiRequest' | 'port' | 'workspaceRoot'>,
+): Promise<NavigatorProbe> {
+    const unconfigured = (source: string, reason: string): NavigatorProbe => ({
+        configured: false, providerId: null, model: null, endpoint: null,
+        locality: null, costClass: null, operator: null, source, reason,
+    });
+    let res: ControllerApiResponse | null;
+    try {
+        res = await ctx.apiRequest(ctx.port, 'GET', '/controller/navigator', ctx.workspaceRoot);
+    } catch (e) {
+        return unconfigured('unreadable', `the Navigator endpoint could not be reached (${e instanceof Error ? e.message : String(e)})`);
     }
-    if (fleet === null) {
-        return { configured: true, seat, present: false, source: 'fleet:ptyListTerminals', reason: `fleet unreadable — cannot confirm supervisor seat '${seat}' is live` };
+    let view: any = null;
+    if (res && res.status === 200) {
+        try { view = res.json()?.navigator; } catch { view = null; }
     }
-    const live = fleet.find(t => t && t.friendlyName === seat && t.status === 'active');
-    return {
-        configured: true,
-        seat,
-        present: !!live,
-        source: 'fleet:ptyListTerminals',
-        reason: live ? `supervisor seat '${seat}' is live` : `supervisor seat '${seat}' is configured but not live`,
+    if (!view || typeof view !== 'object') {
+        return unconfigured('unreadable', res ? 'the board returned no navigator view' : 'the Navigator endpoint is unreachable');
+    }
+    const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    const source = str(view.source) || 'unknown';
+    const providerId = str(view.providerId);
+    const endpoint = str(view.endpoint);
+    const model = str(view.model);
+    const reason = str(view.reason);
+    const base = {
+        providerId,
+        model,
+        endpoint,
+        locality: str(view.locality),
+        costClass: str(view.costClass),
+        operator: str(view.operator),
     };
+    if (source === 'unset') {
+        return { configured: false, ...base, source, reason: reason || 'no Navigator model configured' };
+    }
+    if (source === 'row-missing') {
+        return { configured: false, ...base, source, reason: reason || `the Navigator names provider '${providerId || 'unset'}', which has no row in agentControlProviders` };
+    }
+    if (source === 'unreadable') {
+        return { configured: false, ...base, source, reason: reason || 'the Navigator config could not be read' };
+    }
+    // Configured means USABLE, not merely "a pointer is set". A local server
+    // names its own model, so an empty model is legal for that provider alone.
+    const configured = !!endpoint && (!!model || providerId === 'local');
+    return {
+        configured,
+        ...base,
+        source,
+        reason: configured
+            ? `Navigator model '${providerId || 'unset'}'${model ? ` (${model})` : ' (server names its own model)'} is configured`
+            : `${source === 'row:navigator' ? 'the Navigator row' : 'the Navigator'} has ${endpoint ? 'no model set' : 'no endpoint'} — no model answers for it`,
+    };
+}
+
+async function probeNavigator(ctx: CapabilityContext): Promise<NavigatorProbe> {
+    if (ctx.navigator) { return ctx.navigator; }
+    return readNavigatorSlot(ctx);
 }
 
 async function probeSurviveBoard(ctx: CapabilityContext): Promise<SurviveBoardProbe> {
@@ -278,15 +360,15 @@ async function probeProviders(ctx: CapabilityContext, fleet: any[] | null): Prom
 
 export async function probeCapabilities(ctx: CapabilityContext): Promise<CapabilitySnapshot> {
     const fleet = await readFleet(ctx);
-    const [surviveBoard, providers, supervisorSeat] = await Promise.all([
+    const [surviveBoard, providers, navigator] = await Promise.all([
         probeSurviveBoard(ctx),
         probeProviders(ctx, fleet),
-        probeSupervisorSeat(ctx, fleet),
+        probeNavigator(ctx),
     ]);
     return {
         model: probeModel(ctx),
         supervisor: probeSupervisor(ctx),
-        supervisorSeat,
+        navigator,
         surviveBoard,
         providers,
     };
@@ -310,10 +392,6 @@ export function capabilityForKey(key: MatrixCapabilityKey, caps: CapabilitySnaps
             const enabled = m.configured && usable;
             return { enabled, reason: m.reason, source: m.source };
         }
-        case 'supervisor': {
-            const s = caps.supervisorSeat;
-            return { enabled: s.present, reason: s.reason, source: s.source };
-        }
         case 'two-providers': {
             const p = caps.providers;
             const enabled = p.providers.length >= 2;
@@ -330,8 +408,9 @@ export function capabilityForKey(key: MatrixCapabilityKey, caps: CapabilitySnaps
 /**
  * Whether one escalation rung is reachable with the current capability set.
  * `restart-board` is not reached by a judgement classification in this subtask
- * (row 7 declares itself unavailable); the judgement rungs need a tier and, for
- * the supervisor rung, a live supervisor seat.
+ * (row 7 declares itself unavailable); the judgement rungs need a tier, and the
+ * `supervisor` rung now needs a configured NAVIGATOR rather than a live
+ * supervisor seat — the seat is retired, the rung is not.
  */
 export function rungReachable(rung: string, caps: CapabilitySnapshot): boolean {
     switch (rung) {
@@ -346,7 +425,7 @@ export function rungReachable(rung: string, caps: CapabilitySnapshot): boolean {
         case 'reroute':
             return capabilityForKey('model', caps).enabled && capabilityForKey('two-providers', caps).enabled;
         case 'supervisor':
-            return capabilityForKey('model', caps).enabled && capabilityForKey('supervisor', caps).enabled;
+            return capabilityForKey('model', caps).enabled && caps.navigator.configured;
         case 'restart-board':
             return false;
         default:

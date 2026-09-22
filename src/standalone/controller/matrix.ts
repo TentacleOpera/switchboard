@@ -53,6 +53,13 @@ export type MatrixRemediation =
  * The escalation ladder, lowest rung first. `mark-complete`,
  * `record-unknown` and `post-completion-on-behalf` are terminal one-shot
  * actions and are deliberately NOT on the ladder.
+ *
+ * The `supervisor` RUNG survives the retirement of the supervisor SEAT
+ * (plan: the-pilot-and-the-navigator-are-one-crew): it is the rung that spends a
+ * model call on a case the cheaper rungs could not settle, and it now asks the
+ * Navigator instead of waking an agent in a pty. The verb is a rung name, not a
+ * capability key — the retired thing is the `supervisor` entry in
+ * `MatrixCapabilityKey`, which is gone.
  */
 export const ESCALATION_LADDER: readonly MatrixRemediation[] = [
     'nudge',
@@ -78,8 +85,15 @@ export const RUNGS_PER_ESCALATION = 2;
  * reported as unavailable WITH ITS REASON, never skipped silently — "reroute
  * unavailable — one provider seated" is a different fact from "reroute was not
  * needed", and collapsing them is the fallback rule again.
+ *
+ * `supervisor` is RETIRED (plan: the-pilot-and-the-navigator-are-one-crew). It
+ * probed for a live supervisor SEAT, and the seat is gone: the escalation
+ * target is the Navigator, which is a model slot, not a seat. The capability
+ * key goes from the type, the values array and every row's `requires` in one
+ * change — a key in the type but not the values array (or the reverse) loads
+ * clean and silently drops the row from the reachability filter.
  */
-export type MatrixCapabilityKey = 'mechanical' | 'model' | 'supervisor' | 'two-providers';
+export type MatrixCapabilityKey = 'mechanical' | 'model' | 'two-providers';
 
 /**
  * WHO a row's remediation acts on (change 3).
@@ -116,7 +130,7 @@ export const MATRIX_CONDITION_KINDS: readonly MatrixCondition['kind'][] = [
 ];
 
 export const MATRIX_CAPABILITY_KEYS: readonly MatrixCapabilityKey[] = [
-    'mechanical', 'model', 'supervisor', 'two-providers',
+    'mechanical', 'model', 'two-providers',
 ];
 
 export interface MatrixCondition {
@@ -228,8 +242,13 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         judge: 'model',
         condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'cpu', 'rss', 'lastWrite', 'logTail'] },
         remediation: 'supervisor',
-        precondition: 'a judgement backend is configured; a supervisor seat must exist to remediate',
-        requires: ['model', 'supervisor'],
+        // The `supervisor` capability key is retired: the rung now reaches the
+        // NAVIGATOR's model slot, so this row needs a judgement backend and
+        // nothing else. `requires: ['model']` alone — a row declaring a
+        // capability that no longer exists is dropped from the reachability
+        // filter and reported as unavailable for a reason nobody can fix.
+        precondition: 'a judgement backend is configured',
+        requires: ['model'],
     },
     {
         id: 'board-level-wedge',
@@ -239,8 +258,13 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         judge: 'model',
         condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'cpu', 'rss', 'lastWrite', 'logTail'] },
         remediation: 'restart-board',
-        precondition: 'a judgement backend is configured and a supervisor is present',
-        requires: ['model', 'supervisor'],
+        // Row 7 also declared the retired `supervisor` key. It is retired
+        // wholesale by the-board-restarts-only-when-it-stops-answering;
+        // whichever of the two lands second must leave the key gone, so it is
+        // removed here too rather than left as a declaration of something that
+        // no longer exists.
+        precondition: 'a judgement backend is configured',
+        requires: ['model'],
         // Change 10: the RESTART MECHANISM is the controller's and ships with
         // the spine subtask; the MODEL-JUDGED trigger is not implemented here,
         // so this row declares itself unavailable rather than silently never

@@ -2120,23 +2120,29 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
     // readable by any client; these flags are the CLI's door onto it. Endpoints
     // and models still come from the existing `agentControlProviders` rows — a
     // `--tier` entry names only the provider id, its role and its metadata.
+    //
+    // `--supervisor` is RETIRED (plan: the-pilot-and-the-navigator-are-one-crew).
+    // The supervisor seat is gone and the Navigator is the escalation target.
+    // The flag says so and writes NOTHING: accepting it and storing a seat name
+    // nothing routes to would be a setting that lies.
     const supervisorFlag = getFlag('--supervisor');
+    if (supervisorFlag !== undefined) {
+        console.error('[switchboard] --supervisor is RETIRED — the supervisor seat no longer exists and nothing routes to it. The Navigator is the escalation target for the rows that used to wake a supervisor; configure it with PUT /controller/navigator (the panel\'s Navigator tile). Nothing was written.');
+    }
     const ceilingFlag = getFlag('--ceiling');
     const tierFlags = argv.reduce<string[]>((acc, a, i) => {
         if (a === '--tier' && argv[i + 1]) { acc.push(argv[i + 1]); }
         else if (a.startsWith('--tier=')) { acc.push(a.slice('--tier='.length)); }
         return acc;
     }, []);
-    if (supervisorFlag !== undefined || ceilingFlag !== undefined || tierFlags.length > 0) {
+    if (ceilingFlag !== undefined || tierFlags.length > 0) {
         const current = await apiGet(target, '/controller/judgement');
         const currentJson = current.json();
         const existing = (currentJson?.judgement && typeof currentJson.judgement === 'object') ? currentJson.judgement : {};
         const next: any = {
             tiers: Array.isArray(existing.tiers) && existing.tiers.length ? existing.tiers : [],
-            supervisorSeat: typeof existing.supervisorSeat === 'string' ? existing.supervisorSeat : null,
             globalCeilingPerDay: typeof existing.globalCeilingPerDay === 'number' ? existing.globalCeilingPerDay : null,
         };
-        if (supervisorFlag !== undefined) { next.supervisorSeat = supervisorFlag || null; }
         if (ceilingFlag !== undefined) {
             const n = Number(ceilingFlag);
             if (!Number.isFinite(n) || n <= 0) { console.error(`[switchboard] --ceiling requires a positive number (got '${ceilingFlag}').`); exitFlushed(5); }
@@ -2164,7 +2170,13 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
     if (stuckPasses !== undefined) {
         const n = Number(stuckPasses);
         if (!Number.isFinite(n) || n < 1) { console.error(`[switchboard] --stuck-passes requires a positive integer (got '${stuckPasses}').`); exitFlushed(5); }
-        config.supervisorStuckPasses = Math.floor(n);
+        config.escalationStuckPasses = Math.floor(n);
+    }
+    const navigatorDeadline = getFlag('--navigator-deadline');
+    if (navigatorDeadline !== undefined) {
+        const n = Number(navigatorDeadline);
+        if (!Number.isFinite(n) || n <= 0) { console.error(`[switchboard] --navigator-deadline requires a positive number of ms (got '${navigatorDeadline}').`); exitFlushed(5); }
+        config.navigatorDeadlineMs = Math.floor(n);
     }
     const deadlineFlag = getFlag('--judgement-deadline');
     if (deadlineFlag !== undefined) {

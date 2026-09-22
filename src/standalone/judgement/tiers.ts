@@ -51,7 +51,6 @@ export interface TierDeclaration {
 
 export interface JudgementConfigView {
     tiers: TierDeclaration[];
-    supervisorSeat: string | null;
     globalCeilingPerDay: number | null;
     source: string;
     /** Set when the config could not be resolved — never an empty list. */

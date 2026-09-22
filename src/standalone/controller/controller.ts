@@ -15,12 +15,14 @@ import {
     capabilityForKey,
     probeCapabilities,
     providerForSeat,
+    readNavigatorSlot,
     rungReachable,
     type CapabilitySnapshot,
     type ControllerApiRequest,
     type ControllerApiResponse,
+    type NavigatorProbe,
 } from './capabilities';
-import { redactAndTail, hasUsableEvidence } from './redact';
+import { redact, redactAndTail, hasUsableEvidence } from './redact';
 import { composeReportEntry, type EntryAction, type RestartRecord, type JudgementTrace } from './report';
 import {
     walkJudgementChain,
@@ -35,7 +37,7 @@ import {
     type ProcessTable, type PreviousSample, type Reading, type WriteScan,
 } from './sample';
 import {
-    buildSupervisorPrompt,
+    buildNavigatorEscalationPrompt,
     emptyEscalationState,
     type EscalationState,
     type EscalationRecord,
@@ -53,9 +55,16 @@ import { callModel } from '../judgement/modelClient';
  * This is the SPINE: the CLI client, its clock, its board lease, its capability
  * declaration, the matrix as a data store, the escalation ladder and the report
  * — with the MECHANICAL rows only (1, 2 and 4). It contains NO model call at
- * all. The judgement rows, the tiered backends, the supervisor seat and reroute
- * are a later subtask; here rows 3, 5, 6, 7 and 8 are present in the store and
- * report as unavailable with their reason.
+ * all. The judgement rows, the tiered backends and reroute are a later subtask;
+ * here rows 3, 5, 6, 7 and 8 are present in the store and report as unavailable
+ * with their reason.
+ *
+ * The Pilot and the Navigator are ONE CREW (plan:
+ * the-pilot-and-the-navigator-are-one-crew): the supervisor SEAT is retired and
+ * the Navigator is the escalation target for rows 3, 6 and 8, and the observer
+ * the Pilot reports its own wake to. Both jobs go through ONE model-client seam
+ * (`askNavigatorModel`), so the redaction, the budget counter and the model-id
+ * recording cannot diverge between them.
  *
  * The controller is a CLIENT: a separate process that drives the board through
  * the CLI's own `apiRequest` path (injected as `apiRequest`). It opens no socket
@@ -90,12 +99,19 @@ export interface ControllerRuntimeConfig {
     judgementDeadlineMs: number;
     /** One label is a handful of tokens; the ceiling is a cost control. */
     judgementMaxTokens: number;
-    /** Consecutive passes a subject must be stuck before a supervisor is woken. */
-    supervisorStuckPasses: number;
-    /** How long an open supervisor escalation is honoured before it times out. */
-    supervisorEscalationTtlMs: number;
+    /** Consecutive passes a subject must be stuck before the Navigator is asked. */
+    escalationStuckPasses: number;
     /** How long a quota stand-down lasts before the seat is eligible again. */
     quotaStandDownMs: number;
+    /**
+     * Total budget for one Navigator call, covering CONNECT. Larger than the
+     * classifier's: the Navigator is asked to read a case, not to emit one line
+     * of closed-set flags, and it may be a hosted model on the far side of the
+     * internet.
+     */
+    navigatorDeadlineMs: number;
+    /** The Navigator answers in prose; a label-sized budget would truncate it. */
+    navigatorMaxTokens: number;
 }
 
 export const DEFAULT_CONTROLLER_CONFIG: ControllerRuntimeConfig = {
@@ -111,9 +127,10 @@ export const DEFAULT_CONTROLLER_CONFIG: ControllerRuntimeConfig = {
     evidenceTailBytes: 8192,
     judgementDeadlineMs: 12_000,
     judgementMaxTokens: 32,
-    supervisorStuckPasses: 2,
-    supervisorEscalationTtlMs: 30 * 60_000,
+    escalationStuckPasses: 2,
     quotaStandDownMs: 60 * 60_000,
+    navigatorDeadlineMs: 30_000,
+    navigatorMaxTokens: 512,
 };
 
 interface SubjectState {
@@ -126,6 +143,17 @@ interface SubjectState {
     /** Consecutive passes this subject has produced a diagnosis. */
     stuckPasses: number;
     lastClass: JudgementClass | null;
+    /**
+     * How many times THIS CONTROLLER has nudged this subject (plan:
+     * the-pilot-and-the-navigator-are-one-crew).
+     *
+     * The board's nudge ledger records only the LAST time a sweep prompted a
+     * seat, which cannot answer "has this already been tried twice?". An
+     * escalation that cannot say how often the cheap rung has already been
+     * applied is how a Navigator recommends the remediation that has already
+     * failed twice.
+     */
+    nudges: number;
 }
 
 interface QuotaEntry {
@@ -392,8 +420,8 @@ function configAssumptions(cfg: ControllerRuntimeConfig): string[] {
             ? 'RSS restart trigger: disabled — no --restart-rss-mb configured'
             : `RSS restart trigger: ${Math.round(cfg.restartRssThresholdBytes / (1024 * 1024))}MB`,
         `judgement deadline=${cfg.judgementDeadlineMs}ms (covers CONNECT, not just read), max_tokens=${cfg.judgementMaxTokens}, reasoning_effort=none (source: controller config)`,
+        `navigator: escalation after ${cfg.escalationStuckPasses} stuck pass(es); one digest per acting wake or unusable judgement reply; deadline=${cfg.navigatorDeadlineMs}ms, max_tokens=${cfg.navigatorMaxTokens}; quota stand-down=${Math.round(cfg.quotaStandDownMs / 60000)}m (source: controller config)`,
         `CPU sampling: USER_HZ assumed ${ASSUMED_USER_HZ} (source: controller constant — sysconf(_SC_CLK_TCK) is not reachable from Node; every CPU percentage is computed against this)`,
-        `supervisor escalation: stuck>=${cfg.supervisorStuckPasses} pass(es), TTL=${Math.round(cfg.supervisorEscalationTtlMs / 60000)}m, quota stand-down=${Math.round(cfg.quotaStandDownMs / 60000)}m (source: controller config)`,
     ];
 }
 
@@ -473,11 +501,16 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     // queue pass will happily push work back into a seat the controller stood
     // down, so the state must be authoritative each pass.
     const quota = await readQuota(apiRequest, port, workspaceRoot);
-    // A late supervisor answer must not reopen a closed escalation: stale opens
-    // are closed as `timedout` on the BOARD (the table is board-owned) BEFORE
-    // the open set is read, so the "one open per subject" bound cannot leak.
-    // Failure is non-fatal — the gate still refuses a second open.
-    await tryRequest(apiRequest, port, 'POST', '/controller/escalations/prune', workspaceRoot, { controllerId, ttlMs: cfg.supervisorEscalationTtlMs });
+    // The Navigator's slot, read ONCE per wake and used for BOTH the capability
+    // block the report prints and the escalation gate that spends the call. Two
+    // reads of one config could disagree, and the report would then describe a
+    // Navigator the gate is not asking.
+    //
+    // There is deliberately no `POST /controller/escalations/prune` any more.
+    // That closed stale opens as `timedout` so a late supervisor answer could
+    // not reopen them; the answer now arrives inside the wake that asked, so
+    // there is no open to expire and no late post to guard against.
+    const navigator = await readNavigatorSlot({ apiRequest, port, workspaceRoot });
     const escalations = await readEscalations(apiRequest, port, workspaceRoot);
 
     const seatByName = new Map<string, any>();
@@ -489,7 +522,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     const caps = await probeCapabilities({
         workspaceRoot, port, apiRequest,
         tiers: judgementConfig.tiers,
-        supervisorSeat: judgementConfig.supervisorSeat,
+        navigator,
         fleet,
         health,
     });
@@ -541,9 +574,14 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     // 6. Evaluate the matrix over held work, in order. Diagnosis of held work
     //    runs before any new dispatch (this subtask dispatches nothing).
     //
-    //    The supervisor is EXCLUDED before any rule is evaluated: an excluded
-    //    seat never becomes a subject, so no row is ever emitted for it.
-    const exclusionSet = controllerExclusionSet(judgementConfig.supervisorSeat);
+    //    The exclusion set is EMPTY now (plan:
+    //    the-pilot-and-the-navigator-are-one-crew). It existed to keep the
+    //    supervisor SEAT out of its own matrix — "ask the supervisor why the
+    //    supervisor is stuck" is a loop with a tool-using agent on the end of it.
+    //    The supervisor is gone and the Navigator is a model, not a seat, so
+    //    there is no seat left to exclude. The seam is kept, empty and stated,
+    //    rather than deleted: the next seat-shaped capability gets it back.
+    const exclusionSet = controllerExclusionSet();
     const subjects = collectSubjects(plans, cfg, now(), exclusionSet);
     const rowsUnavailable = matrix.rows
         .filter(r => !rowEnabled(r, caps))
@@ -555,6 +593,17 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         });
 
     const actions: EntryAction[] = [];
+    // Judgement replies the controller could NOT use — `invalid`, `unreachable`,
+    // `key-missing`, `error` — collected as they happen so the end-of-wake
+    // digest can tell the Navigator that its partner stopped working.
+    //
+    // This is the second digest trigger and it closes a real blind spot: seven
+    // of the ten rows are `judge: 'model'`, and when every reply fails
+    // validation the Pilot has done nothing, so a wake where the model is
+    // broken would otherwise be indistinguishable from a wake where everything
+    // was fine. `unknown` is NOT collected here — it is a valid "I saw nothing
+    // worth reporting", not a failure.
+    const unusableJudgement: UnusableJudgementReply[] = [];
     const readLog = makeLogReader(apiRequest, port, workspaceRoot, cfg.evidenceTailBytes);
 
     // ONE `/proc` snapshot for the whole wake (change 2). Once, not per seat:
@@ -586,11 +635,14 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         escalations,
         quota,
         seatByName,
+        nudges,
         tiers: judgementConfig.tiers,
-        supervisorSeat: judgementConfig.supervisorSeat,
+        navigator,
         ceilingReached,
         dayKey,
         judgementCalls: state.judgementCalls,
+        countModelCall,
+        unusableJudgement,
     };
 
     // ── BOARD-LEVEL CHECK — never gated on what the board can see ─────────
@@ -820,6 +872,28 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, health, decision: restartDecision });
     }
 
+    // 7b. The end-of-wake DIGEST — one Navigator call, after every action is
+    //     applied, so it describes a settled wake.
+    //
+    //     Two triggers, and only two: the wake took at least one action, or the
+    //     Pilot produced a judgement reply it could not use. A wake where the
+    //     Pilot answered normally and found nothing makes NO call — the failure
+    //     mode this bounds is a per-action call, which drifts back toward
+    //     calling on the cadence.
+    //
+    //     It must not delay or gate the wake: a Navigator that does not answer
+    //     leaves the wake intact and the entry says the digest was not
+    //     delivered. It is also skipped when a performed restart has already
+    //     written its own report — that wake is over.
+    if ((!restart || restart.rateLimited) && (actions.length > 0 || unusableJudgement.length > 0)) {
+        const digest = await composeNavigatorDigest(
+            { ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan },
+            actions,
+            unusableJudgement,
+        );
+        actions.push(digest);
+    }
+
     // 8. Compose and write the report to the BOARD (never the controller's disk).
     const armingState = describeArmingState(caps, stateView);
     const facts = {
@@ -1004,17 +1078,46 @@ function makeLogReader(apiRequest: ControllerApiRequest, port: number, workspace
 
 // ── Judgement board state ────────────────────────────────────────────────
 
+/**
+ * One judgement reply the controller could not use, and why. Recorded per
+ * attempt so the digest can name the seats the Pilot could not read rather than
+ * saying "something went wrong".
+ */
+interface UnusableJudgementReply {
+    seat: string;
+    planId: string;
+    /** `invalid` | `unreachable` | `key-missing` | `error`. */
+    outcome: string;
+    providerId: string;
+    error?: string;
+}
+
 interface JudgementRuntimeContext {
     config: JudgementConfigView;
     escalations: EscalationState;
     quota: Record<string, QuotaEntry>;
     seatByName: Map<string, any>;
+    /** The board's nudge ledger — seat -> when a sweep last prompted it. */
+    nudges: Record<string, number>;
     tiers: TierDeclaration[];
-    supervisorSeat: string | null;
+    /**
+     * The Navigator's model slot, read once this wake. The escalation gate and
+     * the capability block read the SAME value — a gate that asked a different
+     * Navigator than the report described is the divergence this avoids.
+     */
+    navigator: NavigatorProbe;
     ceilingReached: boolean;
     dayKey: string;
     /** Shared by reference with controller state — increments mutate it. */
     judgementCalls: { dayKey: string; count: number };
+    /**
+     * The per-model call counter, shared by the Pilot's calls and every
+     * Navigator call (escalations and the digest alike) so
+     * `/controller/budget`'s `usedToday` stays true for both stations.
+     */
+    countModelCall: (providerId?: string | null, model?: string | null) => void;
+    /** Judgement replies this wake that failed validation — the digest's second trigger. */
+    unusableJudgement: UnusableJudgementReply[];
 }
 
 async function readJudgementConfig(apiRequest: ControllerApiRequest, port: number, workspaceRoot: string): Promise<JudgementConfigView> {
@@ -1024,13 +1127,12 @@ async function readJudgementConfig(apiRequest: ControllerApiRequest, port: numbe
     if (view && typeof view === 'object') {
         return {
             tiers: Array.isArray(view.tiers) ? view.tiers : [],
-            supervisorSeat: typeof view.supervisorSeat === 'string' && view.supervisorSeat ? view.supervisorSeat : null,
             globalCeilingPerDay: typeof view.globalCeilingPerDay === 'number' && view.globalCeilingPerDay > 0 ? view.globalCeilingPerDay : null,
             source: typeof view.source === 'string' ? view.source : 'controller.judgement',
             ...(view.unavailable ? { unavailable: view.unavailable } : {}),
         };
     }
-    return { tiers: [], supervisorSeat: null, globalCeilingPerDay: null, source: 'unreadable', unavailable: { reason: res ? 'board returned no judgement view' : 'judgement endpoint unreachable', source: 'controller.judgement' } };
+    return { tiers: [], globalCeilingPerDay: null, source: 'unreadable', unavailable: { reason: res ? 'board returned no judgement view' : 'judgement endpoint unreachable', source: 'controller.judgement' } };
 }
 
 async function readQuota(apiRequest: ControllerApiRequest, port: number, workspaceRoot: string): Promise<Record<string, QuotaEntry>> {
@@ -1065,21 +1167,23 @@ async function readEscalations(apiRequest: ControllerApiRequest, port: number, w
 /**
  * The controller's explicit matrix EXCLUSION set
  * (plan: judgement-tiers-the-supervisor-seat-and-reroute, change 8,
- * constraint 1).
+ * constraint 1; retired to empty by
+ * plan: the-pilot-and-the-navigator-are-one-crew).
  *
- * The supervisor is a SEAT, so the matrix would otherwise diagnose it when it
- * goes quiet — and "ask the supervisor why the supervisor is stuck" is a loop
- * with a tool-using agent on the end of it. The exclusion is stated here, by
- * name, and applied BEFORE any rule is evaluated: an excluded seat never
- * becomes a subject, so no row (mechanical or judgement) is ever emitted for it.
- * It is deliberately not left to a downstream gate, which would still emit the
- * row and could still act on it.
+ * It existed for one reason: the supervisor was a SEAT, so the matrix would
+ * diagnose it when it went quiet, and "ask the supervisor why the supervisor is
+ * stuck" is a loop with a tool-using agent on the end of it. The supervisor seat
+ * is retired and its replacement — the Navigator — is a model slot, not a seat,
+ * so there is nothing left to exclude.
+ *
+ * It returns an EMPTY SET rather than being deleted: the seam is where a
+ * seat-shaped escalation target would go back, and an exclusion that is applied
+ * before any rule is evaluated is cheaper to keep than to rediscover. It is
+ * deliberately not left to a downstream gate, which would still emit the row
+ * and could still act on it.
  */
-export function controllerExclusionSet(supervisorSeat: string | null | undefined): Set<string> {
-    const excluded = new Set<string>();
-    const seat = typeof supervisorSeat === 'string' ? supervisorSeat.trim() : '';
-    if (seat) { excluded.add(seat); }
-    return excluded;
+export function controllerExclusionSet(): Set<string> {
+    return new Set<string>();
 }
 
 function collectSubjects(plans: any[], cfg: ControllerRuntimeConfig, nowMs: number, excludedSeats: Set<string>): Subject[] {
@@ -1089,7 +1193,10 @@ function collectSubjects(plans: any[], cfg: ControllerRuntimeConfig, nowMs: numb
         const seat = typeof p.ownerSeat === 'string' ? p.ownerSeat : (typeof p.owner_seat === 'string' ? p.owner_seat : '');
         const ownerSince = p.ownerSince ?? p.owner_since ?? null;
         if (!seat || !ownerSince) { continue; }
-        // The supervisor is never a subject: no row may be emitted for it.
+        // An excluded seat never becomes a subject, so no row is emitted for it.
+        // The set is empty today (the supervisor seat is retired); the check
+        // stays because an excluded seat must be excluded BEFORE any rule runs,
+        // not gated downstream where the row would still be emitted.
         if (excludedSeats.has(seat)) { continue; }
         const ownerSinceMs = Date.parse(String(ownerSince));
         if (!Number.isFinite(ownerSinceMs)) { continue; }
@@ -1228,6 +1335,23 @@ async function diagnoseJudgement(subject: Subject, rows: MatrixRow[], ctx: Diagn
     // Count the calls that actually reached a model, for the declared ceiling.
     const calls = outcome.attempts.filter(a => a.outcome === 'answered' || a.outcome === 'unknown' || a.outcome === 'invalid' || a.outcome === 'unreachable').length;
     ctx.judgementCtx.judgementCalls.count += calls;
+
+    // Every attempt that failed validation, for the digest's second trigger.
+    // `answered` and `unknown` are NOT failures: `unknown` is a valid "I saw
+    // nothing worth reporting", and the whole point of the trigger is to tell
+    // the Navigator when its partner produced NOTHING usable — not when it
+    // reported that there was nothing to report.
+    for (const attempt of outcome.attempts) {
+        if (attempt.outcome === 'invalid' || attempt.outcome === 'unreachable' || attempt.outcome === 'key-missing' || attempt.outcome === 'error') {
+            ctx.judgementCtx.unusableJudgement.push({
+                seat: subject.seat,
+                planId: subject.planId,
+                outcome: attempt.outcome,
+                providerId: attempt.providerId,
+                ...(attempt.error ? { error: attempt.error } : {}),
+            });
+        }
+    }
 
     // OBSERVATIONS -> CLASS, in code (change 4). The model said what it saw;
     // the conclusion is drawn here, where it can be read and tested.
@@ -1651,12 +1775,12 @@ async function applyDiagnosis(subject: Subject, diagnosis: Diagnosis, ctx: Apply
     const base = actionBase(subject, diagnosis, ctx);
     const remediation = diagnosis.row.remediation;
 
-    // Track the subject's persistence for the supervisor escalation gate, even
+    // Track the subject's persistence for the Navigator escalation gate, even
     // for a one-shot remediation: "stuck across N consecutive passes" is a fact
     // about the subject, not about the ladder.
     let st = ctx.state.subjects[key];
     if (!st || typeof st.rung !== 'number' || !Number.isFinite(st.rung)) {
-        st = { rung: ESCALATION_LADDER.includes(remediation) ? ESCALATION_LADDER.indexOf(remediation) : 0, atRung: 0, ruleId: diagnosis.row.id, firstSeenAt: ctx.now(), lastFiredAt: ctx.now(), ownerSince: subject.ownerSince, stuckPasses: 1, lastClass: diagnosis.judgement?.class ?? null };
+        st = { rung: ESCALATION_LADDER.includes(remediation) ? ESCALATION_LADDER.indexOf(remediation) : 0, atRung: 0, ruleId: diagnosis.row.id, firstSeenAt: ctx.now(), lastFiredAt: ctx.now(), ownerSince: subject.ownerSince, stuckPasses: 1, lastClass: diagnosis.judgement?.class ?? null, nudges: 0 };
         ctx.state.subjects[key] = st;
     } else {
         st.stuckPasses += 1;
@@ -1745,6 +1869,13 @@ async function applyRemediation(
             action.outcome = json?.success === false ? 'failed' : 'applied';
             action.detail = `${diagnosis.detail}; nudge ${json?.success === false ? 'refused' : 'delivered'}`;
             action.ownerSinceReStamped = false;
+            // Recorded so a later escalation can say this cheap rung has already
+            // been applied, and how often. Counted on DELIVERY, not on attempt:
+            // a refused nudge never reached the seat and is not "already tried".
+            const nudged = ctx.state.subjects[subjectKey(subject)];
+            if (nudged && action.outcome === 'applied') {
+                nudged.nudges = (typeof nudged.nudges === 'number' ? nudged.nudges : 0) + 1;
+            }
             return action;
         }
         case 'clear-respawn': {
@@ -1779,21 +1910,24 @@ async function applyRemediation(
         }
         case 'relay-answer': {
             // Row 3 — a seat waiting on a human. The classification cannot
-            // derive the ANSWER, so relay hands the question to the supervisor
-            // when one is available, and otherwise escalates with the question
+            // derive the ANSWER, so relay hands the question to the NAVIGATOR
+            // when one is configured, and otherwise escalates with the question
             // quoted rather than nudging the seat (a nudge is noise to a seat
             // that is waiting on a person).
-            const gate = escalationGate(subject, diagnosis, ctx);
-            if (gate.ok) {
-                const opened = await openSupervisorEscalation(subject, diagnosis, ctx);
-                action.outcome = opened.sent ? 'applied' : 'failed';
-                action.detail = `${diagnosis.detail}; relayed to supervisor seat '${ctx.judgementCtx.supervisorSeat}'${opened.error ? ` (${opened.error})` : ''}`;
-                if (opened.escalationId && action.judgement) { action.judgement.escalationId = opened.escalationId; }
-                return action;
-            }
             const question = extractQuestion(diagnosis.evidence);
-            action.detail = `${diagnosis.detail}; supervisor unavailable (${gate.reason}) — escalating with the question quoted: ${question}`;
-            return escalateToHuman(action, subject, ctx, question);
+            const consulted = await consultNavigator(subject, diagnosis, ctx);
+            if (!consulted.asked) {
+                action.detail = `${diagnosis.detail}; Navigator not consulted (${consulted.gateReason}) — escalating with the question quoted: ${question}`;
+                return escalateToHuman(action, subject, ctx, question);
+            }
+            attachNavigatorEscalation(action, consulted.asked);
+            if (!consulted.asked.answered) {
+                action.detail = `${diagnosis.detail}; the Navigator '${consulted.asked.modelId}' did not answer (${consulted.asked.error}) — escalating with the question quoted: ${question}`;
+                return escalateToHuman(action, subject, ctx, question);
+            }
+            action.outcome = 'applied';
+            action.detail = `${diagnosis.detail}; relayed to the Navigator '${consulted.asked.modelId}' — ${consulted.asked.reply}`;
+            return action;
         }
         case 'reroute': {
             // Row 5 — out of quota. Stand down (board state, re-read next wake),
@@ -1827,31 +1961,46 @@ async function applyRemediation(
             return action;
         }
         case 'supervisor': {
-            const gate = escalationGate(subject, diagnosis, ctx);
-            if (gate.ok) {
-                const opened = await openSupervisorEscalation(subject, diagnosis, ctx);
-                action.outcome = opened.sent ? 'applied' : 'failed';
-                action.detail = `${diagnosis.detail}; handed to supervisor seat '${ctx.judgementCtx.supervisorSeat}'${opened.error ? ` (${opened.error})` : ''}`;
-                if (opened.escalationId && action.judgement) { action.judgement.escalationId = opened.escalationId; }
-                return action;
+            // Row 6 — the looping seat the cheaper rungs could not settle. The
+            // rung spends ONE model call on the case: the Navigator is asked
+            // what it makes of it, with everything already tried attached, and
+            // its answer is recorded. It acts on nothing.
+            const consulted = await consultNavigator(subject, diagnosis, ctx);
+            if (!consulted.asked) {
+                action.detail = `${diagnosis.detail}; Navigator not consulted (${consulted.gateReason}) — diagnosis written and escalated to a human`;
+                return escalateToHuman(action, subject, ctx, diagnosis.detail);
             }
-            action.detail = `${diagnosis.detail}; supervisor unavailable (${gate.reason}) — diagnosis written and escalated to a human`;
-            return escalateToHuman(action, subject, ctx, diagnosis.detail);
+            attachNavigatorEscalation(action, consulted.asked);
+            if (!consulted.asked.answered) {
+                action.detail = `${diagnosis.detail}; the Navigator '${consulted.asked.modelId}' did not answer (${consulted.asked.error}) — diagnosis written and escalated to a human`;
+                return escalateToHuman(action, subject, ctx, diagnosis.detail);
+            }
+            action.outcome = 'applied';
+            action.detail = `${diagnosis.detail}; handed to the Navigator '${consulted.asked.modelId}' — ${consulted.asked.reply}`;
+            return action;
         }
         case 'record-unknown': {
-            // Row 8 — record evidence, escalate, act not at all. The escalation
-            // is the tier-2 -> tier-3 path and is gated by the same criteria.
-            const gate = escalationGate(subject, diagnosis, ctx);
-            if (gate.ok) {
-                const opened = await openSupervisorEscalation(subject, diagnosis, ctx);
-                action.outcome = opened.sent ? 'applied' : 'recorded';
-                action.detail = `${diagnosis.detail}; no remediation applied; escalated to supervisor seat '${ctx.judgementCtx.supervisorSeat}'${opened.error ? ` (${opened.error})` : ''}`;
-                if (opened.escalationId && action.judgement) { action.judgement.escalationId = opened.escalationId; }
-                return action;
+            // Row 8 — record evidence, escalate, act not at all. Row 8 is the
+            // load-bearing "I cannot classify this" row: it exists so the Pilot
+            // never guesses a plausible class, and its escalation used to reach
+            // nobody but the operator. It now reaches the Navigator first, and
+            // the operator is the TERMINAL fallback — the same shape as row 6,
+            // because "an unconfigured Navigator" and "the Navigator did not
+            // answer" must both land somewhere, and say which one it was.
+            const consulted = await consultNavigator(subject, diagnosis, ctx);
+            if (!consulted.asked) {
+                action.outcome = 'recorded';
+                action.detail = `${diagnosis.detail}; no remediation applied; Navigator not consulted (${consulted.gateReason}) — escalated to a human`;
+                return escalateToHuman(action, subject, ctx, diagnosis.detail);
             }
-            action.outcome = 'recorded';
-            action.detail = `${diagnosis.detail}; no remediation applied (supervisor not woken: ${gate.reason})`;
-            action.ownerSinceReStamped = false;
+            attachNavigatorEscalation(action, consulted.asked);
+            if (!consulted.asked.answered) {
+                action.outcome = 'recorded';
+                action.detail = `${diagnosis.detail}; no remediation applied; the Navigator '${consulted.asked.modelId}' did not answer (${consulted.asked.error}) — escalated to a human`;
+                return escalateToHuman(action, subject, ctx, diagnosis.detail);
+            }
+            action.outcome = 'applied';
+            action.detail = `${diagnosis.detail}; no remediation applied; the Navigator '${consulted.asked.modelId}' answered — ${consulted.asked.reply}`;
             return action;
         }
         case 'report-to-lead': {
@@ -1945,20 +2094,32 @@ async function applyRemediation(
 }
 
 /**
- * The supervisor escalation gate — criteria, not a rate limit. One open
- * escalation per subject is the primary bound: a stuck seat escalates once, not
- * once per wake, until the supervisor answers or the escalation times out.
+ * The escalation gate — criteria, not a rate limit (plan:
+ * the-pilot-and-the-navigator-are-one-crew).
+ *
+ * It gated on a supervisor SEAT and now gates on a configured NAVIGATOR. What
+ * is kept is the reasoning about whether a case is WORTH a call: the tiers must
+ * have been walked, the seat must not be parked, the subject must be stuck
+ * across enough passes, and one escalation per subject is the primary bound — a
+ * stuck seat escalates once, not once per wake.
+ *
+ * The bound is "an escalation record already exists for this subject". It used
+ * to be "an OPEN record", because the supervisor answered on its own schedule
+ * and an answered escalation freed the slot. The Navigator answers inside the
+ * wake, so there is no open/answered transition left to key on; what remains is
+ * the same cost bound, stated over the record's existence.
  */
 function escalationGate(subject: Subject, diagnosis: Diagnosis, ctx: ApplyContext): { ok: boolean; reason: string } {
-    const supervisorSeat = ctx.judgementCtx.supervisorSeat;
-    if (!supervisorSeat) { return { ok: false, reason: 'no supervisor seat configured' }; }
-    if (!ctx.caps.supervisorSeat.present) { return { ok: false, reason: ctx.caps.supervisorSeat.reason }; }
-    if (subject.seat === supervisorSeat) { return { ok: false, reason: 'the subject IS the supervisor seat' }; }
-    // The tiers are ordered and not skippable: with an escalation tier
-    // configured, the supervisor is never woken on a tier-1 answer — the chain
-    // must have reached the last tier (tier 1 declined and tier 2 answered or
-    // declined) before an agent is spent. With tier 2 absent, tier 1 reaches
-    // the supervisor directly.
+    const navigator = ctx.judgementCtx.navigator;
+    if (!navigator.configured) {
+        // The Navigator's own reason travels verbatim: "no Navigator model
+        // configured" must not be the answer for a pointer that names a missing
+        // row or a config that could not be read.
+        return { ok: false, reason: `no Navigator model is configured (${navigator.reason})` };
+    }
+    // The tiers are ordered and not skippable: the Navigator is never asked on
+    // an answer the chain did not reach its end on. With one rung every tier is
+    // last, so this only refuses when an operator declared a longer list.
     const tierCount = ctx.judgementCtx.tiers.length;
     const consulted = diagnosis.judgement?.tierChain.length ?? 0;
     if (tierCount > 1 && consulted < tierCount) {
@@ -1968,18 +2129,77 @@ function escalationGate(subject: Subject, diagnosis: Diagnosis, ctx: ApplyContex
     if (seatRow && seatRow.hidden === true) { return { ok: false, reason: 'the seat is parked/hidden' }; }
     const st = ctx.state.subjects[subjectKey(subject)];
     const stuck = st ? st.stuckPasses : 1;
-    if (stuck < ctx.cfg.supervisorStuckPasses) {
-        return { ok: false, reason: `stuck ${stuck} pass(es), fewer than the required ${ctx.cfg.supervisorStuckPasses}` };
+    if (stuck < ctx.cfg.escalationStuckPasses) {
+        return { ok: false, reason: `stuck ${stuck} pass(es), fewer than the required ${ctx.cfg.escalationStuckPasses}` };
     }
-    const open = Object.values(ctx.judgementCtx.escalations.open).find(e => e.subjectKey === subjectKey(subject) && e.status === 'open');
-    if (open) { return { ok: false, reason: `an escalation is already open (${open.escalationId})` }; }
+    const prior = ctx.judgementCtx.escalations.open[subjectKey(subject)];
+    if (prior) { return { ok: false, reason: `an escalation is already on record for this subject (${prior.escalationId})` }; }
     return { ok: true, reason: '' };
 }
 
-async function openSupervisorEscalation(subject: Subject, diagnosis: Diagnosis, ctx: ApplyContext): Promise<{ sent: boolean; escalationId?: string; error?: string }> {
-    const supervisorSeat = ctx.judgementCtx.supervisorSeat;
-    if (!supervisorSeat) { return { sent: false, error: 'no supervisor seat configured' }; }
+/** What one Navigator escalation produced. */
+interface NavigatorEscalation {
+    escalationId: string;
+    answered: boolean;
+    /** The reply, or the reason there is none. Truncated for the report line. */
+    reply: string;
+    /** `providerId (model)` — which model answered, or was asked and did not. */
+    modelId: string;
+    error?: string;
+}
+
+/**
+ * Gate, then ask. Shared by rows 3, 6 and 8 so the criteria and the call cannot
+ * drift between them. `asked: null` means the gate refused and `gateReason`
+ * says why; a returned escalation with `answered: false` means the Navigator is
+ * configured but did not answer — two DIFFERENT facts the human fallback must
+ * not report identically.
+ */
+async function consultNavigator(
+    subject: Subject,
+    diagnosis: Diagnosis,
+    ctx: ApplyContext,
+): Promise<{ asked: NavigatorEscalation | null; gateReason: string }> {
+    const gate = escalationGate(subject, diagnosis, ctx);
+    if (!gate.ok) { return { asked: null, gateReason: gate.reason }; }
+    return { asked: await askNavigator(subject, diagnosis, ctx), gateReason: '' };
+}
+
+/**
+ * Ask the Navigator about one stuck case, and record the answer.
+ *
+ * The escalation is SYNCHRONOUS: the model call returns inside this wake, and
+ * its answer is attached to the action in the same entry. That is the whole
+ * difference from the supervisor seat — an agent in a pty answers on its own
+ * schedule, which is what the open/answered/timeout lifecycle existed to model.
+ *
+ * The AUDIT RECORD is still written (the table is board-owned, and "what was
+ * escalated, when, and what came back" must survive), but it is written ONCE,
+ * with the answer already in it. Nothing is left open and nothing is pruned.
+ */
+async function askNavigator(subject: Subject, diagnosis: Diagnosis, ctx: ApplyContext): Promise<NavigatorEscalation> {
     const escalationId = crypto.randomUUID();
+    const navigator = ctx.judgementCtx.navigator;
+    const modelId = navigator.model ? `${navigator.providerId || 'unset'} (${navigator.model})` : String(navigator.providerId || 'unset');
+    const st = ctx.state.subjects[subjectKey(subject)];
+    const prompt = buildNavigatorEscalationPrompt({
+        seat: subject.seat,
+        planId: subject.planId,
+        title: subject.title,
+        ruleId: diagnosis.row.id,
+        cause: diagnosis.row.cause,
+        evidence: diagnosis.evidence,
+        evidenceWindow: diagnosis.evidenceWindow,
+        tierAttempts: diagnosis.judgement?.tierChain ?? [],
+        escalationId,
+        stuckPasses: st ? st.stuckPasses : 1,
+        controllerNudges: st && typeof st.nudges === 'number' ? st.nudges : 0,
+        lastBoardNudgeAt: ctx.judgementCtx.nudges[subject.seat] ?? null,
+        ladderRung: diagnosis.row.remediation,
+        priorVerdict: subject.lastAction,
+    });
+
+    const answer = await askNavigatorModel(ctx, prompt.system, prompt.user);
     const record: EscalationRecord = {
         escalationId,
         subjectKey: subjectKey(subject),
@@ -1989,34 +2209,180 @@ async function openSupervisorEscalation(subject: Subject, diagnosis: Diagnosis, 
         openedAt: ctx.now(),
         tierChain: diagnosis.judgement?.tierChain ?? [],
         evidenceWindow: diagnosis.evidenceWindow,
-        status: 'open',
+        answeredAt: ctx.now(),
+        answer: {
+            ok: answer.answered,
+            content: answer.reply,
+            providerId: navigator.providerId,
+            model: navigator.model,
+            latencyMs: answer.latencyMs,
+        },
     };
-    const prompt = buildSupervisorPrompt({
-        seat: subject.seat,
-        planId: subject.planId,
-        title: subject.title,
-        ruleId: diagnosis.row.id,
-        cause: diagnosis.row.cause,
-        evidence: diagnosis.evidence,
-        evidenceWindow: diagnosis.evidenceWindow,
-        tierAttempts: record.tierChain,
-        escalationId,
-    });
-    const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptySendPrompt', ctx.workspaceRoot, { name: supervisorSeat, data: prompt, machineOrigin: true });
-    const json = safeJson(res);
-    if (json?.success === false) {
-        return { sent: false, error: json?.error || `ptySendPrompt status ${res?.status}` };
-    }
-    // Record the open escalation on the BOARD (board-owned table). A refusal
-    // means another escalation for this subject is already open — reported, and
-    // the prompt was already delivered, so the record is what matters here.
+    // Recorded on the BOARD (board-owned table). A refusal means a record for
+    // this subject already exists — reported on the action, never swallowed:
+    // the answer is what the operator needs, and the record is the audit.
     const recorded = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/controller/escalations/open', ctx.workspaceRoot, { controllerId: ctx.controllerId, escalation: record });
     const recordedJson = safeJson(recorded);
     if (!recordedJson?.success) {
-        return { sent: true, escalationId, error: `prompt delivered but the escalation record was refused: ${recordedJson?.reason || recorded?.status || 'no response'}` };
+        ctx.judgementCtx.escalations.open[record.subjectKey] = record;
+        return {
+            escalationId,
+            answered: answer.answered,
+            reply: answer.reply,
+            modelId,
+            error: `${answer.error ? `${answer.error}; ` : ''}the escalation audit record was refused (${recordedJson?.reason || recorded?.status || 'no response'})`,
+        };
     }
     ctx.judgementCtx.escalations.open[record.subjectKey] = record;
-    return { sent: true, escalationId };
+    return { escalationId, answered: answer.answered, reply: answer.reply, modelId, ...(answer.error ? { error: answer.error } : {}) };
+}
+
+/** Attach the escalation's id and answer to the action's judgement trace. */
+function attachNavigatorEscalation(action: EntryAction, asked: NavigatorEscalation): void {
+    if (!action.judgement) { return; }
+    action.judgement.escalationId = asked.escalationId;
+    if (asked.answered) { action.judgement.escalationReply = asked.reply; }
+}
+
+/**
+ * THE model-client seam for the Navigator (plan:
+ * the-pilot-and-the-navigator-are-one-crew, "one Navigator call path").
+ *
+ * Every Navigator call goes through here — the escalation rung, the
+ * end-of-wake digest, and the mission adjudication that arrives separately in
+ * `a-mission-is-watched-for-the-whole-of-its-life`. Two paths to one model is
+ * two places for the redaction, the budget counter and the model-id recording
+ * to diverge, so there is exactly one.
+ *
+ * It reads the credential through the SAME store the Pilot's tiers use
+ * (`readTierApiKey`), counts the call BEFORE it is made — a call that failed
+ * still spent the allowance — and returns a tagged result rather than throwing.
+ */
+async function askNavigatorModel(
+    ctx: ApplyContext,
+    system: string,
+    user: string,
+): Promise<{ answered: boolean; reply: string; latencyMs: number; error?: string }> {
+    const navigator = ctx.judgementCtx.navigator;
+    if (!navigator.configured || !navigator.endpoint) {
+        return { answered: false, reply: '', latencyMs: 0, error: `no Navigator model is configured (${navigator.reason})` };
+    }
+    // A local server is not authenticated. For anything else the key is read
+    // from the board's encrypted store, and a declared-but-unreadable key is
+    // reported rather than silently downgraded to an anonymous call.
+    let apiKey: string | null = null;
+    if (navigator.providerId && navigator.providerId !== 'local') {
+        const keyRead = await readTierApiKey(ctx.workspaceRoot, navigator.providerId);
+        if (keyRead.error) { return { answered: false, reply: '', latencyMs: 0, error: keyRead.error }; }
+        if (!keyRead.key) {
+            return { answered: false, reply: '', latencyMs: 0, error: `a key is declared for provider '${navigator.providerId}' but none could be read` };
+        }
+        apiKey = keyRead.key;
+    }
+    ctx.judgementCtx.countModelCall(navigator.providerId, navigator.model);
+    const res = await callModel({
+        endpoint: navigator.endpoint,
+        model: navigator.model || '',
+        apiKey,
+        system,
+        user,
+        deadlineMs: ctx.cfg.navigatorDeadlineMs,
+        maxTokens: ctx.cfg.navigatorMaxTokens,
+    });
+    if (!res.ok) {
+        return { answered: false, reply: '', latencyMs: res.latencyMs, error: res.error || `the Navigator's endpoint returned ${res.status}` };
+    }
+    const content = String(res.content || '').trim();
+    if (!content) {
+        return { answered: false, reply: '', latencyMs: res.latencyMs, error: `the Navigator returned nothing (finish: ${res.doneReason || 'unknown'})` };
+    }
+    return { answered: true, reply: content.slice(0, 1000), latencyMs: res.latencyMs };
+}
+
+/**
+ * The end-of-wake digest (plan: the-pilot-and-the-navigator-are-one-crew).
+ *
+ * ONE call per acting wake, and one per wake where the Pilot could not read the
+ * board — never one per action. It carries what the wake DID and which seats
+ * the Pilot could not read, so the Navigator is told what its partner is doing
+ * rather than being parachuted in later with no history.
+ *
+ * The channel is INERT. The reply is recorded in the report and read by nothing:
+ * no remediation arm, no ladder computation and no gate consults it. Acting
+ * authority arrives separately, on its own trigger and under its own bounds
+ * (`the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it`). Keeping the
+ * always-on channel separate from the acting one is the point.
+ */
+async function composeNavigatorDigest(
+    ctx: ApplyContext,
+    actions: EntryAction[],
+    unusable: UnusableJudgementReply[],
+): Promise<EntryAction> {
+    const navigator = ctx.judgementCtx.navigator;
+    const action: EntryAction = {
+        subject: 'wake',
+        kind: 'board',
+        ruleId: 'navigator-digest',
+        cause: 'End-of-wake digest — what the Pilot did',
+        rung: 'none',
+        ladderIndex: null,
+        command: null,
+        evidence: redact(JSON.stringify({
+            actions: actions.map(a => ({
+                ruleId: a.ruleId,
+                seat: a.seat ?? null,
+                card: a.planId ?? null,
+                remediation: a.rung,
+                outcome: a.outcome,
+            })),
+            unusableJudgementReplies: unusable,
+        }, null, 2)),
+        evidenceWindow: `this wake's ${actions.length} action(s) + ${unusable.length} unusable judgement reply(ies)`,
+        outcome: 'observed',
+        detail: '',
+        ownerSince: null,
+        ownerSinceReStamped: false,
+        dispatchTimeoutRemainingMs: null,
+        priorVerdict: null,
+    };
+    if (!navigator.configured) {
+        action.outcome = 'unavailable';
+        action.detail = `the digest was not delivered: no Navigator model is configured (${navigator.reason})`;
+        return action;
+    }
+    const system = [
+        'You are the Navigator on a board of coding agents. The Pilot — the model that watches the',
+        'board every few minutes — has just finished a wake and is telling you what it did.',
+        'You are being kept informed. You do NOT act: nothing you write is executed, and your reply is',
+        'recorded in the controller\'s report for the operator to read.',
+        'Reply with a few short lines: what you make of this wake, and anything the Pilot may have',
+        'missed. If the wake is unremarkable, say so in one line.',
+    ].join('\n');
+    const user = redact([
+        `Actions this wake: ${actions.length}`,
+        JSON.stringify(actions.map(a => ({
+            ruleId: a.ruleId,
+            seat: a.seat ?? null,
+            card: a.planId ?? null,
+            remediation: a.rung,
+            outcome: a.outcome,
+            detail: a.detail ?? null,
+        })), null, 2),
+        '',
+        `Seats the Pilot could NOT read this wake: ${unusable.length}`,
+        unusable.length
+            ? JSON.stringify(unusable, null, 2)
+            : '(none — every judgement reply was usable)',
+    ].join('\n'));
+    const answer = await askNavigatorModel(ctx, system, user);
+    const modelId = navigator.model ? `${navigator.providerId || 'unset'} (${navigator.model})` : String(navigator.providerId || 'unset');
+    if (!answer.answered) {
+        action.outcome = 'failed';
+        action.detail = `the digest was not delivered: the Navigator '${modelId}' did not answer (${answer.error})`;
+        return action;
+    }
+    action.detail = `the Navigator '${modelId}' was told what this wake did and answered — ${answer.reply}`;
+    return action;
 }
 
 /** The smallest thing that answers row 3's "escalate with the question quoted". */
@@ -2052,10 +2418,13 @@ function standDownSeat(seat: string, reason: string, provider: string | null, ct
 interface RerouteTarget { seat: string | null; provider: string | null; reason: string; }
 
 /**
- * "Which other seat could take this." Role-compatible, live, not the
- * supervisor, not parked, and on a DIFFERENT provider. A seat whose provider is
- * not recorded is not a candidate — picking one would be a guess, and a guessed
- * provider routes work onto the wrong family.
+ * "Which other seat could take this." Role-compatible, live, not parked, and on
+ * a DIFFERENT provider. A seat whose provider is not recorded is not a
+ * candidate — picking one would be a guess, and a guessed provider routes work
+ * onto the wrong family.
+ *
+ * The old "not the supervisor" clause is gone with the seat: the Navigator is a
+ * model slot, not a seat in the fleet, so it can never appear here.
  */
 function resolveRerouteTarget(subject: Subject, ctx: ApplyContext): RerouteTarget {
     const sourceSeat = ctx.seatByName.get(subject.seat);
@@ -2070,7 +2439,6 @@ function resolveRerouteTarget(subject: Subject, ctx: ApplyContext): RerouteTarge
     const candidates = Array.from(ctx.seatByName.values()).filter(t =>
         t && t.status === 'active'
         && t.friendlyName !== subject.seat
-        && t.friendlyName !== ctx.judgementCtx.supervisorSeat
         && t.hidden !== true
         && (t.role || '') !== 'mission-control'
     );
@@ -2100,7 +2468,7 @@ function findMissionControlSeat(ctx: ApplyContext): string | null {
 function snapshotAvailability(caps: CapabilitySnapshot): Record<string, boolean> {
     return {
         model: capabilityForKey('model', caps).enabled,
-        supervisor: capabilityForKey('supervisor', caps).enabled,
+        navigator: caps.navigator.configured,
         twoProviders: capabilityForKey('two-providers', caps).enabled,
     };
 }
@@ -2109,11 +2477,15 @@ function snapshotAvailability(caps: CapabilitySnapshot): Record<string, boolean>
  * `{ enabled, reason, source }` per capability, persisted for the panel. Never a
  * bare boolean: the panel must be able to say WHY a row is unavailable using the
  * controller's answer, not a sentence it composed itself.
+ *
+ * `navigator` stands where `supervisor` used to: the supervisor SEAT is retired
+ * and its replacement is the model slot the escalation rung now spends a call
+ * on, so the state pane reports the Navigator's configured state in its place.
  */
 function snapshotCapabilityDetail(caps: CapabilitySnapshot): Record<string, { enabled: boolean; reason: string; source: string }> {
     return {
         model: capabilityForKey('model', caps),
-        supervisor: capabilityForKey('supervisor', caps),
+        navigator: { enabled: caps.navigator.configured, reason: caps.navigator.reason, source: caps.navigator.source },
         twoProviders: capabilityForKey('two-providers', caps),
     };
 }
@@ -2383,6 +2755,7 @@ function normalizeState(raw: any): PersistedControllerState {
                 ownerSince: typeof s.ownerSince === 'string' ? s.ownerSince : null,
                 stuckPasses: typeof s.stuckPasses === 'number' ? s.stuckPasses : 0,
                 lastClass: typeof s.lastClass === 'string' ? s.lastClass : null,
+                nudges: typeof s.nudges === 'number' ? s.nudges : 0,
             };
         }
     }
@@ -2411,6 +2784,22 @@ function normalizeState(raw: any): PersistedControllerState {
         judgementCalls: (raw.judgementCalls && typeof raw.judgementCalls === 'object' && typeof raw.judgementCalls.count === 'number')
             ? { dayKey: String(raw.judgementCalls.dayKey || ''), count: raw.judgementCalls.count }
             : { dayKey: '', count: 0 },
+        // The per-model counter is CARRIED, not re-defaulted. Dropping it here
+        // (as this read did) makes every wake start from zero and overwrite the
+        // persisted total, so `/controller/budget`'s `usedToday` would show only
+        // the last wake's calls — a spend readout that silently resets is the
+        // quiet wrong answer the fallback rule forbids, and it is the number the
+        // Navigator's allowance is planned against.
+        modelCalls: (raw.modelCalls && typeof raw.modelCalls === 'object' && raw.modelCalls.byModel && typeof raw.modelCalls.byModel === 'object')
+            ? {
+                dayKey: String(raw.modelCalls.dayKey || ''),
+                byModel: Object.keys(raw.modelCalls.byModel).reduce((acc: Record<string, number>, k: string) => {
+                    const n = raw.modelCalls.byModel[k];
+                    if (typeof n === 'number' && Number.isFinite(n)) { acc[k] = n; }
+                    return acc;
+                }, {}),
+            }
+            : { dayKey: '', byModel: {} },
         lastKnownBoardPid: typeof raw.lastKnownBoardPid === 'number' ? raw.lastKnownBoardPid : null,
     };
 }

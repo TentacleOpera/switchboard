@@ -194,6 +194,26 @@
      *  that request answers — an unanswered request must not read as "unset". */
     let agentNavigatorState = null;
 
+    // ── The Navigator's mission conversation ─────────────────────────────
+    // Subject and goal in; a proposal of existing cards out. This is the only
+    // place in the product where the operator types free text at a model, so it
+    // is deliberately two fields and two buttons — not a form, and not a chat.
+    const agentNavSubjectEl = document.getElementById('agent-navigator-subject');
+    const agentNavGoalEl = document.getElementById('agent-navigator-goal');
+    const agentNavProposeBtn = document.getElementById('agent-navigator-propose');
+    const agentNavColdBtn = document.getElementById('agent-navigator-cold');
+    const agentNavMissionStatusEl = document.getElementById('agent-navigator-mission-status');
+    const agentNavMissionProposalEl = document.getElementById('agent-navigator-mission-proposal');
+    /** The proposal on screen, so Apply posts exactly what was rendered —
+     *  including which boxes the operator unchecked. */
+    let agentNavProposal = null;
+    let agentNavBusy = false;
+    /** Repaints the mission strips from /kanban/missions/progress. Published by
+     *  the panel IIFE below, where the ONE mission renderer lives: an apply must
+     *  reach it or the panel keeps saying "No mission set up" over a mission the
+     *  operator just created. Read back and reported when missing. */
+    let repaintMissions = null;
+
     // ── Tab switching ────────────────────────────────────────────────────
     function setDockActiveTab(tab) {
         const activeTab = normaliseDockTab(tab);
@@ -576,6 +596,205 @@
      *  "never wired" and "working" look the same are the trap here, so this one
      *  is read back and reported when it is missing. */
     let repaintCrew = null;
+
+    // ── The Navigator's mission conversation ─────────────────────────────
+
+    /** Set the mission block's status line. */
+    function setAgentNavMissionStatus(text, isError) {
+        if (!agentNavMissionStatusEl) { return; }
+        agentNavMissionStatusEl.textContent = text || '';
+        agentNavMissionStatusEl.classList.toggle('is-error', isError === true);
+    }
+
+    /** One checkbox row: `topic — column`, ticked. Unchecking is how the
+     *  operator edits the list, so the checkbox IS the edit surface. */
+    function navCardRow(card, checked) {
+        const row = document.createElement('label');
+        row.className = 'agent-nav-row';
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = checked;
+        box.dataset.planId = card.planId;
+        row.appendChild(box);
+        const topic = document.createElement('span');
+        topic.className = 'agent-nav-topic';
+        topic.textContent = card.topic || card.planId;
+        row.appendChild(topic);
+        const col = document.createElement('span');
+        col.className = 'agent-nav-col';
+        col.textContent = card.kanbanColumn || '(no column)';
+        row.appendChild(col);
+        return row;
+    }
+
+    /** Render one proposal block (a mission proposal, or one cold-board
+     *  grouping) with its own Apply button. The cards come from the candidate
+     *  set the SERVER assembled — the panel never invents a row. */
+    function navProposalBlock(proposal, candidates) {
+        const block = document.createElement('div');
+        block.className = 'agent-nav-group';
+
+        const head = document.createElement('div');
+        head.className = 'agent-nav-head';
+        head.textContent = proposal.missionName || '(the Navigator did not name the mission)';
+        block.appendChild(head);
+
+        if (proposal.goal) {
+            const goal = document.createElement('div');
+            goal.className = 'agent-nav-goal';
+            goal.textContent = proposal.goal;
+            block.appendChild(goal);
+        }
+        if (proposal.rationale) {
+            const why = document.createElement('div');
+            why.className = 'agent-nav-goal';
+            why.textContent = proposal.rationale;
+            block.appendChild(why);
+        }
+        // The truncation, ABOVE the list: dropping two cards from a proposal the
+        // operator is about to approve silently is worse than saying so.
+        if (proposal.truncated) {
+            const note = document.createElement('div');
+            note.className = 'agent-nav-note';
+            note.textContent = proposal.truncated.dropped + ' more card(s) were dropped — a proposal is capped at ten.';
+            note.title = (proposal.truncated.ids || []).join(', ');
+            block.appendChild(note);
+        }
+
+        const byId = new Map((candidates || []).map(c => [c.planId, c]));
+        const boxes = [];
+        for (const id of proposal.planIds) {
+            const card = byId.get(id) || { planId: id, topic: id, kanbanColumn: '' };
+            const row = navCardRow(card, true);
+            boxes.push(row.querySelector('input'));
+            block.appendChild(row);
+        }
+
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'agent-control-config-save';
+        applyBtn.textContent = 'Apply';
+        applyBtn.addEventListener('click', () => {
+            const ids = boxes.filter(b => b.checked).map(b => b.dataset.planId);
+            void applyNavigatorProposal(proposal, ids);
+        });
+        block.appendChild(applyBtn);
+        return block;
+    }
+
+    /** Render a propose outcome. A non-proposal kind renders its own string and
+     *  NOTHING else — never an empty list, which would read as "the Navigator
+     *  found nothing". */
+    function renderNavigatorOutcome(data) {
+        const host = agentNavMissionProposalEl;
+        if (!host) { return; }
+        host.textContent = '';
+        agentNavProposal = null;
+        const outcome = data && data.outcome ? data.outcome : null;
+        if (!outcome) {
+            setAgentNavMissionStatus('The Navigator did not answer.', true);
+            return;
+        }
+        if (outcome.kind === 'proposal') {
+            agentNavProposal = outcome;
+            setAgentNavMissionStatus(data.message || '', false);
+            host.appendChild(navProposalBlock(outcome.proposal, outcome.candidates));
+            return;
+        }
+        if (outcome.kind === 'cold-board') {
+            setAgentNavMissionStatus(data.message || '', false);
+            const note = document.createElement('div');
+            note.className = 'agent-nav-note';
+            note.textContent = 'Three groupings is a cap, not a count.';
+            host.appendChild(note);
+            for (const g of outcome.groupings) {
+                host.appendChild(navProposalBlock(g, outcome.candidates));
+            }
+            return;
+        }
+        // no-candidates | invalid-reply | unconfigured | error — four distinct
+        // strings, from the server, rendered verbatim.
+        setAgentNavMissionStatus(data.message || 'The pass did not produce a proposal.', true);
+    }
+
+    /** POST the two questions (or the explicit cold-board ask). */
+    async function proposeNavigatorMission(cold) {
+        if (agentNavBusy) { return; }
+        const subject = agentNavSubjectEl ? agentNavSubjectEl.value.trim() : '';
+        const goal = agentNavGoalEl ? agentNavGoalEl.value.trim() : '';
+        if (!cold && !subject) {
+            setAgentNavMissionStatus('Type a subject, or use "Look at the whole board".', true);
+            return;
+        }
+        agentNavBusy = true;
+        if (agentNavProposeBtn) { agentNavProposeBtn.disabled = true; }
+        setAgentNavMissionStatus(cold ? 'Asking the Navigator to look at the board…' : 'Asking the Navigator…', false);
+        try {
+            const res = await fetch('/controller/navigator/propose', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(cold ? { cold: true } : { subject: subject, goal: goal }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) {
+                setAgentNavMissionStatus('The propose request failed: ' + (data.error || ('HTTP ' + res.status)), true);
+                if (agentNavMissionProposalEl) { agentNavMissionProposalEl.textContent = ''; }
+                return;
+            }
+            renderNavigatorOutcome(data);
+        } catch (err) {
+            setAgentNavMissionStatus('The Navigator did not answer: ' + (err?.message || err), true);
+            if (agentNavMissionProposalEl) { agentNavMissionProposalEl.textContent = ''; }
+        } finally {
+            agentNavBusy = false;
+            if (agentNavProposeBtn) { agentNavProposeBtn.disabled = false; }
+        }
+    }
+
+    /** POST the approved ids. On success the EXISTING mission renderer repaints
+     *  from /kanban/missions/progress — no second renderer, and a partially
+     *  applied mission is reported as such rather than as complete. */
+    async function applyNavigatorProposal(proposal, planIds) {
+        if (agentNavBusy) { return; }
+        if (!planIds.length) {
+            setAgentNavMissionStatus('No cards are ticked — nothing to apply.', true);
+            return;
+        }
+        agentNavBusy = true;
+        setAgentNavMissionStatus('Applying…', false);
+        try {
+            const res = await fetch('/controller/navigator/apply', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    missionName: proposal.missionName || '',
+                    goal: proposal.goal || '',
+                    planIds: planIds,
+                    subject: agentNavSubjectEl ? agentNavSubjectEl.value.trim() : '',
+                    modelId: agentNavProposal ? agentNavProposal.modelId : '',
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) {
+                setAgentNavMissionStatus('Apply failed: ' + (data.error || ('HTTP ' + res.status)), true);
+                return;
+            }
+            const failed = data.kind !== 'applied';
+            setAgentNavMissionStatus(data.message || '', failed);
+            if (data.kind === 'applied' && repaintMissions) {
+                await repaintMissions();
+            } else if (data.kind === 'applied') {
+                setAgentNavMissionStatus((data.message || '') + ' Reload the panel to see the mission strip.', false);
+            }
+        } catch (err) {
+            setAgentNavMissionStatus('Apply failed: ' + (err?.message || err), true);
+        } finally {
+            agentNavBusy = false;
+        }
+    }
+
+    if (agentNavProposeBtn) { agentNavProposeBtn.addEventListener('click', () => void proposeNavigatorMission(false)); }
+    if (agentNavColdBtn) { agentNavColdBtn.addEventListener('click', () => void proposeNavigatorMission(true)); }
 
     /** Set the status line text + class. */
     function setAgentStatus(text, cls) {
@@ -2026,6 +2245,18 @@
 
         // Hand the crew repaint out to the config save (see `repaintCrew`).
         repaintCrew = loadModels;
+
+        // Hand the mission repaint out to an APPLY (see `repaintMissions`). It
+        // is the same `refreshReport` the panel already runs, so the new mission
+        // is drawn by the ONE mission renderer — no second strip painter. A team
+        // channel replaces the report with that team's feed, which does not draw
+        // missions at all, so the Board channel is selected first: the operator
+        // just created a mission and the surface that shows missions is where
+        // they should land, rather than a panel that says nothing about it.
+        repaintMissions = async () => {
+            if (selectedTeam) { selectedTeam = null; paintTeamTabs(); }
+            await refreshReport();
+        };
 
         paintTeamTabs();
         void loadModels();

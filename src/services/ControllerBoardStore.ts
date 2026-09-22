@@ -862,7 +862,11 @@ const KNOWN_REMEDIATIONS = [
     'stand-down', 'supervisor', 'escalate-human', 'restart-board', 'record-unknown',
     'report-to-lead', 'post-completion-on-behalf',
 ];
-const KNOWN_CAPABILITIES = ['mechanical', 'model', 'supervisor', 'two-providers'];
+// `supervisor` is RETIRED as a CAPABILITY KEY (plan:
+// the-pilot-and-the-navigator-are-one-crew): it probed for a live supervisor
+// SEAT, and the seat is gone — the escalation target is the Navigator, a model
+// slot. The `supervisor` REMEDIATION verb above is a different thing and stays.
+const KNOWN_CAPABILITIES = ['mechanical', 'model', 'two-providers'];
 /**
  * Who a row's remediation addresses. Mirrored from `MATRIX_TARGETS`.
  *

@@ -6,7 +6,7 @@ import type { JudgementClass } from '../judgement/classes';
 /**
  * The judgement half of one action: which class the chain produced, which tiers
  * were tried and how each answered, which model URL answered, and — when the
- * supervisor was woken — the escalation's id and verdict.
+ * NAVIGATOR was asked — the escalation's id and the answer it gave.
  *
  * The model URL, locality, operator and costClass ride EVERY entry that names a
  * judgement result, so "which model answered this classification, and who else
@@ -25,7 +25,12 @@ export interface JudgementTrace {
     tierChain: TierAttempt[];
     answeredBy: { providerId: string; role: string; url: string; locality: string; operator: string; costClass: string } | null;
     escalationId?: string;
-    escalationVerdict?: string;
+    /**
+     * The Navigator's answer to an escalation, recorded and read by nothing.
+     * Acting authority arrives separately, under its own bounds; this field is
+     * the report's copy of what the Navigator said.
+     */
+    escalationReply?: string;
     /** Set when the declared global ceiling stopped further calls this day. */
     ceilingReached?: boolean;
     ceilingDetail?: string;
@@ -71,7 +76,13 @@ export interface EntryAction {
     command: string | null;
     evidence: string;
     evidenceWindow: string;
-    outcome: 'applied' | 'refused' | 'recorded' | 'unavailable' | 'failed';
+    /**
+     * `observed` is an entry that reports a reading and acts on nothing — the
+     * board-level check and the end-of-wake digest are both this shape. It is a
+     * distinct outcome from `recorded` on purpose: "nothing was done" and "the
+     * controller did something and wrote it down" are different claims.
+     */
+    outcome: 'applied' | 'refused' | 'recorded' | 'unavailable' | 'failed' | 'observed';
     detail?: string;
     ownerSince: string | null;
     ownerSinceReStamped: boolean;
@@ -146,7 +157,7 @@ function capabilityLines(caps: CapabilitySnapshot): string[] {
     return [
         `- model endpoint: configured=${caps.model.configured}, reachable=${caps.model.reachable === null ? 'unprobed' : caps.model.reachable}, constrained-output=${caps.model.constrainedOutput === null ? 'unprobed' : caps.model.constrainedOutput} — ${caps.model.reason} (source: ${caps.model.source})`,
         ...tierLines,
-        `- supervisor seat: configured=${caps.supervisorSeat.configured}, present=${caps.supervisorSeat.present} — ${caps.supervisorSeat.reason} (source: ${caps.supervisorSeat.source})`,
+        `- navigator model: configured=${caps.navigator.configured}${caps.navigator.model ? `, model=${caps.navigator.model}` : ''} — ${caps.navigator.reason} (source: ${caps.navigator.source})`,
         `- platform supervisor (restarts the CONTROLLER): ${caps.supervisor.outcome} — ${caps.supervisor.detail} (source: ${caps.supervisor.source})`,
         `- terminal.fleet.surviveBoard: ${caps.surviveBoard.value === null ? 'unknown' : caps.surviveBoard.value}${caps.surviveBoard.reason ? ` — ${caps.surviveBoard.reason}` : ''} (source: ${caps.surviveBoard.source})`,
         `- providers seated: ${caps.providers.providers.length} [${caps.providers.providers.join(', ') || 'none'}]${caps.providers.unknownSeats.length ? `, ${caps.providers.unknownSeats.length} unrecorded (${caps.providers.unknownSeats.join(', ')})` : ''} (source: ${caps.providers.source})`,
@@ -178,7 +189,7 @@ function actionBlock(a: EntryAction): string {
         for (const t of j.tierChain) {
             lines.push(`  - tier \`${t.providerId}\` (${t.role}, ${t.locality}/${t.operator}/${t.costClass}): ${t.outcome}${t.error ? ` — ${t.error}` : ''} [${t.latencyMs}ms, done_reason=${t.doneReason ?? 'n/a'}, reasoning_effort=${t.reasoningEffort}]`);
         }
-        if (j.escalationId) { lines.push(`- supervisor escalation: \`${j.escalationId}\`${j.escalationVerdict ? ` — verdict \`${j.escalationVerdict}\`` : ' — open'}`); }
+        if (j.escalationId) { lines.push(`- navigator escalation: \`${j.escalationId}\`${j.escalationReply ? ` — answered \`${j.escalationReply.replace(/\s+/g, ' ').slice(0, 300)}\`` : ' — no answer recorded'}`); }
         if (j.ceilingReached) { lines.push(`- global escalation ceiling reached: ${j.ceilingDetail || 'further judgement calls suppressed this day'}`); }
     }
     lines.push(`- evidence window: ${a.evidenceWindow}`);

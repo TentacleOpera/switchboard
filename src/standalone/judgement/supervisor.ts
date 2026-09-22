@@ -1,22 +1,26 @@
 import type { TierAttempt } from './tiers';
 
 /**
- * The supervisor seat (plan: judgement-tiers-the-supervisor-seat-and-reroute,
- * change 8).
+ * The escalation record and the escalation prompt
+ * (plan: judgement-tiers-the-supervisor-seat-and-reroute, change 8;
+ *  plan: the-pilot-and-the-navigator-are-one-crew).
  *
- * Rows 3 and 6 need something that can ACT rather than classify: read the repo,
- * run a command, answer the question a stuck agent actually asked. That is an
- * agent seat, not a model call. The supervisor is a seat like any other —
- * dispatched, logged, live — and it posts its answer through the CLI, never
- * through scrollback. ANSI churn, interleaved tool output and partial writes
- * make terminal text the wrong channel.
+ * Rows 3, 6 and 8 need something that can act rather than classify: read the
+ * repo, run a command, answer the question a stuck agent actually asked. That
+ * used to be a supervisor SEAT — a whole agent in a pty, running permanently,
+ * carrying standing RAM on a 1 GB box for an event that happens rarely. The
+ * seat is RETIRED: the escalation target is the Navigator, a model slot that
+ * costs nothing while idle and answers inside the wake that asked.
  *
- * Three constraints, each a bug if missed:
- *  1. the supervisor is excluded from the controller's own matrix (a loop with a
- *     tool-using agent on the end of it otherwise);
- *  2. escalation is gated by criteria, not a rate limit — chiefly one open
- *     escalation per subject;
- *  3. it is a ladder rung, reached by escalation, never a row's first response.
+ * What survives the retirement is the AUDIT RECORD — what was escalated, when,
+ * and what came back — and the prompt contract. What goes with the seat is the
+ * asynchronous lifecycle: the open / answered / timed-out state machine, the
+ * TTL and the cross-wake pruning had nothing left to model once the answer
+ * arrives synchronously, in the same wake, as `answer`.
+ *
+ * The supervisor's own post path (`/controller/supervisor-post`) and its
+ * verdict vocabulary are left in place: the escalation table is BOARD-owned,
+ * and its shape is not this plan's to change.
  */
 
 export const SUPERVISOR_POST_PATH = '/controller/supervisor-post';
@@ -64,7 +68,23 @@ export interface EscalationRecord {
     /** What each lower tier concluded, and why it could not decide. */
     tierChain: TierAttempt[];
     evidenceWindow: string;
-    status: 'open' | 'answered' | 'spurious' | 'needs-human' | 'timedout';
+    /**
+     * The Navigator's answer, attached in the SAME wake that asked.
+     *
+     * There is no `status` any more. `open` / `answered` / `timedout` modelled a
+     * seat that answers on its own schedule; a model call returns inside the
+     * wake, so the only states left were "we asked" and "here is the reply",
+     * and a record that keeps saying `open` after the reply arrived is a lie
+     * the report would print.
+     */
+    answer?: {
+        ok: boolean;
+        /** The reply text, or the reason there is none. */
+        content: string;
+        providerId: string | null;
+        model: string | null;
+        latencyMs: number;
+    };
     answeredAt?: number;
     verdict?: SupervisorVerdict;
     reason?: string;
@@ -72,8 +92,13 @@ export interface EscalationRecord {
 }
 
 export interface EscalationState {
+    /** The audit records, keyed by subject. Written by `/controller/escalations/open`. */
     open: Record<string, EscalationRecord>;
-    /** Closed escalations, including timed-out ones — a late post is refused. */
+    /**
+     * Closed escalations. Nothing closes one any more — the answer arrives in
+     * the wake that asked — but the table is BOARD-owned and this read keeps its
+     * existing shape rather than reinterpreting a store it does not own.
+     */
     answered: Record<string, EscalationRecord>;
     /** Repeated `spurious` verdicts are a fact about the RULE that escalated. */
     spuriousByRule: Record<string, number>;
@@ -83,7 +108,7 @@ export function emptyEscalationState(): EscalationState {
     return { open: {}, answered: {}, spuriousByRule: {} };
 }
 
-export interface SupervisorPromptArgs {
+export interface NavigatorEscalationPromptArgs {
     seat: string;
     planId: string;
     title: string;
@@ -94,22 +119,60 @@ export interface SupervisorPromptArgs {
     evidenceWindow: string;
     tierAttempts: TierAttempt[];
     escalationId: string;
+    /**
+     * What has already been tried (plan: the-pilot-and-the-navigator-are-one-crew).
+     *
+     * Escalating without history is adjudicating blind: a Navigator asked "what
+     * is wrong with this looping seat" that is not told the seat has been nudged
+     * twice and cleared once will propose the remediation that has already
+     * failed twice. All of this is already persisted — the ladder state, the
+     * per-seat nudge ledger and the card's prior verdict — so it costs nothing
+     * to carry and its absence is the difference between a recommendation and a
+     * repetition.
+     */
+    stuckPasses: number;
+    /** How many times the CONTROLLER has nudged this subject, from its own ladder state. */
+    controllerNudges: number;
+    /** When the BOARD last nudged this seat, or null. */
+    lastBoardNudgeAt: number | null;
+    /** The ladder rung reached for this subject, or null when none applies. */
+    ladderRung: string | null;
+    /** The card's `last_action`, when the board recorded one. */
+    priorVerdict: string | null;
 }
 
 /**
- * The escalation prompt gives the supervisor permission to refuse FIRST. A
- * tool-using agent handed a vague problem will investigate it thoroughly — the
- * wrong response to a case that should not have been escalated. So the prompt is
- * a contract, and the refusal path is stated before the investigation path.
+ * The escalation prompt gives the Navigator permission to refuse FIRST. A model
+ * handed a vague problem will investigate it thoroughly — the wrong response to
+ * a case that should not have been escalated. So the prompt is a contract, and
+ * the refusal path is stated before the investigation path.
+ *
+ * It is also told what the Pilot already did, and it must NOT act: the reply is
+ * recorded. Acting authority arrives separately, on its own trigger and under
+ * its own bounds (`the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it`).
  */
-export function buildSupervisorPrompt(args: SupervisorPromptArgs): string {
+export function buildNavigatorEscalationPrompt(args: NavigatorEscalationPromptArgs): { system: string; user: string } {
     const tierLines = args.tierAttempts.length
         ? args.tierAttempts.map(a => `  - tier ${a.providerId} (${a.role}, ${a.locality}/${a.operator}/${a.costClass}): ${a.outcome}${a.error ? ` — ${a.error}` : ''}`).join('\n')
         : '  - (no classification tier was configured or reachable)';
-    return [
-        `[switchboard:controller] Supervisor escalation ${args.escalationId}.`,
+    const nudgeLine = args.controllerNudges > 0
+        ? `${args.controllerNudges} time(s) by the controller`
+        : 'never by the controller';
+    const system = [
+        'You are the Navigator on a board of coding agents. The Pilot — the model that watches the',
+        'board every few minutes — has escalated one case to you because the cheaper rungs could not',
+        'settle it.',
         '',
-        `A seat on this board is stuck and the cheaper tiers could not resolve it.`,
+        'STEP 1 — judge whether this escalation is warranted, before doing anything else.',
+        'If the evidence does not support a real problem, say so in one line and STOP.',
+        '',
+        'STEP 2 — otherwise say what you make of it, in a few lines.',
+        'You OBSERVE and ADVISE. You do not act: nothing you write is executed, and your reply is',
+        'recorded in the controller\'s report for the operator to read.',
+        'Do not propose a remediation listed under "what has already been tried".',
+    ].join('\n');
+    const user = [
+        `Escalation: ${args.escalationId}`,
         `Card: ${args.planId}${args.title ? ` "${args.title}"` : ''}`,
         `Seat: ${args.seat}`,
         `Rule that escalated: ${args.ruleId} (${args.cause})`,
@@ -117,17 +180,16 @@ export function buildSupervisorPrompt(args: SupervisorPromptArgs): string {
         'What the lower tiers concluded:',
         tierLines,
         '',
-        'STEP 1 — judge whether this request is warranted, before doing anything else.',
-        'If the evidence below does not support a real problem, post verdict "spurious" with a one-line',
-        'reason and STOP. Do no repo reads, run no tests, use no tools.',
-        '',
-        'STEP 2 — otherwise investigate, act within the verbs available to you, and post your finding.',
-        '',
-        'Post your answer through the CLI (never through scrollback):',
-        `  switchboard api POST ${SUPERVISOR_POST_PATH} '{"escalationId":"${args.escalationId}","verdict":"fixed|spurious|needs-human","reason":"..."}'`,
+        'What has already been tried (do not propose these again):',
+        `  - consecutive passes this subject has been stuck: ${args.stuckPasses}`,
+        `  - this subject has been nudged: ${nudgeLine}`,
+        `  - the board last nudged this seat: ${args.lastBoardNudgeAt ? new Date(args.lastBoardNudgeAt).toISOString() : 'never'}`,
+        `  - ladder rung reached: ${args.ladderRung || '(not on the escalation ladder)'}`,
+        `  - the card's prior verdict (last_action): ${args.priorVerdict || '(none recorded)'}`,
         '',
         `Evidence window: ${args.evidenceWindow}`,
         '---',
         args.evidence || '(no evidence window)',
     ].join('\n');
+    return { system, user };
 }
