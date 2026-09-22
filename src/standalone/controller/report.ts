@@ -1,4 +1,4 @@
-import type { MatrixRemediation, MatrixRow } from './matrix';
+import type { MatrixRemediation, MatrixRow, SecondOrderAction } from './matrix';
 import type { CapabilitySnapshot } from './capabilities';
 import type { TierAttempt } from '../judgement/tiers';
 import type { JudgementClass } from '../judgement/classes';
@@ -63,11 +63,66 @@ export interface ReportLease {
     source: string;
 }
 
+/**
+ * The MECHANICAL verification of the previous wake's action (plan:
+ * the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it).
+ *
+ * "A remediation is not finished when it is applied; it is finished when the
+ * work moves again." The question is answered from the row RE-FIRING on the
+ * same subject — no model is asked whether its own advice worked — and the
+ * answer is carried on the successor entry so the report says whether the
+ * previous wake's action worked.
+ */
+export interface VerificationTrace {
+    /** The action that was verified: a rung, or a second-order action. */
+    of: string;
+    /** The row whose re-firing is the signal. */
+    ruleId: string;
+    result: 'success' | 'failed';
+    detail: string;
+}
+
+/**
+ * One second-order decision, recorded in full (plan:
+ * the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it).
+ *
+ * A destructive action nobody can account for is the thing that makes
+ * automation frightening, so every applied action records the model that
+ * chose it, the evidence it acted on and its stated reason — and for an action
+ * that destroys its own evidence, `recordedBeforeEffect` says the record was
+ * written BEFORE the effect.
+ */
+export interface SecondOrderTrace {
+    /** The Navigator's chosen action, or null when nothing was chosen. */
+    action: SecondOrderAction | null;
+    /** `providerId (model)` — which model answered, or was asked and did not. */
+    modelId: string;
+    /** The Navigator's stated reason, or its raw reply when it named nothing. */
+    reason: string;
+    /**
+     * What the controller did about it: `applied` | `discarded` | `refused` |
+     * `suppressed` | `unavailable` | `failed` | `aborted`.
+     */
+    result: string;
+    /** The precondition that was unmet, when one was. */
+    precondition?: string;
+    /** True when the record was written BEFORE the action's effect. */
+    recordedBeforeEffect?: boolean;
+}
+
 export interface EntryAction {
     subject: string;
-    kind: 'card' | 'seat' | 'board';
-    planId?: string;
-    seat?: string;
+    kind: 'card' | 'seat' | 'board' | 'mission';
+    planId?: string | null;
+    seat?: string | null;
+    /**
+     * The mission a `kind: 'mission'` action is about
+     * (plan: a-mission-is-watched-for-the-whole-of-its-life). A mission stall is
+     * its own finding, not a seat finding, so it needs its own identifier: with
+     * `planId: null` and `seat: null`, "which mission?" would otherwise be
+     * unanswerable from the entry.
+     */
+    missionId?: string | null;
     ruleId: string;
     cause: string;
     rung: MatrixRemediation | 'none';
@@ -91,12 +146,69 @@ export interface EntryAction {
     /** The card's `last_action`, so a prior `timed out` verdict is visible. */
     priorVerdict?: string | null;
     judgement?: JudgementTrace;
+    /** Whether the PREVIOUS wake's action on this subject worked. */
+    verification?: VerificationTrace;
+    /** The Navigator's second-order decision, when this entry is one. */
+    secondOrder?: SecondOrderTrace;
     /**
      * The model that produced a board-level verdict. The board check has no
      * judgement trace of its own, and with two models on the board "the model
      * said" is not answerable without naming which one.
      */
     judgedBy?: { providerId: string; model: string } | null;
+}
+
+/**
+ * ONE mission's line in the report's leading section
+ * (plan: a-mission-is-watched-for-the-whole-of-its-life).
+ *
+ * `state` is the classification the watch reached this wake, never a
+ * re-derivation at render time: `moving`, `stalled`, `unexplained` (stalled and
+ * surviving every mechanical check), `unjudgeable`, `paused`, `not-started` or
+ * `out-of-order`. A mission whose state the report could not establish says so
+ * rather than being omitted — an absent line would read as "nothing to report".
+ */
+export interface MissionReportLine {
+    missionId: string;
+    name: string;
+    state: string;
+    detail: string;
+}
+
+/**
+ * One wake's MISSION state, as the controller read it.
+ *
+ * `state` is `read` or `unreadable` and is NEVER collapsed: "the host has not
+ * answered yet" and "there is genuinely nothing" are different claims, and a
+ * failed read must never render as "no missions". `source` names the endpoint
+ * the numbers came from, so the section is checkable against the panel.
+ */
+export interface MissionReportSection {
+    state: 'read' | 'unreadable';
+    /** Why it could not be read, when `state === 'unreadable'`. */
+    reason?: string;
+    source: string;
+    total: number;
+    inFlight: number;
+    moving: number;
+    stalled: number;
+    unjudgeable: number;
+    paused: number;
+    notStarted: number;
+    outOfOrder: number;
+    lines: MissionReportLine[];
+    /**
+     * Work in flight or parked that belongs to NO mission. Reported alongside
+     * the mission state because "nothing is running" and "162 cards are parked
+     * outside any mission" are different claims.
+     */
+    outsideMissions?: {
+        inFlightFeatures: number;
+        inFlightCards: number;
+        parkedFeatures: number;
+        parkedCards: number;
+        parkedCardsDone: number;
+    } | null;
 }
 
 export interface RestartRecord {
@@ -134,6 +246,15 @@ export interface ReportEntryFacts {
     assumptions: string[];
     /** Set when the declared global judgement ceiling stopped further calls. */
     judgementCeiling?: { reached: boolean; detail: string };
+    /**
+     * The mission state this wake established. Mission state LEADS the report
+     * (plan: a-mission-is-watched-for-the-whole-of-its-life) because once
+     * missions are running "is the work moving" is the operator's question and
+     * "is anything wrong with the board" is the smaller one. The section is
+     * always present — a report that examined no missions SAYS so, rather than
+     * expressing "no missions" by the section's absence.
+     */
+    missions?: MissionReportSection;
     /** Rows that could not run this pass, each with its reason and source. */
     rowsUnavailable: Array<{ row: MatrixRow; reason: string; source: string }>;
     actions: EntryAction[];
@@ -166,7 +287,10 @@ function capabilityLines(caps: CapabilitySnapshot): string[] {
 
 function actionBlock(a: EntryAction): string {
     const lines: string[] = [];
-    const target = a.kind === 'card' ? `card \`${a.planId || a.subject}\`` : a.kind === 'seat' ? `seat \`${a.seat || a.subject}\`` : 'board';
+    const target = a.kind === 'card' ? `card \`${a.planId || a.subject}\``
+        : a.kind === 'seat' ? `seat \`${a.seat || a.subject}\``
+            : a.kind === 'mission' ? `mission \`${a.missionId || a.subject}\``
+                : 'board';
     lines.push(`### ${target} — ${a.cause} (\`${a.ruleId}\`)`);
     lines.push('');
     lines.push(`- rung: \`${a.rung}\`${a.ladderIndex === null ? '' : ` (ladder #${a.ladderIndex})`}`);
@@ -177,6 +301,24 @@ function actionBlock(a: EntryAction): string {
         lines.push(`- dispatch timeout: ${fmtMs(a.dispatchTimeoutRemainingMs)} remaining before \`_runDispatchTimeoutSweep\` may abandon this card`);
     }
     if (a.priorVerdict) { lines.push(`- prior verdict (\`last_action\`): \`${a.priorVerdict}\``); }
+    if (a.verification) {
+        const v = a.verification;
+        lines.push(`- verification of the previous action: **${v.result}** — \`${v.of}\` was applied and the row \`${v.ruleId}\` ${v.result === 'success' ? 'no longer fires for this subject' : 'fired again on this subject'}`);
+        lines.push(`  - ${v.detail}`);
+    }
+    if (a.secondOrder) {
+        const s = a.secondOrder;
+        lines.push(`- second-order action: ${s.action === null ? '(none chosen)' : `\`${s.action}\``} — **${s.result}**`);
+        // The model is named only where one was actually consulted: a suppressed
+        // ask never reached a model, and "chosen by" for it would attribute a
+        // decision nobody made.
+        if (s.result !== 'suppressed') {
+            lines.push(`  - ${s.action === null ? 'asked of' : 'chosen by'}: \`${s.modelId}\``);
+        }
+        lines.push(`  - stated reason: ${s.reason || '(none recorded)'}`);
+        if (s.precondition) { lines.push(`  - unmet precondition: ${s.precondition}`); }
+        lines.push(`  - record written before the effect: ${s.recordedBeforeEffect === true}`);
+    }
     if (a.judgedBy) {
         lines.push(`- judged by: \`${a.judgedBy.providerId || 'unset'}\`${a.judgedBy.model ? ` (${a.judgedBy.model})` : ''}`);
     }
@@ -200,6 +342,49 @@ function actionBlock(a: EntryAction): string {
     return lines.join('\n');
 }
 
+function outsideMissionsLines(o: NonNullable<MissionReportSection['outsideMissions']>): string[] {
+    const lines: string[] = [];
+    if (o.inFlightFeatures > 0) {
+        lines.push(`- work in flight OUTSIDE any mission: ${o.inFlightFeatures} feature(s), ${o.inFlightCards} card(s) held`);
+    }
+    if (o.parkedFeatures > 0) {
+        lines.push(`- work parked outside any mission: ${o.parkedFeatures} feature(s), ${o.parkedCards} card(s) (${o.parkedCardsDone} done)`);
+    }
+    if (o.inFlightFeatures === 0 && o.parkedFeatures === 0) {
+        lines.push('- no work is in flight or parked outside a mission');
+    }
+    return lines;
+}
+
+/**
+ * The report's leading section. Present on EVERY wake, in all three states:
+ * read-with-missions, read-with-none, and unreadable. Its absence is never how
+ * "no missions" is expressed, and "could not be read" never renders as "none".
+ */
+function missionLines(m: MissionReportSection): string[] {
+    const lines: string[] = ['### Missions', ''];
+    if (m.state === 'unreadable') {
+        lines.push(`- **Mission state could not be read** — ${m.reason || 'no reason given'} (source: ${m.source})`);
+        lines.push('- No mission was examined this wake. This is NOT "no missions": the read failed, and the two are different claims.');
+        lines.push('');
+        return lines;
+    }
+    if (m.total === 0) {
+        lines.push(`- No missions were examined: the board holds no missions (source: ${m.source}).`);
+        if (m.outsideMissions) { lines.push(...outsideMissionsLines(m.outsideMissions)); }
+        lines.push('');
+        return lines;
+    }
+    lines.push(`- missions examined: ${m.total} (source: ${m.source})`);
+    lines.push(`- in flight: ${m.inFlight}, moving: ${m.moving}, stalled: ${m.stalled}, unjudgeable: ${m.unjudgeable}, paused: ${m.paused}, not started: ${m.notStarted}, out of order: ${m.outOfOrder}`);
+    if (m.outsideMissions) { lines.push(...outsideMissionsLines(m.outsideMissions)); }
+    for (const l of m.lines) {
+        lines.push(`- \`${l.missionId}\`${l.name ? ` "${l.name}"` : ''} — ${l.state}: ${l.detail}`);
+    }
+    lines.push('');
+    return lines;
+}
+
 export function composeReportEntry(facts: ReportEntryFacts): string {
     const lines: string[] = [];
     lines.push(`**Controller:** \`${facts.controllerId}\``);
@@ -218,6 +403,13 @@ export function composeReportEntry(facts: ReportEntryFacts): string {
     if (facts.judgementCeiling?.reached) {
         lines.push(`**Global judgement ceiling reached:** ${facts.judgementCeiling.detail}`);
         lines.push('');
+    }
+    // MISSION STATE LEADS. Board health — columns, seats, the next card — is
+    // the background section it was always meant to be once missions run. The
+    // section is emitted even when nothing could be read, so the report can
+    // never express "no missions" by omission.
+    if (facts.missions) {
+        lines.push(...missionLines(facts.missions));
     }
     lines.push('### Lease');
     lines.push('');
@@ -241,7 +433,13 @@ export function composeReportEntry(facts: ReportEntryFacts): string {
         }
         lines.push('');
     }
-    if (facts.actions.length === 0) {
+    // A mission entry is a READING the watch takes every wake, not a matrix
+    // rule. It is therefore not what "no rule fired" is about — the mission
+    // state has its own leading section, and the rows' entries keep their place
+    // (plan: a-mission-is-watched-for-the-whole-of-its-life).
+    const missionActions = facts.actions.filter(a => a.kind === 'mission');
+    const ruleActions = facts.actions.filter(a => a.kind !== 'mission');
+    if (ruleActions.length === 0) {
         lines.push('### Actions');
         lines.push('');
         lines.push('_No rule fired this pass._');
@@ -249,10 +447,14 @@ export function composeReportEntry(facts: ReportEntryFacts): string {
     } else {
         lines.push('### Actions');
         lines.push('');
-        for (const a of facts.actions) {
+        for (const a of ruleActions) {
             lines.push(actionBlock(a));
             lines.push('');
         }
+    }
+    for (const a of missionActions) {
+        lines.push(actionBlock(a));
+        lines.push('');
     }
     if (facts.restart) {
         const r = facts.restart;

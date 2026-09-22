@@ -633,9 +633,27 @@ async function run() {
             const callSites = (controllerSrc.match(/await callModel\(/g) || []).length;
             assert.strictEqual(callSites, 2,
                 `expected exactly two callModel call sites (the Pilot's board check and the Navigator seam), got ${callSites}`);
-            assert.ok(/async function askNavigatorModel\(/.test(controllerSrc), 'the Navigator seam must exist');
-            assert.strictEqual((controllerSrc.match(/askNavigatorModel\(/g) || []).length, 3,
-                'the seam must be called by the escalation and the digest (and defined once)');
+            assert.strictEqual((controllerSrc.match(/async function askNavigatorModel\(/g) || []).length, 1,
+                'the Navigator seam must be DEFINED exactly once — a second path would be a second place for '
+                + 'the redaction, the budget counter and the model-id recording to diverge');
+            // The seam's CALLERS grow as Navigator jobs land (the escalation, the
+            // digest, the mission adjudication, and second-order verification), so
+            // the invariant is asserted PER JOB rather than as a total every new
+            // job has to bump: each job must reach the model through this one seam.
+            assert.ok(/await askNavigatorModel\(ctx, prompt\.system, prompt\.user\)/.test(controllerSrc),
+                'the escalation must call the seam');
+            assert.ok(/await askNavigatorModel\(ctx, system, user\)/.test(controllerSrc),
+                'the digest must call the seam');
+            assert.ok(/await askNavigatorModel\(args, prompt\.system, prompt\.user\)/.test(controllerSrc),
+                'the mission adjudication must call the seam');
+            // The second-order ask (plan: the-navigator-verifies-and-acts-when-
+            // the-pilot-did-not-fix-it) is the fourth job. Asserted on its own
+            // function body, so the check says WHERE the call is rather than
+            // merely that some call exists.
+            const secondOrderFn = controllerSrc.slice(controllerSrc.indexOf('async function runSecondOrder('));
+            const secondOrderBody = secondOrderFn.slice(0, secondOrderFn.indexOf('/** The smallest thing that answers row 3'));
+            assert.ok(/await askNavigatorModel\(ctx, prompt\.system, prompt\.user\)/.test(secondOrderBody),
+                'the second-order ask must reach the model through the same seam, not a second path');
             assert.ok(/a-mission-is-watched-for-the-whole-of-its-life/.test(controllerSrc),
                 'the seam must name the mission adjudication it also serves');
         });

@@ -100,6 +100,128 @@ export type MatrixRemediation =
     | 'stop';
 
 /**
+ * The SECOND-ORDER actions — a closed set chosen by the Navigator, on a
+ * SEPARATE AXIS from the ladder (plan:
+ * the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it).
+ *
+ * The ladder escalates FORCE: `bare-enter` through `stop` all press the same
+ * subject harder. A seat that will not move because its feature's status is
+ * wrong, or because its team is wedged, is not helped by a more forceful
+ * version of a nudge — it is helped by changing the situation. These five
+ * change the situation, and they are the only thing the Navigator may name.
+ *
+ * Three properties, each load-bearing:
+ *
+ *  - **A name from a closed set, never a command.** The Navigator returns one
+ *    of these names and nothing else. It never names a team, a seat, a card, a
+ *    column or a command, so there is no composition surface and no injection
+ *    surface — the controller resolves the subject's own team, card and column
+ *    from the board and checks that action's precondition before applying it.
+ *  - **Not rungs.** These are deliberately absent from `MatrixRemediation`,
+ *    `MATRIX_REMEDIATIONS` and `ESCALATION_LADDER`: they are not something a
+ *    row escalates through, and a row that named one would load clean and fall
+ *    through the remediation switch doing nothing.
+ *  - **Validated at runtime, like `MATRIX_REMEDIATIONS`.** A reply outside the
+ *    set means NO ACTION WAS CHOSEN — discarded, recorded, never coerced to a
+ *    nearest name. The same contract `flags.ts` states for the flag vocabulary:
+ *    a value outside the set means the rule did not run.
+ *
+ * `stop` is the TERMINUS: the controller ceases acting on that subject and
+ * records that it has. There is deliberately no `escalate-human` — messaging an
+ * agent seat is forbidden, and "record it in the report" was never a
+ * remediation because every action is recorded there already.
+ */
+export type SecondOrderAction =
+    | 'redispatch'
+    | 'reset-feature-status'
+    | 'stand-down-team'
+    | 'disband-team'
+    | 'stop';
+
+/**
+ * The values array, declared beside the type so neither can drift from the
+ * other. A name in the type but not the array (or the reverse) is the defect
+ * `MATRIX_CAPABILITY_KEYS` documents: it loads clean and is inert at runtime.
+ */
+export const SECOND_ORDER_ACTIONS: readonly SecondOrderAction[] = [
+    'redispatch', 'reset-feature-status', 'stand-down-team', 'disband-team', 'stop',
+];
+
+/** One declared second-order action: what it does, and what must be true first. */
+export interface SecondOrderActionSpec {
+    action: SecondOrderAction;
+    /** The board verb it is applied through. `none` for the terminus. */
+    boardVerb: string;
+    /**
+     * Human-readable precondition, CHECKED BY THE CONTROLLER against the
+     * subject before the action is applied. The Navigator's choice is a
+     * proposal that code may refuse, and a refusal is recorded with its reason.
+     */
+    precondition: string;
+    /**
+     * True when applying this action destroys the evidence the decision rested
+     * on, so the record must be WRITTEN BEFORE THE EFFECT — the rule
+     * `performBoardRestart` already follows.
+     */
+    destroysEvidence: boolean;
+}
+
+/**
+ * The declared specs. Preconditions are per-action AND per-subject: the
+ * controller resolves the team, the card's column and the feature from the
+ * BOARD, so the Navigator cannot widen what it is allowed to touch.
+ */
+export const SECOND_ORDER_ACTION_SPECS: readonly SecondOrderActionSpec[] = [
+    {
+        action: 'redispatch',
+        boardVerb: 'POST /kanban/dispatch',
+        precondition: 'the card has a recorded column to re-issue into, and no live seat is producing work on it',
+        destroysEvidence: false,
+    },
+    {
+        action: 'reset-feature-status',
+        boardVerb: 'POST /kanban/move',
+        precondition: 'the subject is a card that belongs to a feature, so there is a feature status to reset',
+        destroysEvidence: false,
+    },
+    {
+        action: 'stand-down-team',
+        boardVerb: 'POST /kanban/mission/pause-team',
+        precondition: 'the subject resolves to a team through the board\'s own mission membership',
+        destroysEvidence: true,
+    },
+    {
+        action: 'disband-team',
+        boardVerb: 'POST /kanban/team/stop',
+        precondition: 'the subject resolves to a team through the board\'s own mission membership',
+        destroysEvidence: true,
+    },
+    {
+        action: 'stop',
+        boardVerb: 'none',
+        precondition: '',
+        destroysEvidence: false,
+    },
+];
+
+/** The spec for one action. A name outside the set has no spec, by construction. */
+export function secondOrderSpec(action: SecondOrderAction): SecondOrderActionSpec {
+    return SECOND_ORDER_ACTION_SPECS.find(s => s.action === action) as SecondOrderActionSpec;
+}
+
+/**
+ * Runtime validation of a name against the closed set.
+ *
+ * `false` means THE RULE DID NOT RUN — the caller records the reply as
+ * discarded and applies nothing. It is deliberately not a nearest-match
+ * lookup: a model's observations are reliable, its conclusions are not, and a
+ * coerced name is a conclusion nobody proposed.
+ */
+export function isSecondOrderAction(name: unknown): name is SecondOrderAction {
+    return typeof name === 'string' && (SECOND_ORDER_ACTIONS as readonly string[]).includes(name);
+}
+
+/**
  * The escalation ladder, lowest rung first. `mark-complete`,
  * `record-unknown` and `post-completion-on-behalf` are terminal one-shot
  * actions and are deliberately NOT on the ladder.
@@ -462,6 +584,14 @@ function validateRow(row: any, index: number, source: string): MatrixRow {
     // and nothing said so.
     if (!(MATRIX_CONDITION_KINDS as readonly string[]).includes(row.condition.kind)) {
         throw new Error(`matrix row '${row.id}' in ${source} has an unknown condition.kind '${row.condition.kind}' (known: ${MATRIX_CONDITION_KINDS.join(', ')})`);
+    }
+    if (isSecondOrderAction(row.remediation)) {
+        // A second-order name is refused BY NAME rather than as an unknown
+        // remediation: the two closed sets are separate axes, and a row that
+        // named a second-order action would load, be validated against the
+        // wrong set, and then fall through the remediation switch at wake time
+        // doing nothing. The refusal says which axis the name belongs to.
+        throw new Error(`matrix row '${row.id}' in ${source} names the second-order action '${String(row.remediation)}' as its remediation — second-order actions are a separate axis, not rungs, and are chosen by the Navigator rather than by a row (known remediations: ${MATRIX_REMEDIATIONS.join(', ')})`);
     }
     if (!(MATRIX_REMEDIATIONS as readonly string[]).includes(String(row.remediation))) {
         throw new Error(`matrix row '${row.id}' in ${source} names an unknown remediation '${String(row.remediation)}' (known: ${MATRIX_REMEDIATIONS.join(', ')})`);

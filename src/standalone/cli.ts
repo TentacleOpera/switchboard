@@ -180,6 +180,8 @@ Options:
   --ceiling <N>                controller: global judgement-call ceiling per day
   --stuck-passes <N>           controller: passes stuck before a supervisor is woken
   --judgement-deadline <ms>    controller: per-call deadline (covers connect)
+  --second-order-wakes <N>     controller: wakes between second-order asks for one subject
+  --second-order-daily-cap <N> controller: daily cap on second-order asks across all subjects
   --help               Show this help
   --version            Show version and system info
 `;
@@ -2079,6 +2081,7 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         console.log('                                  [--tier <id>:<classifier>[:<locality>[:<operator>[:<cost>]]]]...');
         console.log('                                  [--supervisor <seat>] [--ceiling <N>] [--stuck-passes <N>]');
         console.log('                                  [--judgement-deadline <ms>] [--hedge-bound <N>] [--navigator-deadline <ms>]');
+        console.log('                                  [--second-order-wakes <N>] [--second-order-daily-cap <N>]');
         console.log('                                  [--board-start-command <cmd>] [--board-start-cwd <dir>] [--json]');
         exitFlushed(0);
     }
@@ -2184,6 +2187,22 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         const n = Number(hedgeBound);
         if (!Number.isFinite(n) || n < 1) { console.error(`[switchboard] --hedge-bound requires a positive integer (got '${hedgeBound}').`); exitFlushed(5); }
         config.hedgeBound = Math.floor(n);
+    }
+    // The second-order axis's two bounds. They are configured HERE rather than
+    // in the matrix because they are not rules: they bound an authority, and an
+    // operator who wants the Navigator to act less often changes a rate, not a
+    // row.
+    const secondOrderWakes = getFlag('--second-order-wakes');
+    if (secondOrderWakes !== undefined) {
+        const n = Number(secondOrderWakes);
+        if (!Number.isFinite(n) || n < 1) { console.error(`[switchboard] --second-order-wakes requires a positive integer (got '${secondOrderWakes}').`); exitFlushed(5); }
+        config.secondOrderWakes = Math.floor(n);
+    }
+    const secondOrderDailyCap = getFlag('--second-order-daily-cap');
+    if (secondOrderDailyCap !== undefined) {
+        const n = Number(secondOrderDailyCap);
+        if (!Number.isFinite(n) || n < 0) { console.error(`[switchboard] --second-order-daily-cap requires a non-negative integer (got '${secondOrderDailyCap}').`); exitFlushed(5); }
+        config.secondOrderDailyCap = Math.floor(n);
     }
     const deadlineFlag = getFlag('--judgement-deadline');
     if (deadlineFlag !== undefined) {

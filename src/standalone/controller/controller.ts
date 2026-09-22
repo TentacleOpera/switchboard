@@ -4,11 +4,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
     ESCALATION_LADDER,
+    SECOND_ORDER_ACTIONS,
+    isSecondOrderAction,
     loadMatrix,
+    secondOrderSpec,
     type LoadedMatrix,
     type MatrixCapabilityKey,
     type MatrixRemediation,
     type MatrixRow,
+    type SecondOrderAction,
 } from './matrix';
 import {
     capabilityForKey,
@@ -22,7 +26,7 @@ import {
     type NavigatorProbe,
 } from './capabilities';
 import { redact, redactAndTail, hasUsableEvidence } from './redact';
-import { composeReportEntry, type EntryAction, type RestartRecord, type JudgementTrace } from './report';
+import { composeReportEntry, type EntryAction, type RestartRecord, type JudgementTrace, type MissionReportSection, type MissionReportLine, type SecondOrderTrace, type VerificationTrace } from './report';
 import {
     walkJudgementChain,
     type JudgementConfigView,
@@ -116,6 +120,23 @@ export interface ControllerRuntimeConfig {
      * down rather than by prompting someone else.
      */
     hedgeBound: number;
+    /**
+     * SECOND-ORDER BOUND 1 — at most one second-order ASK per subject per this
+     * many wakes (plan: the-navigator-verifies-and-acts-when-the-pilot-did-not-
+     * fix-it). Verify → act → verify is a control loop, and without a bound it
+     * is nudge-spam one level up. A suppressed ask is REPORTED with its reason,
+     * never skipped silently, and the subject carries on down the first-order
+     * ladder in the meantime.
+     */
+    secondOrderWakes: number;
+    /**
+     * SECOND-ORDER BOUND 2 — a daily cap across ALL subjects' second-order
+     * asks. The per-subject rate bounds one subject; this bounds the board, and
+     * it is the backstop that makes the whole axis a bounded cost. Reached, it
+     * reports as a suppression and the subject continues on the first-order
+     * ladder.
+     */
+    secondOrderDailyCap: number;
 }
 
 export const DEFAULT_CONTROLLER_CONFIG: ControllerRuntimeConfig = {
@@ -134,6 +155,8 @@ export const DEFAULT_CONTROLLER_CONFIG: ControllerRuntimeConfig = {
     navigatorDeadlineMs: 30_000,
     navigatorMaxTokens: 512,
     hedgeBound: 2,
+    secondOrderWakes: 3,
+    secondOrderDailyCap: 24,
 };
 
 interface SubjectState {
@@ -164,12 +187,65 @@ interface SubjectState {
      * loop, and the loop terminates by the controller standing down.
      */
     hedges?: number;
+    /**
+     * The action applied on the PREVIOUS wake that has not yet been verified
+     * (plan: the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it).
+     *
+     * Verification is mechanical: the subject is re-evaluated on the next wake,
+     * and the row RE-FIRING is the failure signal. Carrying the action here —
+     * rather than recomputing "what did we do last time" — is what makes the
+     * report able to say whether the previous wake's action worked.
+     */
+    pending?: {
+        /** The rung, or the second-order action, that was applied. */
+        action: string;
+        /** The row whose re-firing is the verification signal. */
+        ruleId: string;
+        at: number;
+        /** True when the applied thing was a second-order action. */
+        secondOrder: boolean;
+    };
+    /** The wake index on which a second-order ASK was last made for this subject. */
+    secondOrderAskWake?: number;
+    /** How many second-order actions have been APPLIED to this subject. */
+    secondOrderCount?: number;
+    /** The last second-order action APPLIED to this subject, for the next ask's history. */
+    secondOrderLast?: SecondOrderAction;
+    /**
+     * A second-order `stop` has been applied: this is the TERMINUS of the
+     * second-order axis, and the subject is never a candidate again. It is kept
+     * apart from `exhausted` because `exhausted` is the FIRST-ORDER ladder's
+     * terminus and the Pilot sets it one wake earlier — the Navigator's turn is
+     * precisely the wake after it.
+     */
+    stoppedBySecondOrder?: boolean;
 }
 
 interface QuotaEntry {
     until: number;
     reason: string;
     provider: string | null;
+}
+
+/**
+ * What the controller remembers about ONE mission between wakes
+ * (plan: a-mission-is-watched-for-the-whole-of-its-life).
+ *
+ * A mission stall is only visible across hours, so "when did this mission last
+ * move, and when did I first notice it had stopped" cannot be recomputed from a
+ * single wake. It is pruned against the live mission ids exactly as
+ * `state.subjects` is pruned against live subject keys — a deleted mission's
+ * state must not leak forever.
+ */
+interface MissionObservation {
+    /** The `lastMovementAt` the board reported when this mission was last seen. */
+    lastMovementAt: number | null;
+    /** When this stall was FIRST detected, or null while the mission is not stalled. */
+    stalledSince: number | null;
+    /** When this mission was last examined. */
+    lastCheckedAt: number;
+    /** The state this mission last resolved to, so a change is visible. */
+    lastState: string | null;
 }
 
 interface PersistedControllerState {
@@ -207,6 +283,23 @@ interface PersistedControllerState {
      * from two different processes.
      */
     samples: Record<string, PreviousSample>;
+    /**
+     * Per-mission observations, keyed by mission id, pruned against the live
+     * mission ids. This is what makes a long-horizon stall visible at all: a
+     * single wake can measure "how long since movement", but only the persisted
+     * first-observation answers "how long has this been stopped".
+     */
+    missions?: Record<string, MissionObservation>;
+    /**
+     * The wake counter, incremented once per pass. It is what makes the
+     * per-subject second-order rate a rate IN WAKES rather than in wall-clock
+     * minutes: "at most one second-order ask per subject per N wakes" is a
+     * statement about how many times the controller re-observed the subject,
+     * and a clock is not that.
+     */
+    wakes: number;
+    /** Second-order ASKS made today — the declared daily backstop. */
+    secondOrderCalls: { dayKey: string; count: number };
 }
 
 function emptyState(): PersistedControllerState {
@@ -222,6 +315,9 @@ function emptyState(): PersistedControllerState {
         modelCalls: { dayKey: '', byModel: {} },
         lastKnownBoardPid: null,
         samples: {},
+        missions: {},
+        wakes: 0,
+        secondOrderCalls: { dayKey: '', count: 0 },
     };
 }
 
@@ -258,6 +354,14 @@ interface Subject {
     lastAction: string | null;
     /** The board's resolved seat role for this card, when it declared one. */
     recommendedRole: string | null;
+    /**
+     * The feature this card belongs to, when it declared one, and whether the
+     * card IS a feature. Both are read from the board's own row — the
+     * second-order `reset-feature-status` resolves WHICH feature from here and
+     * never from anything a model named.
+     */
+    featureId: string | null;
+    isFeature: boolean;
 }
 
 /** Restart timestamps kept in the board's config row. Bounded on purpose. */
@@ -406,8 +510,11 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
     // cardsInFlightByTeam stay in the facts so the model still JUDGES the whole
     // board; they are simply not recited back.
     // "nothing wrong" is the model's clean verdict; say it in words the operator
-    // reads as a finding rather than echoing the sentinel.
-    if (/^nothing wrong/i.test(line)) { return { verdict: 'No problems found.', tier: judgedBy, reason: null }; }
+    // reads as a finding rather than echoing the sentinel. It is SCOPED to what
+    // was actually judged — board health — because the facts now carry a mission
+    // summary and "No problems found." would claim more than the check examined
+    // (plan: a-mission-is-watched-for-the-whole-of-its-life).
+    if (/^nothing wrong/i.test(line)) { return { verdict: 'No problems found in board health.', tier: judgedBy, reason: null }; }
     return { verdict: line.slice(0, 280), tier: judgedBy, reason: null };
 }
 
@@ -428,6 +535,7 @@ function configAssumptions(cfg: ControllerRuntimeConfig): string[] {
             : 'board restart: disabled — no --board-start-command configured (a controller that cannot start the board must not stop it)',
         `judgement deadline=${cfg.judgementDeadlineMs}ms (covers CONNECT, not just read), max_tokens=${cfg.judgementMaxTokens}, reasoning_effort=none (source: controller config)`,
         `navigator: escalation after ${cfg.escalationStuckPasses} stuck pass(es); one digest per acting wake or unusable judgement reply; deadline=${cfg.navigatorDeadlineMs}ms, max_tokens=${cfg.navigatorMaxTokens}; quota stand-down=${Math.round(cfg.quotaStandDownMs / 60000)}m (source: controller config)`,
+        `second-order actions: at most one Navigator ask per subject per ${cfg.secondOrderWakes} wake(s), daily cap ${cfg.secondOrderDailyCap} ask(s); the closed set is ${SECOND_ORDER_ACTIONS.join(' | ')} (source: controller config + matrix.SECOND_ORDER_ACTIONS)`,
         `CPU sampling: USER_HZ assumed ${ASSUMED_USER_HZ} (source: controller constant — sysconf(_SC_CLK_TCK) is not reachable from Node; every CPU percentage is computed against this)`,
     ];
 }
@@ -494,7 +602,8 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     const healthRes = await tryRequest(apiRequest, port, 'GET', '/health', workspaceRoot);
     const health = safeJson(healthRes);
     const plans = await readPlans(apiRequest, port, workspaceRoot);
-    const fleet = await readFleet(apiRequest, port, workspaceRoot);
+    const fleetRead = await readFleetChecked(apiRequest, port, workspaceRoot);
+    const fleet = fleetRead.rows;
     const finishedByPlan = await readFinishedTurnEnds(apiRequest, port, workspaceRoot);
     const judgementConfig = await readJudgementConfig(apiRequest, port, workspaceRoot);
     // Quota stand-down is re-read at the TOP of every wake rather than trusted
@@ -562,6 +671,16 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     if (!state.modelCalls || state.modelCalls.dayKey !== dayKey) {
         state.modelCalls = { dayKey, byModel: {} };
     }
+    // The second-order daily cap is a SECOND daily counter, not a share of the
+    // judgement ceiling: it bounds a different authority, and collapsing the two
+    // would make one of them unreportable.
+    if (!state.secondOrderCalls || state.secondOrderCalls.dayKey !== dayKey) {
+        state.secondOrderCalls = { dayKey, count: 0 };
+    }
+    // The wake counter. The per-subject second-order rate is "one ask per N
+    // WAKES" — a statement about how many times the controller re-observed the
+    // subject, which a wall clock is not.
+    state.wakes = (typeof state.wakes === 'number' && Number.isFinite(state.wakes) ? state.wakes : 0) + 1;
     // Counted where the call is MADE, not where a rule decides to make one: a
     // call that failed still spent the allowance, and a budget that only counts
     // successes runs out without warning.
@@ -605,7 +724,24 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     // was fine. `unknown` is NOT collected here — it is a valid "I saw nothing
     // worth reporting", not a failure.
     const unusableJudgement: UnusableJudgementReply[] = [];
-    const readLog = makeLogReader(apiRequest, port, workspaceRoot, cfg.evidenceTailBytes);
+    // ONE log fetch per seat per wake. The mission watch and the seat-row pass
+    // share this memo, so a seat that is both a mission member and a held
+    // subject is read once — the mission watch reuses the wake's evidence
+    // rather than collecting its own. Delivery verification deliberately
+    // bypasses the memo (`readLogFresh`), because it must see what arrived
+    // AFTER the paste.
+    const readLogFresh = makeLogReader(apiRequest, port, workspaceRoot, cfg.evidenceTailBytes);
+    const logMemo = new Map<string, Promise<string | null>>();
+    const readLog = (seat: string): Promise<string | null> => {
+        const hit = logMemo.get(seat);
+        if (hit) { return hit; }
+        const p = readLogFresh(seat);
+        logMemo.set(seat, p);
+        return p;
+    };
+    // This wake's per-seat readings, shared by the mission watch and the
+    // seat-row pass (see `observeSeatByName`).
+    const observationsBySeat = new Map<string, SeatObservations>();
 
     // ONE `/proc` snapshot for the whole wake (change 2). Once, not per seat:
     // nine seats each walking `/proc` is nine scans of the same directory, and
@@ -628,7 +764,27 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     // re-diagnoses it as unowned rather than continuing the old ladder.
     const liveKeys = new Set(subjects.map(subjectKey));
     for (const key of Object.keys(state.subjects)) {
-        if (!liveKeys.has(key)) { delete state.subjects[key]; }
+        if (liveKeys.has(key)) { continue; }
+        // The subject LEFT the board between wakes — released, completed or
+        // reassigned. For a subject whose action was awaiting verification that
+        // is the strongest success there is: the work moved. It is recorded
+        // BEFORE the state is dropped, or the verdict would be lost with it.
+        const gone = state.subjects[key];
+        if (gone?.pending) {
+            actions.push(verificationAction(
+                {
+                    planId: key.startsWith('card:') ? key.slice('card:'.length) : '',
+                    seat: key.startsWith('seat:') ? key.slice('seat:'.length) : '',
+                },
+                {
+                    of: gone.pending.action,
+                    ruleId: gone.pending.ruleId,
+                    result: 'success',
+                    detail: `the subject left the board between wakes (released, completed or reassigned), so \`${gone.pending.action}\` cannot be said to have failed — the work moved`,
+                },
+            ));
+        }
+        delete state.subjects[key];
     }
 
     const judgementCtx: JudgementRuntimeContext = {
@@ -644,6 +800,34 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         countModelCall,
         unusableJudgement,
     };
+
+    // ── MISSION WATCH — a mission stall is its own finding ────────────────
+    //
+    // A SIBLING to the board-level check below, and for the same structural
+    // reason: the matrix's evaluator is SUBJECT-scoped, and a subject requires
+    // both `ownerSeat` and `ownerSince`. A stalled mission is by definition one
+    // where no card is held, so it produces zero subjects and a matrix row for
+    // it would be evaluated exactly never. So this pass runs on EVERY wake,
+    // whether or not any subject exists, and it does not depend on a held card.
+    //
+    // It runs BEFORE the board-level check only because the board check's facts
+    // carry the mission summary — both are outside the subject loop and neither
+    // is gated on a subject. Its ACTIONS land after the subject loop, so the
+    // matrix's own actions keep their place in the report.
+    //
+    // It REPORTS and does not act: no nudge, no dispatch, no column move, no
+    // card write. Remediation is a separate authority.
+    const missionWatch = await watchMissions({
+        apiRequest, port, workspaceRoot, controllerId,
+        plans: plans || [],
+        fleet: fleet || [],
+        fleetReadOk: fleetRead.ok,
+        fleetReadReason: fleetRead.reason,
+        seatByName, quota, finishedByPlan,
+        readLog, observationsBySeat,
+        procTable, prevSamples: state.samples, nextSamples,
+        state, cfg, now: now(), caps, judgementCtx,
+    });
 
     // ── BOARD-LEVEL CHECK — never gated on what the board can see ─────────
     //
@@ -722,6 +906,12 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             subjectsFound: subjects.length,
             cardsOwnedAndNotCompleted: ownedNotDone,
             cardsTotal: (plans || []).length,
+            // The mission summary, so the model judges the WHOLE board — and so
+            // the clean verdict stops claiming more than it examined. Only
+            // fields that change on REAL movement are included: `lastMovementAt`
+            // ticks on incidental card updates and would defeat the fingerprint
+            // gate, which is why it is absent here.
+            missions: missionWatch.boardSummary,
             nextHighestPriority: nextUp
                 ? {
                     id: String(nextUp.planId ?? nextUp.plan_id ?? '').slice(0, 8),
@@ -782,6 +972,16 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         }
     }
 
+    // Subjects the PILOT acted on this wake. A subject that received a Pilot
+    // remediation this wake receives NO second-order action in the same wake
+    // (plan: the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it):
+    // the two ladders never both act on one subject in one wake.
+    const pilotActed = new Set<string>();
+    // Subjects whose PREVIOUS action was verified failed, the Pilot applied
+    // nothing this wake, and a Navigator is configured to be asked. Collected
+    // here and asked AFTER the loop, so the whole wake's Pilot work is known.
+    const secondOrderCandidates: SecondOrderCandidate[] = [];
+
     for (const subject of subjects) {
         // A `timed out` card is a PRIOR VERDICT, not a blank and not a fresh
         // row-1 case. Record it and act not at all.
@@ -818,24 +1018,106 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         }
         const diagnoseCtx: DiagnoseContext = {
             cfg, now: now(), workspaceRoot, seatByName, finishedByPlan, caps, readLog, judgementCtx,
-            procTable, prevSamples: state.samples, nextSamples, observations: null,
+            procTable, prevSamples: state.samples, nextSamples, observationsBySeat, observations: null,
         };
         // Observe first, and unconditionally. Sampling costs the seat nothing
         // and says nothing to it, so it must not be conditional on which row
         // matches — and a rate needs the PREVIOUS wake to have sampled too.
         diagnoseCtx.observations = observeSeat(subject, diagnoseCtx);
+        const key = subjectKey(subject);
+        const st = state.subjects[key];
+        // VERIFY the previous wake's action, mechanically, and CONSUME the
+        // pending record so a verdict is produced exactly once. The signal is
+        // the row re-firing on this same subject — no model is asked whether its
+        // own advice worked.
+        const pending = st?.pending ?? null;
+        if (st) { delete st.pending; }
         const diagnosis = await diagnose(subject, matrix.rows, diagnoseCtx);
-        if (!diagnosis) { continue; }
+        const verification: VerificationTrace | null = pending
+            ? {
+                of: pending.action,
+                ruleId: pending.ruleId,
+                result: diagnosis && diagnosis.row.id === pending.ruleId ? 'failed' : 'success',
+                detail: diagnosis && diagnosis.row.id === pending.ruleId
+                    ? `\`${pending.action}\` was applied on a previous wake and the row \`${pending.ruleId}\` fired again for this subject — the call was accepted, the work did not move`
+                    : diagnosis
+                        ? `\`${pending.action}\` was applied on a previous wake and the row \`${pending.ruleId}\` no longer fires — the subject now presents as \`${diagnosis.row.id}\`, so the situation changed`
+                        : `\`${pending.action}\` was applied on a previous wake and nothing fires for this subject now — the work moved`,
+            }
+            : null;
+        if (!diagnosis) {
+            // Nothing fires for this subject. A pending verification resolves as
+            // SUCCESS and is the whole finding for it this wake.
+            if (verification) { actions.push(verificationAction(subject, verification)); }
+            continue;
+        }
         const action = await applyDiagnosis(subject, diagnosis, {
             ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan,
-            readLog,
+            readLog, readLogFresh,
             // The SAME readings the row was selected against: `bare-enter`'s CPU
             // gate must not consult a second sample taken later, which is how a
             // seat that was at rest when diagnosed and busy at delivery would
             // still receive a CR mid-ingestion.
             observations: diagnoseCtx.observations,
         });
-        if (action) { actions.push(action); }
+        if (action) {
+            if (verification) { action.verification = verification; }
+            actions.push(action);
+            pilotActed.add(key);
+            continue;
+        }
+        // The Pilot applied NOTHING this wake — its ladder is exhausted, or a
+        // stop already ended it. That is the only wake on which the second-order
+        // axis may act on this subject, and it is what keeps the two ladders
+        // from both acting in one wake.
+        if (verification) {
+            // A SUCCESS is always reported: "the work moved" is the finding this
+            // plan exists to produce, and it is a fact about the Pilot's own
+            // action rather than an exercise of Navigator authority. A FAILED
+            // verdict with no successor entry to carry it is reported only where
+            // there is something to do about it — with no Navigator configured
+            // the report is byte-identical to the day before this plan, which is
+            // the stated constraint.
+            if (verification.result === 'success' || navigator.configured) {
+                actions.push(verificationAction(subject, verification));
+            }
+        }
+        const acted = state.subjects[key];
+        if (verification?.result === 'failed' && acted && acted.stoppedBySecondOrder !== true) {
+            secondOrderCandidates.push({ subject, diagnosis, verification });
+        }
+    }
+
+    // The mission watch's actions land here, after the matrix's own — the
+    // mission state is the report's SUBJECT (it leads, in `### Missions`), but
+    // it is not a matrix rule, so it does not displace the rows' entries.
+    for (const action of missionWatch.actions) { actions.push(action); }
+
+    // 6b. SECOND-ORDER — where the Pilot's own ladder did not fix it.
+    //
+    //     Verification has already run, mechanically, inside the subject loop:
+    //     each subject's previous action was checked against its row re-firing.
+    //     Where that failed AND the Pilot applied nothing this wake (its ladder
+    //     is spent), the Navigator chooses ONE action from the closed set, and
+    //     the controller validates the name, checks that action's preconditions
+    //     for THIS subject, applies the declared bounds, re-checks the
+    //     triggering condition and only then applies it through the board verb
+    //     it names.
+    //
+    //     WITH NO NAVIGATOR CONFIGURED THIS IS A NO-OP — no candidates, no
+    //     calls, no entries. The axis exists to spend a Navigator call, and the
+    //     Pilot's own behaviour must be identical to the day before this plan;
+    //     an unconfigured Navigator is reported by the capability block the
+    //     report prints every wake, while a configured-but-unreachable one is
+    //     reported on the subject's own entry. The two never read alike.
+    if (navigator.configured) {
+        for (const candidate of secondOrderCandidates) {
+            // The entry is pushed into `actions` by `runSecondOrder` itself, so
+            // it is present before any pre-effect report is written.
+            await runSecondOrder(candidate, {
+                ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, readLogFresh,
+            });
+        }
     }
 
     // 7. Mechanical restart trigger: an unresponsive health endpoint. No
@@ -875,7 +1157,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         };
         log(`restart suppressed: ${restartDecision.suppressionReason}`);
     } else {
-        restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, health, decision: restartDecision });
+        restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, readLogFresh, health, decision: restartDecision });
     }
 
     // 7b. The end-of-wake DIGEST — one Navigator call, after every action is
@@ -887,13 +1169,21 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     //     mode this bounds is a per-action call, which drifts back toward
     //     calling on the cadence.
     //
+    //     Mission observations do NOT trigger it. A mission entry is a READING
+    //     the watch takes on every wake, not something the wake DID, and the
+    //     watch makes its own Navigator call when — and only when — a stall
+    //     survived every mechanical check. Counting mission entries here would
+    //     put the Navigator back on the cadence and double-call an unexplained
+    //     stall (plan: a-mission-is-watched-for-the-whole-of-its-life).
+    //
     //     It must not delay or gate the wake: a Navigator that does not answer
     //     leaves the wake intact and the entry says the digest was not
     //     delivered. It is also skipped when a performed restart has already
     //     written its own report — that wake is over.
-    if ((!restart || restart.rateLimited) && (actions.length > 0 || unusableJudgement.length > 0)) {
+    const digestTriggering = actions.filter(a => a.kind !== 'mission');
+    if ((!restart || restart.rateLimited) && (digestTriggering.length > 0 || unusableJudgement.length > 0)) {
         const digest = await composeNavigatorDigest(
-            { ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog },
+            { ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, readLogFresh },
             actions,
             unusableJudgement,
         );
@@ -920,6 +1210,9 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         capabilityChanges,
         assumptions: configAssumptions(cfg),
         judgementCeiling: ceilingReached ? { reached: true, detail: `global ceiling ${ceiling}/day reached (${state.judgementCalls.count} calls)` } : undefined,
+        // MISSION STATE LEADS the report. Always present, in all three states,
+        // so "no missions" is never expressed by the section's absence.
+        missions: missionWatch.section,
         rowsUnavailable,
         actions,
         restart,
@@ -980,12 +1273,27 @@ async function readPlans(apiRequest: ControllerApiRequest, port: number, workspa
 }
 
 async function readFleet(apiRequest: ControllerApiRequest, port: number, workspaceRoot: string): Promise<any[]> {
+    return (await readFleetChecked(apiRequest, port, workspaceRoot)).rows;
+}
+
+/**
+ * The live terminal list WITH its read status.
+ *
+ * `readFleet` collapses every failure to `[]`, and on the mission watch that is
+ * the fallback trap: "the fleet could not be read" and "no seat is running"
+ * would both make every mission's team look down. The status is carried
+ * alongside so a consumer that makes a CLAIM about liveness can refuse to make
+ * it from an unreadable read.
+ */
+async function readFleetChecked(apiRequest: ControllerApiRequest, port: number, workspaceRoot: string): Promise<{ rows: any[]; ok: boolean; reason: string }> {
     const res = await tryRequest(apiRequest, port, 'POST', '/terminals/verb/ptyListTerminals', workspaceRoot, {});
+    if (!res || res.status !== 200) {
+        return { rows: [], ok: false, reason: `ptyListTerminals returned ${res ? res.status : 'no response'}` };
+    }
     const json = safeJson(res);
-    if (Array.isArray(json)) { return json; }
-    if (Array.isArray(json?.terminals)) { return json.terminals; }
-    if (Array.isArray(json?.result)) { return json.result; }
-    return [];
+    const rows = Array.isArray(json) ? json : (Array.isArray(json?.terminals) ? json.terminals : (Array.isArray(json?.result) ? json.result : null));
+    if (!rows) { return { rows: [], ok: false, reason: 'ptyListTerminals returned no terminal array' }; }
+    return { rows, ok: true, reason: '' };
 }
 
 /**
@@ -1035,6 +1343,902 @@ function makeLogReader(apiRequest: ControllerApiRequest, port: number, workspace
         if (!res || res.status !== 200) { return null; }
         return typeof res.body === 'string' ? res.body : null;
     };
+}
+
+// ── The mission watch ────────────────────────────────────────────────────
+//
+// plan: a-mission-is-watched-for-the-whole-of-its-life.
+//
+// A mission that stops progressing is noticed and reported, however healthy its
+// seats look. This is the Pilot's PRIMARY job: every rule the matrix has is
+// about a seat or about the whole board, and a stalled mission is usually made
+// of healthy parts — every seat idle with no blocker, which is a legitimate
+// state, and every matrix row correctly answering "nothing wrong".
+//
+// The DIVISION OF LABOUR is the point. Detection is mechanical — arithmetic
+// over timestamps, rounds and subtask states — and belongs to the Pilot. The
+// Navigator is consulted on exactly ONE condition: stalled AND unexplained,
+// which means detection fired and every cheap mechanical check came back
+// negative. The Navigator reads what the plans SAY; the mechanical checks read
+// timestamps, columns, fields and edges. A model is not asked a question the
+// board can already answer, because the board's answer is the better one.
+//
+// This pass REPORTS. It does not act: no nudge, no dispatch, no column move, no
+// card write.
+
+/** The stall window is a stated multiple of the mission's own median interval. */
+const MISSION_STALL_WINDOW_MULTIPLE = 3;
+
+/** How many member completions are needed before an interval exists at all. */
+const MISSION_MIN_COMPLETIONS_FOR_WINDOW = 2;
+
+/** A quota / rate-limit marker in a member seat's log tail. */
+const QUOTA_TAIL_MARKER = /(rate[\s_-]?limit|quota|\b429\b|too many requests|usage limit|out of credit)/i;
+
+/** The progress row, as `GET /kanban/missions/progress` returns it. */
+interface MissionProgressRow {
+    id: string;
+    name: string;
+    goal: string;
+    team: string | null;
+    teams: string[];
+    ready: boolean;
+    paused: boolean;
+    cardsTotal: number;
+    cardsDone: number;
+    cardsInFlight: number;
+    cardsWorking: number;
+    columns: Record<string, number>;
+    startedAt: string | null;
+    lastMovementAt: number | null;
+    runState: 'not-started' | 'in-flight' | 'completed';
+    sequencing: string[];
+}
+
+interface MissionOutside {
+    inFlightFeatures: number;
+    inFlightCards: number;
+    parkedFeatures: number;
+    parkedCards: number;
+    parkedCardsDone: number;
+}
+
+/** One complete explanation for why a mission is not moving. */
+interface StallExplanation {
+    ruleId: 'mission-stalled' | 'mission-out-of-order';
+    cause: string;
+    detail: string;
+    evidence: string;
+    /** The seat the explanation rests on, when it is a seat-level one. */
+    seat: string | null;
+}
+
+/** A mechanical weirdness signal, independent of the stall signal. */
+interface MissionWeirdness {
+    cause: string;
+    detail: string;
+}
+
+interface MissionWatchResult {
+    actions: EntryAction[];
+    section: MissionReportSection;
+    /** The fields `boardFacts` carries — only those that change on real movement. */
+    boardSummary: Record<string, unknown>;
+    navigatorCalls: number;
+}
+
+interface MissionWatchArgs {
+    apiRequest: ControllerApiRequest;
+    port: number;
+    workspaceRoot: string;
+    controllerId: string;
+    plans: any[];
+    fleet: any[];
+    fleetReadOk: boolean;
+    fleetReadReason: string;
+    seatByName: Map<string, any>;
+    quota: Record<string, QuotaEntry>;
+    finishedByPlan: Map<string, number[]>;
+    readLog: (seat: string) => Promise<string | null>;
+    observationsBySeat: Map<string, SeatObservations>;
+    procTable: ProcessTable;
+    prevSamples: Record<string, PreviousSample>;
+    nextSamples: Record<string, PreviousSample>;
+    state: PersistedControllerState;
+    cfg: ControllerRuntimeConfig;
+    now: number;
+    caps: CapabilitySnapshot;
+    judgementCtx: JudgementRuntimeContext;
+}
+
+function cardPlanId(c: any): string { return String(c?.planId ?? c?.plan_id ?? ''); }
+function cardCompletedAt(c: any): string | null { const v = c?.completedAt ?? c?.completed_at ?? null; return v ? String(v) : null; }
+function cardOwnerSeat(c: any): string { return String(c?.ownerSeat ?? c?.owner_seat ?? '').trim(); }
+function cardOwnerSince(c: any): string | null { const v = c?.ownerSince ?? c?.owner_since ?? null; return v ? String(v) : null; }
+function cardColumn(c: any): string { return String(c?.kanbanColumn ?? c?.kanban_column ?? ''); }
+function cardTopic(c: any): string { return String(c?.topic ?? c?.title ?? ''); }
+
+function median(values: number[]): number {
+    const s = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/**
+ * A mission's identifying token, derived the SAME way the board-level check
+ * groups seats into teams (`seat.split('-')[0]`): lowercase, split on any
+ * non-alphanumeric, first token. `'coding-team'` and `'Coding Coder'` both
+ * yield `'coding'`, so a team id and a seat name written in either style match.
+ */
+function teamToken(name: string): string {
+    return String(name || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)[0] || '';
+}
+
+function liveSeatNames(fleet: any[]): string[] {
+    return (fleet || [])
+        .filter((t: any) => t && t.status !== 'exited' && t.hidden !== true)
+        .map((t: any) => String(t.friendlyName || '').trim())
+        .filter(Boolean);
+}
+
+/** The mission's window, derived from its own member completion intervals. */
+interface StallWindow {
+    windowMs: number;
+    medianMs: number;
+    intervals: number[];
+    completions: number[];
+}
+
+/**
+ * A window from the mission's OWN history, or null when there is too little of
+ * it. Fewer than two completions yields no interval, and the mission is then
+ * reported `unjudgeable` with its reason rather than measured against an
+ * invented threshold — a wrong threshold produces the nudge spam this product
+ * has already been bitten by.
+ */
+function deriveStallWindow(completions: number[]): StallWindow | null {
+    if (completions.length < MISSION_MIN_COMPLETIONS_FOR_WINDOW) { return null; }
+    const sorted = [...completions].sort((a, b) => a - b);
+    const intervals: number[] = [];
+    for (let i = 1; i < sorted.length; i++) { intervals.push(sorted[i] - sorted[i - 1]); }
+    const positive = intervals.filter(x => x > 0);
+    if (positive.length === 0) { return null; }
+    const med = median(positive);
+    return { windowMs: med * MISSION_STALL_WINDOW_MULTIPLE, medianMs: med, intervals, completions: sorted };
+}
+
+/** The last substantive line of a log tail, or ''. */
+function lastLogLine(raw: string): string {
+    const lines = String(raw || '').split('\n').map(l => l.trim()).filter(Boolean);
+    return lines.length ? lines[lines.length - 1] : '';
+}
+
+/** Every transitive predecessor of `planId`, cycle-safe. */
+function transitiveDeps(planId: string, edges: Map<string, string[]>): Set<string> {
+    const out = new Set<string>();
+    const stack = [...(edges.get(planId) || [])];
+    while (stack.length) {
+        const d = stack.pop() as string;
+        if (out.has(d)) { continue; }
+        out.add(d);
+        for (const n of (edges.get(d) || [])) { if (!out.has(n)) { stack.push(n); } }
+    }
+    return out;
+}
+
+/**
+ * The two mechanical weirdness signals, independent of the stall signal:
+ * a member completed while one of its recorded predecessors was not complete,
+ * and every remaining member transitively depending on one member that is not
+ * progressing. Both are read from the `plan_dependencies` edges the Navigator
+ * recorded and the members' `completed_at`.
+ */
+function findMissionWeirdness(cards: any[], edges: Map<string, string[]>, cardByPlanId: Map<string, any>): MissionWeirdness | null {
+    const completedAtOf = (id: string): string | null => {
+        const c = cardByPlanId.get(id);
+        return c ? cardCompletedAt(c) : null;
+    };
+    for (const c of cards) {
+        const id = cardPlanId(c);
+        const doneAt = cardCompletedAt(c);
+        if (!id || !doneAt) { continue; }
+        const doneMs = Date.parse(doneAt);
+        if (!Number.isFinite(doneMs)) { continue; }
+        for (const dep of (edges.get(id) || [])) {
+            const depDoneAt = completedAtOf(dep);
+            const depDoneMs = depDoneAt ? Date.parse(depDoneAt) : NaN;
+            if (!depDoneAt || !Number.isFinite(depDoneMs) || depDoneMs > doneMs) {
+                return {
+                    cause: 'Mission out of order: a member completed before its recorded predecessor',
+                    detail: `member '${id}' completed at ${doneAt} while its recorded predecessor '${dep}' ${depDoneAt ? `completed later, at ${depDoneAt}` : 'has not completed'} — the recorded order and the real order disagree`,
+                };
+            }
+        }
+    }
+    const unfinished = cards.filter(c => !cardCompletedAt(c));
+    if (unfinished.length >= 2) {
+        for (const gate of unfinished) {
+            const gid = cardPlanId(gate);
+            const others = unfinished.filter(c => cardPlanId(c) !== gid);
+            if (!others.length) { continue; }
+            if (others.every(c => transitiveDeps(cardPlanId(c), edges).has(gid))) {
+                return {
+                    cause: 'Mission out of order: every remaining member waits on one member that is not progressing',
+                    detail: `every unfinished member (${others.map(cardPlanId).join(', ')}) transitively depends on '${gid}', which is not progressing — the whole mission is gated behind one card`,
+                };
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * The SIX mechanical checks, IN ORDER, and the first that answers is the
+ * explanation. Check 1 is first because it is the most common cause of a
+ * mission that stops moving, its fix is mechanical, and it leaves NO board
+ * trace at all — a coder that finished and never ran `submit` looks, in every
+ * board field, exactly like a coder still working.
+ *
+ * `null` means the stall survived all six, and only then is the Navigator
+ * asked.
+ */
+async function explainMissionStall(args: {
+    mission: MissionProgressRow;
+    cards: any[];
+    edges: Map<string, string[]>;
+    cardByPlanId: Map<string, any>;
+    seatByName: Map<string, any>;
+    quota: Record<string, QuotaEntry>;
+    finishedByPlan: Map<string, number[]>;
+    readLog: (seat: string) => Promise<string | null>;
+    observe: (seat: string) => SeatObservations;
+    nowMs: number;
+    cfg: ControllerRuntimeConfig;
+    fleet: any[];
+    fleetReadOk: boolean;
+    fleetReadReason: string;
+}): Promise<StallExplanation | null> {
+    const { mission, cards, edges, cardByPlanId, seatByName, quota, finishedByPlan, readLog, observe, nowMs, cfg } = args;
+    const unfinished = cards.filter(c => !cardCompletedAt(c));
+
+    // ── CHECK 1 — a member's seat finished and never posted. ─────────────
+    // Row 10's evidence, per seat: a prior `finished` before `owner_since`,
+    // none after; a worktree write this round; the seat at rest. This is the
+    // single most frequent reason a mission stops moving, and it is asked
+    // BEFORE any board field because a board-field answer arriving first would
+    // hide the cause that is actually actionable.
+    for (const c of unfinished) {
+        const seatName = cardOwnerSeat(c);
+        const since = cardOwnerSince(c);
+        if (!seatName || !since) { continue; }
+        const sinceMs = Date.parse(since);
+        if (!Number.isFinite(sinceMs)) { continue; }
+        const seat = seatByName.get(seatName);
+        const lastDataAt = seat && typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
+        if (lastDataAt <= 0) { continue; } // no heartbeat data is no evidence.
+        if (nowMs - lastDataAt < cfg.turnEndSilenceMs) { continue; } // mid-turn — not at rest.
+        const planId = cardPlanId(c);
+        const finishedOnEarlierRound = finishedBefore(finishedByPlan, planId, sinceMs);
+        const noFinishedThisRound = !finishedSince(finishedByPlan, planId, sinceMs);
+        const obs = observe(seatName);
+        const wroteAtMs = obs.write.available && obs.write.ageMs !== null ? nowMs - obs.write.ageMs : null;
+        const wroteThisRound = wroteAtMs !== null && wroteAtMs > sinceMs;
+        if (finishedOnEarlierRound && noFinishedThisRound && wroteThisRound) {
+            return {
+                ruleId: 'mission-stalled',
+                seat: seatName,
+                cause: 'Mission stalled: a member finished and never posted its completion',
+                detail: `member '${planId}' on seat '${seatName}' posted a \`finished\` on an earlier round (before ${since}) and none on this one, wrote its worktree this round, and is at rest — the completion was never posted, and the fix is to post it`,
+                evidence: `plan_events turn_end (action=finished) before owner_since ${since} + a worktree write after it + fleet lastDataAt ${new Date(lastDataAt).toISOString()} (seat at rest)`,
+            };
+        }
+    }
+
+    // ── CHECK 2 — a member's seat is dead, out of quota, or waiting on a human.
+    for (const c of unfinished) {
+        const seatName = cardOwnerSeat(c);
+        if (!seatName) { continue; }
+        const planId = cardPlanId(c);
+        const seat = seatByName.get(seatName);
+        if (!seat || seat.status === 'exited') {
+            return {
+                ruleId: 'mission-stalled',
+                seat: seatName,
+                cause: 'Mission stalled: a member\'s seat is dead',
+                detail: `member '${planId}' is held by seat '${seatName}', which is ${seat ? 'exited' : 'absent from the fleet'}`,
+                evidence: `fleet liveness (seat '${seatName}' status=${seat ? seat.status : 'absent'})`,
+            };
+        }
+        const stand = quota[seatName];
+        if (stand && stand.until > nowMs) {
+            return {
+                ruleId: 'mission-stalled',
+                seat: seatName,
+                cause: 'Mission stalled: a member\'s seat is stood down (quota)',
+                detail: `member '${planId}' is held by seat '${seatName}', stood down until ${new Date(stand.until).toISOString()}: ${stand.reason}`,
+                evidence: 'controller.quota (board config)',
+            };
+        }
+        const raw = await readLog(seatName);
+        if (raw && QUOTA_TAIL_MARKER.test(raw)) {
+            return {
+                ruleId: 'mission-stalled',
+                seat: seatName,
+                cause: 'Mission stalled: a member\'s seat hit a quota or rate limit',
+                detail: `member '${planId}' on seat '${seatName}' has a quota / rate-limit marker in its log tail`,
+                evidence: `GET /terminals/${seatName}/log tail (quota marker), redacted`,
+            };
+        }
+        if (raw && lastLogLine(raw).endsWith('?')) {
+            return {
+                ruleId: 'mission-stalled',
+                seat: seatName,
+                cause: 'Mission stalled: a member\'s seat is waiting on a human',
+                detail: `member '${planId}' on seat '${seatName}' has a log tail ending in a question — it stopped and is waiting on a person`,
+                evidence: `GET /terminals/${seatName}/log tail, redacted: ${lastLogLine(raw).slice(0, 200)}`,
+            };
+        }
+    }
+
+    // ── CHECK 3 — the mission is paused, or its runState is not-started. ──
+    // A field read. Both are complete explanations and neither is a stall: a
+    // paused mission has deliberately stopped moving, and a mission nobody
+    // started was never moving.
+    if (mission.paused) {
+        return {
+            ruleId: 'mission-stalled',
+            seat: null,
+            cause: 'Mission is paused, not stalled',
+            detail: 'the operator paused this mission — it has deliberately stopped moving, and reporting it as a stall would be a nudge against a decision already made',
+            evidence: 'missions.paused (board)',
+        };
+    }
+    if (mission.runState === 'not-started') {
+        return {
+            ruleId: 'mission-stalled',
+            seat: null,
+            cause: 'Mission has not started, so it cannot be stalled',
+            detail: `runState is '${mission.runState}' — a mission nobody started is not a stall`,
+            evidence: 'missions.runState (derived by the board)',
+        };
+    }
+
+    // ── CHECK 4 — the assigned team is not live. ─────────────────────────
+    // A fleet read. An UNREADABLE fleet is not "no seats": claiming the team is
+    // down from a failed read is the fallback trap, so the claim is withheld
+    // and the read's failure is stated instead.
+    if (mission.team) {
+        if (!args.fleetReadOk) {
+            return {
+                ruleId: 'mission-stalled',
+                seat: null,
+                cause: 'Mission stalled: the fleet could not be read, so its team\'s liveness is unknown',
+                detail: `the mission is assigned to team '${mission.team}'; the fleet read failed (${args.fleetReadReason}), so whether the team is live is NOT established — this is not a claim that it is down`,
+                evidence: `ptyListTerminals failed: ${args.fleetReadReason}`,
+            };
+        }
+        const token = teamToken(mission.team);
+        const live = liveSeatNames(args.fleet).some(s => teamToken(s) === token);
+        if (token && !live) {
+            return {
+                ruleId: 'mission-stalled',
+                seat: null,
+                cause: 'Mission stalled: its team is not live',
+                detail: `the mission is assigned to team '${mission.team}', and no live seat on this board belongs to it (live seats: ${liveSeatNames(args.fleet).join(', ') || 'none'})`,
+                evidence: `fleet liveness via ptyListTerminals; team token '${token}'`,
+            };
+        }
+    }
+
+    // ── CHECK 5 — every unfinished member waits on an incomplete predecessor.
+    // A walk over the `plan_dependencies` edges.
+    if (unfinished.length > 0) {
+        const blocked = unfinished.map(c => {
+            const id = cardPlanId(c);
+            const deps = edges.get(id) || [];
+            const incomplete = deps.filter(d => {
+                const dep = cardByPlanId.get(d);
+                return !dep || !cardCompletedAt(dep);
+            });
+            return { id, deps, incomplete };
+        });
+        if (blocked.every(b => b.deps.length > 0 && b.incomplete.length === b.deps.length)) {
+            return {
+                ruleId: 'mission-stalled',
+                seat: null,
+                cause: 'Mission stalled: every unfinished member waits on an incomplete predecessor',
+                detail: blocked.map(b => `'${b.id}' waits on ${b.incomplete.map(d => `'${d}'`).join(', ')}`).join('; '),
+                evidence: 'plan_dependencies edges + plans.completed_at',
+            };
+        }
+    }
+
+    // ── CHECK 6 — a member completed out of the recorded order. ──────────
+    const weird = findMissionWeirdness(cards, edges, cardByPlanId);
+    if (weird) {
+        return { ruleId: 'mission-out-of-order', seat: null, cause: weird.cause, detail: weird.detail, evidence: 'plan_dependencies edges + plans.completed_at' };
+    }
+
+    return null;
+}
+
+async function readMissionProgress(
+    apiRequest: ControllerApiRequest, port: number, workspaceRoot: string,
+): Promise<{ ok: boolean; reason: string; missions: MissionProgressRow[]; outsideMissions: MissionOutside | null }> {
+    const res = await tryRequest(apiRequest, port, 'GET', '/kanban/missions/progress', workspaceRoot);
+    if (!res || res.status !== 200) {
+        return { ok: false, reason: `GET /kanban/missions/progress returned ${res ? res.status : 'no response'}`, missions: [], outsideMissions: null };
+    }
+    const json = safeJson(res);
+    // `/kanban/missions/progress` is served through `_handleReadEndpoint`, which
+    // wraps the payload as `{ success: true, data: {...} }`. Reading only the
+    // top level would make a WORKING endpoint look unreadable — and, worse, a
+    // board with missions would look like a board with none. Verified against
+    // the live host: `{"success":true,"data":{"missions":[],...}}`.
+    const payload = (json && json.data && typeof json.data === 'object') ? json.data : json;
+    if (!payload || !Array.isArray(payload.missions)) {
+        return { ok: false, reason: 'GET /kanban/missions/progress returned no missions array', missions: [], outsideMissions: null };
+    }
+    const missions: MissionProgressRow[] = payload.missions.map((m: any) => ({
+        id: String(m?.id || ''),
+        name: String(m?.name || ''),
+        goal: String(m?.goal || ''),
+        team: typeof m?.team === 'string' && m.team ? m.team : null,
+        teams: Array.isArray(m?.teams) ? m.teams.map((x: unknown) => String(x)) : [],
+        ready: !!m?.ready,
+        paused: !!m?.paused,
+        cardsTotal: Number(m?.cardsTotal || 0),
+        cardsDone: Number(m?.cardsDone || 0),
+        cardsInFlight: Number(m?.cardsInFlight || 0),
+        cardsWorking: Number(m?.cardsWorking || 0),
+        columns: (m?.columns && typeof m.columns === 'object') ? m.columns : {},
+        startedAt: m?.startedAt ?? null,
+        lastMovementAt: typeof m?.lastMovementAt === 'number' && Number.isFinite(m.lastMovementAt) ? m.lastMovementAt : null,
+        runState: (m?.runState === 'in-flight' || m?.runState === 'completed') ? m.runState : 'not-started',
+        sequencing: Array.isArray(m?.sequencing) ? m.sequencing.map((x: unknown) => String(x)) : [],
+    })).filter((m: MissionProgressRow) => !!m.id);
+    const o = payload.outsideMissions;
+    const outsideMissions: MissionOutside | null = (o && typeof o === 'object') ? {
+        inFlightFeatures: Number(o.inFlightFeatures || 0),
+        inFlightCards: Number(o.inFlightCards || 0),
+        parkedFeatures: Number(o.parkedFeatures || 0),
+        parkedCards: Number(o.parkedCards || 0),
+        parkedCardsDone: Number(o.parkedCardsDone || 0),
+    } : null;
+    return { ok: true, reason: '', missions, outsideMissions };
+}
+
+/**
+ * The mission -> member cards join.
+ *
+ * This is the ONE thing the progress endpoint does not carry: it reports
+ * counts and movement, not member ids, and without member ids a stalled
+ * mission cannot be joined to its members' seats. Movement stays the progress
+ * endpoint's own numbers — this read is membership only, so there is still one
+ * implementation of "has this mission moved".
+ */
+async function readMissionMembership(
+    apiRequest: ControllerApiRequest, port: number, workspaceRoot: string, plans: any[],
+): Promise<{ ok: boolean; reason: string; memberCards: Map<string, any[]> }> {
+    const res = await tryRequest(apiRequest, port, 'GET', '/kanban/missions', workspaceRoot);
+    const json = safeJson(res);
+    if (!res || res.status !== 200 || !json || !Array.isArray(json.missions)) {
+        return { ok: false, reason: `GET /kanban/missions returned ${res ? res.status : 'no response'}`, memberCards: new Map() };
+    }
+    const isFeature = (p: any) => p && (p.isFeature === 1 || p.isFeature === true);
+    const subsByFeature = new Map<string, any[]>();
+    for (const p of plans) {
+        if (!p || isFeature(p)) { continue; }
+        const fid = String(p.featureId ?? p.feature_id ?? '').trim();
+        if (!fid) { continue; }
+        const list = subsByFeature.get(fid) || [];
+        list.push(p);
+        subsByFeature.set(fid, list);
+    }
+    const byId = new Map<string, any>();
+    for (const p of plans) { const id = cardPlanId(p); if (id) { byId.set(id, p); } }
+    const memberCards = new Map<string, any[]>();
+    for (const m of json.missions as any[]) {
+        const cards: any[] = [];
+        for (const fid of (Array.isArray(m?.features) ? m.features : [])) {
+            const subs = subsByFeature.get(String(fid)) || [];
+            if (subs.length) { cards.push(...subs); }
+            else { const f = byId.get(String(fid)); if (f) { cards.push(f); } }
+        }
+        for (const pid of (Array.isArray(m?.plans) ? m.plans : [])) {
+            const p = byId.get(String(pid));
+            if (p) { cards.push(p); }
+        }
+        memberCards.set(String(m?.id || ''), cards);
+    }
+    return { ok: true, reason: '', memberCards };
+}
+
+async function readDependencyEdges(
+    apiRequest: ControllerApiRequest, port: number, workspaceRoot: string,
+): Promise<{ ok: boolean; reason: string; edges: Map<string, string[]> }> {
+    const res = await tryRequest(apiRequest, port, 'GET', '/kanban/dependencies', workspaceRoot);
+    const json = safeJson(res);
+    if (!res || res.status !== 200 || !json || json.success !== true) {
+        return { ok: false, reason: `GET /kanban/dependencies returned ${res ? res.status : 'no response'}`, edges: new Map() };
+    }
+    const rows = Array.isArray(json.dependencies) ? json.dependencies : null;
+    if (!rows) {
+        return { ok: false, reason: 'GET /kanban/dependencies returned no dependencies array', edges: new Map() };
+    }
+    const edges = new Map<string, string[]>();
+    for (const r of rows as any[]) {
+        const pid = String(r?.planId || '');
+        const dep = String(r?.dependsOnPlanId || '');
+        if (!pid || !dep) { continue; }
+        const list = edges.get(pid) || [];
+        list.push(dep);
+        edges.set(pid, list);
+    }
+    return { ok: true, reason: '', edges };
+}
+
+/** The one shape every mission action takes. `missionId` is always set. */
+function missionAction(a: {
+    missionId: string | null;
+    ruleId: string;
+    cause: string;
+    outcome: EntryAction['outcome'];
+    detail: string;
+    evidence: string;
+    seat?: string | null;
+    judgedBy?: { providerId: string; model: string } | null;
+}): EntryAction {
+    return {
+        // The plan's declared shape: `{ subject: 'mission', kind: 'mission',
+        // seat: null, planId: null, missionId, ruleId, ... }`. The identity of a
+        // finding is `missionId`, not the subject string.
+        subject: 'mission',
+        kind: 'mission',
+        missionId: a.missionId,
+        seat: a.seat ?? null,
+        planId: null,
+        ruleId: a.ruleId,
+        cause: a.cause,
+        rung: 'none',
+        ladderIndex: null,
+        command: null,
+        evidence: a.evidence,
+        evidenceWindow: 'GET /kanban/missions/progress + GET /kanban/missions + GET /kanban/dependencies + this wake\'s seat evidence (reused, not re-read)',
+        outcome: a.outcome,
+        detail: a.detail,
+        ownerSince: null,
+        ownerSinceReStamped: false,
+        dispatchTimeoutRemainingMs: null,
+        priorVerdict: null,
+        ...(a.judgedBy ? { judgedBy: a.judgedBy } : {}),
+        // `seat`/`planId` are null on a mission entry by construction, the same
+        // shape the board-level check builds and casts for the same reason.
+    } as any;
+}
+
+/**
+ * The mission adjudication prompt. The Navigator is handed the mission's SHAPE
+ * — member topics, columns, completion times, the recorded edges, the derived
+ * window — and is told to OBSERVE and ADVISE, never to act. Its reply is
+ * recorded; acting authority is a separate plan.
+ */
+function buildMissionAdjudicationPrompt(args: {
+    mission: MissionProgressRow;
+    cards: any[];
+    edges: Map<string, string[]>;
+    window: StallWindow;
+    movedSince: number;
+}): { system: string; user: string } {
+    // Deliberately NOT a bare `system` array literal here: the judgement-bundle
+    // contract test locates the CLASSIFIER prompt by that anchor, and this
+    // prompt is not it.
+    const systemText = [
+        'You are the Navigator on a board of coding agents. The Pilot — the model that watches the',
+        'board every few minutes — has detected that ONE MISSION has stopped moving, and every cheap',
+        'mechanical explanation (a member that finished and never posted, a dead or quota-stood-down',
+        'seat, a paused or not-started mission, a team that is down, members waiting on incomplete',
+        'predecessors, a member completed out of the recorded order) came back negative.',
+        '',
+        'You are the only thing left that can read what the mission MEANS: whether its plans imply a',
+        'blocker nobody recorded as an edge, or its remaining work is implicitly serial.',
+        '',
+        'You OBSERVE and ADVISE. You do not act: nothing you write is executed, and your reply is',
+        'recorded in the controller\'s report for the operator to read.',
+        'Reply in a few short lines: what you make of this mission\'s shape, and the single most likely',
+        'reason it has stopped. If you cannot tell, say so in one line.',
+    ].join('\n');
+    const memberLines = args.cards.length
+        ? args.cards.map(c => {
+            const id = cardPlanId(c);
+            const deps = args.edges.get(id) || [];
+            return `  - ${id} "${cardTopic(c)}" | column ${cardColumn(c) || '(none)'} | ${cardCompletedAt(c) ? `completed ${cardCompletedAt(c)}` : (cardOwnerSeat(c) ? `held by ${cardOwnerSeat(c)} since ${cardOwnerSince(c)}` : 'not started')} | waits on ${deps.length ? deps.join(', ') : '(nothing)'}`;
+        }).join('\n')
+        : '  - (no member cards could be resolved for this mission)';
+    const user = [
+        `Mission: ${args.mission.id} "${args.mission.name}"`,
+        args.mission.goal ? `Goal: ${args.mission.goal}` : 'Goal: (none recorded)',
+        `Team: ${args.mission.team || '(none assigned)'}`,
+        `Cards: ${args.mission.cardsDone} done of ${args.mission.cardsTotal}; ${args.mission.cardsInFlight} in flight`,
+        `Columns: ${JSON.stringify(args.mission.columns)}`,
+        `Last movement: ${new Date(args.mission.lastMovementAt as number).toISOString()} (${renderDuration(args.movedSince)} ago)`,
+        `Window derived from this mission's own completion intervals: median ${renderDuration(args.window.medianMs)} x ${MISSION_STALL_WINDOW_MULTIPLE} = ${renderDuration(args.window.windowMs)}`,
+        '',
+        'Members (from the board\'s own rows):',
+        memberLines,
+        '',
+        'Recorded sequencing (from the dependency edges):',
+        args.mission.sequencing.length ? args.mission.sequencing.map(s => `  - ${s}`).join('\n') : '  - (no sequencing recorded)',
+    ].join('\n');
+    return { system: systemText, user };
+}
+
+async function watchMissions(args: MissionWatchArgs): Promise<MissionWatchResult> {
+    const source = 'GET /kanban/missions/progress';
+    const findings: EntryAction[] = [];
+    const lines: MissionReportLine[] = [];
+    let inFlight = 0, moving = 0, stalledCount = 0, unjudgeable = 0, pausedCount = 0, notStartedCount = 0, outOfOrderCount = 0;
+    let navigatorCalls = 0;
+
+    const progress = await readMissionProgress(args.apiRequest, args.port, args.workspaceRoot);
+
+    // The progress read FAILED. This is not "no missions" — the two must never
+    // render the same string, so the report says the state could not be read
+    // and the summary entry says the same.
+    if (!progress.ok) {
+        const section: MissionReportSection = {
+            state: 'unreadable', reason: progress.reason, source,
+            total: 0, inFlight: 0, moving: 0, stalled: 0, unjudgeable: 0, paused: 0, notStarted: 0, outOfOrder: 0,
+            lines: [], outsideMissions: null,
+        };
+        const action = missionAction({
+            missionId: null,
+            ruleId: 'mission-state-unreadable',
+            cause: 'Mission state could not be read',
+            outcome: 'unavailable',
+            detail: `the mission watch could not read mission state: ${progress.reason}. No mission was examined this wake — this is NOT "no missions".`,
+            evidence: `GET /kanban/missions/progress failed: ${progress.reason}`,
+        });
+        return { actions: [action], section, boardSummary: { read: false, reason: progress.reason }, navigatorCalls: 0 };
+    }
+
+    // With no missions there is nothing to join to seats and nothing to compare
+    // against, so the membership and edge reads are skipped: a zero-mission
+    // board makes ONE board read, not three.
+    const hasMissions = progress.missions.length > 0;
+    const membership = hasMissions
+        ? await readMissionMembership(args.apiRequest, args.port, args.workspaceRoot, args.plans)
+        : { ok: true, reason: '', memberCards: new Map<string, any[]>() };
+    const edgesRead = hasMissions
+        ? await readDependencyEdges(args.apiRequest, args.port, args.workspaceRoot)
+        : { ok: true, reason: '', edges: new Map<string, string[]>() };
+    // Prune per-mission state against the live mission ids, exactly as
+    // `state.subjects` is pruned against live subject keys: a deleted mission's
+    // state must not leak forever, and a mission that completed between wakes
+    // gets no final stall.
+    const priorMissions: Record<string, MissionObservation> = args.state.missions || (args.state.missions = {});
+    const liveMissionIds = new Set(progress.missions.map(m => m.id));
+    for (const id of Object.keys(priorMissions)) {
+        if (!liveMissionIds.has(id)) { delete priorMissions[id]; }
+    }
+
+    const cardByPlanId = new Map<string, any>();
+    for (const p of args.plans) { const id = cardPlanId(p); if (id) { cardByPlanId.set(id, p); } }
+    const missionCtx: DiagnoseContext = {
+        cfg: args.cfg, now: args.now, workspaceRoot: args.workspaceRoot,
+        seatByName: args.seatByName, finishedByPlan: args.finishedByPlan, caps: args.caps,
+        readLog: args.readLog, judgementCtx: args.judgementCtx,
+        procTable: args.procTable, prevSamples: args.prevSamples, nextSamples: args.nextSamples,
+        observationsBySeat: args.observationsBySeat, observations: null,
+    };
+
+    for (const mission of progress.missions) {
+        const observed: MissionObservation = priorMissions[mission.id]
+            || { lastMovementAt: null, stalledSince: null, lastCheckedAt: 0, lastState: null };
+
+        // A COMPLETED mission is pruned; no final stall is emitted for it.
+        if (mission.runState === 'completed') {
+            delete priorMissions[mission.id];
+            continue;
+        }
+
+        const cards = membership.memberCards.get(mission.id) || [];
+        const cardEvidence = JSON.stringify({
+            id: mission.id, name: mission.name, runState: mission.runState, paused: mission.paused,
+            cardsTotal: mission.cardsTotal, cardsDone: mission.cardsDone, cardsInFlight: mission.cardsInFlight,
+            lastMovementAt: mission.lastMovementAt, columns: mission.columns,
+            members: cards.map(c => ({ id: cardPlanId(c), column: cardColumn(c), completedAt: cardCompletedAt(c), ownerSeat: cardOwnerSeat(c), ownerSince: cardOwnerSince(c) })),
+        });
+        const remember = (lastState: string, stalledSince: number | null): void => {
+            priorMissions[mission.id] = { ...observed, lastMovementAt: mission.lastMovementAt, stalledSince, lastCheckedAt: args.now, lastState };
+        };
+
+        // CHECK 3 (classification half) — a paused mission and a not-started
+        // mission are different states, and neither is a stall.
+        if (mission.paused) {
+            pausedCount++;
+            remember('paused', null);
+            lines.push({ missionId: mission.id, name: mission.name, state: 'paused', detail: 'the operator paused this mission — it has deliberately stopped moving' });
+            continue;
+        }
+        if (mission.runState === 'not-started') {
+            notStartedCount++;
+            remember('not-started', null);
+            lines.push({ missionId: mission.id, name: mission.name, state: 'not-started', detail: `runState is '${mission.runState}' — a mission nobody started is not a stall` });
+            continue;
+        }
+
+        inFlight++;
+
+        // Membership could not be read: the mission's movement is visible but
+        // its members cannot be joined to seats, so no window can be derived.
+        if (!membership.ok) {
+            unjudgeable++;
+            const why = `the mission's member cards could not be resolved (${membership.reason}), so no completion intervals could be derived`;
+            remember('unjudgeable', null);
+            lines.push({ missionId: mission.id, name: mission.name, state: 'unjudgeable', detail: why });
+            findings.push(missionAction({
+                missionId: mission.id, ruleId: 'mission-unjudgeable',
+                cause: 'Mission cannot be judged for a stall',
+                outcome: 'observed',
+                detail: `mission '${mission.id}' is in flight but ${why} — reported rather than measured against an invented threshold`,
+                evidence: cardEvidence,
+            }));
+            continue;
+        }
+
+        // Weirdness signals are MECHANICAL and INDEPENDENT of the stall signal:
+        // they are emitted whether the mission is moving or stalled, because a
+        // member that completed out of the recorded order is a finding in its
+        // own right.
+        const weird = findMissionWeirdness(cards, edgesRead.edges, cardByPlanId);
+        if (weird) {
+            outOfOrderCount++;
+            findings.push(missionAction({
+                missionId: mission.id, ruleId: 'mission-out-of-order',
+                cause: weird.cause, outcome: 'observed', detail: weird.detail, evidence: cardEvidence,
+            }));
+            lines.push({ missionId: mission.id, name: mission.name, state: 'out-of-order', detail: weird.detail });
+        }
+
+        const completions = cards.map(cardCompletedAt).filter(Boolean).map(t => Date.parse(String(t))).filter(Number.isFinite);
+        const window = deriveStallWindow(completions);
+
+        // Fewer than two completions: no interval exists, so the mission is
+        // unjudgeable and SAYS so rather than being measured against a guess.
+        if (!window) {
+            unjudgeable++;
+            const why = `fewer than ${MISSION_MIN_COMPLETIONS_FOR_WINDOW} member completions (${completions.length}), so there is no interval to derive a window from`;
+            remember('unjudgeable', null);
+            lines.push({ missionId: mission.id, name: mission.name, state: 'unjudgeable', detail: why });
+            findings.push(missionAction({
+                missionId: mission.id, ruleId: 'mission-unjudgeable',
+                cause: 'Mission cannot be judged for a stall',
+                outcome: 'observed',
+                detail: `mission '${mission.id}' is in flight but ${why} — reported rather than measured against an invented threshold`,
+                evidence: cardEvidence,
+            }));
+            continue;
+        }
+
+        const lastMovementAt = mission.lastMovementAt;
+        const movedSince = lastMovementAt === null ? null : args.now - lastMovementAt;
+        const movingNow = movedSince !== null && movedSince <= window.windowMs;
+
+        // "Nothing is in flight" means NO MEMBER IS ACTIVELY WORKING — a held
+        // card whose seat is producing output or burning CPU — and NOT
+        // `cardsInFlight === 0`. The board counts a card held by a seat that
+        // finished and never posted as in flight, and that is precisely the case
+        // check 1 exists for: gating the stall on `cardsInFlight === 0` would
+        // make the unposted-completion check (and the dead-seat check) fire
+        // never, which is the bug this plan is written against.
+        const heldMembers = cards.filter(c => !cardCompletedAt(c) && cardOwnerSeat(c) && cardOwnerSince(c));
+        const workingMember = heldMembers.find(c => {
+            const seatName = cardOwnerSeat(c);
+            const seat = args.seatByName.get(seatName);
+            if (!seat || seat.status !== 'active') { return false; }
+            const lastDataAt = typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
+            if (lastDataAt > 0 && args.now - lastDataAt < args.cfg.turnEndSilenceMs) { return true; }
+            const obs = observeSeatByName(seatName, missionCtx);
+            return obs.cpu.available && obs.cpu.value > 0;
+        });
+
+        // NEVER report a mission as stalled while it is moving: a subtask
+        // dispatched, completed or a round advanced inside the window is
+        // progress, however far from done the mission is — and a member whose
+        // seat is actively working is progress too.
+        if (lastMovementAt === null || movingNow || workingMember) {
+            moving++;
+            const why = lastMovementAt === null
+                ? 'the board reports no movement timestamp for it'
+                : movingNow
+                    ? `it moved ${renderDuration(movedSince)} ago, inside its ${renderDuration(window.windowMs)} window`
+                    : `member '${cardPlanId(workingMember)}' is being actively worked on seat '${cardOwnerSeat(workingMember)}'`;
+            remember('moving', null);
+            lines.push({ missionId: mission.id, name: mission.name, state: 'moving', detail: why });
+            continue;
+        }
+
+        // STALLED. Walk the six mechanical checks IN ORDER; the first that
+        // answers explains it and no model is asked.
+        const explanation = await explainMissionStall({
+            mission, cards, edges: edgesRead.edges, cardByPlanId,
+            seatByName: args.seatByName, quota: args.quota, finishedByPlan: args.finishedByPlan,
+            readLog: args.readLog, observe: (seat: string) => observeSeatByName(seat, missionCtx),
+            nowMs: args.now, cfg: args.cfg, fleet: args.fleet,
+            fleetReadOk: args.fleetReadOk, fleetReadReason: args.fleetReadReason,
+        });
+
+        stalledCount++;
+        const stallAge = `stalled ${renderDuration(movedSince)} against a ${renderDuration(window.windowMs)} window (median member interval ${renderDuration(window.medianMs)} x ${MISSION_STALL_WINDOW_MULTIPLE})`;
+        const stalledSince = observed.stalledSince ?? args.now;
+
+        if (explanation) {
+            findings.push(missionAction({
+                missionId: mission.id, ruleId: explanation.ruleId,
+                cause: explanation.cause, outcome: 'observed',
+                detail: `${explanation.detail} — ${stallAge}`,
+                evidence: `${explanation.evidence}\n${cardEvidence}`,
+                seat: explanation.seat,
+            }));
+            lines.push({ missionId: mission.id, name: mission.name, state: 'stalled', detail: `${explanation.cause} — ${explanation.detail}` });
+            remember('stalled', stalledSince);
+            continue;
+        }
+
+        // UNEXPLAINED — the ONE condition that reaches the Navigator.
+        const navigator = args.judgementCtx.navigator;
+        const modelId = navigator.model ? `${navigator.providerId || 'unset'} (${navigator.model})` : String(navigator.providerId || 'unset');
+        const prompt = buildMissionAdjudicationPrompt({ mission, cards, edges: edgesRead.edges, window, movedSince: movedSince as number });
+        const answer = await askNavigatorModel(args, prompt.system, prompt.user);
+        if (answer.called) { navigatorCalls++; }
+        const judgedBy = answer.called ? { providerId: navigator.providerId || '', model: navigator.model || '' } : null;
+        // An unreadable edge set means checks 5 and 6 did NOT run, and that is
+        // stated rather than silently folded into "no explanation".
+        const checksNote = edgesRead.ok ? '' : ` (checks 5 and 6 did not run: the recorded dependency order could not be read — ${edgesRead.reason})`;
+        const detail = !navigator.configured
+            ? `stalled and unexplained, but the Navigator was not asked: no Navigator model is configured (${navigator.reason}) — ${stallAge}${checksNote}`
+            : answer.answered
+                ? `stalled and unexplained; the Navigator '${modelId}' answered in ${answer.latencyMs}ms — ${answer.reply} — ${stallAge}${checksNote}`
+                : `stalled and unexplained; the Navigator '${modelId}' was asked and did not answer (${answer.error}) — ${stallAge}${checksNote}`;
+        findings.push(missionAction({
+            missionId: mission.id, ruleId: 'mission-stalled',
+            cause: 'Mission stalled and unexplained',
+            outcome: answer.answered ? 'recorded' : 'unavailable',
+            detail, evidence: cardEvidence, judgedBy,
+        }));
+        lines.push({ missionId: mission.id, name: mission.name, state: 'unexplained', detail: `stalled and no mechanical check explained it; ${answer.answered ? `the Navigator '${modelId}' was asked and answered` : `the Navigator was not consulted (${navigator.reason})`}` });
+        remember('unexplained', stalledSince);
+    }
+
+    // THE NOTICING ENTRY — always emitted, so a wake with zero subjects (and a
+    // board with zero missions) still carries a `kind: 'mission'` action. An
+    // empty list is a CLAIM and needs a source: this entry is what makes "no
+    // mission was examined" sayable rather than silent.
+    const summary = missionAction({
+        missionId: null,
+        ruleId: progress.missions.length === 0 ? 'mission-none' : 'mission-watch',
+        cause: progress.missions.length === 0 ? 'No missions were examined' : 'Mission watch',
+        outcome: 'observed',
+        detail: progress.missions.length === 0
+            ? `no mission was examined: the board holds no missions (source: ${source})`
+            : `${progress.missions.length} mission(s) examined — ${inFlight} in flight, ${moving} moving, ${stalledCount} stalled, ${unjudgeable} unjudgeable, ${pausedCount} paused, ${notStartedCount} not started, ${outOfOrderCount} out of order`,
+        evidence: JSON.stringify({ source, missions: progress.missions.length, outsideMissions: progress.outsideMissions }),
+    });
+
+    const section: MissionReportSection = {
+        state: 'read', source,
+        total: progress.missions.length,
+        inFlight, moving, stalled: stalledCount, unjudgeable, paused: pausedCount, notStarted: notStartedCount, outOfOrder: outOfOrderCount,
+        lines, outsideMissions: progress.outsideMissions,
+    };
+    const boardSummary = {
+        read: true,
+        total: progress.missions.length,
+        inFlight, stalled: stalledCount, unjudgeable, paused: pausedCount, notStarted: notStartedCount,
+        outsideMissions: progress.outsideMissions,
+    };
+    return { actions: [summary, ...findings], section, boardSummary, navigatorCalls };
 }
 
 // ── Judgement board state ────────────────────────────────────────────────
@@ -1173,6 +2377,11 @@ function collectSubjects(plans: any[], cfg: ControllerRuntimeConfig, nowMs: numb
             kanbanColumn,
             lastAction: p.lastAction ?? p.last_action ?? null,
             recommendedRole: typeof p.recommendedRole === 'string' && p.recommendedRole ? p.recommendedRole : null,
+            featureId: (() => {
+                const fid = String(p.featureId ?? p.feature_id ?? '').trim();
+                return fid || null;
+            })(),
+            isFeature: p.isFeature === 1 || p.isFeature === true,
         });
     }
     return subjects;
@@ -1203,6 +2412,16 @@ interface DiagnoseContext {
     prevSamples: Record<string, PreviousSample>;
     /** Samples taken this wake, written back into persisted state. */
     nextSamples: Record<string, PreviousSample>;
+    /**
+     * This wake's readings, keyed by seat, computed ONCE per seat.
+     *
+     * The mission watch asks about its members' seats and the seat-row pass asks
+     * about the same seats a moment later; without this they would sample twice,
+     * at two instants, against one shared wall clock — two readings of one seat
+     * in one wake, which is the divergence the mission watch must not
+     * introduce (plan: a-mission-is-watched-for-the-whole-of-its-life).
+     */
+    observationsBySeat: Map<string, SeatObservations>;
     /** This subject's readings, taken once per wake before any row is evaluated. */
     observations: SeatObservations | null;
 }
@@ -1477,15 +2696,30 @@ interface SeatObservations {
  * same redaction path as an escalating one.
  */
 function observeSeat(subject: Subject, ctx: DiagnoseContext): SeatObservations {
-    const seat = ctx.seatByName.get(subject.seat);
+    return observeSeatByName(subject.seat, ctx);
+}
+
+/**
+ * One seat's readings, computed ONCE per wake and memoised by seat name.
+ *
+ * The memo is what lets the mission watch reuse the seat-row pass's evidence
+ * instead of collecting its own: a member's `cpu`/`rss`/`lastWrite` are the
+ * SAME numbers whether the question was asked for a matrix row or for a stalled
+ * mission, and a second sample would be a second instant against one clock
+ * (plan: a-mission-is-watched-for-the-whole-of-its-life).
+ */
+function observeSeatByName(seatName: string, ctx: DiagnoseContext): SeatObservations {
+    const cached = ctx.observationsBySeat.get(seatName);
+    if (cached) { return cached; }
+    const seat = ctx.seatByName.get(seatName);
     const pid = seat && typeof seat.pid === 'number' && seat.pid > 0 ? seat.pid : null;
     const sample = sampleSeat({
         pid,
-        previous: ctx.prevSamples[subject.seat] ?? null,
+        previous: ctx.prevSamples[seatName] ?? null,
         table: ctx.procTable,
         nowMs: ctx.now,
     });
-    if (sample.next) { ctx.nextSamples[subject.seat] = sample.next; }
+    if (sample.next) { ctx.nextSamples[seatName] = sample.next; }
 
     // The basis is REPORTED, never assumed. "no write in 47m (whole worktree)"
     // and "no write in 47m (card write set)" are different claims, and a reader
@@ -1512,7 +2746,9 @@ function observeSeat(subject: Subject, ctx: DiagnoseContext): SeatObservations {
         `  last worktree write: ${writeText}`,
     ].join('\n');
     const window = `cpu/rss from ${ctx.procTable.source} (USER_HZ assumed ${ASSUMED_USER_HZ}); last write from ${write.source} over ${dir ?? '(no directory)'}`;
-    return { cpu: sample.cpu, rss: sample.rss, write, line, window };
+    const observations: SeatObservations = { cpu: sample.cpu, rss: sample.rss, write, line, window };
+    ctx.observationsBySeat.set(seatName, observations);
+    return observations;
 }
 
 /**
@@ -1705,6 +2941,12 @@ interface ApplyContext extends PassContext {
      */
     readLog: (seat: string) => Promise<string | null>;
     /**
+     * The wake's log reader WITHOUT the per-wake memo. Delivery verification is
+     * the one consumer that must see what arrived AFTER the paste, so it reads
+     * the log again rather than the copy the diagnosis rested on.
+     */
+    readLogFresh: (seat: string) => Promise<string | null>;
+    /**
      * The wake's turn-end `finished` reads, keyed by plan id. The same map the
      * rows were selected against, so the report a remediation writes names the
      * prior `finished` the diagnosis actually rested on — never a second read
@@ -1760,9 +3002,33 @@ async function applyDiagnosis(subject: Subject, diagnosis: Diagnosis, ctx: Apply
         st.ownerSince = subject.ownerSince;
     }
 
+    // Arm the MECHANICAL VERIFICATION for a remediation that was actually
+    // APPLIED (plan: the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it).
+    //
+    // The next wake re-evaluates this subject and the row RE-FIRING is the
+    // failure signal — no model is asked whether its own advice worked. `stop`
+    // is armed too: its own contract is that the FIRST-ORDER ladder is spent,
+    // and the wake after it is exactly the one on which the Navigator may
+    // change the situation instead of pressing the same subject again. A
+    // remediation that was refused or failed did nothing, so there is nothing
+    // to verify and it is not armed.
+    const armVerification = async (entry: Promise<EntryAction>, rung: MatrixRemediation): Promise<EntryAction> => {
+        const resolved = await entry;
+        // `stop` is armed on its own outcome, which is `recorded` rather than
+        // `applied`: its effect — the controller ceases acting on this subject —
+        // is certain the moment it is written, and it is exactly the state whose
+        // next wake the Navigator may act on. Every other rung is armed only
+        // when it was actually APPLIED; a rung that was refused or failed did
+        // nothing, so there is nothing to verify.
+        if (resolved.outcome === 'applied' || rung === 'stop') {
+            st.pending = { action: rung, ruleId: diagnosis.row.id, at: ctx.now(), secondOrder: false };
+        }
+        return resolved;
+    };
+
     // Terminal one-shot remediations are not on the ladder.
     if (!ESCALATION_LADDER.includes(remediation)) {
-        return applyRemediation(remediation, base, subject, diagnosis, ctx, null);
+        return armVerification(applyRemediation(remediation, base, subject, diagnosis, ctx, null), remediation);
     }
 
     const targetIndex = ESCALATION_LADDER.indexOf(remediation);
@@ -1797,7 +3063,7 @@ async function applyDiagnosis(subject: Subject, diagnosis: Diagnosis, ctx: Apply
     st.ownerSince = subject.ownerSince;
     if (next >= 0) { st.rung = next; st.atRung = 0; } else { st.atRung += 1; }
 
-    return applyRemediation(ESCALATION_LADDER[applyIndex], base, subject, diagnosis, ctx, applyIndex);
+    return armVerification(applyRemediation(ESCALATION_LADDER[applyIndex], base, subject, diagnosis, ctx, applyIndex), ESCALATION_LADDER[applyIndex]);
 }
 
 function actionBase(subject: Subject, diagnosis: Diagnosis, ctx: ApplyContext): EntryAction {
@@ -2323,8 +3589,9 @@ const DELIVERY_HEADING_RE = /^## \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z —
  */
 async function verifyDeliveryEcho(subject: Subject, ctx: ApplyContext): Promise<'delivered' | 'unverified'> {
     // The tail is read AFTER the delivery. A null read is not evidence of an
-    // echo, so it lands on `unverified` rather than on a pass.
-    const raw = await ctx.readLog(subject.seat);
+    // echo, so it lands on `unverified` rather than on a pass. This is the
+    // FRESH reader on purpose: the memo the diagnosis used predates the paste.
+    const raw = await ctx.readLogFresh(subject.seat);
     if (raw === null) { return 'unverified'; }
     let end = -1;
     DELIVERY_HEADING_RE.lastIndex = 0;
@@ -2461,13 +3728,13 @@ async function redeliverSeatPrompt(subject: Subject, ctx: ApplyContext): Promise
  * still spent the allowance — and returns a tagged result rather than throwing.
  */
 async function askNavigatorModel(
-    ctx: ApplyContext,
+    ctx: Pick<ApplyContext, 'judgementCtx' | 'workspaceRoot' | 'cfg'>,
     system: string,
     user: string,
-): Promise<{ answered: boolean; reply: string; latencyMs: number; error?: string }> {
+): Promise<{ answered: boolean; called: boolean; reply: string; latencyMs: number; error?: string }> {
     const navigator = ctx.judgementCtx.navigator;
     if (!navigator.configured || !navigator.endpoint) {
-        return { answered: false, reply: '', latencyMs: 0, error: `no Navigator model is configured (${navigator.reason})` };
+        return { answered: false, called: false, reply: '', latencyMs: 0, error: `no Navigator model is configured (${navigator.reason})` };
     }
     // A local server is not authenticated. For anything else the key is read
     // from the board's encrypted store, and a declared-but-unreadable key is
@@ -2475,9 +3742,9 @@ async function askNavigatorModel(
     let apiKey: string | null = null;
     if (navigator.providerId && navigator.providerId !== 'local') {
         const keyRead = await readTierApiKey(ctx.workspaceRoot, navigator.providerId);
-        if (keyRead.error) { return { answered: false, reply: '', latencyMs: 0, error: keyRead.error }; }
+        if (keyRead.error) { return { answered: false, called: false, reply: '', latencyMs: 0, error: keyRead.error }; }
         if (!keyRead.key) {
-            return { answered: false, reply: '', latencyMs: 0, error: `a key is declared for provider '${navigator.providerId}' but none could be read` };
+            return { answered: false, called: false, reply: '', latencyMs: 0, error: `a key is declared for provider '${navigator.providerId}' but none could be read` };
         }
         apiKey = keyRead.key;
     }
@@ -2492,13 +3759,13 @@ async function askNavigatorModel(
         maxTokens: ctx.cfg.navigatorMaxTokens,
     });
     if (!res.ok) {
-        return { answered: false, reply: '', latencyMs: res.latencyMs, error: res.error || `the Navigator's endpoint returned ${res.status}` };
+        return { answered: false, called: true, reply: '', latencyMs: res.latencyMs, error: res.error || `the Navigator's endpoint returned ${res.status}` };
     }
     const content = String(res.content || '').trim();
     if (!content) {
-        return { answered: false, reply: '', latencyMs: res.latencyMs, error: `the Navigator returned nothing (finish: ${res.doneReason || 'unknown'})` };
+        return { answered: false, called: true, reply: '', latencyMs: res.latencyMs, error: `the Navigator returned nothing (finish: ${res.doneReason || 'unknown'})` };
     }
-    return { answered: true, reply: content.slice(0, 1000), latencyMs: res.latencyMs };
+    return { answered: true, called: true, reply: content.slice(0, 1000), latencyMs: res.latencyMs };
 }
 
 /**
@@ -2584,6 +3851,552 @@ async function composeNavigatorDigest(
         return action;
     }
     action.detail = `the Navigator '${modelId}' was told what this wake did and answered — ${answer.reply}`;
+    return action;
+}
+
+// ── The second-order axis ────────────────────────────────────────────────
+//
+// plan: the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it.
+//
+// A remediation is not finished when it is applied; it is finished when the
+// work MOVES AGAIN. Verification is mechanical (the row re-firing on the same
+// subject) and belongs to the Pilot. Where it fails AND the Pilot's own ladder
+// has stopped acting, the Navigator chooses a targeted action from a CLOSED SET
+// that changes the situation rather than pressing the same seat harder.
+//
+// The architecture's spine is preserved. A model reports and code decides: the
+// Navigator returns a NAMED ACTION from the closed set, never a command and
+// never a team, seat, card or column name; the controller validates the name
+// against `SECOND_ORDER_ACTIONS`, checks that action's declared preconditions
+// for that subject, applies the declared bounds, re-checks the triggering
+// condition immediately before acting, and refuses anything it cannot verify.
+// The Navigator proposes; code still enforces.
+
+/**
+ * The column `reset-feature-status` moves a feature back to.
+ *
+ * It is the board's OWN entry column for work the queue draws from — the same
+ * string the board-level check reads to answer "what is next up" — so the reset
+ * puts the feature where the board will pick it up again rather than inventing
+ * a state. The card's move cascades to its subtasks through `POST /kanban/move`
+ * (the route exists precisely so the feature→subtask cascade is inherited), and
+ * the column used is recorded in the action's own detail.
+ */
+const FEATURE_RESET_COLUMN = 'PLAN REVIEWED';
+
+/** A subject whose previous action was verified failed and whose Pilot is spent. */
+interface SecondOrderCandidate {
+    subject: Subject;
+    /** The diagnosis that re-fired — its evidence is what the Navigator is sent. */
+    diagnosis: Diagnosis;
+    verification: VerificationTrace;
+}
+
+/**
+ * The entry for a completed mechanical verification. `kind: 'card'` for a
+ * seat-level subject, so it lands among the matrix's own entries rather than in
+ * the mission section.
+ */
+function verificationAction(subject: Pick<Subject, 'planId' | 'seat'>, v: VerificationTrace): EntryAction {
+    return {
+        subject: subject.planId || subject.seat,
+        kind: 'card',
+        planId: subject.planId,
+        seat: subject.seat,
+        ruleId: `verification:${v.result}`,
+        cause: v.result === 'success' ? 'Remediation verified — the work moved' : 'Remediation verified — the row fired again',
+        rung: 'none',
+        ladderIndex: null,
+        command: null,
+        evidence: v.detail,
+        evidenceWindow: `the same subject re-evaluated this wake; the signal is whether rule \`${v.ruleId}\` fires again`,
+        outcome: 'observed',
+        detail: v.detail,
+        ownerSince: null,
+        ownerSinceReStamped: false,
+        dispatchTimeoutRemainingMs: null,
+        priorVerdict: null,
+        verification: v,
+    };
+}
+
+/**
+ * Parse the Navigator's second-order reply against its closed set.
+ *
+ * `null` means the reply named none, or named more than one — the rule did not
+ * run, and the caller must record it as DISCARDED and apply nothing. It is
+ * deliberately NOT a nearest-name match: coercing a reply to the action it most
+ * resembles is how a model's conclusion gets applied that nobody proposed.
+ */
+function parseSecondOrderAction(reply: string): SecondOrderAction | null {
+    const text = String(reply || '').toLowerCase();
+    const named = SECOND_ORDER_ACTIONS.filter(a => new RegExp(`(^|[^a-z0-9-])${a}([^a-z0-9-]|$)`).test(text));
+    // Both named is ambiguous, and an ambiguous reply is not a choice. Report
+    // it as neither rather than picking one — the same rule row 3's
+    // classification already follows.
+    if (named.length !== 1) { return null; }
+    return named[0];
+}
+
+/**
+ * The second-order prompt. The Navigator is handed the subject, the evidence
+ * the failed row fired on, what has already been tried, and the closed set —
+ * with the reply contract stated as a one-word answer.
+ *
+ * It is told explicitly that it cannot name a team, a seat, a card, a column or
+ * a command. That is not a courtesy: it is the fence. The controller resolves
+ * every one of those from the board, so the model has no composition surface at
+ * all.
+ */
+function buildSecondOrderPrompt(args: {
+    seat: string;
+    planId: string;
+    title: string;
+    ruleId: string;
+    cause: string;
+    evidence: string;
+    evidenceWindow: string;
+    failedAction: string;
+    stuckPasses: number;
+    ladderRung: string;
+    priorVerdict: string | null;
+    priorSecondOrder: SecondOrderAction | null;
+    secondOrderCount: number;
+}): { system: string; user: string } {
+    const system = [
+        'You are the Navigator on a board of coding agents. The Pilot — the model that watches the',
+        'board every few minutes — has applied every rung of its escalation ladder to ONE subject and',
+        'the same condition still fires. Pressing that subject harder has been tried and did not work.',
+        '',
+        'You choose exactly ONE action from this CLOSED SET, and reply with the action NAME ALONE —',
+        'one of these five words, nothing else, no punctuation, no explanation:',
+        '',
+        ...SECOND_ORDER_ACTIONS.map(a => {
+            const spec = secondOrderSpec(a);
+            return `  - ${a}${spec.boardVerb === 'none' ? ' — cease acting on this subject altogether and record that you have' : ` — ${spec.boardVerb}`}`;
+        }),
+        '',
+        'A reply that is not exactly one of those names applies NOTHING. It is recorded as discarded,',
+        'and it is never coerced to the nearest name.',
+        '',
+        'You cannot name a team, a seat, a card, a column or a command. The controller resolves the',
+        'subject\'s own team and feature from the board and refuses any action whose precondition this',
+        'subject does not meet. `disband-team` closes seats; it is recoverable only because the board',
+        'is the state and those seats\' cards are released rather than completed, so choose it when the',
+        'TEAM is the problem, not when one seat is.',
+    ].join('\n');
+    const user = [
+        `Subject: seat '${args.seat}' on card '${args.planId}' "${args.title}"`,
+        `Rule that keeps firing: \`${args.ruleId}\` — ${args.cause}`,
+        `The action that did not work: \`${args.failedAction}\` (applied on a previous wake; the row fired again)`,
+        `Ladder rung reached: ${args.ladderRung}`,
+        `Consecutive passes this subject has been stuck: ${args.stuckPasses}`,
+        `Prior verdict (last_action): ${args.priorVerdict || '(none recorded)'}`,
+        args.priorSecondOrder
+            ? `A second-order action was already applied to this subject: \`${args.priorSecondOrder}\` (${args.secondOrderCount} applied so far) — and the row still fires`
+            : 'No second-order action has been applied to this subject yet',
+        '',
+        `Evidence window: ${args.evidenceWindow}`,
+        redact(args.evidence),
+        '',
+        'Reply with exactly one action name from the set.',
+    ].join('\n');
+    return { system, user };
+}
+
+/**
+ * The subject's TEAM, resolved from the BOARD's own mission membership.
+ *
+ * The Navigator never names a team, so this is the only source: the mission
+ * holding the subject carries `missions.team`, which is the id `POST
+ * /kanban/team/stop` and `POST /kanban/mission/pause-team` both take. An
+ * unreadable missions read is NOT "no team" — the two would send a refusal for
+ * a subject that has a team and a refusal for one that does not under the same
+ * words, so the read's failure is stated instead.
+ */
+async function readSubjectTeam(subject: Subject, ctx: ApplyContext): Promise<{ team: string | null; reason: string }> {
+    const res = await tryRequest(ctx.apiRequest, ctx.port, 'GET', '/kanban/missions', ctx.workspaceRoot);
+    const json = safeJson(res);
+    if (!res || res.status !== 200 || !json || !Array.isArray(json.missions)) {
+        return { team: null, reason: `the board could not read its missions (${res ? `status ${res.status}` : 'no response'}), so the subject's team is not established` };
+    }
+    const id = subject.planId;
+    for (const m of json.missions as any[]) {
+        const members = [
+            ...(Array.isArray(m?.plans) ? m.plans : []),
+            ...(Array.isArray(m?.features) ? m.features : []),
+        ].map((x: unknown) => String(x));
+        if (!id || !members.includes(id)) { continue; }
+        const team = String(m?.team || '').trim();
+        if (!team) {
+            return { team: null, reason: `the mission '${String(m?.id || '')}' holding this subject records no team (missions.team is empty), so there is no team of the subject's own to act on` };
+        }
+        return { team, reason: '' };
+    }
+    return { team: null, reason: 'no mission on the board holds this subject, so it has no team of its own to act on' };
+}
+
+/**
+ * The declared precondition for one action, checked against THIS subject.
+ *
+ * Preconditions are per-action AND per-subject, and every fact they read comes
+ * from the BOARD: the card's own column and feature, the live fleet, and the
+ * mission membership. That is what makes `disband-team` on a team that is not
+ * the subject's — or `redispatch` of a card already in flight — impossible
+ * rather than merely discouraged: the Navigator cannot name a team at all, and
+ * the controller refuses whatever its preconditions do not hold for.
+ */
+async function secondOrderPrecondition(action: SecondOrderAction, subject: Subject, ctx: ApplyContext): Promise<{ ok: boolean; reason: string }> {
+    switch (action) {
+        case 'redispatch': {
+            if (!subject.kanbanColumn) {
+                return { ok: false, reason: 'the card has no recorded column, so a dispatch would route it rather than re-issue its own prompt' };
+            }
+            if (await seatIsProducingWork(subject, ctx)) {
+                return { ok: false, reason: `seat '${subject.seat}' is producing work, so the card is already in flight and re-dispatching it would double-dispatch` };
+            }
+            return { ok: true, reason: '' };
+        }
+        case 'reset-feature-status': {
+            if (!subject.isFeature && !subject.featureId) {
+                return { ok: false, reason: 'the subject belongs to no feature, so there is no feature status to reset' };
+            }
+            return { ok: true, reason: '' };
+        }
+        case 'stand-down-team':
+        case 'disband-team': {
+            const resolved = await readSubjectTeam(subject, ctx);
+            return resolved.team ? { ok: true, reason: '' } : { ok: false, reason: resolved.reason };
+        }
+        case 'stop':
+            return { ok: true, reason: '' };
+    }
+}
+
+/**
+ * Re-check the triggering condition IMMEDIATELY before acting.
+ *
+ * The plan's race: the seat may start moving between the verification read and
+ * the action. The check re-reads the card from the board — a FRESH read, not
+ * the snapshot the diagnosis rested on, which cannot have changed — and refuses
+ * if the card is gone, completed, re-stamped, or the seat has started producing
+ * work. Aborting is a recorded outcome with its reason, never a silent skip.
+ */
+async function recheckSecondOrderTrigger(subject: Subject, ctx: ApplyContext): Promise<{ ok: boolean; reason: string }> {
+    const plans = await readPlans(ctx.apiRequest, ctx.port, ctx.workspaceRoot);
+    const fresh = plans.find(p => String(p?.planId ?? p?.plan_id ?? '') === subject.planId);
+    if (!fresh) {
+        return { ok: false, reason: 'the card is no longer on the board — the work moved between the diagnosis and the action' };
+    }
+    const completedAt = fresh.completedAt ?? fresh.completed_at ?? null;
+    if (completedAt) {
+        return { ok: false, reason: `the card was completed (${completedAt}) between the diagnosis and the action` };
+    }
+    const ownerSince = fresh.ownerSince ?? fresh.owner_since ?? null;
+    if (String(ownerSince || '') !== subject.ownerSince) {
+        return { ok: false, reason: `the card's owner stamp changed (${subject.ownerSince} -> ${ownerSince === null ? 'NULL' : String(ownerSince)}) between the diagnosis and the action, so the situation the decision rested on no longer holds` };
+    }
+    if (await seatIsProducingWork(subject, ctx)) {
+        return { ok: false, reason: `seat '${subject.seat}' started producing work between the diagnosis and the action` };
+    }
+    return { ok: true, reason: '' };
+}
+
+/**
+ * Apply one chosen action through the board verb it names. NOTHING is composed
+ * as a fallback anywhere: a verb that refuses is a recorded refusal.
+ *
+ * `disband-team` goes through `POST /kanban/team/stop` and closes seats by NO
+ * OTHER PATH — no client-side fan-out, no `ptyCloseTerminal` loop. That route
+ * pauses the team's missions before the seats die, because a mission with no
+ * in-flight member is indistinguishable from one that never started, and this
+ * action does not reimplement any of it.
+ */
+async function applySecondOrderAction(
+    action: SecondOrderAction,
+    subject: Subject,
+    ctx: ApplyContext,
+): Promise<{ outcome: EntryAction['outcome']; detail: string; command: string | null }> {
+    switch (action) {
+        case 'redispatch': {
+            // The SAME operation the `redeliver-dispatch` rung performs — one
+            // implementation, so a second-order re-dispatch and a first-order one
+            // cannot deliver different payloads.
+            const outcome = await redeliverSeatPrompt(subject, ctx);
+            const ok = outcome.startsWith('re-delivered');
+            return {
+                command: `switchboard dispatch ${subject.planId} --seat ${subject.seat} --json`,
+                outcome: ok ? (outcome.includes('UNVERIFIED') ? 'recorded' : 'applied') : 'failed',
+                detail: `re-dispatched through the dispatch route — ${outcome}`,
+            };
+        }
+        case 'reset-feature-status': {
+            const featureId = subject.isFeature ? subject.planId : String(subject.featureId);
+            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/kanban/move', ctx.workspaceRoot, {
+                planId: featureId,
+                targetColumn: FEATURE_RESET_COLUMN,
+            });
+            const json = safeJson(res);
+            const ok = !!res && res.status === 200 && json?.success !== false;
+            return {
+                command: `switchboard api POST /kanban/move '{"planId":"${featureId}","targetColumn":"${FEATURE_RESET_COLUMN}"}' --json`,
+                outcome: ok ? 'applied' : 'failed',
+                detail: ok
+                    ? `reset the status of feature \`${featureId}\` by moving it back to \`${FEATURE_RESET_COLUMN}\` — the column the board's queue draws from, so its subtask cascade follows`
+                    : `the move of feature \`${featureId}\` was refused (${json?.error || res?.status || 'no response'}) — nothing was composed as a fallback`,
+            };
+        }
+        case 'stand-down-team': {
+            const resolved = await readSubjectTeam(subject, ctx);
+            // The team is re-resolved for the APPLY, not reused from the
+            // precondition check, so the id actually acted on is the one the
+            // board answers with now. A team that vanished in between is a
+            // refusal with its reason, never a malformed call carrying `null`.
+            if (!resolved.team) {
+                return { command: null, outcome: 'failed', detail: `the subject's team could not be resolved at the moment of acting — ${resolved.reason}` };
+            }
+            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/kanban/mission/pause-team', ctx.workspaceRoot, { teamId: resolved.team });
+            const json = safeJson(res);
+            const ok = !!res && res.status === 200 && json?.success === true;
+            const paused = Array.isArray(json?.paused) ? json.paused.length : 0;
+            return {
+                command: `switchboard api POST /kanban/mission/pause-team '{"teamId":"${resolved.team}"}' --json`,
+                outcome: ok ? 'applied' : 'failed',
+                detail: ok
+                    ? `stood the team \`${resolved.team}\` down — ${paused} mission(s) paused, its seats left running`
+                    : `pausing team \`${resolved.team}\` was refused (${json?.error || res?.status || 'no response'})`,
+            };
+        }
+        case 'disband-team': {
+            const resolved = await readSubjectTeam(subject, ctx);
+            if (!resolved.team) {
+                return { command: null, outcome: 'failed', detail: `the subject's team could not be resolved at the moment of acting — ${resolved.reason}` };
+            }
+            // ONE server call. The route owns the order (pause, release, close)
+            // and reports per-step outcomes; a partial stop reports as partial.
+            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/kanban/team/stop', ctx.workspaceRoot, { teamId: resolved.team });
+            const json = safeJson(res);
+            const ok = !!res && res.status === 200 && json?.success === true;
+            const status = String(json?.status || 'unknown');
+            const closed = Array.isArray(json?.closed) ? json.closed.length : 0;
+            const released = Array.isArray(json?.released) ? json.released.length : 0;
+            const alreadyGone = Array.isArray(json?.alreadyGone) ? json.alreadyGone.length : 0;
+            const closeFailed = Array.isArray(json?.closeFailed) ? json.closeFailed.length : 0;
+            return {
+                command: `switchboard api POST /kanban/team/stop '{"teamId":"${resolved.team}"}' --json`,
+                outcome: ok ? (status === 'stopped' ? 'applied' : 'recorded') : 'failed',
+                detail: ok
+                    ? `disbanded the team \`${resolved.team}\` in one call — status ${status}, ${released} card(s) released (never completed), ${closed} seat(s) closed, ${alreadyGone} already gone, ${closeFailed} close failure(s)`
+                    : `stopping team \`${resolved.team}\` was refused (${json?.error || res?.status || 'no response'}) — the seats are closed by NO OTHER PATH, so nothing was fanned out as a fallback`,
+            };
+        }
+        case 'stop':
+            // No board call at all. The subject is marked as no longer acted on
+            // and the reason recorded — which every action already does.
+            return {
+                command: null,
+                outcome: 'applied',
+                detail: 'the second-order axis is at its terminus: the controller ceases acting on this subject and nothing is delivered to the seat',
+            };
+    }
+}
+
+/**
+ * Write the report entry BEFORE an action that destroys its own evidence.
+ *
+ * The rule `performBoardRestart` already follows, for the same reason: the
+ * reason for a destructive action must survive the thing that made it. The
+ * action object is already in `ctx.actions`, so the entry carries it, and the
+ * wake's final report carries the same object with its outcome filled in.
+ */
+async function writeSecondOrderPreEffectEntry(ctx: ApplyContext, note: string): Promise<void> {
+    const facts: Parameters<typeof composeReportEntry>[0] = {
+        wakeAt: new Date(ctx.now()).toISOString(),
+        controllerId: ctx.controllerId,
+        target: { port: ctx.port, workspaceRoot: ctx.workspaceRoot, source: 'loopback:cli' },
+        configVersion: ctx.state.configVersion,
+        lease: { holder: ctx.controllerId, renewedAt: ctx.now(), expiresAt: null, source: 'no-lease' },
+        armingState: { state: 'armed-healthy', detail: note },
+        capabilities: ctx.caps,
+        capabilityChanges: [] as string[],
+        assumptions: configAssumptions(ctx.cfg),
+        rowsUnavailable: [] as Array<{ row: MatrixRow; reason: string; source: string }>,
+        actions: ctx.actions,
+        errors: [] as string[],
+    };
+    await writeReport(ctx.apiRequest, ctx.port, ctx.workspaceRoot, ctx.teamId, ctx.controllerId, facts, []);
+}
+
+/**
+ * Ask the Navigator for one second-order action and apply it under bounds.
+ *
+ * The order is the plan's, and it is load-bearing:
+ *
+ *   1. the BOUNDS are checked BEFORE the call — a bound checked after the
+ *      allowance is spent is not a bound;
+ *   2. the NAME is validated against `SECOND_ORDER_ACTIONS` — anything else is
+ *      discarded, never coerced;
+ *   3. the action's PRECONDITIONS are checked against this subject — the
+ *      Navigator's choice is a proposal code may refuse;
+ *   4. the TRIGGERING CONDITION is re-checked from a fresh read immediately
+ *      before acting;
+ *   5. only then is the board verb called, and for an action that destroys its
+ *      own evidence the record is written BEFORE the effect.
+ */
+async function runSecondOrder(candidate: SecondOrderCandidate, ctx: ApplyContext): Promise<EntryAction> {
+    const { subject, diagnosis } = candidate;
+    const key = subjectKey(subject);
+    const st = ctx.state.subjects[key];
+    const navigator = ctx.judgementCtx.navigator;
+    const modelId = navigator.model ? `${navigator.providerId || 'unset'} (${navigator.model})` : String(navigator.providerId || 'unset');
+    const action: EntryAction = {
+        subject: subject.planId || subject.seat,
+        kind: 'card',
+        planId: subject.planId,
+        seat: subject.seat,
+        ruleId: 'second-order-action',
+        cause: 'Second-order action — the Pilot\'s ladder did not fix it',
+        rung: 'none',
+        ladderIndex: null,
+        command: null,
+        evidence: diagnosis.evidence,
+        evidenceWindow: diagnosis.evidenceWindow,
+        outcome: 'recorded',
+        detail: '',
+        ownerSince: subject.ownerSince,
+        ownerSinceReStamped: false,
+        dispatchTimeoutRemainingMs: null,
+        priorVerdict: subject.lastAction,
+        secondOrder: { action: null, modelId, reason: '', result: 'recorded' },
+    };
+    const trace: SecondOrderTrace = action.secondOrder!;
+    // Pushed into the wake's actions BEFORE anything can be written, so the
+    // pre-effect report for a destructive action already carries the record it
+    // is being written for. The caller does not push it again.
+    ctx.actions.push(action);
+
+    // ── BOUND 2: the daily cap, checked BEFORE the call ──────────────────
+    const cap = ctx.cfg.secondOrderDailyCap;
+    if (ctx.state.secondOrderCalls.count >= cap) {
+        trace.result = 'suppressed';
+        trace.reason = `the daily second-order cap is reached (${ctx.state.secondOrderCalls.count} of ${cap} asks today)`;
+        action.outcome = 'unavailable';
+        action.detail = `${diagnosis.detail}; a second-order action was NOT chosen: the daily cap is reached (${ctx.state.secondOrderCalls.count} of ${cap} asks today). The subject continues on the first-order ladder, which has already stopped acting on it.`;
+        return action;
+    }
+
+    // ── BOUND 1: the per-subject rate, checked BEFORE the call ───────────
+    const wakes = ctx.cfg.secondOrderWakes;
+    const askedAt = st && typeof st.secondOrderAskWake === 'number' ? st.secondOrderAskWake : null;
+    if (askedAt !== null && ctx.state.wakes - askedAt < wakes) {
+        trace.result = 'suppressed';
+        trace.reason = `the subject was asked ${ctx.state.wakes - askedAt} wake(s) ago; the per-subject rate allows one ask per ${wakes} wakes`;
+        action.outcome = 'unavailable';
+        action.detail = `${diagnosis.detail}; a second-order action was NOT chosen: the subject was asked ${ctx.state.wakes - askedAt} wake(s) ago and the per-subject rate allows one ask per ${wakes} wakes. The subject continues on the first-order ladder, which has already stopped acting on it.`;
+        return action;
+    }
+
+    // The ask is recorded against BOTH bounds at the moment it is made, not at
+    // the moment an action is applied: a reply that is discarded or refused
+    // still spent the call, and a rate that only counts successes does not
+    // bound the cost it exists to bound.
+    if (st) { st.secondOrderAskWake = ctx.state.wakes; }
+    ctx.state.secondOrderCalls.count += 1;
+
+    const prompt = buildSecondOrderPrompt({
+        seat: subject.seat,
+        planId: subject.planId,
+        title: subject.title,
+        ruleId: diagnosis.row.id,
+        cause: diagnosis.row.cause,
+        evidence: diagnosis.evidence,
+        evidenceWindow: diagnosis.evidenceWindow,
+        failedAction: candidate.verification.of,
+        stuckPasses: st ? st.stuckPasses : 1,
+        ladderRung: diagnosis.row.remediation,
+        priorVerdict: subject.lastAction,
+        priorSecondOrder: st?.secondOrderLast ?? null,
+        secondOrderCount: st?.secondOrderCount ?? 0,
+    });
+    const answer = await askNavigatorModel(ctx, prompt.system, prompt.user);
+    if (!answer.answered) {
+        trace.result = 'unavailable';
+        trace.reason = answer.error || 'the Navigator did not answer';
+        action.outcome = 'unavailable';
+        action.detail = `${diagnosis.detail}; the Navigator '${modelId}' was asked for a second-order action and did not answer (${answer.error}) — NOTHING was applied. An unconfigured Navigator is reported by the capability block, never here, so this reads as a configured Navigator that did not answer.`;
+        return action;
+    }
+
+    // ── Validate the NAME against the closed set. ────────────────────────
+    const chosen = parseSecondOrderAction(answer.reply);
+    trace.reason = answer.reply.slice(0, 300);
+    if (chosen === null) {
+        trace.result = 'discarded';
+        action.outcome = 'recorded';
+        action.detail = `${diagnosis.detail}; the Navigator '${modelId}' named no single action in the closed set — the reply is DISCARDED and NOTHING is applied, never coerced to a nearest name. Closed set: ${SECOND_ORDER_ACTIONS.join(', ')}.`;
+        return action;
+    }
+    trace.action = chosen;
+    const spec = secondOrderSpec(chosen);
+
+    // ── The action's preconditions, for THIS subject. ────────────────────
+    const pre = await secondOrderPrecondition(chosen, subject, ctx);
+    if (!pre.ok) {
+        trace.result = 'refused';
+        trace.precondition = pre.reason;
+        action.outcome = 'refused';
+        action.detail = `${diagnosis.detail}; the Navigator '${modelId}' chose \`${chosen}\` and the controller REFUSED it — ${pre.reason} (declared precondition: ${spec.precondition}). Nothing was applied.`;
+        return action;
+    }
+
+    // ── Re-check the triggering condition immediately before acting. ─────
+    const recheck = await recheckSecondOrderTrigger(subject, ctx);
+    if (!recheck.ok) {
+        trace.result = 'aborted';
+        action.outcome = 'refused';
+        action.detail = `${diagnosis.detail}; the Navigator '${modelId}' chose \`${chosen}\` and the action was ABANDONED — the triggering condition no longer holds: ${recheck.reason}`;
+        return action;
+    }
+
+    // ── For an action that destroys its own evidence, WRITE FIRST. ───────
+    if (spec.destroysEvidence) {
+        trace.recordedBeforeEffect = true;
+        trace.result = 'recorded';
+        action.detail = `${diagnosis.detail}; the Navigator '${modelId}' chose \`${chosen}\` (${spec.boardVerb}) — this record is written BEFORE the effect, because applying it destroys the evidence the decision rested on.`;
+        await writeSecondOrderPreEffectEntry(ctx, `${chosen} is about to be applied to '${subject.planId || subject.seat}' — record written before the effect`);
+    }
+
+    const applied = await applySecondOrderAction(chosen, subject, ctx);
+    action.command = applied.command;
+    action.outcome = applied.outcome;
+    trace.result = applied.outcome === 'applied' ? 'applied' : applied.outcome;
+    action.detail = `${diagnosis.detail}; the Navigator '${modelId}' chose \`${chosen}\` — ${applied.detail}`;
+
+    if (chosen === 'stop' && applied.outcome === 'applied') {
+        if (st) {
+            // The terminus. Both axes stop, and the subject is never a candidate
+            // again — recorded, so "we have stopped acting on this" is a fact
+            // rather than an absence.
+            st.secondOrderCount = (st.secondOrderCount || 0) + 1;
+            st.secondOrderLast = chosen;
+            st.exhausted = true;
+            st.stoppedBySecondOrder = true;
+            delete st.pending;
+        }
+        return action;
+    }
+    if (st) {
+        if (applied.outcome === 'applied') {
+            st.secondOrderCount = (st.secondOrderCount || 0) + 1;
+            st.secondOrderLast = chosen;
+        }
+        // The action is now awaiting verification REGARDLESS of its own
+        // outcome: the next wake asks whether the WORK moved, not whether the
+        // call was accepted. A verb that refused still has to be re-observed,
+        // and the per-subject rate — not the absence of a pending record — is
+        // what bounds the retry.
+        st.pending = { action: chosen, ruleId: diagnosis.row.id, at: ctx.now(), secondOrder: true };
+    }
     return action;
 }
 
@@ -2936,6 +4749,19 @@ function normalizeState(raw: any): PersistedControllerState {
                 lastClass: typeof s.lastClass === 'string' ? s.lastClass : null,
                 ...(s.exhausted === true ? { exhausted: true } : {}),
                 ...(typeof s.hedges === 'number' ? { hedges: s.hedges } : {}),
+                // The pending verification and the second-order bookkeeping are
+                // CARRIED, never re-defaulted: dropping the pending record makes
+                // the next wake unable to say whether the previous action worked,
+                // and dropping the ask counter makes the per-subject rate
+                // unreachable, so the bound it exists to enforce would silently
+                // stop existing.
+                ...(s.pending && typeof s.pending === 'object' && typeof s.pending.action === 'string' && typeof s.pending.ruleId === 'string'
+                    ? { pending: { action: s.pending.action, ruleId: s.pending.ruleId, at: typeof s.pending.at === 'number' ? s.pending.at : 0, secondOrder: s.pending.secondOrder === true } }
+                    : {}),
+                ...(typeof s.secondOrderAskWake === 'number' ? { secondOrderAskWake: s.secondOrderAskWake } : {}),
+                ...(typeof s.secondOrderCount === 'number' ? { secondOrderCount: s.secondOrderCount } : {}),
+                ...(isSecondOrderAction(s.secondOrderLast) ? { secondOrderLast: s.secondOrderLast } : {}),
+                ...(s.stoppedBySecondOrder === true ? { stoppedBySecondOrder: true } : {}),
             };
         }
     }
@@ -2952,10 +4778,30 @@ function normalizeState(raw: any): PersistedControllerState {
             samples[seat] = { pid: v.pid, startTime: v.startTime, jiffies: v.jiffies, atMs: v.atMs };
         }
     }
+    const missions: Record<string, MissionObservation> = {};
+    if (raw.missions && typeof raw.missions === 'object') {
+        for (const id of Object.keys(raw.missions)) {
+            const v = raw.missions[id];
+            if (!v || typeof v !== 'object') { continue; }
+            // A partially-written observation is DROPPED rather than defaulted.
+            // A zeroed `lastMovementAt` would read as "not moving since the
+            // epoch", which is a stall the mission never had — the loud wrong
+            // answer the fallback rule forbids, on the read the whole watch
+            // turns on.
+            if (!Number.isFinite(v.lastCheckedAt)) { continue; }
+            missions[id] = {
+                lastMovementAt: typeof v.lastMovementAt === 'number' && Number.isFinite(v.lastMovementAt) ? v.lastMovementAt : null,
+                stalledSince: typeof v.stalledSince === 'number' && Number.isFinite(v.stalledSince) ? v.stalledSince : null,
+                lastCheckedAt: v.lastCheckedAt,
+                lastState: typeof v.lastState === 'string' ? v.lastState : null,
+            };
+        }
+    }
     return {
         configVersion: typeof raw.configVersion === 'string' ? raw.configVersion : '',
         subjects,
         samples,
+        missions,
         capabilityAvailability: (raw.capabilityAvailability && typeof raw.capabilityAvailability === 'object') ? raw.capabilityAvailability : {},
         capabilityDetail: (raw.capabilityDetail && typeof raw.capabilityDetail === 'object') ? raw.capabilityDetail : {},
         restartHistory: Array.isArray(raw.restartHistory) ? raw.restartHistory.filter((n: any) => typeof n === 'number') : [],
@@ -2981,6 +4827,14 @@ function normalizeState(raw: any): PersistedControllerState {
             }
             : { dayKey: '', byModel: {} },
         lastKnownBoardPid: typeof raw.lastKnownBoardPid === 'number' ? raw.lastKnownBoardPid : null,
+        // The wake counter and the second-order daily counter are CARRIED for
+        // the same reason `modelCalls` is: a counter re-defaulted on every read
+        // makes the bound it feeds unreachable, and the bound would then exist
+        // only in the config.
+        wakes: typeof raw.wakes === 'number' && Number.isFinite(raw.wakes) ? raw.wakes : 0,
+        secondOrderCalls: (raw.secondOrderCalls && typeof raw.secondOrderCalls === 'object' && typeof raw.secondOrderCalls.count === 'number')
+            ? { dayKey: String(raw.secondOrderCalls.dayKey || ''), count: raw.secondOrderCalls.count }
+            : { dayKey: '', count: 0 },
     };
 }
 
