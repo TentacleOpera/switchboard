@@ -1,4 +1,5 @@
 import type { ModelCallRequest, ModelCallResult } from '../judgement/modelClient';
+import { computeMapFingerprint } from '../../services/kanbanOrdering';
 
 /**
  * The Navigator capability (plan: the-navigator-groups-ready-plans-into-missions,
@@ -520,6 +521,605 @@ export async function applyProposal(
     }
 
     return { kind, missionId, approvedCount: planIds.length, claims, recorded };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  The parameters pass
+//  (plan: the-navigator-orders-missions-into-a-schedule, subtask 3)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Where a mission's parameter provenance is recorded, so "who chose this team"
+ * and "why is this subtask third" are answerable after the fact.
+ *
+ * The mission row has no column for a setter, and the plan deliberately leaves
+ * the home of the ordered list open ("See the open question on where the ordered
+ * list lives"). The order itself is NOT stored a second time — the dependency
+ * edges are the order, and a topological sort reproduces it. What is stored here
+ * is the PROVENANCE only: the model, the time, and each parameter's setter, so a
+ * mission the Navigator ordered is distinguishable from one in insertion order
+ * and from one whose plans stated no constraint at all. It is board state (the
+ * `config` table of the board's own database), not a new mission store.
+ */
+export const MISSION_PARAMETERS_CONFIG_KEY = 'switchboard.missions.parameters';
+
+/** A mission row, as the board read returns it. */
+export interface MissionRow {
+    id: string;
+    name: string;
+    goal: string;
+    team: string;
+    maxExtraWorktrees: number;
+    runState: 'not-started' | 'in-flight' | 'completed';
+    /** Plan members. */
+    plans: string[];
+    /** Feature members — contained by the mission but not reorderable here. */
+    features: string[];
+}
+
+/** A live team that an automated dispatch can actually reach. */
+export interface LiveTeam {
+    id: string;
+    label: string;
+    head: string;
+    headRole: string;
+    /** `readTeamAutomatedDispatch(def).value` — `pool` | `head-only-when-sole` | `never`. */
+    policy: string;
+    /** Who decided the policy: `config` | `default` | `unknown`. Never collapsed. */
+    policySource: string;
+}
+
+/** A live team that cannot take the dispatch, with the reason the seam gave. */
+export interface UnavailableTeam {
+    id: string;
+    label: string;
+    head: string;
+    /** VERBATIM from `resolveAutomatedDispatchExclusions`' reason map. */
+    reason: string;
+}
+
+export interface ParameterRecord {
+    at: string;
+    modelId: string;
+    /** The order the Navigator recorded — the edges are the order; this is the readback. */
+    order: string[];
+    setters: { order: 'navigator' | 'operator'; team: ParameterSetter; worktree: ParameterSetter };
+    /** The value the NAVIGATOR last wrote for `missions.team`. */
+    team: string;
+    /** The value the NAVIGATOR last wrote for `missions.max_extra_worktrees`. */
+    maxExtraWorktrees: number;
+    finding: 'ordering-constraints-recorded' | 'no-hard-ordering-constraints';
+    teamReason: string;
+    worktreeReason: string;
+}
+
+/**
+ * Who set a parameter. `operator` wins and is never overwritten; `unassigned`
+ * means nothing was assigned and the reason says why; `default` means the column
+ * default was kept because the Navigator did not judge.
+ */
+export type ParameterSetter = 'navigator' | 'operator' | 'unassigned' | 'default';
+
+export interface ParameterProvenance {
+    missionId: string;
+    modelId: string;
+    at: string;
+    order: string[];
+    edges: Array<{ planId: string; dependsOn: string[]; ok: boolean; error?: string }>;
+    team: string;
+    teamSource: ParameterSetter;
+    teamReason: string;
+    maxExtraWorktrees: number;
+    worktreeSource: ParameterSetter;
+    worktreeReason: string;
+    finding: string;
+    skippedHeld: string[];
+    unavailableTeams: UnavailableTeam[];
+}
+
+/**
+ * The ports the parameters pass needs, over and above the proposal's.
+ *
+ * `readAvailableTeams` is the seam the plan calls `readAvailableTeams()`: the
+ * composition root runs the teamWiring reads (`readTeamAutomatedDispatch`,
+ * `resolveAutomatedDispatchExclusions`) and hands the result over, so the reason
+ * string the operator sees is the seam's own, verbatim, and the capability
+ * continues to make no board call of its own.
+ */
+export interface NavigatorParameterPorts extends NavigatorPorts {
+    readMission(missionId: string): Promise<MissionRow | null>;
+    /** Every live team, split into those a dispatch can reach and those it cannot. */
+    readAvailableTeams(): Promise<{ available: LiveTeam[]; unavailable: UnavailableTeam[] }>;
+    /** `POST /kanban/dependencies` — a set-write per plan id, with the map fingerprint. */
+    writeDependencies(input: { planId: string; dependsOn: string[]; mapFingerprint: string }): Promise<{ ok: boolean; error?: string; cycle?: string[] }>;
+    /** `POST /kanban/mission/update`, field-scoped: an omitted field is left alone. */
+    updateMission(input: { missionId: string; team?: string; maxExtraWorktrees?: number }): Promise<{ ok: boolean; error?: string }>;
+    readParameterRecord(missionId: string): Promise<ParameterRecord | null>;
+    writeParameterRecord(missionId: string, record: ParameterRecord): Promise<RecordResult>;
+    recordParameterProvenance(entry: ParameterProvenance): Promise<RecordResult>;
+    /** Injectable clock; defaults to the real one. */
+    now?(): string;
+}
+
+export type ParameterOutcome =
+    | {
+        /** `partial` when an edge write or the mission update failed — never presented as arranged. */
+        kind: 'applied' | 'partial';
+        missionId: string;
+        modelId: string;
+        at: string;
+        order: string[];
+        edges: Array<{ planId: string; dependsOn: string[]; ok: boolean; error?: string }>;
+        finding: 'ordering-constraints-recorded' | 'no-hard-ordering-constraints';
+        team: string;
+        teamSource: ParameterSetter;
+        teamReason: string;
+        maxExtraWorktrees: number;
+        worktreeSource: ParameterSetter;
+        worktreeReason: string;
+        /** Members a seat took between the read and the write — never reordered. */
+        skippedHeld: string[];
+        unavailableTeams: UnavailableTeam[];
+        /** Set when the mission row itself could not be updated. */
+        updateError: string;
+        recorded: RecordResult;
+    }
+    | { kind: 'not-found'; missionId: string }
+    | { kind: 'refused-in-flight'; missionId: string; reason: string }
+    | { kind: 'no-members'; missionId: string; featureMembers: string[] }
+    | { kind: 'all-members-held'; missionId: string; heldIds: string[] }
+    | { kind: 'cycle'; missionId: string; cycle: string[] }
+    | { kind: 'invalid-reply'; missionId: string; modelId: string; reason: string }
+    | { kind: 'unconfigured'; missionId: string; reason: string }
+    | { kind: 'error'; missionId: string; reason: string };
+
+function isHeld(row: NavigatorPlanRow | undefined): boolean {
+    if (!row) { return false; }
+    const ownerSince = row.ownerSince ?? row.owner_since ?? null;
+    const completedAt = row.completedAt ?? row.completed_at ?? null;
+    return !!str(ownerSince) && !str(completedAt);
+}
+
+/**
+ * Kahn's algorithm with the model's declared order as the TIE-BREAK, so the sort
+ * is stable and the declared order is only ever a tie-break — never a second
+ * stored sequence. Returns `null` on a cycle.
+ */
+function topologicalOrder(members: string[], edges: Map<string, string[]>, tieBreak: string[]): string[] | null {
+    const rank = new Map(tieBreak.map((id, i) => [id, i]));
+    const inDegree = new Map<string, number>(members.map(id => [id, 0]));
+    const dependents = new Map<string, string[]>();
+    for (const id of members) {
+        for (const dep of (edges.get(id) || [])) {
+            if (!inDegree.has(dep)) { continue; }
+            inDegree.set(id, (inDegree.get(id) || 0) + 1);
+            const list = dependents.get(dep) || [];
+            list.push(id);
+            dependents.set(dep, list);
+        }
+    }
+    const ready = members.filter(id => (inDegree.get(id) || 0) === 0);
+    const out: string[] = [];
+    while (ready.length) {
+        ready.sort((a, b) => (rank.get(a) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b) ?? Number.MAX_SAFE_INTEGER));
+        const id = ready.shift() as string;
+        out.push(id);
+        for (const next of (dependents.get(id) || [])) {
+            const left = (inDegree.get(next) || 0) - 1;
+            inDegree.set(next, left);
+            if (left === 0) { ready.push(next); }
+        }
+    }
+    return out.length === members.length ? out : null;
+}
+
+/** The cycle that makes the edge set unwritable, as a path — for the report. */
+function findCycle(members: string[], edges: Map<string, string[]>): string[] {
+    const state = new Map<string, 0 | 1 | 2>();
+    const path: string[] = [];
+    const visit = (id: string): string[] | null => {
+        const st = state.get(id) || 0;
+        if (st === 1) { return [...path.slice(path.indexOf(id)), id]; }
+        if (st === 2) { return null; }
+        state.set(id, 1);
+        path.push(id);
+        for (const dep of (edges.get(id) || [])) {
+            const found = visit(dep);
+            if (found) { return found; }
+        }
+        path.pop();
+        state.set(id, 2);
+        return null;
+    };
+    for (const id of members) {
+        const found = visit(id);
+        if (found) { return found; }
+    }
+    return [];
+}
+
+/**
+ * The fingerprint the dependency write carries, computed by the SAME function the
+ * analysis pass uses (`computeMapFingerprint`) with the member set standing in
+ * for the file set — one fingerprint shape, so "the persisted map is stale" is
+ * one comparison rather than two that can disagree.
+ */
+function memberFingerprint(planId: string, memberSet: string[]): string {
+    return computeMapFingerprint([{ planId, fileSet: [...memberSet].sort() }]);
+}
+
+/**
+ * Which of `team` / `max_extra_worktrees` this pass may write.
+ *
+ * "The operator's value wins and is never silently overwritten" needs a way to
+ * tell an operator's value from the Navigator's own earlier one, and the mission
+ * row records neither. The rule is mechanical: this pass may write a field when
+ * it is still at its column default, or when it still holds exactly the value
+ * THIS pass last wrote (from the parameter record). A value that matches neither
+ * was set by someone else, so it is reported as the operator's and left alone.
+ */
+function decideField(
+    current: string | number,
+    lastWritten: string | number | undefined,
+    defaultValue: string | number,
+    proposed: string | number,
+    whenSkipped: string,
+): { write: boolean; value: string | number; setter: ParameterSetter; reason: string } {
+    if (current !== defaultValue && (lastWritten === undefined || current !== lastWritten)) {
+        return { write: false, value: current, setter: 'operator', reason: whenSkipped };
+    }
+    return { write: true, value: proposed, setter: 'navigator', reason: '' };
+}
+
+const PARAMETERS_SYSTEM = [
+    'You arrange the cards of ONE mission that already exists on a board of coding',
+    'agents. You are given the mission, its member cards with their text, and the',
+    'teams that are LIVE right now. Decide four things:',
+    '1. order — every member planId, first to last.',
+    '2. dependencies — the ordering constraints the cards\' OWN TEXT states.',
+    '3. team — which live team takes the mission.',
+    '4. worktrees — whether the members need an extra isolated worktree each.',
+    'Reply with ONE JSON object and nothing else:',
+    '{"order":["..."],"dependencies":[{"planId":"...","dependsOn":["..."]}],',
+    ' "team":"<team id from the live list, or null>",',
+    ' "worktrees":{"extra":0,"reason":"..."}}',
+    'Rules you must not break:',
+    '- Use ONLY planId values from the member list, and list EVERY member in order.',
+    '- `dependsOn` must be a constraint the cards\' text actually states. An invented',
+    '  dependency is obeyed by the queue and holds a card out of every dispatch until',
+    '  its predecessor completes, so state none rather than guess. A member with no',
+    '  constraint gets an empty `dependsOn` array.',
+    '- `order` must agree with `dependencies`.',
+    '- `team` must be an id from the live team list, or null if none fits.',
+    '- `worktrees.extra` is 0 or 1. Use 0 unless the members will genuinely edit the',
+    '  same files at the same time; 0 is the safe answer.',
+    '- You arrange cards that already exist. You do not write, edit or retitle a plan.',
+].join('\n');
+
+/**
+ * Fill in one mission's parameters: order (as dependency edges), team, and the
+ * worktree decision.
+ *
+ * Three fences, each a bug if broken:
+ *  - **This pass never stages a card.** The one method that writes queue order
+ *    also moves every card to STAGING, which is starting the mission — so it
+ *    belongs to the start subtask and is deliberately not named here. Recording
+ *    an order and applying it are two different authorities, and this pass holds
+ *    only the first.
+ *  - **A cycle writes NOTHING.** Not the edges, and not the team or worktree
+ *    either: a partially applied parameter set is a mission that looks arranged
+ *    and is not.
+ *  - **An invented dependency is worse than none.** The queue obeys these edges
+ *    immediately, boardwide, so the pass writes only what the reply stated and
+ *    reports "no hard ordering constraints" as a positive finding when it stated
+ *    none.
+ */
+export async function proposeParameters(
+    args: { missionId: string },
+    ports: NavigatorParameterPorts,
+): Promise<ParameterOutcome> {
+    const missionId = str(args.missionId);
+    if (!missionId) { return { kind: 'not-found', missionId }; }
+
+    const slot = await ports.navigatorModel();
+    if ('error' in slot) { return { kind: 'unconfigured', missionId, reason: slot.error }; }
+    if (!slot.endpoint) {
+        return { kind: 'unconfigured', missionId, reason: `no Navigator model is configured (source: ${slot.source || 'unset'})` };
+    }
+    const modelId = modelIdOf(slot);
+
+    const mission = await ports.readMission(missionId);
+    if (!mission) { return { kind: 'not-found', missionId }; }
+    if (mission.runState === 'in-flight') {
+        return { kind: 'refused-in-flight', missionId, reason: 'the mission is in flight — its order and team are settled' };
+    }
+
+    const board = (await ports.listPlans()) || [];
+    const byId = new Map<string, NavigatorPlanRow>();
+    for (const r of board) { const id = str(r.planId) || str(r.id); if (id) { byId.set(id, r); } }
+
+    const memberIds = (mission.plans || []).map(str).filter(Boolean);
+    const featureMembers = (mission.features || []).map(str).filter(Boolean);
+    if (memberIds.length === 0) { return { kind: 'no-members', missionId, featureMembers }; }
+
+    const heldIds = memberIds.filter(id => isHeld(byId.get(id)));
+    const reorderable = memberIds.filter(id => heldIds.indexOf(id) < 0);
+    if (reorderable.length === 0) { return { kind: 'all-members-held', missionId, heldIds }; }
+
+    const teams = await ports.readAvailableTeams();
+
+    const memberPayload: unknown[] = [];
+    for (const id of reorderable) {
+        const row = byId.get(id) || { planId: id };
+        const body = await ports.readPlanBody(row);
+        memberPayload.push({
+            planId: id,
+            topic: str(row.topic) || id,
+            column: str(row.kanbanColumn) || str(row.kanban_column),
+            body: String(body || '').slice(0, NAVIGATOR_BODY_EXCERPT_CHARS),
+        });
+    }
+
+    const asked = await askNavigator(ports, slot, PARAMETERS_SYSTEM, {
+        mission: { name: mission.name, goal: mission.goal },
+        members: memberPayload,
+        liveTeams: teams.available.map(t => ({ id: t.id, label: t.label, headRole: t.headRole })),
+    });
+    if (!asked.ok) { return { kind: 'error', missionId, reason: asked.reason }; }
+
+    const reply = parseJsonReply(asked.content);
+    if (!reply || typeof reply !== 'object') {
+        return { kind: 'invalid-reply', missionId, modelId, reason: 'the reply was not a JSON object' };
+    }
+
+    const memberSet = new Set(reorderable);
+    // `dependencies` must be PRESENT. A reply that simply omits it would
+    // otherwise be recorded as "the plans state no ordering constraint" — a
+    // claim the model never made, and the fallback rule applied to the one
+    // finding this pass publishes. An empty ARRAY is that claim; a missing key
+    // is a malformed reply.
+    if (!Array.isArray(reply.dependencies)) {
+        return { kind: 'invalid-reply', missionId, modelId, reason: 'the reply carried no dependencies array (an empty array is how "no constraints" is stated)' };
+    }
+    const rawDeps: any[] = reply.dependencies;
+    const namedIds = [
+        ...idList(reply.order),
+        ...rawDeps.map(d => str(d && d.planId)),
+        ...rawDeps.flatMap(d => idList(d && d.dependsOn)),
+    ].filter(Boolean);
+    const foreign = namedIds.filter(id => !memberSet.has(id));
+    if (foreign.length > 0) {
+        return {
+            kind: 'invalid-reply', missionId, modelId,
+            reason: `the reply named ${foreign.length} card(s) that are not members of this mission: ${Array.from(new Set(foreign)).join(', ')}`,
+        };
+    }
+
+    const order = dedupe(idList(reply.order));
+    if (order.length !== reorderable.length) {
+        return {
+            kind: 'invalid-reply', missionId, modelId,
+            reason: `order must list every one of the ${reorderable.length} member(s) exactly once (got ${order.length})`,
+        };
+    }
+
+    const edges = new Map<string, string[]>();
+    for (const id of reorderable) { edges.set(id, []); }
+    for (const d of rawDeps) {
+        const planId = str(d && d.planId);
+        if (!planId) { continue; }
+        edges.set(planId, dedupe(idList(d && d.dependsOn)).filter(x => x !== planId && memberSet.has(x)));
+    }
+
+    const sorted = topologicalOrder(reorderable, edges, order);
+    if (sorted === null) {
+        return { kind: 'cycle', missionId, cycle: findCycle(reorderable, edges) };
+    }
+    if (sorted.join('\u0000') !== order.join('\u0000')) {
+        return {
+            kind: 'invalid-reply', missionId, modelId,
+            reason: `the declared order (${order.join(' -> ')}) contradicts the declared dependencies (a sort over them gives ${sorted.join(' -> ')})`,
+        };
+    }
+
+    const availableIds = new Set(teams.available.map(t => t.id));
+    const requestedTeam = reply.team === null || reply.team === undefined ? '' : str(reply.team);
+    let proposedTeam = '';
+    let proposedTeamReason = '';
+    if (requestedTeam && availableIds.has(requestedTeam)) {
+        proposedTeam = requestedTeam;
+    } else if (requestedTeam) {
+        // Named a team that is not reachable. The exclusion reason travels
+        // VERBATIM; a name that is not a team at all says that instead.
+        const unavailable = teams.unavailable.find(t => t.id === requestedTeam);
+        proposedTeamReason = unavailable
+            ? unavailable.reason
+            : `the Navigator named team '${requestedTeam}', which is not a live team on this board`;
+    } else {
+        proposedTeamReason = teams.available.length === 0
+            ? 'no team is running — no live team can take an automated dispatch'
+            : 'the Navigator did not name a team';
+    }
+
+    const worktreeReply = reply.worktrees && typeof reply.worktrees === 'object' ? reply.worktrees : null;
+    const rawExtra = worktreeReply ? Number(worktreeReply.extra) : 0;
+    if (!Number.isInteger(rawExtra) || rawExtra < 0 || rawExtra > 1) {
+        return {
+            kind: 'invalid-reply', missionId, modelId,
+            reason: `worktrees.extra must be 0 or 1 for a mission (got ${JSON.stringify(worktreeReply ? worktreeReply.extra : null)})`,
+        };
+    }
+    const proposedWorktrees = rawExtra;
+    const worktreeReason = worktreeReply ? str(worktreeReply.reason) : '';
+
+    // ── Write. Ownership and membership are RE-READ here, not trusted from the
+    //    set the model was shown: a seat can take a card between the two. ──
+    const boardNow = (await ports.listPlans()) || [];
+    const byIdNow = new Map<string, NavigatorPlanRow>();
+    for (const r of boardNow) { const id = str(r.planId) || str(r.id); if (id) { byIdNow.set(id, r); } }
+    const heldNow = new Set(reorderable.filter(id => isHeld(byIdNow.get(id))));
+    const toWrite = reorderable.filter(id => !heldNow.has(id));
+    const skippedHeld = Array.from(new Set([...heldIds, ...Array.from(heldNow)]));
+
+    const writtenEdges: Array<{ planId: string; dependsOn: string[]; ok: boolean; error?: string }> = [];
+    for (const id of toWrite) {
+        const dependsOn = (edges.get(id) || []).filter(d => d !== id);
+        const res = await ports.writeDependencies({
+            planId: id,
+            dependsOn,
+            // The fingerprint is the mission's MEMBER set, not just the members
+            // this pass mapped: a later pass recomputes it from the membership it
+            // sees, and a member joining or leaving must make the map stale.
+            mapFingerprint: memberFingerprint(id, memberIds),
+        });
+        writtenEdges.push({ planId: id, dependsOn, ok: !!res.ok, ...(res.error ? { error: res.error } : {}) });
+    }
+
+    const record = await ports.readParameterRecord(missionId);
+    const teamDecision = decideField(
+        mission.team, record ? record.team : undefined, '', proposedTeam,
+        'left as the operator set it',
+    );
+    const worktreeDecision = decideField(
+        mission.maxExtraWorktrees, record ? record.maxExtraWorktrees : undefined, 0, proposedWorktrees,
+        'left as the operator set it',
+    );
+
+    const update: { missionId: string; team?: string; maxExtraWorktrees?: number } = { missionId };
+    // Only a field whose decided value DIFFERS is sent. Rewriting a field with
+    // the value it already holds would bump `missions.updated_at`, and
+    // `updated_at` is what the panel's "moved Nm ago" and the mission watch read
+    // as movement — a pass that decided nothing new must not look like one that
+    // moved the mission.
+    if (teamDecision.write && String(teamDecision.value) !== mission.team) { update.team = String(teamDecision.value); }
+    if (worktreeDecision.write && Number(worktreeDecision.value) !== mission.maxExtraWorktrees) {
+        update.maxExtraWorktrees = Number(worktreeDecision.value);
+    }
+    let updateError = '';
+    if (update.team !== undefined || update.maxExtraWorktrees !== undefined) {
+        const res = await ports.updateMission(update);
+        if (!res.ok) { updateError = res.error || 'the board refused the mission update'; }
+    }
+
+    const finding: 'ordering-constraints-recorded' | 'no-hard-ordering-constraints' =
+        writtenEdges.some(e => e.dependsOn.length > 0) ? 'ordering-constraints-recorded' : 'no-hard-ordering-constraints';
+    const at = ports.now ? ports.now() : new Date().toISOString();
+
+    const teamValue = String(teamDecision.value);
+    const teamSource: ParameterSetter = !teamDecision.write ? 'operator' : (teamValue ? 'navigator' : 'unassigned');
+    const worktreeSource: ParameterSetter = !worktreeDecision.write ? 'operator' : (worktreeReply ? 'navigator' : 'default');
+    const teamReason = teamDecision.write ? proposedTeamReason : teamDecision.reason;
+    const worktreeReasonFinal = worktreeDecision.write ? worktreeReason : worktreeDecision.reason;
+
+    const parameterRecord: ParameterRecord = {
+        at,
+        modelId,
+        order: order.filter(id => !heldNow.has(id)),
+        setters: { order: 'navigator', team: teamSource, worktree: worktreeSource },
+        team: teamDecision.write ? teamValue : (record ? record.team : ''),
+        maxExtraWorktrees: worktreeDecision.write ? Number(worktreeDecision.value) : (record ? record.maxExtraWorktrees : mission.maxExtraWorktrees),
+        finding,
+        teamReason,
+        worktreeReason: worktreeReasonFinal,
+    };
+    let recorded: RecordResult = { written: false, reason: 'this host wired no parameter record store' };
+    try {
+        recorded = await ports.writeParameterRecord(missionId, parameterRecord);
+    } catch (err) {
+        recorded = { written: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+    let reported: RecordResult = { written: false, reason: 'this host wired no controller report store' };
+    try {
+        reported = await ports.recordParameterProvenance({
+            missionId, modelId, at, order: parameterRecord.order, edges: writtenEdges,
+            team: teamValue, teamSource, teamReason,
+            maxExtraWorktrees: Number(worktreeDecision.value), worktreeSource, worktreeReason: worktreeReasonFinal,
+            finding, skippedHeld, unavailableTeams: teams.unavailable,
+        });
+    } catch (err) {
+        reported = { written: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+
+    // A pass where an edge write or the mission update failed has NOT arranged
+    // the mission, and saying "applied" would present a half-arranged mission as
+    // whole — the same failure the proposal subtask reports as `partial`.
+    const partial = updateError !== '' || writtenEdges.some(e => !e.ok);
+    return {
+        kind: partial ? 'partial' : 'applied',
+        missionId,
+        modelId,
+        at,
+        order: parameterRecord.order,
+        edges: writtenEdges,
+        finding,
+        team: teamValue,
+        teamSource,
+        teamReason,
+        maxExtraWorktrees: Number(worktreeDecision.value),
+        worktreeSource,
+        worktreeReason: worktreeReasonFinal,
+        skippedHeld,
+        unavailableTeams: teams.unavailable,
+        updateError,
+        recorded: reported,
+    };
+}
+
+/** One string per state, so a refusal never reads like a quiet success. */
+export function parameterOutcomeMessage(outcome: ParameterOutcome): string {
+    switch (outcome.kind) {
+        case 'applied':
+        case 'partial': {
+            const bits: string[] = [];
+            bits.push(outcome.finding === 'ordering-constraints-recorded'
+                ? `Order recorded over ${outcome.order.length} card(s) as dependency edges.`
+                : 'No hard ordering constraints — zero edges written, and that is the finding, not a missing pass.');
+            if (outcome.team) {
+                bits.push(`Team: ${outcome.team}.`);
+            } else {
+                bits.push(`No team assigned — ${outcome.teamReason}.`);
+            }
+            bits.push(`Worktrees: ${outcome.maxExtraWorktrees === 0 ? 'none (the fail-safe default)' : outcome.maxExtraWorktrees + ' extra'}${outcome.worktreeReason ? ` — ${outcome.worktreeReason}` : ''}.`);
+            if (outcome.teamSource === 'operator' || outcome.worktreeSource === 'operator') {
+                bits.push('A hand-set value was left alone.');
+            }
+            if (outcome.skippedHeld.length) {
+                bits.push(`${outcome.skippedHeld.length} held card(s) excluded from reordering.`);
+            }
+            const failed = outcome.edges.filter(e => !e.ok);
+            if (failed.length) {
+                bits.push(`${failed.length} edge write(s) FAILED: ${failed.map(e => `${e.planId} (${e.error || 'refused'})`).join(', ')}`);
+            }
+            if (outcome.updateError) {
+                bits.push(`The mission update FAILED: ${outcome.updateError}`);
+            }
+            if (outcome.kind === 'partial') {
+                bits.push('The mission is only PARTLY arranged.');
+            }
+            if (!outcome.recorded.written) {
+                bits.push(`Provenance not recorded: ${outcome.recorded.reason || 'unknown reason'}`);
+            }
+            return bits.join(' ');
+        }
+        case 'not-found':
+            return `No mission '${outcome.missionId}' on this board.`;
+        case 'refused-in-flight':
+            return `Refused: ${outcome.reason}. Nothing was written.`;
+        case 'no-members':
+            return outcome.featureMembers.length
+                ? `The mission holds ${outcome.featureMembers.length} feature(s) and no loose plans, so there is nothing to order.`
+                : 'The mission has no members, so there is nothing to order.';
+        case 'all-members-held':
+            return `Every member is being worked on (${outcome.heldIds.join(', ')}) — their order and team are settled, and nothing was written.`;
+        case 'cycle':
+            return `Dependency cycle refused: ${outcome.cycle.length ? outcome.cycle.join(' -> ') : 'a cycle among the members'}. Nothing was written — not the edges, not the team, not the worktree.`;
+        case 'invalid-reply':
+            return `The Navigator's reply was invalid and nothing was written: ${outcome.reason}`;
+        case 'unconfigured':
+            return `The Navigator could not be asked: ${outcome.reason}`;
+        case 'error':
+            return `The parameters pass failed: ${outcome.reason}`;
+    }
 }
 
 /** The three (plus one) states, as the ONE string each surface renders. */

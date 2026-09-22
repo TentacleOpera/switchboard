@@ -1438,6 +1438,42 @@
         // same paragraph over and over and the current state of the board had to
         // be reconstructed by reading down the list. The panel shows the LATEST
         // report only: columns, teams, assessment, and what is next.
+        /** The last parameters pass's message, rendered above the strips until
+         *  the next pass replaces it. A refusal must outlive the click. */
+        let lastParameterMessage = null;
+
+        /**
+         * Run the parameters pass over ONE mission, then repaint from the ONE
+         * mission renderer so the strip shows what the board now holds. The pass
+         * writes dependency edges, `missions.team` and `missions.max_extra_worktrees`
+         * and NEVER stages a card — the operator's next gesture is the start.
+         */
+        async function runNavigatorParameters(missionId, btn) {
+            if (!missionId) { return; }
+            if (btn) { btn.disabled = true; }
+            try {
+                const res = await fetch('/controller/navigator/parameters', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ missionId: missionId }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.success === false) {
+                    lastParameterMessage = { text: 'Parameters failed: ' + (data.error || ('HTTP ' + res.status)), isError: true };
+                } else {
+                    lastParameterMessage = {
+                        text: data.message || 'The parameters pass answered without a message.',
+                        isError: data.kind !== 'applied',
+                    };
+                }
+            } catch (err) {
+                lastParameterMessage = { text: 'Parameters failed: ' + (err?.message || err), isError: true };
+            } finally {
+                if (btn) { btn.disabled = false; }
+                await refreshReport();
+            }
+        }
+
         async function refreshReport() {
             if (!reportEl) { return; }
             if (selectedTeam) { await renderTeamReports(selectedTeam); return; }
@@ -1714,6 +1750,15 @@
                 }
 
                 // ── MISSION STRIPS ───────────────────────────────────────────
+                // What the last parameters pass said, if one has run. It is
+                // rendered here rather than in a transient toast because a
+                // refusal (a cycle, an invalid reply) is the operator's only
+                // signal that the mission was left unarranged.
+                if (lastParameterMessage) {
+                    const pm = mk('div', 'padding-top:6px;', lastParameterMessage.text);
+                    pm.className = 'stencil mission-param' + (lastParameterMessage.isError ? ' is-error' : '');
+                    card.appendChild(pm);
+                }
                 if (missions.length) {
                     const strips = mk('div', 'padding-top:6px;');
                     for (const m of missions) {
@@ -1751,6 +1796,80 @@
                         const metaEl = mk('div', 'margin-top:7px;', meta.join('  ·  '));
                         metaEl.className = 'stencil';
                         s.appendChild(metaEl);
+
+                        // ── THE MISSION'S PARAMETERS ─────────────────────────
+                        // Order, team and worktree decision, each labelled with
+                        // whether the NAVIGATOR or the OPERATOR set it. The
+                        // order is rendered from `sequencing`, which the board
+                        // derives from the dependency edges the queue itself
+                        // obeys — a view, not a second store, so the strip and
+                        // the pop cannot disagree.
+                        //
+                        // Three states that must not render alike: nobody has
+                        // arranged this mission; the Navigator arranged it and
+                        // found no ordering constraints; the Navigator recorded
+                        // an order. `parameters === null` is the first.
+                        const p = m.parameters || null;
+                        const paramLines = mk('div', 'margin-top:6px;');
+                        paramLines.className = 'stencil mission-params';
+
+                        const orderLine = mk('div', '');
+                        const seq = Array.isArray(m.sequencing) ? m.sequencing.filter(Boolean) : [];
+                        if (!p) {
+                            orderLine.className = 'mission-param is-unset';
+                            orderLine.textContent = 'Insertion order — not ordered by the Navigator.';
+                        } else if (p.finding === 'no-hard-ordering-constraints') {
+                            orderLine.className = 'mission-param is-unset';
+                            orderLine.textContent = 'No hard ordering constraints — the Navigator read the cards and found none.';
+                        } else if (seq.length) {
+                            orderLine.className = 'mission-param';
+                            orderLine.textContent = 'Order (Navigator): ' + seq.join('  ·  ');
+                        } else {
+                            orderLine.className = 'mission-param is-unset';
+                            orderLine.textContent = 'The Navigator recorded an order, but the board renders none.';
+                        }
+                        paramLines.appendChild(orderLine);
+
+                        const teamLine = mk('div', '');
+                        teamLine.className = 'mission-param';
+                        if (p && p.team) {
+                            teamLine.textContent = 'Team: ' + p.team + ' (' + (p.setters && p.setters.team === 'operator' ? 'operator' : 'Navigator') + ')';
+                        } else if (p) {
+                            teamLine.textContent = 'Team: none — ' + (p.teamReason || 'no team assigned');
+                        } else if (m.team) {
+                            teamLine.textContent = 'Team: ' + m.team + ' (operator)';
+                        } else {
+                            teamLine.textContent = 'Team: none set.';
+                        }
+                        paramLines.appendChild(teamLine);
+
+                        const wtLine = mk('div', '');
+                        wtLine.className = 'mission-param';
+                        if (p) {
+                            const who = p.setters && p.setters.worktree === 'operator' ? 'operator'
+                                : (p.setters && p.setters.worktree === 'default' ? 'default' : 'Navigator');
+                            wtLine.textContent = 'Worktrees: ' + (p.maxExtraWorktrees || 0)
+                                + (p.maxExtraWorktrees ? ' extra' : ' (fail-safe default)')
+                                + ' (' + who + ')' + (p.worktreeReason ? ' — ' + p.worktreeReason : '');
+                        } else {
+                            wtLine.textContent = 'Worktrees: 0 (fail-safe default)';
+                        }
+                        paramLines.appendChild(wtLine);
+                        s.appendChild(paramLines);
+
+                        // The operator's gesture for this pass. The plan gives the
+                        // strip a display role and names no trigger; a pass with no
+                        // way to run it would make every line above dead code, so
+                        // the strip carries the one button that runs it.
+                        if (m.planCount || m.cardsTotal) {
+                            const fillBtn = document.createElement('button');
+                            fillBtn.type = 'button';
+                            fillBtn.className = 'mission-param-btn';
+                            fillBtn.textContent = p ? 'Re-derive parameters' : 'Fill in parameters';
+                            fillBtn.addEventListener('click', () => void runNavigatorParameters(m.id, fillBtn));
+                            s.appendChild(fillBtn);
+                        }
+
                         strips.appendChild(s);
                     }
                     card.appendChild(strips);

@@ -658,6 +658,34 @@
             overflow: hidden;
         }
         .mission-fill { height: 100%; background: var(--accent-primary); }
+        /* A mission's filled-in parameters. The ORDER is rendered from the
+           board's own sequencing view, so the strip and the queue pop agree.
+           `is-unset` is a distinct look, not a dimmer one: "nobody arranged
+           this" must not read like "arranged, with no constraints". */
+        .mission-params {
+            margin-top: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+        .mission-param.is-unset { color: var(--text-dim); }
+        .mission-param.is-error { color: #f85149; }
+        .mission-param-btn {
+            margin-top: 7px;
+            align-self: flex-start;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-dim);
+            font-family: var(--font-family);
+            font-size: 10px;
+            padding: 3px 9px;
+            cursor: pointer;
+        }
+        .mission-param-btn:hover { color: var(--text-primary); border-color: var(--accent-dim); }
+        .mission-param-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
         /* ── SEAT REPORTS ────────────────────────────────────────────────────
            The scoped channel was an undesigned dump: 400-word entries at full

@@ -2,8 +2,10 @@ import * as http from 'http';
 import { resolveBudget, usageKey } from '../standalone/judgement/budgets';
 import { callModel } from '../standalone/judgement/modelClient';
 import {
-    applyProposal, applyOutcomeMessage, navigatorOutcomeMessage, proposeColdBoard, proposeMission,
-    type NavigatorPlanRow, type NavigatorPorts,
+    applyProposal, applyOutcomeMessage, navigatorOutcomeMessage, proposeColdBoard, proposeMission, proposeParameters,
+    parameterOutcomeMessage, MISSION_PARAMETERS_CONFIG_KEY,
+    type MissionRow, type NavigatorParameterPorts, type NavigatorPlanRow, type NavigatorPorts,
+    type ParameterProvenance, type ParameterRecord, type UnavailableTeam, type LiveTeam,
 } from '../standalone/controller/navigator';
 import * as zlib from 'zlib';
 import * as fs from 'fs/promises';
@@ -41,7 +43,7 @@ import {
     makeStandingOrder,
     makeStandingOrderDefinition,
 } from './standingOrders';
-import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders, resolveTeamByIdIncludingDisabled, DEFAULT_TEAM_DEFINITIONS, readTeamCompletionAuthority, rosterOfGroup } from './teamWiring';
+import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders, resolveTeamByIdIncludingDisabled, DEFAULT_TEAM_DEFINITIONS, readTeamCompletionAuthority, rosterOfGroup, isSpawnedTeamGroup, resolveDefinitionForGroup, readTeamAutomatedDispatch, resolveAutomatedDispatchExclusions } from './teamWiring';
 import { resolveMissionStageFromTeam, releaseVerdict, heldMembers, type PipelineStage } from './missionStage';
 import { computeRosterClearTargets } from './workContextResolver';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
@@ -3292,14 +3294,22 @@ export class LocalApiServer {
             // as today — the regression fence for the CLI `dispatch` verb and
             // the desktop drag-drop path, neither of which sends `ack`.
             const acked = body?.ack === true;
+            // Re-delivery semantics (plan: the-pilot-acts-on-the-board-not-on-the-agent).
+            // A controller re-issuing a seat's own dispatch prompt is REPAIRING
+            // it, not handing it new work: the roster barrier must not fire and
+            // the destination seat must not be cleared. Both are opt-in and
+            // default to the existing dispatch behaviour, so every current
+            // caller is unaffected.
+            const skipClear = body?.skipClear === true;
+            const clearBeforePrompt = typeof body?.clearBeforePrompt === 'boolean' ? body.clearBeforePrompt : undefined;
             const outcome = acked
                 ? await this.performKanbanDispatchAcked(
                     workspaceRoot, ref, rawColumn || undefined,
-                    { originTerminal: from || undefined, ...(seat ? { targetTerminalOverride: seat } : {}) }
+                    { originTerminal: from || undefined, ...(seat ? { targetTerminalOverride: seat } : {}), ...(skipClear ? { skipClear: true } : {}), ...(clearBeforePrompt !== undefined ? { clearBeforePrompt } : {}) }
                 )
                 : await this.performKanbanDispatch(
                     workspaceRoot, ref, rawColumn || undefined,
-                    { originTerminal: from || undefined, ...(seat ? { targetTerminalOverride: seat } : {}) }
+                    { originTerminal: from || undefined, ...(seat ? { targetTerminalOverride: seat } : {}), ...(skipClear ? { skipClear: true } : {}), ...(clearBeforePrompt !== undefined ? { clearBeforePrompt } : {}) }
                 );
             res.writeHead(outcome.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(outcome.payload));
@@ -12341,6 +12351,7 @@ export class LocalApiServer {
             const mdb = await this._options.getKanbanDatabase?.(wsRoot);
             const wsId = (await mdb?.getWorkspaceId?.()) || (await mdb?.getDominantWorkspaceId?.()) || '';
             const raw = mdb ? await mdb.getMissions(wsId) : [];
+            const parameterRecords = mdb ? await this._readAllParameterRecords(mdb) : {};
 
             const out: any[] = [];
             let subtasksTotal = 0;
@@ -12388,6 +12399,15 @@ export class LocalApiServer {
                     columns,
                     startedAt: m.createdAt ?? null,
                     lastMovementAt: lastMovementAt || null,
+                    // The SEQUENCING PROSE, rendered from the dependency edges by
+                    // `_deriveMissionSequencing` — a view, not a second store. The
+                    // panel reads it here rather than re-deriving it, so the
+                    // rendered order and the order the queue obeys are one fact.
+                    sequencing: Array.isArray(m.sequencing) ? m.sequencing : [],
+                    // Who set this mission's parameters, or null when nobody has.
+                    // "Not arranged" and "arranged with no constraints" must not
+                    // render the same, so the record travels rather than a flag.
+                    parameters: parameterRecords[m.id] || null,
                 });
             }
             out.sort((a, b) => (b.lastMovementAt || 0) - (a.lastMovementAt || 0));
@@ -13621,6 +13641,248 @@ export class LocalApiServer {
             console.error('[LocalApiServer] navigator apply error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'navigator apply failed' }));
+        }
+    }
+
+    /**
+     * The ports the PARAMETERS pass runs against (plan:
+     * the-navigator-orders-missions-into-a-schedule, subtask 3).
+     *
+     * `readAvailableTeams` is the seam the plan calls `readAvailableTeams()`:
+     * the teamWiring reads run HERE, so the reason an operator sees for a team
+     * that cannot take the dispatch is `resolveAutomatedDispatchExclusions`' own
+     * string, verbatim, rather than a second availability notion invented in the
+     * capability.
+     *
+     * The parameter record is board state — one key in the board's own `config`
+     * table, keyed by mission id. It exists because the mission row has no column
+     * recording who set `team` or `max_extra_worktrees`, and the plan requires a
+     * derived parameter to be distinguishable from a chosen one. The ORDER is not
+     * duplicated there: the dependency edges are the order.
+     */
+    private async _navigatorParameterPorts(db: any, workspaceRoot: string): Promise<NavigatorParameterPorts> {
+        const base = await this._navigatorPorts(db, workspaceRoot);
+        return {
+            ...base,
+            readMission: async (missionId: string) => {
+                const m = await db.getMissionById?.(missionId);
+                if (!m) { return null; }
+                return {
+                    id: String(m.id),
+                    name: String(m.name || ''),
+                    goal: String(m.goal || ''),
+                    team: String(m.team || ''),
+                    maxExtraWorktrees: Number(m.maxExtraWorktrees || 0),
+                    runState: String(m.runState || 'not-started') as MissionRow['runState'],
+                    plans: Array.isArray(m.plans) ? m.plans.map((x: unknown) => String(x)) : [],
+                    features: Array.isArray(m.features) ? m.features.map((x: unknown) => String(x)) : [],
+                };
+            },
+            readAvailableTeams: async () => await this._readAvailableTeams(db, workspaceRoot),
+            writeDependencies: async ({ planId, dependsOn, mapFingerprint }) => {
+                // The SAME store the queue's `isDependencyReady` reads, written
+                // through the same method the route uses. A cycle is refused
+                // inside `setPlanDependencies` (all or nothing) as well as by the
+                // capability's own sort, so a cycle cannot land by either path.
+                const ok = await db.setPlanDependencies(planId, dependsOn);
+                if (ok && mapFingerprint) { await db.setMapFingerprint?.(planId, mapFingerprint); }
+                if (!ok) {
+                    const cycle = typeof db.findDependencyCycle === 'function'
+                        ? await this._firstCycle(db, planId, dependsOn)
+                        : null;
+                    return { ok: false, error: 'the board refused the dependency write', ...(cycle ? { cycle } : {}) };
+                }
+                return { ok: true };
+            },
+            updateMission: async ({ missionId, team, maxExtraWorktrees }) => {
+                // Field-scoped: an omitted field is left alone by `updateMission`,
+                // so a field this pass did not decide is never rewritten.
+                const ok = await db.updateMission(missionId, {
+                    ...(team !== undefined ? { team } : {}),
+                    ...(maxExtraWorktrees !== undefined ? { maxExtraWorktrees } : {}),
+                });
+                return ok ? { ok: true } : { ok: false, error: `mission '${missionId}' could not be updated` };
+            },
+            readParameterRecord: async (missionId: string) => await this._readParameterRecord(db, missionId),
+            writeParameterRecord: async (missionId: string, record: ParameterRecord) => {
+                const all = await this._readAllParameterRecords(db);
+                all[missionId] = record;
+                await db.setConfigJson(MISSION_PARAMETERS_CONFIG_KEY, all);
+                return { written: true };
+            },
+            recordParameterProvenance: async (entry) => await this._recordNavigatorParameters(workspaceRoot, entry),
+        };
+    }
+
+    /** The first cycle a proposed edge would close, for the refusal message. */
+    private async _firstCycle(db: any, planId: string, dependsOn: string[]): Promise<string[] | null> {
+        for (const dep of dependsOn) {
+            if (dep === planId) { return [planId, planId]; }
+            const cycle = await db.findDependencyCycle(planId, dep);
+            if (cycle) { return cycle; }
+        }
+        return null;
+    }
+
+    /**
+     * Every live team, split by whether an automated dispatch can reach it.
+     *
+     * A team is AVAILABLE when its head is live and the exclusion resolver does
+     * not exclude it. A team whose policy is `'never'`, or whose head is held
+     * back by a pooled team sharing its role, is unavailable WITH THE RESOLVER'S
+     * OWN REASON — never a re-worded one. Team choice is an availability
+     * question, not a suitability one.
+     */
+    private async _readAvailableTeams(db: any, workspaceRoot: string): Promise<{ available: LiveTeam[]; unavailable: UnavailableTeam[] }> {
+        const available: LiveTeam[] = [];
+        const unavailable: UnavailableTeam[] = [];
+        let groups: any[] = [];
+        try {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? raw : [];
+        } catch { groups = []; }
+
+        const liveNames = await this._liveTerminalNames(workspaceRoot);
+        const { excluded, reasons } = await resolveAutomatedDispatchExclusions({ db, liveNames });
+
+        for (const g of groups) {
+            if (!g || !isSpawnedTeamGroup(g)) { continue; }
+            const head = teamHeadName(g) || (typeof g.name === 'string' && g.name ? g.name : '');
+            if (!head || !liveNames.has(head)) { continue; }
+            let def: any = null;
+            try { def = await resolveDefinitionForGroup(db, g); } catch { def = null; }
+            const label = (def && (def.name || def.id)) || g.id || head;
+            const id = (def && def.id) || g.id || head;
+            const policy = readTeamAutomatedDispatch(def);
+            if (excluded.has(head)) {
+                unavailable.push({
+                    id: String(id), label: String(label), head,
+                    // VERBATIM from the resolver. A missing entry is stated as a
+                    // missing entry rather than substituted with a plausible rule.
+                    reason: reasons.get(head) || `'${label}' is excluded from automated dispatch (the resolver gave no reason)`,
+                });
+                continue;
+            }
+            available.push({
+                id: String(id), label: String(label), head,
+                headRole: String((def && def.headRole) || '').toLowerCase(),
+                policy: policy.value,
+                policySource: policy.source,
+            });
+        }
+        return { available, unavailable };
+    }
+
+    /** The live terminal names, from the one liveness source the fleet uses. */
+    private async _liveTerminalNames(workspaceRoot: string): Promise<Set<string>> {
+        const names = new Set<string>();
+        if (!this._options.terminalVerb) { return names; }
+        try {
+            const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
+            for (const t of (listed?.terminals || [])) {
+                if (t && t.friendlyName && t.status !== 'exited') { names.add(String(t.friendlyName)); }
+            }
+        } catch { /* no fleet read: no live team, which the pass reports as such */ }
+        return names;
+    }
+
+    private async _readAllParameterRecords(db: any): Promise<Record<string, ParameterRecord>> {
+        try {
+            const raw = await db.getConfigJson(MISSION_PARAMETERS_CONFIG_KEY, {});
+            return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, ParameterRecord> : {};
+        } catch {
+            // A corrupt read is NOT an unconfigured board — say so rather than
+            // handing back "{}" as though no mission had ever been arranged.
+            console.error('[LocalApiServer] the Navigator parameter record could not be read');
+            return {};
+        }
+    }
+
+    private async _readParameterRecord(db: any, missionId: string): Promise<ParameterRecord | null> {
+        const all = await this._readAllParameterRecords(db);
+        const rec = all[missionId];
+        return rec && typeof rec === 'object' ? rec : null;
+    }
+
+    /**
+     * Record the parameters pass in the controller's report: the model, the
+     * recorded order, the edges and their outcomes, and each parameter's setter.
+     * A `## Wake` section with no `### Actions` heading, so the panel's
+     * latest-report walk is not hijacked. A failure to record is REPORTED.
+     */
+    private async _recordNavigatorParameters(workspaceRoot: string, entry: ParameterProvenance): Promise<{ written: boolean; reason?: string }> {
+        const store = this._options.controllerStore;
+        if (!store) { return { written: false, reason: 'this host wired no controller report store' }; }
+        const lines = [
+            '### Navigator — mission parameters',
+            '',
+            `- model: \`${entry.modelId}\``,
+            `- at: ${entry.at}`,
+            `- mission: \`${entry.missionId}\``,
+            `- order: ${entry.order.length ? entry.order.map(id => `\`${id}\``).join(' -> ') : '(none recorded)'}`,
+            `- finding: ${entry.finding}`,
+            `- team: ${entry.team ? `\`${entry.team}\`` : '(none)'} (setter: ${entry.teamSource}${entry.teamReason ? ` — ${entry.teamReason}` : ''})`,
+            `- worktrees: ${entry.maxExtraWorktrees} (setter: ${entry.worktreeSource}${entry.worktreeReason ? ` — ${entry.worktreeReason}` : ''})`,
+            ...(entry.skippedHeld.length ? [`- excluded, held by a seat: ${entry.skippedHeld.map(id => `\`${id}\``).join(', ')}`] : []),
+            ...(entry.unavailableTeams.length
+                ? ['', 'Teams that could not take the dispatch:', ...entry.unavailableTeams.map(t => `- \`${t.id}\` — ${t.reason}`)]
+                : []),
+            '',
+            '| plan | depends on | write |',
+            '|---|---|---|',
+            ...entry.edges.map(e => `| \`${e.planId}\` | ${e.dependsOn.length ? e.dependsOn.map(d => `\`${d}\``).join(', ') : '(none)'} | ${e.ok ? 'written' : `refused — ${e.error || 'no reason given'}`} |`),
+        ];
+        try {
+            const result = await store.writeReport(workspaceRoot, {
+                from: 'navigator',
+                kind: 'mission-parameters',
+                body: lines.join('\n'),
+            });
+            return result?.success ? { written: true } : { written: false, reason: String(result?.error || 'the report write did not report success') };
+        } catch (err) {
+            return { written: false, reason: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
+    /**
+     * POST /controller/navigator/parameters — fill in one mission's order, team
+     * and worktree decision.
+     *
+     * Body: `{ missionId }`. The mission must already exist and hold loose plans;
+     * the pass records an order as `plan_dependencies` edges and never stages a
+     * card. A cycle writes nothing at all.
+     */
+    private async _handleControllerNavigatorParameters(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+        let body: any;
+        try { body = await this._parseJsonBody(req); } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'invalid JSON body' }));
+            return;
+        }
+        const missionId = String(body?.missionId || '').trim();
+        if (!missionId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'missionId is required' }));
+            return;
+        }
+        try {
+            const db = await this._requireReadableStore(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const ports = await this._navigatorParameterPorts(db, workspaceRoot);
+            const outcome = await proposeParameters({ missionId }, ports);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                kind: outcome.kind,
+                message: parameterOutcomeMessage(outcome),
+                missionId,
+                outcome,
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] navigator parameters error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'navigator parameters failed' }));
         }
     }
 
@@ -16275,6 +16537,10 @@ export class LocalApiServer {
                 await this._handleControllerNavigatorPropose(req, res);
             } else if (pathname === '/controller/navigator/apply' && req.method === 'POST') {
                 await this._handleControllerNavigatorApply(req, res);
+            } else if (pathname === '/controller/navigator/parameters' && req.method === 'POST') {
+                // The parameters pass (plan: the-navigator-orders-missions-into-a-
+                // schedule): order as dependency edges, team, worktree decision.
+                await this._handleControllerNavigatorParameters(req, res);
             } else if (pathname === '/controller/quota' && req.method === 'GET') {
                 if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
                 const store = this._options.controllerStore;

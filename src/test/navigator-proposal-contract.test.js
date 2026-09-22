@@ -328,14 +328,21 @@ async function run() {
         assert.ok(/empty/i.test(navigator.applyOutcomeMessage(outcome)));
     });
 
-    await test('the capability module names no feature verbs, and its only writes are the mission verbs', async () => {
+    await test('the capability module names no feature verbs, and its writes are the mission verbs alone', async () => {
         const src = fs.readFileSync(path.join(__dirname, '..', 'standalone', 'controller', 'navigator.ts'), 'utf8');
         assert.ok(!src.includes('create-feature.js'), 'the capability must not call create-feature.js');
         assert.ok(!src.includes('assign-to-feature.js'), 'the capability must not call assign-to-feature.js');
         assert.ok(src.includes('createMission') && src.includes('claimIntoMission'),
             'paired positive: the mission verbs ARE the module\'s write surface');
-        assert.ok(!/appendQueuePositions|updateMission|addMissionMember/.test(src),
-            'no third mission verb, no staging, no INSERT OR IGNORE member add');
+        // `updateMission` is NOT in this list any more, and that is intended: the
+        // parameters subtask (the-navigator-orders-missions-into-a-schedule) fills
+        // in `missions.team` and `max_extra_worktrees` through
+        // `POST /kanban/mission/update`, which its own plan names. What must stay
+        // absent is staging and the INSERT OR IGNORE member add.
+        assert.ok(src.includes('updateMission'),
+            'paired positive: the parameters pass writes team/worktree through the mission update verb');
+        assert.ok(!/appendQueuePositions|addMissionMember/.test(src),
+            'no staging (that is the start subtask\'s), and no INSERT OR IGNORE member add');
     });
 
     // ══ The route, against a real board and a real model endpoint ══════════
