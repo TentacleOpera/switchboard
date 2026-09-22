@@ -1506,7 +1506,13 @@ func (f *fleet) respawnAndReinject(t *terminal, family, prompt string) map[strin
 			return map[string]any{"success": false, "cleared": false, "respawned": true, "error": err.Error()}
 		}
 		t.promptCount = 1
-		res := map[string]any{"success": true, "cleared": true, "respawned": true, "tmuxWindow": true}
+		res := map[string]any{
+			"success": true, "cleared": true, "respawned": true, "tmuxWindow": true,
+			// The prompt travels in the window's command, not through a composer —
+			// but only where a shape is declared for this family.
+			"argvInjected": prompt != "" && respawnArgvSuffix(family, prompt) != "",
+			"promptBytesWritten": 0,
+		}
 		if pid > 0 {
 			res["pid"] = pid
 			res["pidSource"] = "tmux-pane"
@@ -1535,12 +1541,27 @@ func (f *fleet) respawnAndReinject(t *terminal, family, prompt string) map[strin
 	// argv shape. The shell is fresh — no completion menu, no leftover
 	// buffer, no running TUI composer — so a single write + \r starts the
 	// CLI with the prompt as an argument, exactly as at initial spawn.
-	line := t.startupCommand + respawnArgvSuffix(family, prompt) + "\r"
+	//
+	// A prompt with NO declared argv shape for this family is NOT injected.
+	// respawnArgvSuffix returns "" for an unrecognised family rather than
+	// guessing a position, and a mis-shaped call fails silently (devin reads a
+	// bare string before `--` as a PATH). The caller is told, so it can fall
+	// back to the gated first-delivery path.
+	suffix := respawnArgvSuffix(family, prompt)
+	if prompt != "" && suffix == "" {
+		t.promptCount = 0
+		return map[string]any{
+			"success": true, "cleared": true, "respawned": true, "pid": pid,
+			"argvInjected": false, "promptBytesWritten": 0,
+			"reason": "no declared argv shape for family '" + family + "' — the prompt was NOT injected; deliver it through the gated first-delivery path",
+		}
+	}
+	line := t.startupCommand + suffix + "\r"
 	if err := writeToPty(t, line); err != nil {
 		return map[string]any{"success": false, "cleared": false, "respawned": true, "error": err.Error(), "pid": pid}
 	}
 	t.promptCount = 1
-	return map[string]any{"success": true, "cleared": true, "respawned": true, "pid": pid}
+	return map[string]any{"success": true, "cleared": true, "respawned": true, "pid": pid, "argvInjected": prompt != "", "promptBytesWritten": 0}
 }
 
 func (t *terminal) subscribe() (<-chan string, func()) {
@@ -1746,6 +1767,39 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 			}
 		}
 		return map[string]any{"success": true}, nil
+	case "ptyRespawnSeat":
+		// Kill the CLI and start a fresh login shell, re-injecting the startup
+		// command with the prompt in the family's DECLARED argv shape (plan:
+		// the-pilot-acts-on-the-board-not-on-the-agent). Where a shape is
+		// declared the CLI receives its own first message as an argument, so NO
+		// prompt write reaches a composer: no bracketed paste, no blind submit
+		// CR, no readiness race, no residue — every failure mode of delivering
+		// into a live composer is structurally absent.
+		//
+		// This is the same respawnAndReinject the clear button uses, reached on
+		// demand rather than only for families whose clearStrategy is "respawn".
+		// The family's clear strategy is NOT consulted: this verb exists
+		// precisely because the argv template is declared for families (claude)
+		// whose clear strategy is "in-process".
+		//
+		// A prompt with no declared shape is NOT injected — the caller is told
+		// (argvInjected:false) so it can deliver through the gated first-delivery
+		// path instead of guessing a position.
+		name, _ := payload["name"].(string)
+		prompt := strField(payload, "prompt")
+		t, ok := f.get(name)
+		if !ok {
+			return map[string]any{"success": false, "error": "No such terminal: " + name}, nil
+		}
+		if t.status != "active" {
+			return map[string]any{"success": false, "error": "Terminal " + name + " is not active"}, nil
+		}
+		// The per-terminal lock serializes the respawn against an in-flight
+		// deliverPrompt paste on the same seat.
+		t.mu.Lock()
+		res := f.respawnAndReinject(t, t.cliFamily, prompt)
+		t.mu.Unlock()
+		return res, nil
 	case "ptySendPrompt":
 		name, _ := payload["name"].(string)
 		prompt := strField(payload, "data")

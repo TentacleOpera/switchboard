@@ -252,8 +252,20 @@ check('Node mirror of clearStrategy agrees with the Go host', () => {
     assert.ok(/export type ClearStrategy = 'in-process' \| 'respawn'/.test(cliIdentity), 'cliIdentity.ts missing ClearStrategy type');
     assert.ok(/export function clearStrategyForFamily/.test(cliIdentity), 'cliIdentity.ts missing clearStrategyForFamily');
     // devin must be respawn in both trees; everything else in-process.
-    assert.ok(/case 'devin':\s*return 'respawn'/.test(cliIdentity), 'Node clearStrategy must declare devin as respawn');
-    assert.ok(/default:\s*return 'in-process'/.test(cliIdentity), 'Node clearStrategy must default to in-process');
+    //
+    // The lookup now returns the VALUE WITH THE ARM THAT ANSWERED IT (plan:
+    // the-pilot-acts-on-the-board-not-on-the-agent): `clearStrategyForFamily`'s
+    // silent `default:` made "declared in-process" and "unrecognised, assumed
+    // in-process" the same answer, and that is the question asked whenever a
+    // family-specific fix appears not to have taken.
+    assert.ok(/case 'devin':\s*return \{ value: 'respawn', source: 'declared' \}/.test(cliIdentity),
+        'Node clearStrategy must declare devin as respawn');
+    assert.ok(/default:\s*return \{ value: 'in-process', source: 'default' \}/.test(cliIdentity),
+        'Node clearStrategy must default to in-process, tagged as the default arm');
+    assert.ok(/export function resolveClearStrategy/.test(cliIdentity),
+        'the tagged lookup must be exported');
+    assert.ok(/return resolveClearStrategy\(family\)\.value/.test(cliIdentity),
+        'clearStrategyForFamily must remain the value-only door over the tagged lookup');
 });
 
 check('ptyPromptDelivery skips the in-process readiness tracker for respawn families', () => {

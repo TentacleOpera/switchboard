@@ -857,10 +857,17 @@ function validateMatrixRows(rows: any[]): string | null {
  * the authority; this mirror is what lets the BOARD refuse an edit at save
  * time instead of writing a row the controller will silently drop).
  */
+// The prompting verbs are RETIRED (plan:
+// the-pilot-acts-on-the-board-not-on-the-agent): `nudge`, `relay-answer`,
+// `report-to-lead` and `escalate-human` all composed text for a running agent,
+// and `clear-respawn` is renamed `reset-context` to say what it does. The
+// replacements are state operations — `bare-enter` (one byte), 
+// `redeliver-dispatch` (the seat's own prompt), `respawn-seat` (a real respawn)
+// and `stop` (the ladder's terminal rung).
 const KNOWN_REMEDIATIONS = [
-    'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
-    'stand-down', 'supervisor', 'escalate-human', 'record-unknown',
-    'report-to-lead', 'post-completion-on-behalf',
+    'mark-complete', 'bare-enter', 'redeliver-dispatch', 'respawn-seat',
+    'reset-context', 'reroute', 'stand-down', 'supervisor', 'record-unknown',
+    'post-completion-on-behalf', 'stop',
 ];
 // `supervisor` is RETIRED as a CAPABILITY KEY (plan:
 // the-pilot-and-the-navigator-are-one-crew): it probed for a live supervisor

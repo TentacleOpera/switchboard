@@ -115,6 +115,13 @@ func clearStrategy(family string) string {
 // a PATH, so a mis-shaped call does not error; it treats the prompt as a
 // directory).
 //
+// An UNRECOGNISED family returns "" — NO declared shape. This used to return
+// ` -- <prompt>` for anything unrecognised, which is the guess this file's own
+// comment warns against: a family whose argv shape nobody has checked would be
+// handed a prompt positioned by guesswork, and a mis-shaped call fails silently
+// rather than erroring. A caller that gets "" must fall back to the gated
+// first-delivery path instead of injecting.
+//
 // The prompt is shell-quoted so a prompt containing metacharacters is passed
 // as a single argument, not interpreted by the shell.
 func respawnArgvSuffix(family, prompt string) string {
@@ -128,7 +135,7 @@ func respawnArgvSuffix(family, prompt string) string {
 	case "devin":
 		return " -- " + quoted
 	default:
-		return " -- " + quoted
+		return ""
 	}
 }
 

@@ -83,13 +83,30 @@ export function deriveAgentDisplayName(startupCommand?: string | null): string {
  */
 export type ClearStrategy = 'in-process' | 'respawn';
 
-export function clearStrategyForFamily(family: CliFamily): ClearStrategy {
+/** Which arm of the lookup answered — a declared family, or the silent default. */
+export type ClearStrategySource = 'declared' | 'default';
+
+/**
+ * The declared strategy AND the arm that answered it.
+ *
+ * `clearStrategyForFamily` below returns the value alone, and its `default:`
+ * arm is silent — so "this family is declared in-process" and "we do not
+ * recognise this family and assumed in-process" are the same answer. On a
+ * ROUTING read those must be distinguishable: it is the question asked whenever
+ * a family-specific fix appears not to have taken, and the fallback rule does
+ * not allow a default that behaves exactly like a configured value.
+ */
+export function resolveClearStrategy(family: CliFamily): { value: ClearStrategy; source: ClearStrategySource } {
     switch (family) {
         case 'devin':
-            return 'respawn';
+            return { value: 'respawn', source: 'declared' };
         default:
-            return 'in-process';
+            return { value: 'in-process', source: 'default' };
     }
+}
+
+export function clearStrategyForFamily(family: CliFamily): ClearStrategy {
+    return resolveClearStrategy(family).value;
 }
 
 export function clearStrategyForStartupCommand(startupCommand?: string | null): ClearStrategy {

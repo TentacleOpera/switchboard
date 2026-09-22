@@ -406,22 +406,27 @@ export function capabilityForKey(key: MatrixCapabilityKey, caps: CapabilitySnaps
 }
 
 /**
- * Whether one escalation rung is reachable with the current capability set.
+ * Whether one escalation rung is reachable with the current capability set
+ * (plan: the-pilot-acts-on-the-board-not-on-the-agent rewrote the ladder).
+ *
+ * The three cheap rungs and the terminal one need NOTHING but a seat: a byte, a
+ * re-dispatch, a respawn and a stop are board operations, not model calls. The
+ * judgement rungs need a tier, and `supervisor` needs a configured NAVIGATOR
+ * rather than a live supervisor seat — the seat is retired, the rung is not.
+ *
  * `restart-board` is RETIRED (plan:
- * the-board-restarts-only-when-it-stops-answering) — it is no longer a
- * remediation, so it is no longer a rung. The judgement rungs need a tier, and
- * the `supervisor` rung now needs a configured NAVIGATOR rather than a live
- * supervisor seat — the seat is retired, the rung is not.
+ * the-board-restarts-only-when-it-stops-answering), so it is no longer a rung
+ * and no longer has a case here.
  */
 export function rungReachable(rung: string, caps: CapabilitySnapshot): boolean {
     switch (rung) {
-        case 'nudge':
-        case 'clear-respawn':
-        case 'escalate-human':
+        case 'bare-enter':
+        case 'redeliver-dispatch':
+        case 'respawn-seat':
+        case 'reset-context':
+        case 'stop':
             return true;
-        case 'relay-answer':
         case 'stand-down':
-        case 'record-unknown':
             return capabilityForKey('model', caps).enabled;
         case 'reroute':
             return capabilityForKey('model', caps).enabled && capabilityForKey('two-providers', caps).enabled;

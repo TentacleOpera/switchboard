@@ -2878,6 +2878,77 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true };
                 }
 
+                case 'ptyRespawnSeat': {
+                    // Kill the pty and start a fresh one, with the seat's OWN
+                    // dispatch prompt in the startup command (plan:
+                    // the-pilot-acts-on-the-board-not-on-the-agent).
+                    //
+                    // The BOARD builds the prompt here, through the SAME builder
+                    // the dispatch path uses, and hands it to the pty host: the
+                    // controller never composes a message, and there is no
+                    // "respawn then write the prompt" path that would land a
+                    // paste in a booting composer.
+                    const respawnName = String(payload?.name || '').trim();
+                    const respawnPlanId = String(payload?.planId || '').trim();
+                    if (!respawnName || !respawnPlanId) {
+                        return { success: false, respawned: false, error: 'ptyRespawnSeat requires name and planId' };
+                    }
+                    const respawnHandle = ptyFleetService.get(respawnName);
+                    if (!respawnHandle) {
+                        return { success: false, respawned: false, error: `No such PTY terminal: ${respawnName} — a tmux-seated seat is not respawnable through this verb` };
+                    }
+                    if (respawnHandle.status !== 'active') {
+                        return { success: false, respawned: false, error: `Terminal ${respawnName} is not active` };
+                    }
+                    const respawnRecord = await db.getPlanByPlanId(respawnPlanId);
+                    if (!respawnRecord) {
+                        return { success: false, respawned: false, error: `No such plan: ${respawnPlanId}` };
+                    }
+                    const respawnColumn = respawnRecord.kanbanColumn || undefined;
+                    const respawnRole = respawnColumn
+                        ? (DEFAULT_KANBAN_COLUMNS.find(c => c.id === respawnColumn)?.role || columnToPromptRole(respawnColumn) || 'coder')
+                        : 'coder';
+                    let respawnPrompt: string | null = null;
+                    try {
+                        const respawnPlans = await kanbanProvider.buildDispatchPlans(root, [respawnRecord]);
+                        respawnPrompt = await kanbanProvider.generateUnifiedPrompt(respawnRole, respawnPlans, root, {
+                            analysisScope: kanbanProvider.getProjectFilter(),
+                            initiatorProject: kanbanProvider.getProjectFilter(),
+                            originTerminal: respawnName,
+                            ...(respawnColumn ? { destinationColumn: respawnColumn } : {}),
+                        });
+                    } catch (promptErr) {
+                        // NO fallback message is composed — a builder failure means
+                        // NOTHING is sent, which is the whole point of this plan.
+                        return { success: false, respawned: false, error: `Failed to build the dispatch prompt: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}` };
+                    }
+                    if (!respawnPrompt) {
+                        return { success: false, respawned: false, error: 'Failed to build the dispatch prompt (the builder returned nothing)' };
+                    }
+                    const respawnRes: any = await ptyHostSupervisor.request('ptyRespawnSeat', { name: respawnName, prompt: respawnPrompt });
+                    if (respawnRes?.success === false) { return respawnRes; }
+                    if (respawnRes?.argvInjected === false) {
+                        // No declared argv shape for this family, so the prompt
+                        // was deliberately NOT injected. Fall back to an ordinary
+                        // FIRST delivery, which passes through the boot-phase
+                        // readiness gate and the family floor — a bespoke write
+                        // here would land a paste in a booting composer, which is
+                        // the exact fault this rung exists to escape.
+                        const delivered: any = await handlePtyVerb('ptySendPrompt', {
+                            name: respawnName,
+                            data: respawnPrompt,
+                            standingOrders: true,
+                            clearBeforePrompt: false,
+                        }, root, { hostComposed: true });
+                        return {
+                            ...respawnRes,
+                            delivery: delivered?.success === false ? 'not-delivered' : 'delivered',
+                            ...(delivered?.error ? { deliveryError: delivered.error } : {}),
+                        };
+                    }
+                    return respawnRes;
+                }
+
                 case 'ptySendModel': {
                     const handle = ptyFleetService.get(payload.name);
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
@@ -4464,24 +4535,13 @@ Each plan file must include:
             ...(errors.length ? { errors } : {}),
         };
     };
-    // The board's own nudge ledger, keyed by the seat a sweep just prompted.
-    // Written at the single turn-end delivery seam below, so all four stall
-    // sweeps feed it without each one being instrumented. The controller's row-2
-    // condition reads it so a seat nudged by a board sweep in the same minute is
-    // not also nudged by the controller — the sweeps de-duplicate among
-    // themselves via `notifiedSeatsThisTick`, a set a separate process cannot
-    // join. Bounded: insertion-ordered, oldest evicted past the cap.
-    const boardNudgeLedger = new Map<string, number>();
-    const BOARD_NUDGE_LEDGER_CAP = 500;
-    const recordBoardNudge = (seat: string) => {
-        if (!seat) { return; }
-        boardNudgeLedger.set(seat, Date.now());
-        while (boardNudgeLedger.size > BOARD_NUDGE_LEDGER_CAP) {
-            const oldest = boardNudgeLedger.keys().next().value;
-            if (oldest === undefined) { break; }
-            boardNudgeLedger.delete(oldest);
-        }
-    };
+    // The board-nudge ledger is REMOVED (plan:
+    // the-pilot-acts-on-the-board-not-on-the-agent). It existed so the
+    // controller's row-2 nudge would not double up with a board sweep's nudge
+    // in the same minute — a gate coordinating two nudging systems. The
+    // controller no longer nudges (and no longer reads a ledger), so the gate
+    // coordinated nothing, and retaining it would make the Pilot wait out a
+    // politeness window before performing a state operation.
     const handleTurnEndNotify = (info: any) => {
         if (info.outcome === 'completed') {
             try {
@@ -4598,10 +4658,6 @@ Each plan file must include:
                 // twin of TaskViewerProvider's notifyTurnEnd. Orders ride every
                 // prompt delivery, so applyOrders is an unconditional true.
                 await deliverPrompt(handle, message, { clearBeforePrompt: false }, true, false);
-                // Board nudge ledger: only a STALL delivery is a nudge. A
-                // `completed` notice is a different event and must not suppress
-                // the controller's row-2 silence window.
-                if (info.outcome === 'stalled') { recordBoardNudge(recipientName); }
             } catch (err) {
                 log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
             }
@@ -5749,11 +5805,11 @@ Each plan file must include:
             releaseLease: (root: string, controllerId: string) => controllerBoardStore.releaseLease(root, controllerId),
             readState: (root: string) => controllerBoardStore.readState(root),
             writeState: (root: string, controllerId: string, state: unknown) => controllerBoardStore.writeState(root, controllerId, state),
-            // The ledger is per-board (one fleet per standalone host), so the
-            // root is not a key. Returning the map's entries is the truthful
-            // answer; an empty map means "no sweep has nudged since boot", which
-            // is a real, configured answer.
-            readBoardNudges: async (_root: string) => Object.fromEntries(boardNudgeLedger),
+            // `readBoardNudges` is GONE with the ledger it read (plan:
+            // the-pilot-acts-on-the-board-not-on-the-agent): the controller no
+            // longer nudges, so there is no nudge to coordinate and no ledger to
+            // serve. The route answers 503 rather than an empty map, which is
+            // the honest shape for a store that no longer exists.
             // Seat -> team lead, for the controller's `target: 'lead'` rows
             // (plan: the-judgement-bundle-cannot-see-a-seat-that-is-busy-doing-
             // the-wrong-thing, change 3). Standalone-only, like the rest of

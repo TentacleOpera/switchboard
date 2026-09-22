@@ -406,9 +406,14 @@ async function run() {
             const user = esc[0].user;
             assert.ok(/consecutive passes this subject has been stuck: 3/.test(user),
                 `the prompt must carry stuckPasses: ${user}`);
-            assert.ok(/nudged: 2 time\(s\) by the controller/.test(user), 'the prompt must carry the nudge history');
             assert.ok(/ladder rung reached: supervisor/.test(user), 'the prompt must carry the ladder rung');
             assert.ok(/prior verdict \(last_action\): dispatched/.test(user), 'the prompt must carry the card\'s prior verdict');
+            // The nudge-era history is GONE with the nudge machinery (plan:
+            // the-pilot-acts-on-the-board-not-on-the-agent removes `nudgeSilenceMs`
+            // and the board-nudge ledger). A prompt that still asked the model to
+            // weigh a nudge count would be describing a system that no longer runs.
+            assert.ok(!/nudged/.test(user), 'the prompt must not carry nudge-era history');
+            assert.ok(!/board last nudged/.test(user), 'the prompt must not carry the board-nudge ledger');
 
             const body = reportBody(board);
             assert.ok(body.includes('NAV-ESCALATION-REPLY'), 'the escalation answer must be recorded in the report');
@@ -427,7 +432,14 @@ async function run() {
                 'the escalation prompt must no longer be a pty supervisor prompt');
         });
 
-        await checkAsync('an UNCONFIGURED Navigator falls back to a human, and says WHICH it was', async () => {
+        await checkAsync('an UNCONFIGURED Navigator is RECORDED, with nothing sent to any agent', async () => {
+            // Superseded clause: the crew plan made the human the terminal
+            // fallback; plan the-pilot-acts-on-the-board-not-on-the-agent deletes
+            // `escalate-human` outright, because both of its branches composed
+            // controller-authored text for a running agent. The OPERATOR is still
+            // the terminal reader — of the report. The distinguishing reason
+            // survives, retargeted from "on the human fallback" to "in the
+            // report".
             stub.calls.length = 0;
             const board = makeBoard({
                 navigatorView: { source: 'unset', reason: 'no Navigator model configured' },
@@ -442,10 +454,12 @@ async function run() {
             assert.strictEqual(stub.ofKind('digest').length, 0, 'no Navigator was told anything');
             const body = reportBody(board);
             assert.ok(/no Navigator model is configured/.test(body),
-                `the human fallback must name the unconfigured Navigator: ${body}`);
+                `the report must name the unconfigured Navigator: ${body}`);
             assert.ok(!/did not answer/.test(body), 'an unconfigured Navigator must not read as an unreachable one');
-            assert.ok(/escalated to Mission Control|no Mission Control seat to escalate to/.test(body),
-                'the human fallback must have run');
+            assert.ok(!/Mission Control/.test(body),
+                'nothing may be sent to a Mission Control seat — that rung is deleted');
+            assert.ok(!board.seen.paths.includes('POST /terminals/verb/ptySendPrompt'),
+                'NOTHING may be delivered to any agent when the Navigator is unconfigured');
         });
 
         await checkAsync('an UNREACHABLE Navigator gives a DIFFERENT reason from an unconfigured one', async () => {
@@ -509,31 +523,31 @@ async function run() {
             }
         });
 
-        await checkAsync('row 8 with an UNCONFIGURED Navigator reaches the human, saying which it was', async () => {
+        await checkAsync('row 8 with an UNCONFIGURED Navigator is recorded, naming the unconfigured Navigator', async () => {
             const { stub8, board8 } = await runRow8({ source: 'unset', reason: 'no Navigator model configured' }, row8Reply);
             try {
                 assert.strictEqual(stub8.ofKind('escalation').length, 0, 'no Navigator was asked');
                 const body = reportBody(board8);
                 assert.ok(/no Navigator model is configured/.test(body),
-                    `row 8 must reach the human and name the unconfigured Navigator: ${body}`);
-                assert.ok(/escalated to Mission Control|no Mission Control seat to escalate to/.test(body),
-                    'row 8 must take the human fallback, not record and stop');
+                    `row 8 must name the unconfigured Navigator: ${body}`);
                 assert.ok(!/did not answer/.test(body), 'unconfigured must not read as unreachable');
+                assert.ok(!board8.seen.paths.includes('POST /terminals/verb/ptySendPrompt'),
+                    'row 8 must deliver NOTHING to any agent — `escalate-human` is deleted');
             } finally {
                 await stub8.close();
             }
         });
 
-        await checkAsync('row 8 with an UNREACHABLE Navigator reaches the human with a DIFFERENT reason', async () => {
+        await checkAsync('row 8 with an UNREACHABLE Navigator gives a DIFFERENT reason', async () => {
             const { stub8, board8 } = await runRow8(() => navigatorConfigured('http://127.0.0.1:1/v1/chat/completions'), row8Reply);
             try {
                 assert.strictEqual(stub8.ofKind('escalation').length, 0, 'the unreachable Navigator is not this stub');
                 const body = reportBody(board8);
-                assert.ok(/did not answer/.test(body), `row 8's fallback must say it did not answer: ${body}`);
+                assert.ok(/did not answer/.test(body), `row 8's record must say it did not answer: ${body}`);
                 assert.ok(!/no Navigator model is configured/.test(body),
                     'unreachable must not read as unconfigured');
-                assert.ok(/escalated to Mission Control|no Mission Control seat to escalate to/.test(body),
-                    'row 8 must take the human fallback');
+                assert.ok(!board8.seen.paths.includes('POST /terminals/verb/ptySendPrompt'),
+                    'row 8 must deliver NOTHING to any agent');
             } finally {
                 await stub8.close();
             }

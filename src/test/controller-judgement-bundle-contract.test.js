@@ -335,13 +335,20 @@ function run() {
 
     // ── 10. Target indirection ────────────────────────────────────────────
 
-    check('row 9 targets the LEAD; row 10 targets the subject', () => {
+    check('no shipped row targets the lead any more; row 10 targets the subject', () => {
+        // Superseded by plan: the-pilot-acts-on-the-board-not-on-the-agent.
+        // Row 9's only lead-targeted verb was `report-to-lead`, which composed
+        // text for a running agent; the row is now a recorded finding routed to
+        // the Navigator, so it targets nothing. `lead` survives in the schema
+        // (MATRIX_TARGETS) so an operator override naming it is still validated.
         const row9 = matrix.DEFAULT_MATRIX_ROWS.find(r => r.id === 'research-loop-no-write');
         const row10 = matrix.DEFAULT_MATRIX_ROWS.find(r => r.id === 'fix-round-unposted');
         assert.ok(row9, 'row 9 must exist');
-        assert.strictEqual(row9.target, 'lead');
-        assert.strictEqual(row9.remediation, 'report-to-lead');
+        assert.strictEqual(row9.target, undefined, 'row 9 must no longer target the lead');
+        assert.strictEqual(row9.remediation, 'record-unknown');
         assert.strictEqual(row10.target, 'subject');
+        assert.ok(matrix.MATRIX_TARGETS.includes('lead'),
+            'the closed set keeps `lead` so an operator override naming it is validated, not dropped');
     });
 
     check('a target outside the closed set is refused at load time', () => {
@@ -374,13 +381,20 @@ function run() {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    check('row 9 degrades to recording, never to nudging the subject', () => {
+    check('a row whose finding is routed to the Navigator sends nothing to any agent', () => {
+        // Superseded by plan: the-pilot-acts-on-the-board-not-on-the-agent.
+        // `report-to-lead` (which composed an observation for the lead's
+        // terminal) is retired; the arm that replaced it records the finding and
+        // asks the Navigator. The invariant it was written to pin is unchanged
+        // and now holds for a stronger reason: NOTHING is sent to any agent.
         const controllerSrc = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'controller', 'controller.ts'), 'utf8');
-        const arm = controllerSrc.slice(controllerSrc.indexOf("case 'report-to-lead':"));
+        assert.ok(!controllerSrc.includes("case 'report-to-lead':"),
+            'the report-to-lead arm must be gone, not merely unused');
+        const arm = controllerSrc.slice(controllerSrc.indexOf("case 'record-unknown':"));
         const armBody = arm.slice(0, arm.indexOf("case 'post-completion-on-behalf':"));
-        const noLeadBranch = armBody.slice(armBody.indexOf('if (!target.seat)'), armBody.indexOf('const data ='));
-        assert.ok(/'recorded'/.test(noLeadBranch), 'with no lead, the outcome must be recorded');
-        assert.ok(!/ptySendPrompt/.test(noLeadBranch), 'with no lead, nothing may be sent to the subject');
+        assert.ok(/'recorded'/.test(armBody), 'the finding must be recorded');
+        assert.ok(!/ptySendPrompt|ptyWrite/.test(armBody),
+            'nothing may be delivered to the seat from the record-only arm');
     });
 
     // ── 11. Nudge suppression — BOTH directions ───────────────────────────
@@ -673,9 +687,22 @@ function run() {
         assert.ok(!decl.includes("'restart-board'"), `the type union still declares it: ${decl}`);
     });
 
-    check("the ladder's last rung is 'escalate-human'", () => {
-        assert.strictEqual(matrix.ESCALATION_LADDER[matrix.ESCALATION_LADDER.length - 1], 'escalate-human',
-            'a seat that climbs to the top must end by asking a person, not by restarting the board');
+    check("the ladder opens bare-enter -> redeliver-dispatch -> respawn-seat and ends at 'stop'", () => {
+        // Rewritten by plan: the-pilot-acts-on-the-board-not-on-the-agent. The
+        // old top rung asked a person; the new one STOPS, because with a Mission
+        // Control seat `escalate-human` sent controller-authored text into a
+        // running agent and without one it recorded what every action already
+        // records. What was missing is the stop.
+        assert.deepStrictEqual(
+            matrix.ESCALATION_LADDER.slice(0, 3),
+            ['bare-enter', 'redeliver-dispatch', 'respawn-seat'],
+            'the ladder must open with the three rungs of increasing cost');
+        assert.strictEqual(matrix.ESCALATION_LADDER[matrix.ESCALATION_LADDER.length - 1], 'stop',
+            'the ladder must terminate at stop, not by re-applying the top rung forever');
+        for (const gone of ['nudge', 'relay-answer', 'report-to-lead', 'escalate-human', 'clear-respawn']) {
+            assert.ok(!matrix.ESCALATION_LADDER.includes(gone), `'${gone}' is still a rung`);
+            assert.ok(!matrix.MATRIX_REMEDIATIONS.includes(gone), `'${gone}' is still in the values array`);
+        }
     });
 
     check('every remaining remediation has a switch arm in the controller', () => {

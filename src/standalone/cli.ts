@@ -2078,7 +2078,7 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         console.log('Usage: npx switchboard controller [--once] [--interval <minutes>] [--id <name>] [--team <id>]');
         console.log('                                  [--tier <id>:<classifier>[:<locality>[:<operator>[:<cost>]]]]...');
         console.log('                                  [--supervisor <seat>] [--ceiling <N>] [--stuck-passes <N>]');
-        console.log('                                  [--judgement-deadline <ms>]');
+        console.log('                                  [--judgement-deadline <ms>] [--hedge-bound <N>] [--navigator-deadline <ms>]');
         console.log('                                  [--board-start-command <cmd>] [--board-start-cwd <dir>] [--json]');
         exitFlushed(0);
     }
@@ -2178,6 +2178,12 @@ async function cmdController(workspaceRoot: string, argv: string[]): Promise<voi
         const n = Number(navigatorDeadline);
         if (!Number.isFinite(n) || n <= 0) { console.error(`[switchboard] --navigator-deadline requires a positive number of ms (got '${navigatorDeadline}').`); exitFlushed(5); }
         config.navigatorDeadlineMs = Math.floor(n);
+    }
+    const hedgeBound = getFlag('--hedge-bound');
+    if (hedgeBound !== undefined) {
+        const n = Number(hedgeBound);
+        if (!Number.isFinite(n) || n < 1) { console.error(`[switchboard] --hedge-bound requires a positive integer (got '${hedgeBound}').`); exitFlushed(5); }
+        config.hedgeBound = Math.floor(n);
     }
     const deadlineFlag = getFlag('--judgement-deadline');
     if (deadlineFlag !== undefined) {

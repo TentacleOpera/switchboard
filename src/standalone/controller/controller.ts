@@ -4,7 +4,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
     ESCALATION_LADDER,
-    RUNGS_PER_ESCALATION,
     loadMatrix,
     type LoadedMatrix,
     type MatrixCapabilityKey,
@@ -38,6 +37,7 @@ import {
 } from './sample';
 import {
     buildNavigatorEscalationPrompt,
+    buildQuestionClassificationPrompt,
     emptyEscalationState,
     type EscalationState,
     type EscalationRecord,
@@ -45,6 +45,7 @@ import {
 import { readTierApiKey } from '../judgement/tierKeys';
 import { usageKey } from '../judgement/budgets';
 import { callModel } from '../judgement/modelClient';
+import { resolveClearStrategy, type CliFamily } from '../../services/cliIdentity';
 
 /**
  * The controller: wakes on a clock, runs a triage checklist over the board,
@@ -78,8 +79,6 @@ export interface ControllerRuntimeConfig {
     intervalMinutes: number;
     /** A seat is "silent" after this long without output. */
     turnEndSilenceMs: number;
-    /** Row 2 requires silence since the last BOARD nudge by at least this long. */
-    nudgeSilenceMs: number;
     /** The board's `dispatchTimeoutMs` — read for visibility, never to act. */
     dispatchTimeoutMs: number;
     restartMinIntervalMs: number;
@@ -110,12 +109,18 @@ export interface ControllerRuntimeConfig {
     navigatorDeadlineMs: number;
     /** The Navigator answers in prose; a label-sized budget would truncate it. */
     navigatorMaxTokens: number;
+    /**
+     * How many row-3 questions on one card the Navigator may classify as a
+     * `hedge` before the controller stops acting. A seat that hedges, is sent
+     * back, and hedges again is a loop, and the loop terminates by standing
+     * down rather than by prompting someone else.
+     */
+    hedgeBound: number;
 }
 
 export const DEFAULT_CONTROLLER_CONFIG: ControllerRuntimeConfig = {
     intervalMinutes: 5,
     turnEndSilenceMs: 10 * 60_000,
-    nudgeSilenceMs: 10 * 60_000,
     dispatchTimeoutMs: 4 * 60 * 60_000,
     restartMinIntervalMs: 10 * 60_000,
     restartMaxConsecutive: 3,
@@ -128,6 +133,7 @@ export const DEFAULT_CONTROLLER_CONFIG: ControllerRuntimeConfig = {
     quotaStandDownMs: 60 * 60_000,
     navigatorDeadlineMs: 30_000,
     navigatorMaxTokens: 512,
+    hedgeBound: 2,
 };
 
 interface SubjectState {
@@ -141,16 +147,23 @@ interface SubjectState {
     stuckPasses: number;
     lastClass: JudgementClass | null;
     /**
-     * How many times THIS CONTROLLER has nudged this subject (plan:
-     * the-pilot-and-the-navigator-are-one-crew).
+     * The controller has STOPPED acting on this subject (plan:
+     * the-pilot-acts-on-the-board-not-on-the-agent).
      *
-     * The board's nudge ledger records only the LAST time a sweep prompted a
-     * seat, which cannot answer "has this already been tried twice?". An
-     * escalation that cannot say how often the cheap rung has already been
-     * applied is how a Navigator recommends the remediation that has already
-     * failed twice.
+     * Set by the `stop` rung once the ladder is exhausted, and by a row-3
+     * question the Navigator classified as a `real-block`. While it is set,
+     * `applyDiagnosis` returns NO action: the subject is still diagnosed, the
+     * report still says the controller is not acting, and nothing is delivered
+     * to the seat — rather than re-applying the top rung on every wake forever.
      */
-    nudges: number;
+    exhausted?: boolean;
+    /**
+     * How many row-3 questions on this card the Navigator classified as a
+     * `hedge`. After the declared bound the next one STOPS rather than
+     * re-delivering: a seat that hedges, is sent back, and hedges again is a
+     * loop, and the loop terminates by the controller standing down.
+     */
+    hedges?: number;
 }
 
 interface QuotaEntry {
@@ -409,7 +422,7 @@ async function judgeBoard(ctx: PassContext, tiers: any[], facts: Record<string, 
 function configAssumptions(cfg: ControllerRuntimeConfig): string[] {
     return [
         `dispatchTimeoutMs=${cfg.dispatchTimeoutMs}ms (source: controller default — the board does not expose its configured value)`,
-        `turnEndSilenceMs=${cfg.turnEndSilenceMs}ms, nudgeSilenceMs=${cfg.nudgeSilenceMs}ms (source: controller config)`,
+        `turnEndSilenceMs=${cfg.turnEndSilenceMs}ms (source: controller config)`,
         cfg.boardStartCommand
             ? `board restart: enabled (start invocation: \`${cfg.boardStartCommand}\`)`
             : 'board restart: disabled — no --board-start-command configured (a controller that cannot start the board must not stop it)',
@@ -476,20 +489,14 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     //    Removed rather than released: a lock that arbitrates nothing is not
     //    worth the failure modes it creates.
 
-    // 3. Read the board once: health, plans, fleet, nudges, finished turn-ends,
-    //    plus the judgement config and the quota/escalation board state.
+    // 3. Read the board once: health, plans, fleet, finished turn-ends, plus
+    //    the judgement config and the quota/escalation board state.
     const healthRes = await tryRequest(apiRequest, port, 'GET', '/health', workspaceRoot);
     const health = safeJson(healthRes);
     const plans = await readPlans(apiRequest, port, workspaceRoot);
     const fleet = await readFleet(apiRequest, port, workspaceRoot);
-    const nudges = await readNudges(apiRequest, port, workspaceRoot);
     const finishedByPlan = await readFinishedTurnEnds(apiRequest, port, workspaceRoot);
     const judgementConfig = await readJudgementConfig(apiRequest, port, workspaceRoot);
-    // Seat -> its team lead (change 3). Read once per wake; every entry carries
-    // the source that answered, because "routing" is one of the four reads the
-    // fallback rule names and a lead resolved from the wrong store is a prompt
-    // delivered to the wrong agent.
-    const leadBySeat = await readSeatLeads(apiRequest, port, workspaceRoot);
     // Quota stand-down is re-read at the TOP of every wake rather than trusted
     // from the controller's own last decision: V81 means an operator tap or a
     // queue pass will happily push work back into a seat the controller stood
@@ -629,7 +636,6 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         escalations,
         quota,
         seatByName,
-        nudges,
         tiers: judgementConfig.tiers,
         navigator,
         ceilingReached,
@@ -811,8 +817,8 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
             continue;
         }
         const diagnoseCtx: DiagnoseContext = {
-            cfg, now: now(), workspaceRoot, seatByName, finishedByPlan, nudges, caps, readLog, judgementCtx,
-            procTable, prevSamples: state.samples, nextSamples, leadBySeat, observations: null,
+            cfg, now: now(), workspaceRoot, seatByName, finishedByPlan, caps, readLog, judgementCtx,
+            procTable, prevSamples: state.samples, nextSamples, observations: null,
         };
         // Observe first, and unconditionally. Sampling costs the seat nothing
         // and says nothing to it, so it must not be conditional on which row
@@ -821,7 +827,13 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         const diagnosis = await diagnose(subject, matrix.rows, diagnoseCtx);
         if (!diagnosis) { continue; }
         const action = await applyDiagnosis(subject, diagnosis, {
-            ...ctx, caps, state, actions, seatByName, judgementCtx, leadBySeat, finishedByPlan,
+            ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan,
+            readLog,
+            // The SAME readings the row was selected against: `bare-enter`'s CPU
+            // gate must not consult a second sample taken later, which is how a
+            // seat that was at rest when diagnosed and busy at delivery would
+            // still receive a CR mid-ingestion.
+            observations: diagnoseCtx.observations,
         });
         if (action) { actions.push(action); }
     }
@@ -863,7 +875,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
         };
         log(`restart suppressed: ${restartDecision.suppressionReason}`);
     } else {
-        restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, health, decision: restartDecision });
+        restart = await performBoardRestart({ ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog, health, decision: restartDecision });
     }
 
     // 7b. The end-of-wake DIGEST — one Navigator call, after every action is
@@ -881,7 +893,7 @@ async function runPass(ctx: PassContext): Promise<'ok' | 'lease-refused'> {
     //     written its own report — that wake is over.
     if ((!restart || restart.rateLimited) && (actions.length > 0 || unusableJudgement.length > 0)) {
         const digest = await composeNavigatorDigest(
-            { ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan },
+            { ...ctx, caps, state, actions, seatByName, judgementCtx, finishedByPlan, readLog },
             actions,
             unusableJudgement,
         );
@@ -976,13 +988,6 @@ async function readFleet(apiRequest: ControllerApiRequest, port: number, workspa
     return [];
 }
 
-async function readNudges(apiRequest: ControllerApiRequest, port: number, workspaceRoot: string): Promise<Record<string, number>> {
-    const res = await tryRequest(apiRequest, port, 'GET', '/controller/nudges', workspaceRoot);
-    const json = safeJson(res);
-    if (json && typeof json.nudges === 'object' && json.nudges !== null) { return json.nudges; }
-    return {};
-}
-
 /**
  * Every `finished` turn-end per plan, ascending — not just the latest.
  *
@@ -1024,44 +1029,6 @@ function finishedSince(map: Map<string, number[]>, planId: string, sinceMs: numb
     return (map.get(planId) || []).some(ts => ts >= sinceMs);
 }
 
-/**
- * Seat -> its team lead (change 3).
- *
- * Routing is one of the four reads CLAUDE.md's fallback rule governs, so every
- * entry is TAGGED with the store that answered and an unresolvable seat gets an
- * explicit `null` with a reason rather than a plausible substitute. Guessing a
- * lead here does not produce a slightly-wrong log line — it delivers a prompt
- * about one team's stalled card into a different team's lead.
- */
-async function readSeatLeads(
-    apiRequest: ControllerApiRequest,
-    port: number,
-    workspaceRoot: string,
-): Promise<Map<string, { seat: string | null; source: string; reason?: string }>> {
-    const out = new Map<string, { seat: string | null; source: string; reason?: string }>();
-    const res = await tryRequest(apiRequest, port, 'GET', '/controller/leads', workspaceRoot);
-    const json = safeJson(res);
-    if (!res || res.status !== 200 || !json?.leads || typeof json.leads !== 'object') {
-        // No map at all is not "no seat has a lead" — it is "the board did not
-        // answer". Row 9 must be able to say which of those it hit.
-        return out;
-    }
-    const source = typeof json.source === 'string' && json.source ? json.source : 'board:/controller/leads';
-    for (const seat of Object.keys(json.leads)) {
-        const entry = json.leads[seat];
-        if (typeof entry === 'string') {
-            out.set(seat, { seat: entry || null, source });
-        } else if (entry && typeof entry === 'object') {
-            out.set(seat, {
-                seat: typeof entry.seat === 'string' && entry.seat ? entry.seat : null,
-                source: typeof entry.source === 'string' && entry.source ? entry.source : source,
-                ...(typeof entry.reason === 'string' && entry.reason ? { reason: entry.reason } : {}),
-            });
-        }
-    }
-    return out;
-}
-
 function makeLogReader(apiRequest: ControllerApiRequest, port: number, workspaceRoot: string, tailBytes: number): (seat: string) => Promise<string | null> {
     return async (seat: string) => {
         const res = await tryRequest(apiRequest, port, 'GET', `/terminals/${encodeURIComponent(seat)}/log`, workspaceRoot, undefined, { tail: String(tailBytes) });
@@ -1091,8 +1058,6 @@ interface JudgementRuntimeContext {
     escalations: EscalationState;
     quota: Record<string, QuotaEntry>;
     seatByName: Map<string, any>;
-    /** The board's nudge ledger — seat -> when a sweep last prompted it. */
-    nudges: Record<string, number>;
     tiers: TierDeclaration[];
     /**
      * The Navigator's model slot, read once this wake. The escalation gate and
@@ -1229,7 +1194,6 @@ interface DiagnoseContext {
     workspaceRoot: string;
     seatByName: Map<string, any>;
     finishedByPlan: Map<string, number[]>;
-    nudges: Record<string, number>;
     caps: CapabilitySnapshot;
     readLog: (seat: string) => Promise<string | null>;
     judgementCtx: JudgementRuntimeContext;
@@ -1239,8 +1203,6 @@ interface DiagnoseContext {
     prevSamples: Record<string, PreviousSample>;
     /** Samples taken this wake, written back into persisted state. */
     nextSamples: Record<string, PreviousSample>;
-    /** Seat -> its team lead, with the source that answered (change 3). */
-    leadBySeat: Map<string, { seat: string | null; source: string; reason?: string }>;
     /** This subject's readings, taken once per wake before any row is evaluated. */
     observations: SeatObservations | null;
 }
@@ -1456,8 +1418,6 @@ function buildClassificationPrompt(
         lines.push(`  wrote this round   : ${priors.wroteThisRound ? 'yes' : 'no'}`);
     }
     if (fields.has('providers')) { lines.push(`  providers seated   : ${ctx.caps.providers.providers.join(', ') || 'none'}`); }
-    const lastNudge = ctx.nudges[subject.seat] ?? 0;
-    lines.push(`  board nudged seat  : ${lastNudge ? new Date(lastNudge).toISOString() : 'never'}`);
 
     // Change 1 — the question is no longer "why has this seat gone quiet".
     // A seat in a research loop is the opposite of quiet: it emits output
@@ -1610,12 +1570,21 @@ function evalCompletedUnasserted(row: MatrixRow, subject: Subject, ctx: Diagnose
 }
 
 /**
- * Row 2 — idle, no blocker. The seat is live, at rest, holding an uncompleted
- * card, with a CLEAN log tail. Silence is measured SINCE THE LAST BOARD NUDGE,
- * not since last output: the board's four nudge sweeps de-duplicate among
- * themselves through `notifiedSeatsThisTick`, a set a separate process cannot
- * join, so without this the seat would get the board's nudge and the
- * controller's back to back.
+ * Row 2 — the seat is producing NOTHING.
+ *
+ * One question: is this seat producing work? It is answered from the activity
+ * the controller already samples — last output, sampled CPU, last worktree
+ * write, the log tail — and NOT from how long it has been since somebody last
+ * prompted it (plan: the-pilot-acts-on-the-board-not-on-the-agent). The
+ * nudge-era gate that read the board's nudge ledger is gone with the nudges it
+ * coordinated: two nudging systems no longer need de-duplicating, and making
+ * the Pilot wait out a politeness window before a state operation would be a
+ * gate with nothing behind it.
+ *
+ * A seat that is burning CPU is DOING something, whatever its output says — it
+ * may be mid-ingestion of a paste, which is exactly the case `bare-enter` must
+ * not disturb. So CPU at rest is part of the condition, not merely a re-check
+ * in the arm.
  */
 async function evalQuietCleanTail(row: MatrixRow, subject: Subject, ctx: DiagnoseContext): Promise<Diagnosis | null> {
     if (subject.completedAt) { return null; }
@@ -1626,9 +1595,17 @@ async function evalQuietCleanTail(row: MatrixRow, subject: Subject, ctx: Diagnos
     if (!seat || seat.status !== 'active') { return null; } // row 4's domain.
     const lastDataAt = typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
     if (lastDataAt <= 0) { return null; } // no heartbeat data is no evidence.
-    if (ctx.now - lastDataAt < ctx.cfg.turnEndSilenceMs) { return null; } // still producing.
-    const lastNudge = ctx.nudges[subject.seat] ?? 0;
-    if (ctx.now - lastNudge < ctx.cfg.nudgeSilenceMs) { return null; }
+    if (ctx.now - lastDataAt < ctx.cfg.turnEndSilenceMs) { return null; } // still producing output.
+    const observations = ctx.observations ?? observeSeat(subject, ctx);
+    // CPU at rest. An unavailable reading is NOT "at rest": a host without
+    // /proc has not told us the seat is idle, and treating that as zero would
+    // send a CR into a seat that may well be ingesting.
+    if (!observations.cpu.available || observations.cpu.value > 0) { return null; }
+    // A worktree write inside the silence window is work, whatever the output
+    // stream did.
+    const wroteRecently = observations.write.available && observations.write.ageMs !== null
+        && ctx.now - observations.write.ageMs < ctx.cfg.turnEndSilenceMs;
+    if (wroteRecently) { return null; }
     const raw = await ctx.readLog(subject.seat);
     if (raw === null) { return null; } // no evidence is not evidence.
     if (ERROR_MARKER.test(raw) || NONZERO_EXIT.test(raw)) { return null; } // not a clean tail.
@@ -1636,9 +1613,9 @@ async function evalQuietCleanTail(row: MatrixRow, subject: Subject, ctx: Diagnos
     if (!hasUsableEvidence(redacted)) { return null; }
     return {
         row,
-        evidence: redacted,
-        evidenceWindow: `GET /terminals/${subject.seat}/log (tail ${ctx.cfg.evidenceTailBytes}B), redacted`,
-        detail: `seat silent since ${new Date(lastDataAt).toISOString()}; last board nudge ${lastNudge ? new Date(lastNudge).toISOString() : 'never'}; clean tail`,
+        evidence: `${observations.line}\n${redacted}`,
+        evidenceWindow: `fleet lastDataAt + ${observations.window}; GET /terminals/${subject.seat}/log (tail ${ctx.cfg.evidenceTailBytes}B), redacted`,
+        detail: `no output since ${new Date(lastDataAt).toISOString()}, sampled CPU at rest, no worktree write in the window, clean tail`,
         priorVerdict: subject.lastAction,
     };
 }
@@ -1710,8 +1687,23 @@ interface ApplyContext extends PassContext {
     actions: EntryAction[];
     seatByName: Map<string, any>;
     judgementCtx: JudgementRuntimeContext;
-    /** Seat -> its lead, with the store that answered (change 3). */
-    leadBySeat?: Map<string, { seat: string | null; source: string; reason?: string }>;
+    /**
+     * THIS subject's readings, taken once per wake before any row was
+     * evaluated — the SAME numbers the row was selected against.
+     *
+     * `bare-enter`'s CPU gate is the load-bearing consumer: it must decide from
+     * the reading the diagnosis was made on, not from a second sample, or a
+     * seat that was at rest when diagnosed and busy at delivery would receive a
+     * CR mid-ingestion.
+     */
+    observations?: SeatObservations | null;
+    /**
+     * The wake's session-log reader, so a delivery can be VERIFIED against the
+     * tail that followed it. The same reader the rows were diagnosed with —
+     * a second reader could see a different window than the one the diagnosis
+     * rested on.
+     */
+    readLog: (seat: string) => Promise<string | null>;
     /**
      * The wake's turn-end `finished` reads, keyed by plan id. The same map the
      * rows were selected against, so the report a remediation writes names the
@@ -1721,47 +1713,26 @@ interface ApplyContext extends PassContext {
     finishedByPlan: Map<string, number[]>;
 }
 
-/**
- * Resolve WHO a row's remediation addresses (change 3).
- *
- * `target: 'subject'` — the assumption every row before this change was written
- * under — returns the subject's own seat. `target: 'lead'` returns the subject's
- * team lead, and returns `null` WITH A REASON when there is none. It never
- * falls back to the subject: row 9 exists precisely because nudging a seat that
- * is already producing output is the wrong action, so degrading to that would
- * turn the row into the failure it was written to avoid.
- */
-function resolveTarget(subject: Subject, row: MatrixRow, ctx: ApplyContext): { seat: string | null; source: string; reason?: string } {
-    if ((row.target ?? 'subject') === 'subject') {
-        return { seat: subject.seat, source: 'matrix:target=subject' };
-    }
-    const entry = ctx.leadBySeat?.get(subject.seat);
-    if (!entry) {
-        return { seat: null, source: 'board:/controller/leads', reason: `the board returned no lead mapping for seat '${subject.seat}'` };
-    }
-    if (!entry.seat) {
-        return { seat: null, source: entry.source, reason: entry.reason || `seat '${subject.seat}' is on no team with a resolvable head` };
-    }
-    if (entry.seat === subject.seat) {
-        return { seat: null, source: entry.source, reason: `seat '${subject.seat}' IS its own team's head — there is no one above it to report to` };
-    }
-    return { seat: entry.seat, source: entry.source };
-}
-
 function subjectKey(subject: Subject): string {
     return subject.planId ? `card:${subject.planId}` : `seat:${subject.seat}`;
 }
 
+/**
+ * The next reachable rung AT OR ABOVE `from`, or **-1 when the ladder is
+ * exhausted**.
+ *
+ * There is deliberately NO fallback to "the highest reachable rung at all"
+ * (plan: the-pilot-acts-on-the-board-not-on-the-agent). That fallback made the
+ * top rung re-apply on every wake forever: with the old ladder it escalated to
+ * Mission Control every five minutes indefinitely, and with this one it would
+ * respawn a seat every five minutes indefinitely. An exhausted ladder is a
+ * terminal state, and the controller records it rather than looping.
+ */
 function nextReachableIndex(from: number, caps: CapabilitySnapshot): number {
-    let lastReachable = -1;
     for (let i = from; i < ESCALATION_LADDER.length; i++) {
         if (rungReachable(ESCALATION_LADDER[i], caps)) { return i; }
     }
-    // No higher reachable rung — fall back to the highest reachable one at all.
-    for (let i = ESCALATION_LADDER.length - 1; i >= 0; i--) {
-        if (rungReachable(ESCALATION_LADDER[i], caps)) { lastReachable = i; break; }
-    }
-    return lastReachable;
+    return -1;
 }
 
 async function applyDiagnosis(subject: Subject, diagnosis: Diagnosis, ctx: ApplyContext): Promise<EntryAction | null> {
@@ -1769,12 +1740,18 @@ async function applyDiagnosis(subject: Subject, diagnosis: Diagnosis, ctx: Apply
     const base = actionBase(subject, diagnosis, ctx);
     const remediation = diagnosis.row.remediation;
 
+    // A subject the controller has STOPPED acting on takes NO action. The row
+    // is still diagnosed and the report still carries its own "not acting" line
+    // from the wake that stopped it; what does not happen is another rung
+    // applied on every wake forever.
+    if (ctx.state.subjects[key]?.exhausted === true) { return null; }
+
     // Track the subject's persistence for the Navigator escalation gate, even
     // for a one-shot remediation: "stuck across N consecutive passes" is a fact
     // about the subject, not about the ladder.
     let st = ctx.state.subjects[key];
     if (!st || typeof st.rung !== 'number' || !Number.isFinite(st.rung)) {
-        st = { rung: ESCALATION_LADDER.includes(remediation) ? ESCALATION_LADDER.indexOf(remediation) : 0, atRung: 0, ruleId: diagnosis.row.id, firstSeenAt: ctx.now(), lastFiredAt: ctx.now(), ownerSince: subject.ownerSince, stuckPasses: 1, lastClass: diagnosis.judgement?.class ?? null, nudges: 0 };
+        st = { rung: ESCALATION_LADDER.includes(remediation) ? ESCALATION_LADDER.indexOf(remediation) : 0, atRung: 0, ruleId: diagnosis.row.id, firstSeenAt: ctx.now(), lastFiredAt: ctx.now(), ownerSince: subject.ownerSince, stuckPasses: 1, lastClass: diagnosis.judgement?.class ?? null };
         ctx.state.subjects[key] = st;
     } else {
         st.stuckPasses += 1;
@@ -1796,17 +1773,31 @@ async function applyDiagnosis(subject: Subject, diagnosis: Diagnosis, ctx: Apply
         st.ruleId = diagnosis.row.id;
     }
 
-    // One rung per wake, and a rung applied RUNGS_PER_ESCALATION times escalates.
-    let effective = st.rung;
-    if (st.atRung >= RUNGS_PER_ESCALATION) {
-        const next = nextReachableIndex(st.rung + 1, ctx.caps);
-        if (next >= 0) { effective = next; }
+    // ONE RUNG PER APPLICATION. This wake applies the rung the subject is
+    // standing on and, if there is a rung above it, the NEXT application moves
+    // up — the advance is the row firing again, which is the controller
+    // re-observing and the only thing that can confirm a diagnosis. Repeating a
+    // remedy tests nothing new, and the new rungs each answer a different
+    // hypothesis, so a second `bare-enter` after the first submitted nothing is
+    // dead time.
+    const applyIndex = st.rung;
+    const next = nextReachableIndex(applyIndex + 1, ctx.caps);
+
+    // The ladder is exhausted: the top reachable rung has been applied and the
+    // row has fired again with nothing higher to try. The controller stops
+    // acting on this subject. `null` — no action entry — is the point: the
+    // count of actions taken on it in subsequent wakes is ZERO.
+    if (next < 0 && st.atRung >= 1) {
+        st.lastFiredAt = ctx.now();
+        st.ownerSince = subject.ownerSince;
+        return null;
     }
+
     st.lastFiredAt = ctx.now();
     st.ownerSince = subject.ownerSince;
-    if (effective === st.rung) { st.atRung += 1; } else { st.rung = effective; st.atRung = 1; }
+    if (next >= 0) { st.rung = next; st.atRung = 0; } else { st.atRung += 1; }
 
-    return applyRemediation(ESCALATION_LADDER[effective], base, subject, diagnosis, ctx, effective);
+    return applyRemediation(ESCALATION_LADDER[applyIndex], base, subject, diagnosis, ctx, applyIndex);
 }
 
 function actionBase(subject: Subject, diagnosis: Diagnosis, ctx: ApplyContext): EntryAction {
@@ -1855,24 +1846,69 @@ async function applyRemediation(
             delete ctx.state.subjects[subjectKey(subject)];
             return action;
         }
-        case 'nudge': {
-            const data = `[switchboard:controller] ${diagnosis.detail}. If you are blocked, say so; otherwise continue and report.`;
-            action.command = `switchboard verb ptySendPrompt '{"name":"${subject.seat}"}' --json`;
-            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptySendPrompt', ctx.workspaceRoot, { name: subject.seat, data, machineOrigin: true });
-            const json = safeJson(res);
-            action.outcome = json?.success === false ? 'failed' : 'applied';
-            action.detail = `${diagnosis.detail}; nudge ${json?.success === false ? 'refused' : 'delivered'}`;
-            action.ownerSinceReStamped = false;
-            // Recorded so a later escalation can say this cheap rung has already
-            // been applied, and how often. Counted on DELIVERY, not on attempt:
-            // a refused nudge never reached the seat and is not "already tried".
-            const nudged = ctx.state.subjects[subjectKey(subject)];
-            if (nudged && action.outcome === 'applied') {
-                nudged.nudges = (typeof nudged.nudges === 'number' ? nudged.nudges : 0) + 1;
+        case 'bare-enter': {
+            // ONE byte. No bracketed paste, no text, no marker, no controller
+            // sentence — nothing that could reshape a turn. It submits whatever
+            // the seat already holds: into a seat whose composer carries an
+            // unsubmitted paste it starts the work, and into an empty composer
+            // it does nothing. Blind, but safe when wrong.
+            //
+            // The CPU gate is LOAD-BEARING, not incidental: an Enter delivered
+            // DURING ingestion could split a paste and submit half of it, which
+            // is worse than the unsubmitted paste it was meant to fix. A seat
+            // mid-ingestion is burning CPU; a seat holding an unsubmitted paste
+            // is at zero.
+            const cpu = ctx.observations?.cpu ?? null;
+            const atRest = !!cpu && cpu.available && cpu.value <= 0;
+            if (!atRest) {
+                action.outcome = 'refused';
+                action.detail = `${diagnosis.detail}; bare-enter refused — the seat is not at zero sampled CPU (${!cpu ? 'no reading this wake' : cpu.available ? `${cpu.value.toFixed(0)}%` : `unavailable: ${cpu.reason}`}), and a CR during ingestion could split a paste`;
+                action.ownerSinceReStamped = false;
+                return action;
             }
+            action.command = `switchboard api POST /terminals/verb/ptyWrite '{"name":"${subject.seat}","data":"\\r"}' --json`;
+            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptyWrite', ctx.workspaceRoot, { name: subject.seat, data: '\r' });
+            const json = safeJson(res);
+            const refused = json?.success === false;
+            action.outcome = refused ? 'failed' : 'applied';
+            action.detail = `${diagnosis.detail}; bare-enter wrote 1 byte (\\r) to '${subject.seat}' at 0% CPU${refused ? ` — refused (${json?.error || res?.status || 'no response'})` : ''}`;
+            action.ownerSinceReStamped = false;
             return action;
         }
-        case 'clear-respawn': {
+        case 'redeliver-dispatch': {
+            // Re-issue the seat's OWN dispatch prompt, through the same endpoint
+            // a dispatch uses, so the payload is byte-identical by construction —
+            // there is no second builder to drift. No marker, no timestamp, no
+            // controller sentence is added, ever.
+            //
+            // Re-check the triggering condition immediately before delivering: a
+            // seat that resumed on its own receives nothing.
+            if (await seatIsProducingWork(subject, ctx)) {
+                action.outcome = 'refused';
+                action.detail = `${diagnosis.detail}; re-delivery skipped — the seat resumed on its own before delivery`;
+                action.ownerSinceReStamped = false;
+                return action;
+            }
+            action.command = `switchboard dispatch ${subject.planId} --seat ${subject.seat} --json`;
+            const outcome = await redeliverSeatPrompt(subject, ctx);
+            const ok = outcome.startsWith('re-delivered');
+            // Delivery is VERIFIED, not assumed: the dispatch route reports what
+            // the DB observed, the echo is what says the CLI received it. An
+            // unverified delivery is a reported state and escalates the ladder.
+            action.outcome = ok ? (outcome.includes('UNVERIFIED') ? 'recorded' : 'applied') : 'failed';
+            action.detail = `${diagnosis.detail}; ${outcome}`;
+            // A re-dispatch re-stamps owner_since — recorded, because it resets
+            // the 4-hour abandonment countdown.
+            action.ownerSinceReStamped = ok;
+            return action;
+        }
+        case 'reset-context': {
+            // RENAMED from `clear-respawn`, which never respawned: it calls
+            // clearTerminalContext → clearPty on the SAME live handle — for most
+            // families a `/clear` into the existing terminal, a context reset in
+            // place. Only a declared respawn family replaces the CLI. The pty,
+            // and any composer residue, survive it; that is what `respawn-seat`
+            // is for.
             action.command = `switchboard clear ${subject.seat} --json`;
             const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/clear', ctx.workspaceRoot, { name: subject.seat, from: ctx.controllerId });
             const json = safeJson(res);
@@ -1885,42 +1921,34 @@ async function applyRemediation(
             action.ownerSinceReStamped = false;
             return action;
         }
-        case 'escalate-human': {
-            const missionControl = findMissionControlSeat(ctx);
-            if (missionControl) {
-                const data = `[switchboard:controller] Escalation: ${diagnosis.detail} (card ${subject.planId || subject.seat}).`;
-                action.command = `switchboard verb ptySendPrompt '{"name":"${missionControl}"}' --json`;
-                const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptySendPrompt', ctx.workspaceRoot, { name: missionControl, data, machineOrigin: true });
-                const json = safeJson(res);
-                action.outcome = json?.success === false ? 'failed' : 'applied';
-                action.detail = `${diagnosis.detail}; escalated to Mission Control seat '${missionControl}'`;
-            } else {
-                action.command = null;
-                action.outcome = 'recorded';
-                action.detail = `${diagnosis.detail}; no Mission Control seat to escalate to — recorded in this report`;
-            }
-            action.ownerSinceReStamped = false;
-            return action;
-        }
-        case 'relay-answer': {
-            // Row 3 — a seat waiting on a human. The classification cannot
-            // derive the ANSWER, so relay hands the question to the NAVIGATOR
-            // when one is configured, and otherwise escalates with the question
-            // quoted rather than nudging the seat (a nudge is noise to a seat
-            // that is waiting on a person).
-            const question = extractQuestion(diagnosis.evidence);
-            const consulted = await consultNavigator(subject, diagnosis, ctx);
-            if (!consulted.asked) {
-                action.detail = `${diagnosis.detail}; Navigator not consulted (${consulted.gateReason}) — escalating with the question quoted: ${question}`;
-                return escalateToHuman(action, subject, ctx, question);
-            }
-            attachNavigatorEscalation(action, consulted.asked);
-            if (!consulted.asked.answered) {
-                action.detail = `${diagnosis.detail}; the Navigator '${consulted.asked.modelId}' did not answer (${consulted.asked.error}) — escalating with the question quoted: ${question}`;
-                return escalateToHuman(action, subject, ctx, question);
-            }
-            action.outcome = 'applied';
-            action.detail = `${diagnosis.detail}; relayed to the Navigator '${consulted.asked.modelId}' — ${consulted.asked.reply}`;
+        case 'respawn-seat': {
+            // Kill the pty and start a fresh one, with the prompt in the startup
+            // command. Where the family declares an argv shape, the CLI receives
+            // its own first message and NO prompt write reaches a composer — no
+            // bracketed paste, no blind submit CR, no readiness race. That is
+            // the whole point of the rung.
+            //
+            // The board builds the prompt (the same builder the dispatch path
+            // uses) and hands it to the pty host: the controller never composes
+            // a message, and there is no "respawn then write the prompt" path to
+            // land a paste in a booting composer.
+            const family = seatFamily(ctx, subject);
+            const strategy = resolveClearStrategy(family);
+            action.command = `switchboard verb ptyRespawnSeat '{"name":"${subject.seat}","planId":"${subject.planId}"}' --json`;
+            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptyRespawnSeat', ctx.workspaceRoot, {
+                name: subject.seat,
+                planId: subject.planId,
+            });
+            const json = safeJson(res);
+            const respawned = json?.success !== false && json?.respawned === true;
+            const argvInjected = json?.argvInjected === true;
+            action.outcome = respawned ? 'applied' : 'failed';
+            action.detail = respawned
+                ? `${diagnosis.detail}; respawned '${subject.seat}' — the dispatch prompt arrived in the startup command (${argvInjected ? 'argv shape declared, ZERO prompt writes' : `no declared argv shape for family '${family}': delivered through the gated first-delivery path`}); clear strategy ${strategy.value} (source: ${strategy.source})`
+                : `${diagnosis.detail}; respawn of '${subject.seat}' failed (${json?.error || res?.status || 'no response'}) — nothing was composed as a fallback`;
+            // A respawn replaces the pty and re-injects the startup command, so
+            // owner_since is re-stamped by the delivery path.
+            action.ownerSinceReStamped = respawned;
             return action;
         }
         case 'reroute': {
@@ -1955,74 +1983,58 @@ async function applyRemediation(
             return action;
         }
         case 'supervisor': {
-            // Row 6 — the looping seat the cheaper rungs could not settle. The
-            // rung spends ONE model call on the case: the Navigator is asked
-            // what it makes of it, with everything already tried attached, and
-            // its answer is recorded. It acts on nothing.
+            // The rung that spends ONE model call on a case the cheaper rungs
+            // could not settle. Two rows reach it, and they ask different
+            // questions:
+            //
+            //  - Row 6 (a looping seat): "what do you make of this?", with
+            //    everything already tried attached. The answer is RECORDED.
+            //  - Row 3 (a seat waiting on a human): "is this a real block or a
+            //    hedge?" The question is CLASSIFIED, never answered — no
+            //    controller-authored and no model-authored answer is ever
+            //    delivered to a seat, because an agent that stops to ask a
+            //    question it could have decided has declined a judgement call and
+            //    answering it teaches that stopping works.
             const consulted = await consultNavigator(subject, diagnosis, ctx);
             if (!consulted.asked) {
-                action.detail = `${diagnosis.detail}; Navigator not consulted (${consulted.gateReason}) — diagnosis written and escalated to a human`;
-                return escalateToHuman(action, subject, ctx, diagnosis.detail);
+                action.outcome = 'recorded';
+                action.detail = `${diagnosis.detail}; Navigator not consulted (${consulted.gateReason}) — recorded, nothing delivered`;
+                action.ownerSinceReStamped = false;
+                return action;
             }
             attachNavigatorEscalation(action, consulted.asked);
             if (!consulted.asked.answered) {
-                action.detail = `${diagnosis.detail}; the Navigator '${consulted.asked.modelId}' did not answer (${consulted.asked.error}) — diagnosis written and escalated to a human`;
-                return escalateToHuman(action, subject, ctx, diagnosis.detail);
+                action.outcome = 'recorded';
+                action.detail = `${diagnosis.detail}; the Navigator '${consulted.asked.modelId}' did not answer (${consulted.asked.error}) — recorded, nothing delivered`;
+                action.ownerSinceReStamped = false;
+                return action;
+            }
+            if (diagnosis.judgement?.class === 'waiting-human') {
+                return applyQuestionClassification(action, subject, diagnosis, ctx, consulted.asked);
             }
             action.outcome = 'applied';
             action.detail = `${diagnosis.detail}; handed to the Navigator '${consulted.asked.modelId}' — ${consulted.asked.reply}`;
             return action;
         }
         case 'record-unknown': {
-            // Row 8 — record evidence, escalate, act not at all. Row 8 is the
-            // load-bearing "I cannot classify this" row: it exists so the Pilot
-            // never guesses a plausible class, and its escalation used to reach
-            // nobody but the operator. It now reaches the Navigator first, and
-            // the operator is the TERMINAL fallback — the same shape as row 6,
-            // because "an unconfigured Navigator" and "the Navigator did not
-            // answer" must both land somewhere, and say which one it was.
+            // Rows 8 and 9 — record the finding and route it to the Navigator.
+            // Act not at all: nothing is delivered to the seat, and NOTHING is
+            // sent to any agent. Row 8 is the load-bearing "I cannot classify
+            // this" row, which exists so the Pilot never guesses a plausible
+            // class; row 9 is the research loop, which used to prompt the lead
+            // and is now a recorded finding the Navigator can weigh.
             const consulted = await consultNavigator(subject, diagnosis, ctx);
             if (!consulted.asked) {
                 action.outcome = 'recorded';
-                action.detail = `${diagnosis.detail}; no remediation applied; Navigator not consulted (${consulted.gateReason}) — escalated to a human`;
-                return escalateToHuman(action, subject, ctx, diagnosis.detail);
-            }
-            attachNavigatorEscalation(action, consulted.asked);
-            if (!consulted.asked.answered) {
-                action.outcome = 'recorded';
-                action.detail = `${diagnosis.detail}; no remediation applied; the Navigator '${consulted.asked.modelId}' did not answer (${consulted.asked.error}) — escalated to a human`;
-                return escalateToHuman(action, subject, ctx, diagnosis.detail);
-            }
-            action.outcome = 'applied';
-            action.detail = `${diagnosis.detail}; no remediation applied; the Navigator '${consulted.asked.modelId}' answered — ${consulted.asked.reply}`;
-            return action;
-        }
-        case 'report-to-lead': {
-            // Row 9 — hand the OBSERVATIONS to the lead. Not a diagnosis: the
-            // lead dispatched the work and holds the plan, so it can weigh
-            // "no write in 47m" against what it actually asked for, which the
-            // watcher never can. Terminal and one-shot — this row is not on the
-            // escalation ladder, so it can never climb into a clear or a
-            // restart on the strength of one observation.
-            const target = resolveTarget(subject, diagnosis.row, ctx);
-            if (!target.seat) {
-                // Degrade to RECORDING, never to nudging the subject. A seat in
-                // a research loop is producing output; prompting it is noise
-                // competing with the work it is already doing, and it is the
-                // exact failure mode this row exists to avoid.
-                action.outcome = 'recorded';
-                action.detail = `${diagnosis.detail}; no lead to report to (${target.reason}) — observation recorded, the subject was NOT nudged`;
+                action.detail = `${diagnosis.detail}; recorded, nothing delivered (${consulted.gateReason})`;
                 action.ownerSinceReStamped = false;
                 return action;
             }
-            const data = `[switchboard:controller] Observation about ${subject.seat}, which holds ${subject.planId || 'a card'}${subject.title ? ` "${subject.title}"` : ''}.\n`
-                + `${diagnosis.evidence.split('\n').slice(0, 4).join('\n')}\n`
-                + 'This is what was observed, not a diagnosis. You dispatched this work and hold the plan — judge whether it is progressing as asked.';
-            action.command = `switchboard verb ptySendPrompt '{"name":"${target.seat}"}' --json`;
-            const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptySendPrompt', ctx.workspaceRoot, { name: target.seat, data, machineOrigin: true });
-            const json = safeJson(res);
-            action.outcome = json?.success === false ? 'failed' : 'applied';
-            action.detail = `${diagnosis.detail}; observations handed to lead '${target.seat}' (resolved by ${target.source}); the subject was not nudged`;
+            attachNavigatorEscalation(action, consulted.asked);
+            action.outcome = 'recorded';
+            action.detail = consulted.asked.answered
+                ? `${diagnosis.detail}; recorded; the Navigator '${consulted.asked.modelId}' answered — ${consulted.asked.reply}`
+                : `${diagnosis.detail}; recorded; the Navigator '${consulted.asked.modelId}' did not answer (${consulted.asked.error})`;
             action.ownerSinceReStamped = false;
             return action;
         }
@@ -2074,6 +2086,24 @@ async function applyRemediation(
             // untouched, exactly as `mark-complete` leaves it.
             action.ownerSinceReStamped = false;
             delete ctx.state.subjects[subjectKey(subject)];
+            return action;
+        }
+        case 'stop': {
+            // The top of the ladder. It REPLACES `escalate-human`, whose two
+            // branches were both wrong: with a Mission Control seat it sent
+            // controller-authored text into a running agent (which this plan
+            // forbids), and without one it returned `outcome: 'recorded'`, which
+            // every action already does.
+            //
+            // What was missing is the STOP. The subject is marked exhausted, so
+            // every subsequent wake takes NO action on it — the count of actions
+            // is zero, not one escalation per wake forever. What was tried is in
+            // the report, which is the log the operator reads.
+            const st = ctx.state.subjects[subjectKey(subject)];
+            if (st) { st.exhausted = true; }
+            action.outcome = 'recorded';
+            action.detail = `${diagnosis.detail}; the ladder is exhausted — the controller stops acting on this subject and nothing is delivered to the seat. Everything tried is in this report`;
+            action.ownerSinceReStamped = false;
             return action;
         }
     }
@@ -2168,22 +2198,34 @@ async function askNavigator(subject: Subject, diagnosis: Diagnosis, ctx: ApplyCo
     const navigator = ctx.judgementCtx.navigator;
     const modelId = navigator.model ? `${navigator.providerId || 'unset'} (${navigator.model})` : String(navigator.providerId || 'unset');
     const st = ctx.state.subjects[subjectKey(subject)];
-    const prompt = buildNavigatorEscalationPrompt({
-        seat: subject.seat,
-        planId: subject.planId,
-        title: subject.title,
-        ruleId: diagnosis.row.id,
-        cause: diagnosis.row.cause,
-        evidence: diagnosis.evidence,
-        evidenceWindow: diagnosis.evidenceWindow,
-        tierAttempts: diagnosis.judgement?.tierChain ?? [],
-        escalationId,
-        stuckPasses: st ? st.stuckPasses : 1,
-        controllerNudges: st && typeof st.nudges === 'number' ? st.nudges : 0,
-        lastBoardNudgeAt: ctx.judgementCtx.nudges[subject.seat] ?? null,
-        ladderRung: diagnosis.row.remediation,
-        priorVerdict: subject.lastAction,
-    });
+    // Row 3 asks a CLASSIFICATION question, not an open one: the Navigator is
+    // told to reply with exactly one of two tokens, and a reply outside that
+    // set is reported as unreadable rather than coerced.
+    const classification = diagnosis.judgement?.class === 'waiting-human';
+    const prompt = classification
+        ? buildQuestionClassificationPrompt({
+            seat: subject.seat,
+            planId: subject.planId,
+            title: subject.title,
+            ruleId: diagnosis.row.id,
+            evidence: diagnosis.evidence,
+            evidenceWindow: diagnosis.evidenceWindow,
+            escalationId,
+        })
+        : buildNavigatorEscalationPrompt({
+            seat: subject.seat,
+            planId: subject.planId,
+            title: subject.title,
+            ruleId: diagnosis.row.id,
+            cause: diagnosis.row.cause,
+            evidence: diagnosis.evidence,
+            evidenceWindow: diagnosis.evidenceWindow,
+            tierAttempts: diagnosis.judgement?.tierChain ?? [],
+            escalationId,
+            stuckPasses: st ? st.stuckPasses : 1,
+            ladderRung: diagnosis.row.remediation,
+            priorVerdict: subject.lastAction,
+        });
 
     const answer = await askNavigatorModel(ctx, prompt.system, prompt.user);
     const record: EscalationRecord = {
@@ -2228,6 +2270,180 @@ function attachNavigatorEscalation(action: EntryAction, asked: NavigatorEscalati
     if (!action.judgement) { return; }
     action.judgement.escalationId = asked.escalationId;
     if (asked.answered) { action.judgement.escalationReply = asked.reply; }
+}
+
+/**
+ * Has this seat started producing work since it was diagnosed?
+ *
+ * Checked IMMEDIATELY before a re-delivery, from a FRESH read of the fleet: a
+ * seat that resumed on its own receives nothing. Re-reading the wake's own
+ * snapshot would not be a re-check at all — those readings are the ones the
+ * diagnosis rested on, and they cannot have changed. The plan's edge case is
+ * explicitly "a seat may resume between diagnosis and re-delivery", so the
+ * check has to look again.
+ *
+ * Re-delivery causes an agent turn with the seat's own token cost, and spending
+ * one on a seat that is already working is the interjection this plan removes.
+ * A failed re-read is NOT "producing": an unanswerable board leaves the
+ * diagnosis standing, and refusing to deliver because a read failed would make
+ * a broken route indistinguishable from a working seat.
+ */
+async function seatIsProducingWork(subject: Subject, ctx: ApplyContext): Promise<boolean> {
+    const fresh = await readFleet(ctx.apiRequest, ctx.port, ctx.workspaceRoot);
+    const seat = fresh.find((t: any) => t && t.friendlyName === subject.seat);
+    const lastDataAt = seat && typeof seat.lastDataAt === 'number' ? seat.lastDataAt : 0;
+    if (lastDataAt > 0 && ctx.now() - lastDataAt < ctx.cfg.turnEndSilenceMs) { return true; }
+    const cpu = ctx.observations?.cpu ?? null;
+    return !!cpu && cpu.available && cpu.value > 0;
+}
+
+/**
+ * The delivery layer's own dispatch boundary, as it appears in the session log.
+ *
+ * `terminalLogWriter.onPrompt` writes `## <ISO timestamp> — <first 80 chars of
+ * the prompt>` before the paste. This is the heading — NOT the callback's name
+ * (`onPromptDelivered`), which never reaches the log; matching the name would
+ * make every delivery read as unverified, which is a reported state that is
+ * always the same and therefore reports nothing.
+ */
+const DELIVERY_HEADING_RE = /^## \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z — /gm;
+
+/**
+ * Did the CLI actually receive what was delivered?
+ *
+ * The dispatch route reports what the DATABASE observed; the ECHO is what says
+ * the CLI got it. A delivery whose heading is the last thing in the log, with
+ * no output after it, is the signature of the unsubmitted paste — the paste
+ * sits in the composer and the seat never starts — and it is a REPORTED state,
+ * never a silent success.
+ *
+ * `unverified` is deliberately distinct from `delivered`: "the board recorded a
+ * dispatch" and "the agent received its instructions" are different claims, and
+ * collapsing them is how the fault this rung exists for stayed invisible.
+ */
+async function verifyDeliveryEcho(subject: Subject, ctx: ApplyContext): Promise<'delivered' | 'unverified'> {
+    // The tail is read AFTER the delivery. A null read is not evidence of an
+    // echo, so it lands on `unverified` rather than on a pass.
+    const raw = await ctx.readLog(subject.seat);
+    if (raw === null) { return 'unverified'; }
+    let end = -1;
+    DELIVERY_HEADING_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = DELIVERY_HEADING_RE.exec(raw)) !== null) { end = m.index + m[0].length; }
+    if (end < 0) { return 'unverified'; }
+    // Skip the rest of the heading line — that text is the PROMPT's first line,
+    // which the writer copied in, not the CLI's echo.
+    const afterHeading = raw.slice(end);
+    const newline = afterHeading.indexOf('\n');
+    const after = (newline < 0 ? '' : afterHeading.slice(newline + 1)).trim();
+    return after.length >= 8 ? 'delivered' : 'unverified';
+}
+
+/** The CLI family a seat runs, from the fleet row's recorded `cliFamily`. */
+function seatFamily(ctx: ApplyContext, subject: Subject): CliFamily {
+    const seat = ctx.seatByName.get(subject.seat);
+    const family = seat && typeof seat.cliFamily === 'string' ? seat.cliFamily : '';
+    return (family === 'devin' || family === 'claude' || family === 'antigravity') ? family : 'unknown';
+}
+
+/**
+ * Row 3's classification, acted on (plan:
+ * the-pilot-acts-on-the-board-not-on-the-agent).
+ *
+ * The Navigator is asked whether the seat's question is a REAL BLOCK or a
+ * HEDGE, and the board acts on the classification. Nothing is delivered as an
+ * answer — not by the controller and not by the Navigator — because an agent
+ * that stops to ask a question it could have decided has declined a judgement
+ * call, and answering it teaches that stopping works.
+ *
+ *  - `hedge`      → the seat gets its own dispatch prompt back and nothing else.
+ *  - `real-block` → STOP: the controller ceases acting on the subject and
+ *    records the question verbatim. Nothing is delivered, nothing is sent to
+ *    any agent; the operator reads it where they read every other action.
+ *
+ * A reply outside the closed set is NOT coerced to the nearest name. It lands
+ * on the SAFE side — the stop — because re-delivering on an unreadable
+ * classification spends an agent turn on a guess.
+ */
+async function applyQuestionClassification(
+    action: EntryAction,
+    subject: Subject,
+    diagnosis: Diagnosis,
+    ctx: ApplyContext,
+    asked: NavigatorEscalation,
+): Promise<EntryAction> {
+    const verdict = parseQuestionVerdict(asked.reply);
+    const question = extractQuestion(diagnosis.evidence);
+    const st = ctx.state.subjects[subjectKey(subject)];
+    const hedges = st && typeof st.hedges === 'number' ? st.hedges : 0;
+
+    if (verdict === 'hedge' && hedges < ctx.cfg.hedgeBound) {
+        if (st) { st.hedges = hedges + 1; }
+        action.outcome = 'applied';
+        action.detail = `${diagnosis.detail}; the Navigator classified the question as a HEDGE (${hedges + 1} of ${ctx.cfg.hedgeBound}) — the seat gets its own dispatch prompt back and nothing else; question recorded verbatim: ${question}`;
+        // The re-delivery is the SAME operation the `redeliver-dispatch` rung
+        // performs, so a hedge and a stale dispatch cannot diverge.
+        const redelivered = await redeliverSeatPrompt(subject, ctx);
+        action.detail += ` — ${redelivered}`;
+        action.outcome = !redelivered.startsWith('re-delivered') ? 'failed'
+            : redelivered.includes('UNVERIFIED') ? 'recorded' : 'applied';
+        return action;
+    }
+
+    // `real-block`, an unreadable classification, or a seat that has hedged
+    // past the bound: the controller stops acting on this subject.
+    if (st) { st.exhausted = true; }
+    action.outcome = 'recorded';
+    action.detail = verdict === 'hedge'
+        ? `${diagnosis.detail}; the Navigator classified the question as a HEDGE for the ${hedges + 1}th time (bound ${ctx.cfg.hedgeBound}) — a seat that hedges, is sent back and hedges again is a loop, so the controller stops acting on this subject; question recorded verbatim: ${question}`
+        : `${diagnosis.detail}; the Navigator classified the question as ${verdict === 'real-block' ? 'a REAL BLOCK' : `UNREADABLE ('${asked.reply.slice(0, 80)}') — recorded as a block rather than guessed at`} — the controller stops acting on this subject and NOTHING is delivered to the seat; question recorded verbatim: ${question}`;
+    return action;
+}
+
+/**
+ * Parse the Navigator's question classification against its closed set.
+ *
+ * `null` means the reply named neither — the rule did not run, and the caller
+ * must not substitute a plausible name.
+ */
+function parseQuestionVerdict(reply: string): 'real-block' | 'hedge' | null {
+    const text = String(reply || '').toLowerCase();
+    const hedge = /\bhedge\b/.test(text);
+    const block = /\breal[- ]?block\b/.test(text);
+    // Both named is ambiguous, and an ambiguous classification is not a
+    // classification. Report it as neither.
+    if (hedge === block) { return null; }
+    return hedge ? 'hedge' : 'real-block';
+}
+
+/**
+ * Re-issue a seat's own dispatch prompt through the dispatch path.
+ *
+ * ONE implementation for the `redeliver-dispatch` rung and for a row-3 hedge,
+ * so the two cannot drift: both send exactly what `/kanban/dispatch` sends for
+ * that card and seat, with no marker, no timestamp and no controller sentence
+ * added anywhere.
+ */
+async function redeliverSeatPrompt(subject: Subject, ctx: ApplyContext): Promise<string> {
+    if (!subject.kanbanColumn) {
+        return 're-delivery refused — the card has no recorded column, so a dispatch would route it rather than re-issue its prompt';
+    }
+    const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/kanban/dispatch', ctx.workspaceRoot, {
+        plan: subject.planId,
+        targetColumn: subject.kanbanColumn,
+        seat: subject.seat,
+        from: ctx.controllerId,
+        skipClear: true,
+        clearBeforePrompt: false,
+    });
+    const json = safeJson(res);
+    if (!(res?.status === 200 && json?.success === true)) {
+        return `re-delivery failed (${json?.error || res?.status || 'no response'}) — nothing was composed as a fallback`;
+    }
+    const verified = await verifyDeliveryEcho(subject, ctx);
+    return verified === 'delivered'
+        ? `re-delivered the seat's own dispatch prompt (delivery delivered)`
+        : `re-delivered the seat's own dispatch prompt — delivery UNVERIFIED: no echo of the prompt appeared in the log tail, which is the signature of an unsubmitted paste`;
 }
 
 /**
@@ -2371,30 +2587,13 @@ async function composeNavigatorDigest(
     return action;
 }
 
-/** The smallest thing that answers row 3's "escalate with the question quoted". */
+/** The smallest thing that answers row 3's "record the question verbatim". */
 function extractQuestion(evidence: string): string {
     const lines = evidence.split('\n').map(l => l.trim()).filter(Boolean);
     for (let i = lines.length - 1; i >= 0; i--) {
         if (lines[i].endsWith('?')) { return lines[i].slice(0, 300); }
     }
     return '(no explicit question found in the tail)';
-}
-
-async function escalateToHuman(action: EntryAction, subject: Subject, ctx: ApplyContext, detail: string): Promise<EntryAction> {
-    const missionControl = findMissionControlSeat(ctx);
-    if (missionControl) {
-        const data = `[switchboard:controller] Escalation: ${detail} (card ${subject.planId || subject.seat}).`;
-        action.command = `switchboard verb ptySendPrompt '{"name":"${missionControl}"}' --json`;
-        const res = await tryRequest(ctx.apiRequest, ctx.port, 'POST', '/terminals/verb/ptySendPrompt', ctx.workspaceRoot, { name: missionControl, data, machineOrigin: true });
-        const json = safeJson(res);
-        action.outcome = json?.success === false ? 'failed' : 'applied';
-        action.detail = `${action.detail}; escalated to Mission Control seat '${missionControl}'`;
-    } else {
-        action.outcome = 'recorded';
-        action.detail = `${action.detail}; no Mission Control seat to escalate to — recorded in this report`;
-    }
-    action.ownerSinceReStamped = false;
-    return action;
 }
 
 function standDownSeat(seat: string, reason: string, provider: string | null, ctx: ApplyContext): void {
@@ -2438,15 +2637,6 @@ function resolveRerouteTarget(subject: Subject, ctx: ApplyContext): RerouteTarge
         };
     }
     return { seat: String(compatible[0].t.friendlyName), provider: compatible[0].p, reason: '' };
-}
-
-function findMissionControlSeat(ctx: ApplyContext): string | null {
-    for (const t of ctx.seatByName?.values?.() ?? []) {
-        if (t && t.status === 'active' && ((t.role || '') === 'mission-control' || /mission control/i.test(String(t.friendlyName || '')))) {
-            return String(t.friendlyName);
-        }
-    }
-    return null;
 }
 
 // ── Capability snapshots, arming state ───────────────────────────────────
@@ -2744,7 +2934,8 @@ function normalizeState(raw: any): PersistedControllerState {
                 ownerSince: typeof s.ownerSince === 'string' ? s.ownerSince : null,
                 stuckPasses: typeof s.stuckPasses === 'number' ? s.stuckPasses : 0,
                 lastClass: typeof s.lastClass === 'string' ? s.lastClass : null,
-                nudges: typeof s.nudges === 'number' ? s.nudges : 0,
+                ...(s.exhausted === true ? { exhausted: true } : {}),
+                ...(typeof s.hedges === 'number' ? { hedges: s.hedges } : {}),
             };
         }
     }

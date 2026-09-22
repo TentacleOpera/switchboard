@@ -33,60 +33,103 @@ export type MatrixJudge = 'mechanical' | 'model';
  * Remediation verbs. The controller composes rules; it does not invent
  * actions — each of these is an existing board verb, reached through the CLI's
  * request path.
+ *
+ * **Every verb here is a STATE operation on the board.** The controller
+ * composes no message to an agent (plan:
+ * the-pilot-acts-on-the-board-not-on-the-agent). A prompt into a working agent
+ * is a turn-shaping event, not a poke: whatever the controller sends arrives as
+ * user input mid-context, and an interjection meant to restart work routinely
+ * ends it. The sole exception is the seat's own dispatch prompt, rebuilt
+ * verbatim by the dispatch path's builder — `redeliver-dispatch` delivers that
+ * and nothing else.
+ *
+ * RETIRED in the same change, from the union, the values array AND the ladder
+ * (all three or the row loads clean and falls through the switch doing
+ * nothing): `nudge` (composed a message), `relay-answer` (composed an answer),
+ * `report-to-lead` (composed an observation), `escalate-human` (composed an
+ * escalation, or recorded what every action already records). `clear-respawn`
+ * is RENAMED `reset-context`, because a rung named for a respawn that resets
+ * context in place is how the gap was misread in the first place; the real
+ * respawn is `respawn-seat`.
  */
 export type MatrixRemediation =
     | 'mark-complete'
-    | 'nudge'
-    | 'relay-answer'
-    | 'clear-respawn'
+    /**
+     * Row 2 — write ONE byte, `\r`, and nothing else. No bracketed paste, no
+     * text, no marker. It submits whatever the seat already holds: into an idle
+     * seat with an unsubmitted paste it starts the work; into an empty composer
+     * it does nothing. Blind, but safe when wrong — and it cannot redirect a
+     * turn, because it carries no content.
+     */
+    | 'bare-enter'
+    /**
+     * Re-issue the seat's own dispatch prompt, rebuilt by the SAME builder
+     * `/kanban/dispatch` uses and delivered by the same path, so the payload is
+     * byte-identical to what a dispatch would send. Not an interjection: it is
+     * the instruction the agent already received and already interpreted.
+     */
+    | 'redeliver-dispatch'
+    /**
+     * Kill the pty and start a fresh one, re-injecting the startup command with
+     * the prompt in the family's declared argv shape. Where a shape is declared
+     * the CLI receives its own first message, so NO prompt write reaches a
+     * composer — every readiness race, residue and submit-CR failure is
+     * structurally absent.
+     */
+    | 'respawn-seat'
+    /** Renamed from `clear-respawn`: an in-place context reset, not a respawn. */
+    | 'reset-context'
     | 'reroute'
     | 'stand-down'
     | 'supervisor'
-    | 'escalate-human'
     | 'record-unknown'
-    /** Row 9 — hand the OBSERVATIONS to the subject's lead (never to the subject). */
-    | 'report-to-lead'
     /**
      * Row 10 — POST the completion the coder never posted, attributed to the
      * controller. State repair, not a takeover: the work exists (row 10's own
      * evidence is a worktree write this round) and what is missing is the
      * RECORD of it. The lead still reads the diff.
      */
-    | 'post-completion-on-behalf';
-
-/**
- * How many times a rung is applied before the controller advances to the next
- * reachable one. "A seat nudged twice earns a clear; a seat cleared twice earns
- * an escalation." Nothing jumps straight to the top rung on one weak
- * classification at 3am.
- */
-export const RUNGS_PER_ESCALATION = 2;
+    | 'post-completion-on-behalf'
+    /**
+     * The top of the ladder. At the top reachable rung, once applied and the
+     * row fires again, the controller stops acting on that subject and records
+     * that it has. It replaces `escalate-human`: with a Mission Control seat
+     * that rung sent controller-authored text into a running agent, and without
+     * one it recorded what every action already records.
+     */
+    | 'stop';
 
 /**
  * The escalation ladder, lowest rung first. `mark-complete`,
  * `record-unknown` and `post-completion-on-behalf` are terminal one-shot
  * actions and are deliberately NOT on the ladder.
  *
+ * The ladder opens `bare-enter → redeliver-dispatch → respawn-seat` — three
+ * rungs of strictly increasing cost, each answering a different hypothesis —
+ * and terminates at `stop`. There is no `RUNGS_PER_ESCALATION`: a rung is
+ * applied ONCE, and the confirmation is the row firing again on the next wake,
+ * which is the controller re-observing and the only thing that can confirm a
+ * diagnosis. Repeating a remedy tests nothing new.
+ *
  * `restart-board` is RETIRED (plan:
- * the-board-restarts-only-when-it-stops-answering): the top rung is now
- * `escalate-human`, so a seat that climbs as far as the ladder goes ends by
- * asking a person rather than by restarting the board from a classification.
+ * the-board-restarts-only-when-it-stops-answering) and `escalate-human` with
+ * it (plan: the-pilot-acts-on-the-board-not-on-the-agent).
  *
  * The `supervisor` RUNG survives the retirement of the supervisor SEAT
  * (plan: the-pilot-and-the-navigator-are-one-crew): it is the rung that spends a
- * model call on a case the cheaper rungs could not settle, and it now asks the
- * Navigator instead of waking an agent in a pty. The verb is a rung name, not a
- * capability key — the retired thing is the `supervisor` entry in
- * `MatrixCapabilityKey`, which is gone.
+ * model call on a case the cheaper rungs could not settle, and it asks the
+ * Navigator. The verb is a rung name, not a capability key — the retired thing
+ * is the `supervisor` entry in `MatrixCapabilityKey`, which is gone.
  */
 export const ESCALATION_LADDER: readonly MatrixRemediation[] = [
-    'nudge',
-    'relay-answer',
-    'clear-respawn',
+    'bare-enter',
+    'redeliver-dispatch',
+    'respawn-seat',
+    'reset-context',
     'reroute',
     'stand-down',
     'supervisor',
-    'escalate-human',
+    'stop',
 ];
 
 /**
@@ -108,10 +151,16 @@ export type MatrixCapabilityKey = 'mechanical' | 'model' | 'two-providers';
  * WHO a row's remediation acts on (change 3).
  *
  * The row schema previously assumed the seat diagnosed is the seat acted upon.
- * Row 9 breaks that assumption on purpose: a member looping is diagnosed on
- * `coder-1` and acted on `lead-1`, because the lead dispatched the work, holds
- * the plan and knows what it asked for — and because nudging a seat that is
- * already producing output is the failure mode row 9 exists to avoid.
+ * Row 9 broke that assumption on purpose: a member looping was diagnosed on
+ * `coder-1` and acted on `lead-1`, because the lead dispatched the work and
+ * knew what it asked for.
+ *
+ * **No shipped row uses `lead` any more** (plan:
+ * the-pilot-acts-on-the-board-not-on-the-agent). Row 9's only `lead`-targeted
+ * verb was `report-to-lead`, which composed text for a running agent and is
+ * retired; row 9 is now a recorded finding routed to the Navigator. The value
+ * is KEPT in the schema and in the board's mirror so an operator override that
+ * still names it is validated rather than silently dropped.
  *
  * Defaults to `subject`, so every existing row keeps its behaviour.
  */
@@ -128,9 +177,9 @@ export const MATRIX_TARGETS: readonly MatrixTarget[] = ['subject', 'lead'];
  * what the panel's save-time validation exists to prevent.
  */
 export const MATRIX_REMEDIATIONS: readonly MatrixRemediation[] = [
-    'mark-complete', 'nudge', 'relay-answer', 'clear-respawn', 'reroute',
-    'stand-down', 'supervisor', 'escalate-human', 'record-unknown',
-    'report-to-lead', 'post-completion-on-behalf',
+    'mark-complete', 'bare-enter', 'redeliver-dispatch', 'respawn-seat',
+    'reset-context', 'reroute', 'stand-down', 'supervisor', 'record-unknown',
+    'post-completion-on-behalf', 'stop',
 ];
 
 /** The condition kinds the controller's evaluator knows. */
@@ -200,25 +249,43 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         requires: ['mechanical'],
     },
     {
+        // Row 2 — the seat is producing nothing. The condition is rewritten
+        // around ONE question: is this seat producing work? It is answered from
+        // the activity the controller already samples — last output, sampled
+        // CPU, last worktree write — and NOT from how long it has been since
+        // somebody last prompted it. The nudge-era gate that read the board's
+        // nudge ledger is gone with the nudges it coordinated.
+        //
+        // The remediation is `bare-enter`: one byte, no content. A seat holding
+        // an unsubmitted paste (the observed failure — a large paste takes
+        // longer to ingest than the fixed settle delay, so the submit CR is
+        // swallowed and the work never starts) is submitted by it; a seat with
+        // an empty composer is unaffected.
         id: 'idle-no-blocker',
         order: 2,
         cause: 'Idle, no blocker',
-        evidence: 'seat silent since the last board nudge + clean log tail',
+        evidence: 'no output, sampled CPU at rest, no worktree write, clean log tail',
         judge: 'mechanical',
         condition: { kind: 'quiet-clean-tail' },
-        remediation: 'nudge',
+        remediation: 'bare-enter',
         precondition: '',
         requires: ['mechanical'],
     },
     {
+        // Row 3 — a seat waiting on a person. The question is CLASSIFIED, never
+        // answered: the Navigator is asked whether it is a real block or a hedge,
+        // and the board acts on that. No controller-authored and no
+        // model-authored answer is ever delivered to a seat — an agent that
+        // stops to ask a question it could have decided has declined a judgement
+        // call, and answering it teaches that stopping works.
         id: 'waiting-on-human',
         order: 3,
         cause: 'Waiting on a human',
         evidence: 'log tail ends in a question or prompt',
         judge: 'model',
         condition: { kind: 'judgement', fields: ['seat', 'card', 'silence', 'ownerSince', 'lastAction', 'cpu', 'rss', 'lastWrite', 'logTail'] },
-        remediation: 'relay-answer',
-        precondition: 'a judgement backend is configured and reachable',
+        remediation: 'supervisor',
+        precondition: 'a judgement backend is configured and a Navigator is configured to classify the question',
         requires: ['model'],
     },
     {
@@ -228,7 +295,7 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         evidence: 'liveness gone, non-zero exit in tail',
         judge: 'mechanical',
         condition: { kind: 'owner-seat-dead' },
-        remediation: 'clear-respawn',
+        remediation: 'reset-context',
         precondition: '',
         requires: ['mechanical'],
     },
@@ -283,18 +350,20 @@ export const DEFAULT_MATRIX_ROWS: readonly MatrixRow[] = [
         // which is why the card text is mandatory in the bundle and why this
         // row is judged by a model rather than a threshold.
         //
-        // It acts on the LEAD. The lead dispatched the work and holds the plan;
-        // the subject is producing output and a nudge into it is noise
-        // competing with the work it is already doing.
+        // It used to PROMPT THE LEAD, which is text into a running agent and is
+        // exactly what this plan removes. It is now a RECORDED FINDING routed to
+        // the Navigator: the lead reads the board, and the Navigator is the
+        // model the crew plan gave the escalation seam to. Terminal and
+        // one-shot, as before — a research loop must not climb a ladder that
+        // ends in respawning the seat.
         id: 'research-loop-no-write',
         order: 9,
         cause: 'Research loop — producing output, producing no work',
         evidence: 'no worktree write for N against a producing card, seat otherwise live',
         judge: 'model',
         condition: { kind: 'judgement', fields: ['seat', 'card', 'column', 'silence', 'ownerSince', 'cpu', 'rss', 'lastWrite', 'logTail'] },
-        remediation: 'report-to-lead',
-        target: 'lead',
-        precondition: 'a judgement backend is configured; the subject must have a resolvable lead to report to',
+        remediation: 'record-unknown',
+        precondition: 'a judgement backend is configured',
         requires: ['model'],
     },
     {

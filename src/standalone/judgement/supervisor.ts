@@ -123,18 +123,14 @@ export interface NavigatorEscalationPromptArgs {
      * What has already been tried (plan: the-pilot-and-the-navigator-are-one-crew).
      *
      * Escalating without history is adjudicating blind: a Navigator asked "what
-     * is wrong with this looping seat" that is not told the seat has been nudged
-     * twice and cleared once will propose the remediation that has already
-     * failed twice. All of this is already persisted — the ladder state, the
-     * per-seat nudge ledger and the card's prior verdict — so it costs nothing
-     * to carry and its absence is the difference between a recommendation and a
+     * is wrong with this looping seat" that is not told the seat has been stuck
+     * across several passes and what rung it reached will propose the
+     * remediation that has already failed. All of this is already persisted —
+     * the ladder state and the card's prior verdict — so it costs nothing to
+     * carry and its absence is the difference between a recommendation and a
      * repetition.
      */
     stuckPasses: number;
-    /** How many times the CONTROLLER has nudged this subject, from its own ladder state. */
-    controllerNudges: number;
-    /** When the BOARD last nudged this seat, or null. */
-    lastBoardNudgeAt: number | null;
     /** The ladder rung reached for this subject, or null when none applies. */
     ladderRung: string | null;
     /** The card's `last_action`, when the board recorded one. */
@@ -155,9 +151,6 @@ export function buildNavigatorEscalationPrompt(args: NavigatorEscalationPromptAr
     const tierLines = args.tierAttempts.length
         ? args.tierAttempts.map(a => `  - tier ${a.providerId} (${a.role}, ${a.locality}/${a.operator}/${a.costClass}): ${a.outcome}${a.error ? ` — ${a.error}` : ''}`).join('\n')
         : '  - (no classification tier was configured or reachable)';
-    const nudgeLine = args.controllerNudges > 0
-        ? `${args.controllerNudges} time(s) by the controller`
-        : 'never by the controller';
     const system = [
         'You are the Navigator on a board of coding agents. The Pilot — the model that watches the',
         'board every few minutes — has escalated one case to you because the cheaper rungs could not',
@@ -182,10 +175,65 @@ export function buildNavigatorEscalationPrompt(args: NavigatorEscalationPromptAr
         '',
         'What has already been tried (do not propose these again):',
         `  - consecutive passes this subject has been stuck: ${args.stuckPasses}`,
-        `  - this subject has been nudged: ${nudgeLine}`,
-        `  - the board last nudged this seat: ${args.lastBoardNudgeAt ? new Date(args.lastBoardNudgeAt).toISOString() : 'never'}`,
         `  - ladder rung reached: ${args.ladderRung || '(not on the escalation ladder)'}`,
-        `  - the card's prior verdict (last_action): ${args.priorVerdict || '(none recorded)'}`,
+        `  - the card\'s prior verdict (last_action): ${args.priorVerdict || '(none recorded)'}`,
+        '',
+        `Evidence window: ${args.evidenceWindow}`,
+        '---',
+        args.evidence || '(no evidence window)',
+    ].join('\n');
+    return { system, user };
+}
+
+export interface QuestionClassificationPromptArgs {
+    seat: string;
+    planId: string;
+    title: string;
+    ruleId: string;
+    /** Redacted, smallest-window evidence — the tail that ends in the question. */
+    evidence: string;
+    evidenceWindow: string;
+    escalationId: string;
+}
+
+/**
+ * Row 3's prompt: CLASSIFY the question, never answer it (plan:
+ * the-pilot-acts-on-the-board-not-on-the-agent).
+ *
+ * An agent that stops to ask a question it could have decided has not hit an
+ * obstacle; it has declined a judgement call. Answering teaches that stopping
+ * works and spends a model call on something the plan or the code already
+ * settled. So the reply is a closed-set token and nothing else, and the caller
+ * acts on it:
+ *
+ *  - `hedge`      — the question was decidable from the material the seat
+ *    already has. The seat gets its own dispatch prompt back.
+ *  - `real-block` — a genuine obstacle. The controller STOPS and records the
+ *    question verbatim; nothing is delivered to the seat.
+ *
+ * A reply naming neither is not coerced: the caller records it as unreadable
+ * and stops, which is the safe side.
+ */
+export function buildQuestionClassificationPrompt(args: QuestionClassificationPromptArgs): { system: string; user: string } {
+    const system = [
+        'You are the Navigator on a board of coding agents. A seat has stopped and asked a question',
+        'instead of continuing its work. Your job is to CLASSIFY that question, never to answer it.',
+        '',
+        'Reply with exactly one token on one line, and nothing else:',
+        '  real-block   — the seat is genuinely blocked on something it cannot determine or do:',
+        '                 missing access, a decision only a person can make, a broken dependency.',
+        '  hedge        — the question is answerable from the material the seat already has (its plan,',
+        '                 the code, the repository), or it is asking permission for something already',
+        '                 asked of it. Asking instead of deciding.',
+        '',
+        'Judge only whether the question is decidable from what the seat holds. Do not answer it,',
+        'do not restate it, do not add prose.',
+    ].join('\n');
+    const user = [
+        `Classification: ${args.escalationId}`,
+        `Card: ${args.planId}${args.title ? ` "${args.title}"` : ''}`,
+        `Seat: ${args.seat}`,
+        `Rule that escalated: ${args.ruleId}`,
         '',
         `Evidence window: ${args.evidenceWindow}`,
         '---',
