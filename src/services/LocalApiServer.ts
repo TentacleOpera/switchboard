@@ -3,9 +3,9 @@ import { resolveBudget, usageKey } from '../standalone/judgement/budgets';
 import { callModel } from '../standalone/judgement/modelClient';
 import {
     applyProposal, applyOutcomeMessage, navigatorOutcomeMessage, proposeColdBoard, proposeMission, proposeParameters,
-    parameterOutcomeMessage, MISSION_PARAMETERS_CONFIG_KEY,
-    type MissionRow, type NavigatorParameterPorts, type NavigatorPlanRow, type NavigatorPorts,
-    type ParameterProvenance, type ParameterRecord, type UnavailableTeam, type LiveTeam,
+    parameterOutcomeMessage, startMission, startOutcomeMessage, MISSION_PARAMETERS_CONFIG_KEY,
+    type LiveTeam, type MissionRow, type NavigatorParameterPorts, type NavigatorPlanRow, type NavigatorPorts,
+    type NavigatorStartPorts, type ParameterProvenance, type ParameterRecord, type StartProvenance, type UnavailableTeam,
 } from '../standalone/controller/navigator';
 import * as zlib from 'zlib';
 import * as fs from 'fs/promises';
@@ -12404,6 +12404,11 @@ export class LocalApiServer {
                     // panel reads it here rather than re-deriving it, so the
                     // rendered order and the order the queue obeys are one fact.
                     sequencing: Array.isArray(m.sequencing) ? m.sequencing : [],
+                    // The DERIVED run state, from the same `getMissions` the
+                    // panel and the start pass both read — never recomputed
+                    // here, so "has this mission begun" has one answer. The
+                    // panel shows its start control only for `not-started`.
+                    runState: m.runState || 'not-started',
                     // Who set this mission's parameters, or null when nobody has.
                     // "Not arranged" and "arranged with no constraints" must not
                     // render the same, so the record travels rather than a flag.
@@ -13674,6 +13679,7 @@ export class LocalApiServer {
                     team: String(m.team || ''),
                     maxExtraWorktrees: Number(m.maxExtraWorktrees || 0),
                     runState: String(m.runState || 'not-started') as MissionRow['runState'],
+                    paused: m.paused === true || Number(m.paused) === 1,
                     plans: Array.isArray(m.plans) ? m.plans.map((x: unknown) => String(x)) : [],
                     features: Array.isArray(m.features) ? m.features.map((x: unknown) => String(x)) : [],
                 };
@@ -13760,6 +13766,11 @@ export class LocalApiServer {
                     // VERBATIM from the resolver. A missing entry is stated as a
                     // missing entry rather than substituted with a plausible rule.
                     reason: reasons.get(head) || `'${label}' is excluded from automated dispatch (the resolver gave no reason)`,
+                    // The policy and WHO decided it travel too: a start refusal
+                    // must name the policy and its source, not just the rule that
+                    // excluded the seat.
+                    policy: policy.value,
+                    policySource: policy.source,
                 });
                 continue;
             }
@@ -13883,6 +13894,138 @@ export class LocalApiServer {
             console.error('[LocalApiServer] navigator parameters error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'navigator parameters failed' }));
+        }
+    }
+
+    /**
+     * The ports the START pass runs against (plan:
+     * the-navigator-starts-the-mission-it-set-up, subtask 4).
+     *
+     * `stageMembers` reaches `appendQueuePositions` — the board's own staging
+     * write, the same one the webview's drag-into-STAGING fires in-process. The
+     * plan names the method, not a route, and inventing a public staging route
+     * for this one caller would be a new board surface nothing else asked for.
+     *
+     * `dispatchCard` reaches `performKanbanDispatch`, which is exactly what
+     * `POST /kanban/dispatch` wraps. The seat is pinned to the mission's own team
+     * head, because a team-bound mission launches into THAT team's head
+     * (`KanbanProvider.launchMission`'s rule, one layer down): letting the first
+     * card route workspace-wide would split one mission across two teams.
+     */
+    private async _navigatorStartPorts(db: any, workspaceRoot: string): Promise<NavigatorStartPorts> {
+        const base = await this._navigatorParameterPorts(db, workspaceRoot);
+        const wsId = await this._wsId(db);
+        return {
+            ...base,
+            readDependencies: async (planIds: string[]) => {
+                const out: Record<string, string[]> = {};
+                for (const planId of planIds) {
+                    const deps = await db.getPlanDependencies(planId);
+                    out[planId] = Array.isArray(deps) ? deps.map((d: unknown) => String(d)) : [];
+                }
+                return out;
+            },
+            stageMembers: async ({ missionId, orderedPlanIds }) => {
+                const ok = await db.appendQueuePositions(wsId, orderedPlanIds, missionId);
+                return ok ? { ok: true } : { ok: false, error: 'the board refused the staging write' };
+            },
+            markReady: async (missionId: string) => {
+                const ok = await db.updateMission(missionId, { ready: true });
+                return ok ? { ok: true } : { ok: false, error: `mission '${missionId}' could not be marked ready` };
+            },
+            dispatchCard: async ({ planId, seat }) => await this.performKanbanDispatch(
+                workspaceRoot, planId, undefined,
+                seat ? { targetTerminalOverride: seat } : undefined,
+            ),
+            recordStartProvenance: async (entry) => await this._recordNavigatorStart(workspaceRoot, entry),
+        };
+    }
+
+    /**
+     * Record a start in the controller's report: which model is the author of
+     * record, which mission, the staged ids IN ORDER, the dispatched card, the
+     * team and its policy, and that the operator approved it. A start nobody can
+     * account for is the thing that makes automation frightening.
+     */
+    private async _recordNavigatorStart(workspaceRoot: string, entry: StartProvenance): Promise<{ written: boolean; reason?: string }> {
+        const store = this._options.controllerStore;
+        if (!store) { return { written: false, reason: 'this host wired no controller report store' }; }
+        const lines = [
+            '### Navigator — mission started',
+            '',
+            `- approved by: ${entry.approvedBy}`,
+            `- author of record: ${entry.modelId ? `\`${entry.modelId}\`` : '(no Navigator configured)'} (${entry.authorSource})`,
+            `- at: ${entry.at}`,
+            `- mission: \`${entry.missionId}\``,
+            `- team: \`${entry.team}\` (automatedDispatch=${entry.teamPolicy}, source: ${entry.teamPolicySource})`,
+            `- order source: ${entry.orderSource}`,
+            ...(entry.finding ? [`- STATED FINDING: ${entry.finding}`] : []),
+            `- staged, in order: ${entry.stagedIds.map(id => `\`${id}\``).join(' -> ') || '(none)'}`,
+            ...(entry.skippedHeld.length ? [`- left alone, already being worked on: ${entry.skippedHeld.map(id => `\`${id}\``).join(', ')}`] : []),
+            ...(entry.skippedCompleted.length ? [`- left alone, already complete: ${entry.skippedCompleted.map(id => `\`${id}\``).join(', ')}`] : []),
+            `- dispatched: ${entry.dispatchedCard ? `\`${entry.dispatchedCard}\` (${entry.dispatchOutcome})` : `(none — ${entry.dispatchError || 'not attempted'})`}`,
+            `- marked ready: ${entry.readyWritten}`,
+            '',
+            'The rest of the mission is carried by automated dispatch; the Navigator does nothing further.',
+        ];
+        try {
+            const result = await store.writeReport(workspaceRoot, {
+                from: 'navigator',
+                kind: 'mission-started',
+                body: lines.join('\n'),
+            });
+            return result?.success ? { written: true } : { written: false, reason: String(result?.error || 'the report write did not report success') };
+        } catch (err) {
+            return { written: false, reason: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
+    /**
+     * POST /controller/navigator/start — start the mission the operator just
+     * approved.
+     *
+     * Body: `{ missionId }`. Every check precedes every write, so a refusal
+     * stages nothing, marks nothing ready and dispatches nothing. A successful
+     * start stages every member above the workspace-wide STAGING maximum, marks
+     * the mission ready, dispatches exactly ONE card and stops — the queue
+     * carries the rest.
+     */
+    private async _handleControllerNavigatorStart(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+        let body: any;
+        try { body = await this._parseJsonBody(req); } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'invalid JSON body' }));
+            return;
+        }
+        const missionId = String(body?.missionId || '').trim();
+        if (!missionId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'missionId is required' }));
+            return;
+        }
+        try {
+            const db = await this._requireReadableStore(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const ports = await this._navigatorStartPorts(db, workspaceRoot);
+            const outcome = await startMission({ missionId }, ports);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                kind: outcome.kind,
+                message: startOutcomeMessage(outcome),
+                missionId,
+                outcome,
+            }));
+        } catch (err) {
+            // A port threw. Every check precedes every write, so nothing was
+            // staged — and the failure is reported as a START STATE rather than
+            // as a bare 500, so the panel has one vocabulary for every outcome.
+            console.error('[LocalApiServer] navigator start error:', err);
+            const reason = err instanceof Error ? err.message : String(err);
+            const outcome = { kind: 'error' as const, missionId, reason };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, kind: outcome.kind, message: startOutcomeMessage(outcome), missionId, outcome }));
         }
     }
 
@@ -16541,6 +16684,10 @@ export class LocalApiServer {
                 // The parameters pass (plan: the-navigator-orders-missions-into-a-
                 // schedule): order as dependency edges, team, worktree decision.
                 await this._handleControllerNavigatorParameters(req, res);
+            } else if (pathname === '/controller/navigator/start' && req.method === 'POST') {
+                // The start pass (plan: the-navigator-starts-the-mission-it-set-up):
+                // stage in dependency order, mark ready, dispatch exactly one card.
+                await this._handleControllerNavigatorStart(req, res);
             } else if (pathname === '/controller/quota' && req.method === 'GET') {
                 if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
                 const store = this._options.controllerStore;

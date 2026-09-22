@@ -1438,9 +1438,10 @@
         // same paragraph over and over and the current state of the board had to
         // be reconstructed by reading down the list. The panel shows the LATEST
         // report only: columns, teams, assessment, and what is next.
-        /** The last parameters pass's message, rendered above the strips until
-         *  the next pass replaces it. A refusal must outlive the click. */
-        let lastParameterMessage = null;
+        /** What the last MISSION ACTION said — the parameters pass or the
+         *  start — rendered above the strips until the next one replaces it.
+         *  A refusal must outlive the click. */
+        let lastMissionMessage = null;
 
         /**
          * Run the parameters pass over ONE mission, then repaint from the ONE
@@ -1459,15 +1460,49 @@
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || data.success === false) {
-                    lastParameterMessage = { text: 'Parameters failed: ' + (data.error || ('HTTP ' + res.status)), isError: true };
+                    lastMissionMessage = { text: 'Parameters failed: ' + (data.error || ('HTTP ' + res.status)), isError: true };
                 } else {
-                    lastParameterMessage = {
+                    lastMissionMessage = {
                         text: data.message || 'The parameters pass answered without a message.',
                         isError: data.kind !== 'applied',
                     };
                 }
             } catch (err) {
-                lastParameterMessage = { text: 'Parameters failed: ' + (err?.message || err), isError: true };
+                lastMissionMessage = { text: 'Parameters failed: ' + (err?.message || err), isError: true };
+            } finally {
+                if (btn) { btn.disabled = false; }
+                await refreshReport();
+            }
+        }
+
+        /**
+         * Approve and start ONE mission. The server stages the members in
+         * dependency order, marks the mission ready and dispatches exactly one
+         * card; everything after that is the board's own automated dispatch, so
+         * the strip is re-fetched from `/kanban/missions/progress` rather than
+         * painted from this response — one source for mission state.
+         */
+        async function runNavigatorStart(missionId, btn) {
+            if (!missionId) { return; }
+            if (btn) { btn.disabled = true; }
+            try {
+                const res = await fetch('/controller/navigator/start', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ missionId: missionId }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.success === false) {
+                    lastMissionMessage = { text: 'Start failed: ' + (data.error || ('HTTP ' + res.status)), isError: true };
+                } else {
+                    // The refusal's OWN reason string, never a generic failure.
+                    lastMissionMessage = {
+                        text: data.message || 'The start answered without a message.',
+                        isError: data.kind !== 'started',
+                    };
+                }
+            } catch (err) {
+                lastMissionMessage = { text: 'Start failed: ' + (err?.message || err), isError: true };
             } finally {
                 if (btn) { btn.disabled = false; }
                 await refreshReport();
@@ -1754,9 +1789,9 @@
                 // rendered here rather than in a transient toast because a
                 // refusal (a cycle, an invalid reply) is the operator's only
                 // signal that the mission was left unarranged.
-                if (lastParameterMessage) {
-                    const pm = mk('div', 'padding-top:6px;', lastParameterMessage.text);
-                    pm.className = 'stencil mission-param' + (lastParameterMessage.isError ? ' is-error' : '');
+                if (lastMissionMessage) {
+                    const pm = mk('div', 'padding-top:6px;', lastMissionMessage.text);
+                    pm.className = 'stencil mission-param' + (lastMissionMessage.isError ? ' is-error' : '');
                     card.appendChild(pm);
                 }
                 if (missions.length) {
@@ -1792,6 +1827,7 @@
                         const mv = elapsed(m.lastMovementAt ? new Date(m.lastMovementAt).toISOString() : null);
                         if (mv) { meta.push('moved ' + mv + ' ago'); }
                         if (m.maxExtraWorktrees) { meta.push(m.maxExtraWorktrees + ' worktrees'); }
+                        if (m.ready) { meta.push('READY'); }
                         if (m.paused) { meta.push('PAUSED'); }
                         const metaEl = mk('div', 'margin-top:7px;', meta.join('  ·  '));
                         metaEl.className = 'stencil';
@@ -1857,18 +1893,37 @@
                         paramLines.appendChild(wtLine);
                         s.appendChild(paramLines);
 
-                        // The operator's gesture for this pass. The plan gives the
-                        // strip a display role and names no trigger; a pass with no
-                        // way to run it would make every line above dead code, so
-                        // the strip carries the one button that runs it.
-                        if (m.planCount || m.cardsTotal) {
+                        const btnRow = mk('div', '');
+                        btnRow.className = 'mission-actions';
+
+                        // The operator's gesture for the parameters pass. The plan
+                        // gives the strip a display role and names no trigger; a
+                        // pass with no way to run it would make every line above
+                        // dead code, so the strip carries the button that runs it.
+                        // It is ABSENT once the mission is running: order and team
+                        // are settled then, and the pass refuses anyway.
+                        if ((m.planCount || m.cardsTotal) && m.runState === 'not-started') {
                             const fillBtn = document.createElement('button');
                             fillBtn.type = 'button';
                             fillBtn.className = 'mission-param-btn';
                             fillBtn.textContent = p ? 'Re-derive parameters' : 'Fill in parameters';
                             fillBtn.addEventListener('click', () => void runNavigatorParameters(m.id, fillBtn));
-                            s.appendChild(fillBtn);
+                            btnRow.appendChild(fillBtn);
                         }
+
+                        // Approve and start. ABSENT — not merely disabled — on a
+                        // mission that is already running or paused: a control that
+                        // cannot act must not be on screen inviting a click.
+                        if (m.runState === 'not-started' && !m.paused && (m.planCount || m.cardsTotal)) {
+                            const startBtn = document.createElement('button');
+                            startBtn.type = 'button';
+                            startBtn.className = 'mission-param-btn is-primary';
+                            startBtn.textContent = 'Approve & start';
+                            startBtn.title = 'Stages the members in dependency order, marks the mission ready, and dispatches one card. The rest is carried by automated dispatch.';
+                            startBtn.addEventListener('click', () => void runNavigatorStart(m.id, startBtn));
+                            btnRow.appendChild(startBtn);
+                        }
+                        if (btnRow.childNodes.length) { s.appendChild(btnRow); }
 
                         strips.appendChild(s);
                     }

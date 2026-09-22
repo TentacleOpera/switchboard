@@ -686,6 +686,13 @@
         }
         .mission-param-btn:hover { color: var(--text-primary); border-color: var(--accent-dim); }
         .mission-param-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+        .mission-param-btn.is-primary {
+            border-color: var(--accent-dim);
+            color: var(--text-primary);
+            background: var(--accent-dim);
+        }
+        .mission-param-btn.is-primary:hover { background: var(--accent-primary); color: var(--bg-color); }
+        .mission-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
 
         /* ── SEAT REPORTS ────────────────────────────────────────────────────
            The scoped channel was an undesigned dump: 400-word entries at full

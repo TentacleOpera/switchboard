@@ -551,6 +551,8 @@ export interface MissionRow {
     team: string;
     maxExtraWorktrees: number;
     runState: 'not-started' | 'in-flight' | 'completed';
+    /** The stored pause. A paused mission is resumed by the operator, not started here. */
+    paused: boolean;
     /** Plan members. */
     plans: string[];
     /** Feature members — contained by the mission but not reorderable here. */
@@ -576,6 +578,10 @@ export interface UnavailableTeam {
     head: string;
     /** VERBATIM from `resolveAutomatedDispatchExclusions`' reason map. */
     reason: string;
+    /** `readTeamAutomatedDispatch(def).value`, when the seam could read it. */
+    policy?: string;
+    /** Who decided the policy: `config` | `default` | `unknown`. Never collapsed. */
+    policySource?: string;
 }
 
 export interface ParameterRecord {
@@ -1157,3 +1163,384 @@ export function applyOutcomeMessage(outcome: ApplyOutcome): string {
             return `The mission could not be created: ${outcome.reason}`;
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  The start pass
+//  (plan: the-navigator-starts-the-mission-it-set-up, subtask 4)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * How the staging order was arrived at. Three states, because they are three
+ * different facts and the plan forbids two of them rendering alike:
+ *
+ *  - `dependency-order` — `plan_dependencies` edges covered the member set and a
+ *    topological sort produced the order. This is the only case where the order
+ *    is anything but the mission's own insertion order.
+ *  - `no-dependencies-stated` — no edges, but the parameters pass ran and
+ *    recorded `no-hard-ordering-constraints`. The cards genuinely have no
+ *    ordering constraints between them, so board order is correct.
+ *  - `no-dependency-order-recorded` — no edges and no parameter record: the
+ *    parameters pass never ordered this mission. Staging proceeds in board order
+ *    and that is a STATED FINDING, because with no edges the queue pops members
+ *    in board order — the round-wasting failure the parameters subtask exists to
+ *    prevent. It is stated, not silently taken.
+ */
+export type StartOrderSource = 'dependency-order' | 'no-dependencies-stated' | 'no-dependency-order-recorded';
+
+export interface StartProvenance {
+    missionId: string;
+    modelId: string;
+    authorSource: string;
+    at: string;
+    approvedBy: 'operator';
+    team: string;
+    teamPolicy: string;
+    teamPolicySource: string;
+    orderSource: StartOrderSource;
+    finding: string | null;
+    stagedIds: string[];
+    skippedHeld: string[];
+    skippedCompleted: string[];
+    dispatchedCard: string | null;
+    dispatchOutcome: string;
+    dispatchError: string | null;
+    readyWritten: boolean;
+}
+
+/**
+ * The ports the start pass needs, over and above the parameters pass's.
+ *
+ * `stageMembers` is the board's own staging write — the one that assigns
+ * `plans.column_order` above the workspace-wide STAGING maximum and moves the
+ * cards there — reached as a port rather than through a new HTTP route, because
+ * staging is what the webview's drag-into-STAGING already does in-process and
+ * the plan names the method, not a route, for it. The method's name is
+ * deliberately not written here: it is the one call this module must never make
+ * by accident, and the parameters pass's own contract pins its absence.
+ */
+export interface NavigatorStartPorts extends NavigatorParameterPorts {
+    /** `GET /kanban/dependencies` over the member set, as a planId → predecessors map. */
+    readDependencies(planIds: string[]): Promise<Record<string, string[]>>;
+    /** The board's staging write: column_order above the global STAGING maximum, then STAGING. */
+    stageMembers(input: { missionId: string; orderedPlanIds: string[] }): Promise<{ ok: boolean; error?: string }>;
+    /** `POST /kanban/mission/update` with `ready` — the approval record. */
+    markReady(missionId: string): Promise<{ ok: boolean; error?: string }>;
+    /** `POST /kanban/dispatch` for one card. */
+    dispatchCard(input: { planId: string; seat?: string }): Promise<{ status: number; payload: any }>;
+    /** The controller report append for a start. */
+    recordStartProvenance(entry: StartProvenance): Promise<RecordResult>;
+}
+
+export type StartOutcome =
+    | {
+        /** `partial-start` when a write failed after staging began — never presented as a clean start. */
+        kind: 'started' | 'partial-start';
+        missionId: string;
+        modelId: string;
+        authorSource: string;
+        at: string;
+        team: string;
+        teamPolicy: string;
+        teamPolicySource: string;
+        order: string[];
+        orderSource: StartOrderSource;
+        /** Non-null when the order was board order for want of recorded edges. */
+        finding: string | null;
+        stagedIds: string[];
+        skippedHeld: string[];
+        skippedCompleted: string[];
+        dispatchedCard: string | null;
+        dispatchOutcome: 'delivered' | 'already-in-flight' | 'failed' | 'not-attempted';
+        dispatchError: string | null;
+        readyWritten: boolean;
+        readyError: string | null;
+        /** Cards the board actually holds in STAGING when a write failed. */
+        actuallyStaged: string[];
+        recorded: RecordResult;
+    }
+    | { kind: 'not-found'; missionId: string }
+    | { kind: 'already-started'; missionId: string; runState: string; reason: string }
+    | { kind: 'paused'; missionId: string; reason: string }
+    | { kind: 'no-members'; missionId: string; reason: string }
+    | { kind: 'no-team'; missionId: string; reason: string }
+    | { kind: 'team-unavailable'; missionId: string; team: string; reason: string }
+    | { kind: 'cycle'; missionId: string; cycle: string[]; reason: string }
+    | { kind: 'nothing-to-start'; missionId: string; heldIds: string[]; completedIds: string[]; reason: string }
+    | { kind: 'error'; missionId: string; reason: string };
+
+/**
+ * Start the mission the operator just approved.
+ *
+ * In order: check everything, then write in a fixed order, then stop.
+ *
+ * Three fences:
+ *  - **Every check precedes every write.** Staging has no inverse, so a start
+ *    that stages and then fails has left a mission the queue will run anyway.
+ *    A refusal is therefore TOTAL: no staging, no `ready`, no dispatch.
+ *  - **The staging order is the topological sort of the recorded edges.** With
+ *    no edges the queue pops members in board order, so that case is stated as a
+ *    finding rather than taken silently.
+ *  - **One card, then stop.** The Navigator dispatches the first member and
+ *    hands the rest to the board's own automated dispatch. It does not feed the
+ *    queue — that is the cross-mission authority this pass deliberately lacks.
+ */
+export async function startMission(
+    args: { missionId: string },
+    ports: NavigatorStartPorts,
+): Promise<StartOutcome> {
+    const missionId = str(args.missionId);
+    if (!missionId) { return { kind: 'not-found', missionId }; }
+
+    // The Navigator is the AUTHOR OF RECORD, not the decider — the operator's
+    // approval is. No model call is made, and an unset slot is tagged rather
+    // than silently blank: a dispatch nobody can account for is the thing that
+    // makes automation frightening.
+    const slot = await ports.navigatorModel();
+    const modelId = 'error' in slot ? '' : modelIdOf(slot);
+    const authorSource = 'error' in slot ? `navigator-slot-unreadable: ${slot.error}`
+        : (slot.endpoint ? `navigator-slot: ${slot.source}` : `navigator-slot-unset: ${slot.source}`);
+
+    const mission = await ports.readMission(missionId);
+    if (!mission) { return { kind: 'not-found', missionId }; }
+    if (mission.runState !== 'not-started') {
+        return { kind: 'already-started', missionId, runState: mission.runState, reason: `this mission is ${mission.runState} — a mission is started once` };
+    }
+    if (mission.paused) {
+        return { kind: 'paused', missionId, reason: 'this mission is paused — it is resumed by the operator, which is a different gesture' };
+    }
+
+    const memberIds = (mission.plans || []).map(str).filter(Boolean);
+    if (memberIds.length === 0) {
+        return { kind: 'no-members', missionId, reason: mission.features.length ? 'this mission holds features and no loose plans, so there is nothing to stage' : 'this mission has no members' };
+    }
+
+    // ── The team, re-checked against the LIVE fleet rather than trusted from
+    //    the row: policy can change between the parameters pass and the start. ──
+    const teamId = str(mission.team);
+    if (!teamId) {
+        return { kind: 'no-team', missionId, reason: 'no team is assigned to this mission — a mission that cannot be carried is not started' };
+    }
+    const teams = await ports.readAvailableTeams();
+    const reachable = teams.available.find(t => t.id === teamId);
+    let teamHead = '';
+    let teamPolicy = '';
+    let teamPolicySource = '';
+    if (reachable) {
+        if (reachable.policy === 'never') {
+            return { kind: 'team-unavailable', missionId, team: teamId, reason: `team '${reachable.label}' will not carry this mission — automatedDispatch=never (source: ${reachable.policySource})` };
+        }
+        teamHead = reachable.head;
+        teamPolicy = reachable.policy;
+        teamPolicySource = reachable.policySource;
+    } else {
+        const blocked = teams.unavailable.find(t => t.id === teamId);
+        return {
+            kind: 'team-unavailable', missionId, team: teamId,
+            reason: blocked
+                ? `team '${blocked.label}' will not carry this mission — ${blocked.reason}${blocked.policy ? ` (policy: ${blocked.policy}, source: ${blocked.policySource || 'unknown'})` : ''}`
+                : `team '${teamId}' is not live on this board — seat it before starting the mission`,
+        };
+    }
+
+    // ── The order: the topological sort of the recorded edges, or a stated
+    //    finding when there are none to sort. ──
+    const depsByPlan = await ports.readDependencies(memberIds);
+    const memberSet = new Set(memberIds);
+    const edgeMap = new Map<string, string[]>();
+    let edgeCount = 0;
+    for (const id of memberIds) {
+        const deps = (depsByPlan[id] || []).map(str).filter(d => d && d !== id && memberSet.has(d));
+        edgeMap.set(id, deps);
+        edgeCount += deps.length;
+    }
+    const record = await ports.readParameterRecord(missionId);
+    let order: string[];
+    let orderSource: StartOrderSource;
+    let finding: string | null = null;
+    if (edgeCount > 0) {
+        const sorted = topologicalOrder(memberIds, edgeMap, memberIds);
+        if (sorted === null) {
+            return { kind: 'cycle', missionId, cycle: findCycle(memberIds, edgeMap), reason: 'the recorded dependency edges contain a cycle — nothing can be staged in order' };
+        }
+        order = sorted;
+        orderSource = 'dependency-order';
+    } else {
+        order = [...memberIds];
+        if (record && record.finding === 'no-hard-ordering-constraints') {
+            orderSource = 'no-dependencies-stated';
+        } else {
+            orderSource = 'no-dependency-order-recorded';
+            finding = 'no dependency order was recorded for this mission — it will be staged in board order';
+        }
+    }
+
+    // ── Held and completed members are excluded from the staging list and NAMED,
+    //    never silently dropped and never a reason to refuse the whole start. ──
+    const board = (await ports.listPlans()) || [];
+    const byId = new Map<string, NavigatorPlanRow>();
+    for (const r of board) { const id = str(r.planId) || str(r.id); if (id) { byId.set(id, r); } }
+    const skippedCompleted = order.filter(id => !!str((byId.get(id) || {}).completedAt ?? (byId.get(id) || {}).completed_at));
+    const skippedHeld = order.filter(id => !skippedCompleted.includes(id) && isHeld(byId.get(id)));
+    const stagedOrder = order.filter(id => !skippedHeld.includes(id) && !skippedCompleted.includes(id));
+    if (stagedOrder.length === 0) {
+        return {
+            kind: 'nothing-to-start', missionId, heldIds: skippedHeld, completedIds: skippedCompleted,
+            reason: skippedCompleted.length === memberIds.length
+                ? 'every member has already completed — there is nothing left to start'
+                : 'every remaining member is already being worked on — there is nothing left to stage',
+        };
+    }
+
+    const at = ports.now ? ports.now() : new Date().toISOString();
+    const base = {
+        missionId, modelId, authorSource, at, team: teamId, teamPolicy, teamPolicySource,
+        order, orderSource, finding, stagedIds: stagedOrder, skippedHeld, skippedCompleted,
+    };
+
+    const finish = async (
+        kind: 'started' | 'partial-start',
+        rest: {
+            dispatchedCard: string | null;
+            dispatchOutcome: 'delivered' | 'already-in-flight' | 'failed' | 'not-attempted';
+            dispatchError: string | null;
+            readyWritten: boolean;
+            readyError: string | null;
+            actuallyStaged: string[];
+        },
+    ): Promise<StartOutcome> => {
+        let recorded: RecordResult = { written: false, reason: 'this host wired no controller report store' };
+        try {
+            recorded = await ports.recordStartProvenance({
+                missionId, modelId, authorSource, at, approvedBy: 'operator',
+                team: teamId, teamPolicy, teamPolicySource, orderSource, finding,
+                stagedIds: stagedOrder, skippedHeld, skippedCompleted,
+                dispatchedCard: rest.dispatchedCard, dispatchOutcome: rest.dispatchOutcome,
+                dispatchError: rest.dispatchError, readyWritten: rest.readyWritten,
+            });
+        } catch (err) {
+            recorded = { written: false, reason: err instanceof Error ? err.message : String(err) };
+        }
+        return { kind, ...base, ...rest, recorded } as StartOutcome;
+    };
+
+    // ── The race: a seat can take a member, or the mission can begin, between
+    //    the checks above and the staging write. Re-read immediately before it. ──
+    const missionNow = await ports.readMission(missionId);
+    if (!missionNow || missionNow.runState !== 'not-started') {
+        return {
+            kind: 'already-started', missionId,
+            runState: missionNow ? missionNow.runState : 'gone',
+            reason: 'the mission began between the check and the staging write — nothing was staged',
+        };
+    }
+
+    // 1. STAGE. Everything above is a check; this is the first write.
+    const staged = await ports.stageMembers({ missionId, orderedPlanIds: stagedOrder });
+    if (!staged.ok) {
+        // Staging is not transactional, so a failure may have moved SOME cards.
+        // Report exactly which ones are in STAGING, because the queue will act
+        // on them regardless.
+        const after = (await ports.listPlans()) || [];
+        const actuallyStaged = stagedOrder.filter(id => {
+            const r = after.find(x => (str(x.planId) || str(x.id)) === id);
+            return !!r && str(r.kanbanColumn) === 'STAGING';
+        });
+        return finish('partial-start', {
+            dispatchedCard: null, dispatchOutcome: 'not-attempted',
+            dispatchError: staged.error || 'the board refused the staging write',
+            readyWritten: false, readyError: null, actuallyStaged,
+        });
+    }
+
+    // 2. MARK READY — the approval, recorded through the existing route.
+    const ready = await ports.markReady(missionId);
+    if (!ready.ok) {
+        return finish('partial-start', {
+            dispatchedCard: null, dispatchOutcome: 'not-attempted',
+            dispatchError: null, readyWritten: false,
+            readyError: ready.error || 'the board refused the mission update',
+            actuallyStaged: stagedOrder,
+        });
+    }
+
+    // 3. DISPATCH THE HEAD — one card, then stop.
+    const head = stagedOrder[0];
+    let dispatchedCard: string | null = null;
+    let dispatchOutcome: 'delivered' | 'already-in-flight' | 'failed' | 'not-attempted' = 'not-attempted';
+    let dispatchError: string | null = null;
+    try {
+        const res = await ports.dispatchCard({ planId: head, ...(teamHead ? { seat: teamHead } : {}) });
+        const payload = res?.payload || {};
+        const errText = str(payload.error);
+        // The queue may have popped the head between staging and this call. That
+        // is benign — the mission started, which is the thing being asserted —
+        // so a "already owned / already in flight" refusal is SUCCESS, not an
+        // error to report.
+        if (payload.success !== false && res.status < 400) {
+            dispatchedCard = head;
+            dispatchOutcome = 'delivered';
+        } else if (res.status === 409 || /already|in flight|owned/i.test(errText)) {
+            dispatchedCard = head;
+            dispatchOutcome = 'already-in-flight';
+        } else {
+            dispatchError = errText || `the dispatch answered ${res.status}`;
+            dispatchOutcome = 'failed';
+        }
+    } catch (err) {
+        dispatchError = err instanceof Error ? err.message : String(err);
+        dispatchOutcome = 'failed';
+    }
+
+    const kind: 'started' | 'partial-start' = dispatchOutcome === 'failed' ? 'partial-start' : 'started';
+    return finish(kind, {
+        dispatchedCard, dispatchOutcome, dispatchError,
+        readyWritten: true, readyError: null, actuallyStaged: stagedOrder,
+    });
+}
+
+/** One string per state, so a refusal names its own reason and never reads generic. */
+export function startOutcomeMessage(outcome: StartOutcome): string {
+    switch (outcome.kind) {
+        case 'started':
+        case 'partial-start': {
+            const bits: string[] = [];
+            bits.push(`${outcome.stagedIds.length} card(s) staged in ${outcome.orderSource === 'dependency-order' ? 'dependency order' : 'board order'}.`);
+            if (outcome.finding) { bits.push(`STATED FINDING: ${outcome.finding}.`); }
+            if (outcome.skippedHeld.length) { bits.push(`${outcome.skippedHeld.length} card(s) already being worked on, left alone.`); }
+            if (outcome.skippedCompleted.length) { bits.push(`${outcome.skippedCompleted.length} card(s) already complete, left alone.`); }
+            if (outcome.dispatchedCard) {
+                bits.push(outcome.dispatchOutcome === 'already-in-flight'
+                    ? `Card ${outcome.dispatchedCard} was already picked up by the queue — the mission is running.`
+                    : `Dispatched ${outcome.dispatchedCard} to ${outcome.team} (automatedDispatch=${outcome.teamPolicy}, source: ${outcome.teamPolicySource}).`);
+            } else {
+                bits.push(`No card was dispatched${outcome.dispatchError ? `: ${outcome.dispatchError}` : ''}.`);
+            }
+            bits.push(outcome.readyWritten ? 'The mission is marked ready.' : `The mission is NOT marked ready: ${outcome.readyError || 'the update failed'}.`);
+            bits.push('The rest of the mission is carried by automated dispatch — the Navigator does nothing further.');
+            if (outcome.kind === 'partial-start') {
+                bits.push(`PARTIAL START — the board holds these in STAGING: ${outcome.actuallyStaged.join(', ')}.`);
+            }
+            if (!outcome.recorded.written) { bits.push(`Provenance not recorded: ${outcome.recorded.reason || 'unknown reason'}`); }
+            return bits.join(' ');
+        }
+        case 'not-found':
+            return `No mission '${outcome.missionId}' on this board.`;
+        case 'already-started':
+            return `Refused: ${outcome.reason}. Nothing was written.`;
+        case 'paused':
+            return `Refused: ${outcome.reason}. Nothing was written.`;
+        case 'no-members':
+            return `Refused: ${outcome.reason}. Nothing was written.`;
+        case 'no-team':
+            return `Refused: ${outcome.reason}. Nothing was written.`;
+        case 'team-unavailable':
+            return `Refused: ${outcome.reason}. Nothing was staged, nothing marked ready, nothing dispatched.`;
+        case 'cycle':
+            return `Refused: ${outcome.reason}${outcome.cycle.length ? ` (${outcome.cycle.join(' -> ')})` : ''}. Nothing was written.`;
+        case 'nothing-to-start':
+            return `Refused: ${outcome.reason}. Nothing was written.`;
+        case 'error':
+            return `The start failed: ${outcome.reason}. Nothing was written.`;
+    }
+}
+
