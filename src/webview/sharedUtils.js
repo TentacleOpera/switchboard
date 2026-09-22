@@ -736,9 +736,14 @@ function initOverflowMenus() {
             // Authorization header is the lucky case; one that rejects it is a
             // failure nobody would connect to a key they never typed.
             needsKey: false,
-            // null (not []) means "no model control at all" — the local server
-            // decides. An empty model is legal for this provider only.
-            models: null,
+            // [] means "no preset list, free-text only" — this provider has no
+            // published catalogue, so the operator types the name their server
+            // serves. It was `null` ("no model control at all — the local server
+            // decides"), and that was wrong about consequences: the stored model
+            // is what `/controller/judgement` puts in the Pilot's tier, so the
+            // field was load-bearing while being unsettable. The only thing the
+            // UI could do to it was clear it.
+            models: [],
         },
         {
             id: 'custom',
@@ -915,7 +920,17 @@ function initOverflowMenus() {
                 ? (els.endpoint ? els.endpoint.value.trim() : '')
                 : prov.endpoint;
             if (prov.models === null) {
-                out.model = '';                       // local server names its own
+                // OMITTED, NOT EMPTIED. This sent `model: ''` on every save, and
+                // the server writes whatever string it is given — so any save
+                // made while the local provider was selected silently wiped that
+                // row's stored model. Reported live 2026-09-22: the operator
+                // opened this drawer meaning to configure the Navigator, saved,
+                // and the Pilot's `gemma4:e2b-it-qat` was destroyed; the panel
+                // then read "not configured", which is indistinguishable from
+                // never having been configured. The server's contract is that an
+                // ABSENT model keeps the existing one, so the field is left out.
+                // This provider has no model control in the UI, which is a
+                // reason to not write the field — never a reason to clear it.
             } else if (Array.isArray(prov.models) && prov.models.length
                        && els.modelSelect && els.modelSelect.value !== P.CUSTOM_MODEL) {
                 out.model = els.modelSelect.value;

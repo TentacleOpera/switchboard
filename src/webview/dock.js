@@ -457,12 +457,25 @@
                 return;
             }
             if (agentKeyEl) { agentKeyEl.value = ''; }
-            setAgentConfigStatus('Saved.', false);
             await loadAgentControlConfig();
+            // The stations name the model, so they are what a model change is
+            // FOR. Without this the panel reported the old one until reload.
+            if (repaintCrew) { await repaintCrew(); }
+            // LAST, not first. `loadAgentControlConfig` clears this line when the
+            // config has no error, so setting it before the reload meant every
+            // successful save wiped its own confirmation and read as a no-op.
+            setAgentConfigStatus(repaintCrew ? 'Saved.' : 'Saved — reload to see the crew update.', false);
         } catch (err) {
             setAgentConfigStatus('Save failed: ' + (err?.message || err), true);
         }
     }
+
+    /** Repaints the crew stations. Published by the panel IIFE below, which is
+     *  where loadModels lives — a save has to reach it or the stations keep
+     *  naming the model that was there before. `Promise<void>` callbacks where
+     *  "never wired" and "working" look the same are the trap here, so this one
+     *  is read back and reported when it is missing. */
+    let repaintCrew = null;
 
     /** Set the status line text + class. */
     function setAgentStatus(text, cls) {
@@ -1280,10 +1293,16 @@
                     const line = function (label, ok, detail) {
                         const el = mk('div', '');
                         el.className = 'sys-row';
+                        // TEAMS failing drew a dead grey dot while BOARD passing
+                        // drew a bright green one, so the problem was the quieter
+                        // mark. An unlit item is now a hollow ring — deliberately
+                        // dark, in the annunciator idiom, rather than a smudge
+                        // that reads as a rendering artifact.
                         const colour = ok === null ? 'var(--warning)'
-                            : (ok ? 'var(--success)' : 'var(--panel-edge)');
-                        const lamp = mk('span', 'background:' + colour
-                            + (ok ? '; box-shadow:0 0 6px ' + colour : '') + ';');
+                            : (ok ? 'var(--success)' : 'var(--text-dim)');
+                        const lamp = mk('span', ok === false
+                            ? 'border:1px solid ' + colour + '; background:transparent;'
+                            : 'background:' + colour + '; box-shadow:0 0 6px ' + colour + ';');
                         lamp.className = 'sys-lamp';
                         el.appendChild(lamp);
                         const name = mk('span', '', label);
@@ -1391,7 +1410,8 @@
 
                 // ── NEXT UP ──────────────────────────────────────────────────
                 const offer = f.nextHighestPriority || null;
-                const foot = mk('div', 'padding:12px 2px 14px;');
+                const foot = mk('div', '');
+                foot.className = 'next-up';
                 const footLabel = function (txt) {
                     const el = mk('div', '', txt);
                     el.className = 'stencil';
@@ -1399,12 +1419,12 @@
                 };
                 if (offer && offer.id) {
                     foot.appendChild(footLabel('Next up'));
-                    foot.appendChild(mk('div', 'font-size:12.5px; line-height:1.4; margin-top:5px; '
-                        + 'color:var(--text-primary);', String(offer.topic || offer.id)));
+                    const topic = mk('div', '', String(offer.topic || offer.id));
+                    topic.className = 'next-up-topic';
+                    foot.appendChild(topic);
                     const act = document.createElement('button');
                     act.type = 'button';
-                    act.className = 'agent-poll-btn secondary-action-btn';
-                    act.style.cssText = 'margin-top:10px;';
+                    act.className = 'next-up-go';
                     act.textContent = 'Start ' + (offer.kind === 'feature' ? 'mission' : 'plan');
                     act.title = String(offer.topic || '') + ' (' + offer.id + ')';
                     act.addEventListener('click', async () => {
@@ -1434,8 +1454,10 @@
                     foot.appendChild(act);
                 } else {
                     foot.appendChild(footLabel('Next up'));
-                    foot.appendChild(mk('div', 'font-size:12px; margin-top:5px; color:var(--text-secondary);',
-                        'Nothing ready to start.'));
+                    const none = mk('div', '', 'Nothing ready to start.');
+                    none.className = 'next-up-topic';
+                    none.style.color = 'var(--text-secondary)';
+                    foot.appendChild(none);
                 }
                 card.appendChild(foot);
 
@@ -1477,10 +1499,10 @@
             try {
                 const res = await fetch('/controller/poll/state');
                 const d = await res.json();
-                if (!d || d.running !== true) { setState(''); return; }
-                const mins = Math.round((d.intervalMs || 0) / 60000);
-                const last = d.lastRunAt ? ' · last run ' + new Date(d.lastRunAt).toLocaleTimeString() : '';
-                setState('Every ' + mins + ' min' + last + (d.lastError ? ' · last error: ' + d.lastError : ''));
+                // SILENT WHEN NORMAL. Cadence and last-run live in the Pilot
+                // tile; this line exists for the things a tile has no room for —
+                // a failed pass, or a control that did not take.
+                setState(d && d.lastError ? 'Last pass errored: ' + d.lastError : '');
             } catch { setState('Watch state unavailable.'); }
         }
 
@@ -1552,6 +1574,7 @@
             const host = document.getElementById('agent-models');
             if (!host) { return; }
             let pilot = null;
+            let pilotFault = null;
             let navigator = null;
             let navMissing = 'not configured';
             try {
@@ -1574,6 +1597,11 @@
                         raw: tier.model,
                         note: tier.costClass === 'metered' ? 'metered' : '',
                     };
+                } else if (tier && tier.endpoint) {
+                    // A server is set and no model resolved against it. That is
+                    // a FAULT, not an empty seat, and it says which endpoint so
+                    // the operator can check the box rather than the panel.
+                    pilotFault = tier.endpoint;
                 }
                 if (esc && esc.model) {
                     navigator = {
@@ -1593,10 +1621,24 @@
             // whether it is running is a settings row, which is what made this
             // read as a tool rather than a panel.
             let flying = false;
+            let cadence = '';
             try {
                 const pr = await fetch('/controller/poll/state');
                 const pd = await pr.json();
                 flying = !!(pd && pd.running);
+                // How often and how recently, rendered INSIDE the Pilot tile.
+                // As a line under the crew bar it read as an orphaned sentence
+                // belonging to nothing; it is a Pilot fact and it sits with the
+                // Pilot. The state line below is transient messages only.
+                if (flying) {
+                    const mins = Math.round((pd.intervalMs || 0) / 60000);
+                    const ranAt = Date.parse(pd.lastRunAt);
+                    cadence = 'every ' + mins + ' min';
+                    if (!isNaN(ranAt)) {
+                        const ago = Math.max(0, Math.round((Date.now() - ranAt) / 60000));
+                        cadence += ' · ran ' + (ago < 1 ? 'just now' : ago + 'm ago');
+                    }
+                }
             } catch { /* unknown stays dark rather than claiming WATCHING */ }
 
             // Today's spend against each station's daily allowance.
@@ -1616,7 +1658,7 @@
             // doing, and — for the Pilot — the switch that arms it. The model id,
             // its locality and whether it is metered are setup facts; they live
             // on the tooltip and in config.
-            const station = function (role, jet, m, state, lit, spend, control) {
+            const station = function (role, jet, m, state, lit, spend, control, detail, fault) {
                 const el = document.createElement('div');
                 el.className = 'crew-station ' + (lit ? 'is-lit' : 'is-dark');
 
@@ -1643,16 +1685,33 @@
 
                 const name = document.createElement('div');
                 name.className = 'crew-model';
+                let why = null;
                 if (m) {
                     const where = [];
                     if (m.where) { where.push(m.where); }
                     if (m.note) { where.push(m.note); }
                     name.textContent = m.name + (where.length ? ' · ' + where.join(', ') : '');
                     name.title = String(m.raw || '');
+                } else if (role === 'NAVIGATOR') {
+                    // `navMissing` names the mechanical reason ("no escalation
+                    // tier declared"). The line under it names the product
+                    // reason, because an operator reading the first one reaches
+                    // for the config drawer, and that drawer is the Pilot's.
+                    name.textContent = navMissing;
+                    why = document.createElement('div');
+                    why.className = 'crew-readout';
+                    why.textContent = 'no slot yet';
+                    why.title = 'The model config holds one slot and it is the '
+                        + "Pilot's. A second slot is the feature "
+                        + '"The Navigator Is Its Own Model Slot".';
+                } else if (fault) {
+                    name.textContent = 'server set, no model resolved';
+                    name.title = fault;
                 } else {
-                    name.textContent = (role === 'NAVIGATOR') ? navMissing : 'not configured';
+                    name.textContent = 'not configured';
                 }
                 el.appendChild(name);
+                if (why) { el.appendChild(why); }
 
                 // Usage against the daily allowance. Shown ONLY where an
                 // allowance is actually known: "12" on its own invites the
@@ -1669,8 +1728,11 @@
                         u.textContent = spend.usedToday + ' / ' + b.perDay + ' today';
                         u.title = b.note + ' (' + b.source + ')';
                     } else if (b.source === 'unmetered') {
-                        // No ceiling to count against, so none is drawn.
-                        u.textContent = spend.usedToday ? spend.usedToday + ' calls today' : 'unmetered';
+                        // No ceiling to count against, so none is drawn — and
+                        // with nothing spent yet there is no measure either, so
+                        // the row is omitted rather than printing the word
+                        // "unmetered" where a number belongs.
+                        u.textContent = spend.usedToday ? spend.usedToday + ' calls today' : '';
                         u.title = b.note;
                     } else {
                         // Unknown allowance: say so rather than draw a bare count
@@ -1681,9 +1743,27 @@
                     if (u.textContent) { el.appendChild(u); }
                 }
 
+                // A station's own operating detail, where it has one.
+                if (detail) {
+                    const dv = document.createElement('div');
+                    dv.className = 'crew-readout';
+                    dv.textContent = detail;
+                    el.appendChild(dv);
+                }
                 if (control) { el.appendChild(control); }
                 return el;
             };
+
+            // NO CONTROL ON THE NAVIGATOR, DELIBERATELY. It had a "Configure"
+            // button that opened the model-config drawer — and that drawer holds
+            // exactly ONE slot, which is the Pilot's. Pressing it overwrote the
+            // Pilot instead of filling the Navigator, which is the bug
+            // `the-navigator-is-its-own-model-slot` exists to fix and which this
+            // button made one click away. A control that does the opposite of
+            // what its station says is worse than an empty tile, so the tile
+            // says what is actually true and offers nothing until that plan
+            // lands and there is a second slot to point at.
+            const navControl = null;
 
             // The arm switch, moved into the station it arms. These are the
             // buttons wired at the top of this IIFE — moved, never re-created, so
@@ -1710,15 +1790,18 @@
                 if (stopBtn) { stopBtn.hidden = true; stopBtn.className = 'crew-switch'; }
             }
 
-            // A station with no model is OFFLINE, not blank — and an unconfigured
-            // Navigator is STANDBY, a different state from a Pilot that is
-            // configured and simply not running.
+            // ONE RULE FOR BOTH SEATS: no model is OFFLINE, a model that is not
+            // running is STOPPED, a model standing by is STANDBY. The Navigator
+            // used to say STANDBY when it had no model at all, which collided
+            // with the verdict's own STANDBY ("no mission running") — the same
+            // word, twice on one panel, meaning two different things.
             stations.appendChild(station('PILOT', 'lead', pilot,
-                pilot ? (flying ? 'WATCHING' : 'STOPPED') : 'OFFLINE', !!(pilot && flying),
-                budget && budget.pilot, control));
+                pilot ? (flying ? 'WATCHING' : 'STOPPED') : (pilotFault ? 'NO MODEL' : 'OFFLINE'),
+                !!(pilot && flying),
+                budget && budget.pilot, control, cadence, pilotFault));
             stations.appendChild(station('NAVIGATOR', 'planner', navigator,
-                navigator ? (flying ? 'READY' : 'STANDBY') : 'STANDBY', false,
-                budget && budget.navigator, null));
+                navigator ? (flying ? 'STANDBY' : 'STOPPED') : 'OFFLINE', false,
+                budget && budget.navigator, navControl, '', null));
             host.textContent = '';
             host.appendChild(stations);
         }
@@ -1766,6 +1849,9 @@
                 host.appendChild(b);
             }
         }
+
+        // Hand the crew repaint out to the config save (see `repaintCrew`).
+        repaintCrew = loadModels;
 
         paintTeamTabs();
         void loadModels();

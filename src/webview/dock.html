@@ -334,8 +334,8 @@
             position: relative;
             display: flex;
             flex-direction: column;
-            gap: 5px;
-            padding: 9px 10px 10px;
+            gap: 4px;
+            padding: 9px 10px 9px;
             background: linear-gradient(180deg, var(--panel-bg2), var(--panel-bg));
             border: 1px solid var(--panel-line);
             border-radius: 2px;
@@ -357,7 +357,13 @@
         .crew-station.is-lit { border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); }
         .crew-station.is-lit::before,
         .crew-station.is-lit::after { border-color: var(--accent-primary); }
-        .crew-head { display: flex; align-items: center; gap: 6px; }
+        .crew-head {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 1px;
+        }
+        .crew-role { flex: 1 1 auto; }
         /* The role's own aircraft — the same pixel jet the scope tags its
            contacts with, and the same file the board rail uses. */
         .crew-jet {
@@ -380,15 +386,16 @@
         /* The state word IS the lamp. An annunciator does not put a dot beside
            a label; the legend lights up. */
         .crew-state {
-            font-size: 15px;
+            font-size: 11px;
             font-weight: 600;
             line-height: 1;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
             color: var(--text-dim);
         }
         .crew-station.is-lit .crew-state {
             color: var(--accent-primary);
-            text-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+            text-shadow: 0 0 9px color-mix(in srgb, var(--accent-primary) 40%, transparent);
         }
         .crew-model {
             font-size: 11px;
@@ -402,6 +409,7 @@
         /* A measure, not a sentence — and the one place on this panel where
            monospace earns itself: used/limit is a stacked numeric. */
         .crew-readout {
+            margin-top: 1px;
             font-family: var(--font-code);
             font-size: 10px;
             letter-spacing: 0.04em;
@@ -507,28 +515,35 @@
            not a filter over one feed. */
         .agent-report-teams {
             display: flex;
-            gap: 4px;
+            gap: 14px;
             flex-wrap: wrap;
-            padding-bottom: 8px;
             border-bottom: 1px solid var(--panel-line);
         }
         .agent-channel-btn {
             background: transparent;
-            border: 1px solid var(--panel-line);
-            border-radius: 2px;
+            border: 0;
+            border-bottom: 2px solid transparent;
+            border-radius: 0;
             color: var(--text-dim);
             font-family: var(--font-family);
             font-size: 9px;
             letter-spacing: 0.14em;
             text-transform: uppercase;
-            padding: 4px 8px;
+            padding: 3px 2px 5px;
             cursor: pointer;
         }
-        .agent-channel-btn:hover { color: var(--text-primary); border-color: var(--panel-edge); }
+        /* BOARD is a different KIND of channel from the four team channels —
+           the controller's own report against the seats' own reports. One hair
+           rule says so without a second row of chrome. */
+        .agent-channel-btn:first-child {
+            margin-right: 6px;
+            padding-right: 14px;
+            border-right: 1px solid var(--panel-line);
+        }
+        .agent-channel-btn:hover { color: var(--text-primary); }
         .agent-channel-btn.is-active {
             color: var(--accent-primary);
-            border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
-            background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+            border-bottom-color: var(--accent-primary);
         }
 
         /* ── ANNUNCIATOR ─────────────────────────────────────────────────────
@@ -546,8 +561,7 @@
                 repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px),
                 linear-gradient(var(--term-grid) 1px, transparent 1px),
                 linear-gradient(90deg, var(--term-grid) 1px, transparent 1px);
-            background-size: auto, var(--term-grid-size) var(--term-grid-size),
-                             var(--term-grid-size) var(--term-grid-size);
+            background-size: auto, 18px 18px, 18px 18px;
             overflow: hidden;
         }
         .ann::before,
@@ -560,9 +574,9 @@
             pointer-events: none;
         }
         .ann::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
-        .ann::after  { top: -1px; right: -1px; border-left: 0; border-bottom: 0; }
+        .ann::after  { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
         .ann-word {
-            font-size: 23px;
+            font-size: 26px;
             font-weight: 600;
             line-height: 1;
             letter-spacing: 0.07em;
@@ -593,8 +607,9 @@
             border-bottom: 1px solid color-mix(in srgb, var(--panel-line) 70%, transparent);
         }
         .sys-lamp {
-            width: 5px;
-            height: 5px;
+            box-sizing: border-box;
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
             flex-shrink: 0;
             position: relative;
@@ -655,6 +670,37 @@
             -webkit-line-clamp: 4;
         }
         .seat-report.is-open .seat-body { -webkit-line-clamp: unset; }
+        .next-up {
+            margin-top: 10px;
+            padding: 12px 12px 13px;
+            border: 1px solid var(--panel-line);
+            border-left: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+            border-radius: 2px;
+            background: var(--panel-bg);
+        }
+        .next-up-topic {
+            font-size: 12.5px;
+            line-height: 1.4;
+            margin-top: 5px;
+            color: var(--text-primary);
+        }
+        /* Primary, and in the panel's own idiom — the same switch the crew
+           stations carry, lit because this one starts something. */
+        .next-up-go {
+            margin-top: 11px;
+            background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 55%, transparent);
+            border-radius: 2px;
+            color: var(--accent-primary);
+            font-family: var(--font-family);
+            font-size: 9px;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+        .next-up-go:hover { background: color-mix(in srgb, var(--accent-primary) 22%, transparent); }
+        .next-up-go[disabled] { opacity: 0.5; cursor: not-allowed; }
         .seat-more {
             background: none;
             border: 0;
