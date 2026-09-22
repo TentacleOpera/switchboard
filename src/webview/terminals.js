@@ -11699,6 +11699,10 @@
             details.push(`${failedNames} did not close`);
         }
         if (releaseFailedCount > 0) { details.push(`${releaseFailedCount} card${releaseFailedCount === 1 ? '' : 's'} did not release`); }
+        // A step that did not RUN is named too: `status: 'partial'` with no
+        // seat to blame would otherwise render as a clean stop.
+        if (data.rosterResolved === false) { details.push('the team roster could not be read'); }
+        if (data.pauseUnavailable) { details.push('the missions could not be paused'); }
         showPaneToast(details.length > 0 ? `${summary} — ${details.join(', ')}` : summary, restart);
     }
 
