@@ -363,8 +363,8 @@ to modify `matrix.ts`, so it is safe to run alongside any of them.
 8. [The Navigator Verifies, and Acts When the Pilot Did Not Fix It](../plans/the-navigator-verifies-and-acts-when-the-pilot-did-not-fix-it.md) — **LEAD CODED**
 9. [The Pilot Acts on the Board, Not on the Agent](../plans/the-pilot-acts-on-the-board-not-on-the-agent.md) — **LEAD CODED**
 10. [A Prerequisite Outside the Feature Is the Navigator's Problem](../plans/a-prerequisite-outside-the-feature-is-the-navigators-problem.md) — **CREATED**
+11. [The Navigator Can Intervene When the Pilot Is Wrong](../plans/the-navigator-can-intervene-when-the-pilot-is-wrong.md) — **CREATED**
 <!-- END SUBTASKS -->
-
 
 ## Delivery summary (2026-09-22)
 
@@ -397,3 +397,42 @@ host. The board on :7777 serves a `dist/` bundle built at 09:02 and still 404s o
 `/controller/navigator`; confirming the panels draw needs a rebuild and a restart,
 which would have killed the seats mid-run. Subtask 1's four webview surfaces
 (`command.html/js`, `dock.html/js`) were accepted on code review alone.
+
+### Two late-attached subtasks (after the original submit)
+
+Subtasks 10 and 11 were attached to this feature by the planner *after* the run
+had started and after the original nine had been submitted, which is why the
+delivery summary above says nine. Both were dispatched by hand at the operator's
+instruction and both landed: **The Navigator Can Intervene When the Pilot Is
+Wrong** (`dd0be222`) gives the end-of-wake digest one machine-read correction
+line, so a Pilot that classifies confidently and *wrongly* is reviewable — every
+prior Navigator path fired on the Pilot's absence. **A Prerequisite Outside the
+Feature Is the Navigator's Problem** (`50256097`) resolves an outside dependency
+by writing the edge *and* dispatching the prerequisite, because a lead driving a
+feature by hand never pops and so never consults `isDependencyReady` — the edge
+alone would have sat unread. That plan was written from an incident in this very
+run: the lead held subtask 9, asked the operator, and the operator hand-dispatched
+the prerequisite. `MATRIX_REMEDIATIONS`, `ESCALATION_LADDER` and
+`SECOND_ORDER_ACTIONS` were verified byte-identical across both.
+
+**Three things left open, none of them a regression:**
+
+1. This plan's own "Ask the running host" scenario is **not reproducible from the
+   feature file as committed**. It expects an edge from `0c15764e` to `4738f94e`,
+   but the prose names the restart card only in the contended-surface table and
+   in a merge-order sentence using italic shorthand, so no subtask is named
+   beside it and the pass reports it **unresolved**. That is the plan's own rule
+   — "exact or reported, never approximate" — applied to attribution; fuzzy
+   title matching was deliberately not added, because an approximate match
+   writing an edge onto the wrong card is the risk the plan names. Resolving it
+   needs either the prose to name the dependent or the pass to take an explicit
+   dependent argument. Operator decision, not a code defect.
+2. `npm run catalog:check` and `npm run host-seam-parity:check` are red for
+   reasons outside this feature: `protocol-catalog.json` holds zero
+   `/controller/navigator` entries and regenerating it would sweep eleven
+   unrelated endpoints into one commit, and `setOnBoardMutated` is wired in
+   `bootstrap.ts` only — it arrived in `2da42df4`, not here, and per the cutover
+   rule a post-cutover seam is not owed to `extension.ts`.
+3. Still unverified against a running host. The board on :7777 404s on
+   `/controller/navigator` and every other route this feature added; a rebuild
+   and restart would have killed the seats mid-run.
